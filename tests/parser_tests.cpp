@@ -482,6 +482,29 @@ void test_indented_postfix_continuation() {
   expect(tails.values[1]->kind == "AstTailCall", "continued bare call");
 }
 
+void test_indented_boolean_continuation() {
+  amber::parser::ParseModuleResult result =
+      parse_module_raw("valid = first\n"
+                       "  and second\n"
+                       "  or third\n"
+                       "next = 1\n");
+  if (!result.ok()) {
+    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::exit(1);
+  }
+
+  expect(result.items.size() == 2, "continued boolean item count");
+  const Expr &assign = node_field(*result.items[0], "expr");
+  expect(assign.kind == "AstAssign", "continued boolean assignment");
+  const Expr &boolean = node_field(assign, "right");
+  expect(boolean.kind == "AstBinary", "continued boolean expression");
+  expect(string_field(boolean, "op") == "or", "continued boolean outer op");
+  expect(string_field(node_field(boolean, "left"), "op") == "and",
+         "continued boolean preserves precedence");
+  expect(node_field(*result.items[1], "expr").kind == "AstAssign",
+         "continued boolean closes before next statement");
+}
+
 void test_module_stray_indent_progresses() {
   amber::parser::ParseModuleResult result = parse_module_raw("value\n"
                                                              "  stray\n");
@@ -1943,6 +1966,7 @@ int main() {
   test_inline_block_chain_boundary();
   test_indented_block_suffix_body();
   test_indented_postfix_continuation();
+  test_indented_boolean_continuation();
   test_module_stray_indent_progresses();
   test_unicode_names();
   test_range_precedence();

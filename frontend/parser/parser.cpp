@@ -3243,16 +3243,18 @@ bool Parser::match_contextual(const char *text) {
 std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
                                                     StopMode stop_mode) {
   std::unique_ptr<ast::Expr> left = parse_prefix(stop_mode);
-  int postfix_continuation_depth = 0;
+  int expression_continuation_depth = 0;
   const bool header_mode = stop_mode == StopMode::ControlHeader;
 
   while (true) {
-    if (starts_indented_postfix_continuation()) {
+    if (starts_indented_postfix_continuation() ||
+        starts_indented_boolean_continuation(min_precedence)) {
       advance();
       advance();
-      ++postfix_continuation_depth;
-    } else if (postfix_continuation_depth > 0 &&
-               starts_same_indent_postfix_continuation()) {
+      ++expression_continuation_depth;
+    } else if (expression_continuation_depth > 0 &&
+               (starts_same_indent_postfix_continuation() ||
+                starts_same_indent_boolean_continuation(min_precedence))) {
       advance();
     }
 
@@ -3383,10 +3385,10 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
     left = std::move(binary);
   }
 
-  while (postfix_continuation_depth > 0) {
+  while (expression_continuation_depth > 0) {
     match(lexer::TokenKind::Newline);
     if (match(lexer::TokenKind::Dedent)) {
-      --postfix_continuation_depth;
+      --expression_continuation_depth;
       continue;
     }
     break;
@@ -4817,6 +4819,35 @@ bool Parser::starts_same_indent_postfix_continuation() const {
   const lexer::TokenKind next = peek().kind;
   return next == lexer::TokenKind::Dot || next == lexer::TokenKind::ChainDot ||
          next == lexer::TokenKind::SafeDot;
+}
+
+bool Parser::starts_indented_boolean_continuation(
+    int min_precedence) const {
+  if (!check(lexer::TokenKind::Newline) ||
+      peek().kind != lexer::TokenKind::Indent) {
+    return false;
+  }
+  const lexer::TokenKind next = peek(2).kind;
+  if (next != lexer::TokenKind::KeywordAnd &&
+      next != lexer::TokenKind::KeywordOr) {
+    return false;
+  }
+  InfixInfo info{};
+  return infix_info(next, &info) && info.precedence >= min_precedence;
+}
+
+bool Parser::starts_same_indent_boolean_continuation(
+    int min_precedence) const {
+  if (!check(lexer::TokenKind::Newline)) {
+    return false;
+  }
+  const lexer::TokenKind next = peek().kind;
+  if (next != lexer::TokenKind::KeywordAnd &&
+      next != lexer::TokenKind::KeywordOr) {
+    return false;
+  }
+  InfixInfo info{};
+  return infix_info(next, &info) && info.precedence >= min_precedence;
 }
 
 bool Parser::starts_map_literal_entry() const {

@@ -494,7 +494,7 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_scalar_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-scalar-core-build.json
 	$(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core.out
-	grep -q '^10$$' $(BUILD_DIR)/native-scalar-core.out
+	grep -q '^11$$' $(BUILD_DIR)/native-scalar-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_scalar_core/main.am > $(BUILD_DIR)/native-scalar-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-scalar-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-scalar-core.dump

@@ -197,6 +197,8 @@ private:
   bool starts_bare_arg() const;
   bool starts_indented_postfix_continuation() const;
   bool starts_same_indent_postfix_continuation() const;
+  bool starts_indented_boolean_continuation(int min_precedence) const;
+  bool starts_same_indent_boolean_continuation(int min_precedence) const;
   bool starts_map_literal_entry() const;
   bool is_contextual_at(std::size_t index, const char *text) const;
   bool is_literal_float_expr(const ast::Expr &expr) const;

@@ -24,4 +24,10 @@ def main():
     score = score + 1
   if Object === null:
     score = score + 1
+  if score == 10:
+    multiline = true
+      and 2 < 3
+      and 4 == 4
+    if multiline:
+      score = score + 1
   score

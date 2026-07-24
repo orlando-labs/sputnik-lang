@@ -1026,11 +1026,19 @@ Because explicitness is sometimes useful:
 
 Bare-call is accepted as ergonomic read/query syntax, not as a ban on parentheses.
 
-### 13.5. Why not make top-level `f` call `f()`?
+### 13.5. Bare identifiers and implicit `self`
 
-This RFC is about member/query access. Top-level/local bare identifiers should remain ordinary binding reads unless separately changed by another RFC.
+Resolution is lexical first. A local, parameter, capture, import or
+module-level binding named `f` remains an ordinary value read and is never
+invoked implicitly.
 
-Reason: local variables and functions share lexical space more directly than object members. Making `f` call `f()` would create larger ambiguity around first-class functions, closures and local binding shadowing.
+Only when no such binding exists and the current procedure has an object
+receiver does bare `f` become the member read `self.f`. It therefore invokes a
+syntactically nullary method (or reads a property) through ordinary dynamic
+linearization. Without an object receiver, an unresolved bare identifier is
+an error. This preserves first-class lexical functions while allowing
+controllers and mixin-heavy DSLs to use inherited APIs without repetitive
+`self.` prefixes.
 
 ---
 

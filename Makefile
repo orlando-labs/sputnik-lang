@@ -691,6 +691,11 @@ test: build
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_vm_fallback_code_count"] == 0, result' $(BUILD_DIR)/native-graph-pure-build.json
 	$(BUILD_DIR)/native_graph_pure/out/nat.graph.main > $(BUILD_DIR)/native-graph-pure.out
 	grep -q '^42$$' $(BUILD_DIR)/native-graph-pure.out
+	rm -rf $(BUILD_DIR)/native_implicit_self_cli
+	$(BUILD_DIR)/amberc build tests/fixtures/native_implicit_self_cli/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_implicit_self_cli/out --cache-dir $(BUILD_DIR)/native_implicit_self_cli/cache > $(BUILD_DIR)/native-implicit-self-cli-build.json
+	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_native_code_count"] == result["native_graph_code_count"] and result["native_graph_vm_fallback_code_count"] == 0 and not result["native_bytecode_fallback"], result' $(BUILD_DIR)/native-implicit-self-cli-build.json
+	$(BUILD_DIR)/native_implicit_self_cli/out/native.implicit_self_cli.main --count 42 > $(BUILD_DIR)/native-implicit-self-cli.out
+	grep -q '^84$$' $(BUILD_DIR)/native-implicit-self-cli.out
 	rm -rf $(BUILD_DIR)/native_ext_dep
 	$(BUILD_DIR)/amberc build tests/fixtures/native_ext_dep/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_ext_dep/out --cache-dir $(BUILD_DIR)/native_ext_dep/cache > $(BUILD_DIR)/native-ext-dep-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_native_code_count"] == result["native_graph_code_count"] and result["native_graph_vm_fallback_code_count"] == 0 and not result["native_bytecode_fallback"] and result["native_extensions"] and result["native_extensions"][0]["native_source_sha256"].startswith("sha256:"), result' $(BUILD_DIR)/native-ext-dep-build.json

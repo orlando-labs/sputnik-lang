@@ -1650,6 +1650,59 @@ void test_property_lowering() {
          "attr setter property flag");
 }
 
+void test_implicit_self_bare_name_lowering() {
+  const amber::hir::Program inherited =
+      lower_ok("class Base:\n"
+               "  def params(): 41\n"
+               "class Child < Base:\n"
+               "  def action(): params\n");
+  const amber::hir::Procedure *action =
+      procedure_by_name(inherited, "action");
+  expect(action != nullptr, "inherited bare-name action procedure exists");
+  const amber::ast::Expr *action_stmt =
+      list_item(*action->body, "items", 0);
+  const amber::ast::Expr *action_expr =
+      action_stmt == nullptr ? nullptr : node_field(*action_stmt, "expr");
+  expect(action_expr != nullptr && action_expr->kind == "HSend",
+         "unresolved bare name in object method lowers to HSend");
+  expect(string_field(*action_expr, "selector") == "params",
+         "implicit self send keeps bare selector");
+  expect(bool_field(*action_expr, "property_access"),
+         "implicit self bare name uses nullary property-access semantics");
+  const amber::ast::Expr *receiver = node_field(*action_expr, "receiver");
+  expect(receiver != nullptr && receiver->kind == "HSelf",
+         "implicit bare-name receiver is self");
+
+  const amber::hir::Program shadowed =
+      lower_ok("class Base:\n"
+               "  def params(): 41\n"
+               "class Child < Base:\n"
+               "  def action():\n"
+               "    params = 7\n"
+               "    params\n");
+  const amber::hir::Procedure *shadowed_action =
+      procedure_by_name(shadowed, "action");
+  expect(shadowed_action != nullptr, "shadowed action procedure exists");
+  const amber::ast::Expr *shadowed_stmt =
+      list_item(*shadowed_action->body, "items", 1);
+  const amber::ast::Expr *shadowed_expr =
+      shadowed_stmt == nullptr ? nullptr : node_field(*shadowed_stmt, "expr");
+  expect(shadowed_expr != nullptr && shadowed_expr->kind == "HLoadLocal",
+         "lexical local shadows implicit self member");
+
+  const amber::hir::Program module_function =
+      lower_ok("def action(): params\n");
+  const amber::hir::Procedure *module_action =
+      procedure_by_name(module_function, "action");
+  const amber::ast::Expr *module_stmt =
+      module_action == nullptr ? nullptr
+                               : list_item(*module_action->body, "items", 0);
+  const amber::ast::Expr *module_expr =
+      module_stmt == nullptr ? nullptr : node_field(*module_stmt, "expr");
+  expect(module_expr != nullptr && module_expr->kind == "HLoadName",
+         "bare name without object self remains unresolved name lookup");
+}
+
 void test_bodyless_class_lowering() {
   const amber::hir::Program program =
       lower_ok("class Empty\n"
@@ -1762,6 +1815,7 @@ int main() {
   test_bare_callable_block_suffix_lowering();
   test_nested_capture_propagation();
   test_property_lowering();
+  test_implicit_self_bare_name_lowering();
   test_bodyless_class_lowering();
   test_try_rescue_ensure_lowering();
   test_throw_catch_lowering();

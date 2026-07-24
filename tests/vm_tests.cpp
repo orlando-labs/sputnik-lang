@@ -2503,6 +2503,52 @@ void test_bare_non_nullary_member_rejected() {
          "bare access to non-nullary method should raise ArgumentError");
 }
 
+void test_implicit_self_bare_identifier_dispatch() {
+  amber::runtime::ExecutionResult exec = execute_emitted_init(
+      "class Base:\n"
+      "  def params(): 41\n"
+      "class Child < Base:\n"
+      "  def action(): params + 1\n"
+      "Child().action()\n");
+  expect(exec.ok(), "inherited implicit-self bare identifier failed");
+  expect(exec.value.is_integer() && exec.value.as_integer() == 42,
+         "bare identifier should dynamically dispatch to inherited nullary "
+         "method");
+
+  exec = execute_emitted_init(
+      "mixin RequestAccess:\n"
+      "  def request(): 40\n"
+      "class Controller:\n"
+      "  include RequestAccess\n"
+      "  def action(): request + 2\n"
+      "Controller().action()\n");
+  expect(exec.ok(), "included implicit-self bare identifier failed");
+  expect(exec.value.is_integer() && exec.value.as_integer() == 42,
+         "bare identifier should dispatch through included mixin");
+
+  exec = execute_emitted_init(
+      "class Base:\n"
+      "  def params(): 41\n"
+      "class Child < Base:\n"
+      "  def action():\n"
+      "    params = 7\n"
+      "    params\n"
+      "Child().action()\n");
+  expect(exec.ok(), "lexically shadowed implicit-self member failed");
+  expect(exec.value.is_integer() && exec.value.as_integer() == 7,
+         "lexical local must win over implicit self member");
+
+  exec = execute_emitted_init(
+      "class Base:\n"
+      "  def params(value): value\n"
+      "class Child < Base:\n"
+      "  def action(): params\n"
+      "Child().action()\n");
+  expect(!exec.ok() && exec.fault.has_value() &&
+             exec.fault->error_name == "ArgumentError",
+         "implicit-self bare identifier must reject non-nullary method");
+}
+
 void test_property_called_as_method_rejected() {
   const amber::bytecode::EmitResult emit_result = emit_ok("class Box:\n"
                                                           "  prop value: 7\n"
@@ -10619,6 +10665,7 @@ int main() {
   test_execute_emitted_properties();
   test_bare_nullary_member_implicit_call();
   test_bare_non_nullary_member_rejected();
+  test_implicit_self_bare_identifier_dispatch();
   test_property_called_as_method_rejected();
   test_dot_call_invokes_member_result();
   test_property_access_errors();

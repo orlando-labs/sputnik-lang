@@ -15,8 +15,9 @@
 #include "profile/modern.h"
 #include "profile/replay.h"
 #include "profile/wasm_accel.h"
-#include "runtime/macro_expander.h"
+#include "runtime/context.h"
 #include "runtime/errors.h"
+#include "runtime/macro_expander.h"
 #include "runtime/stdlib_registry.h"
 #include "runtime/vm.h"
 
@@ -6936,6 +6937,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include \"runtime/amber_ext.h\"\n";
   out << "#include \"runtime/amber_ext_runtime.h\"\n";
   out << "#include \"runtime/concurrency.h\"\n";
+  out << "#include \"runtime/context.h\"\n";
   out << "#include \"runtime/digest.h\"\n";
   out << "#include \"runtime/errors.h\"\n";
   out << "#include \"runtime/io.h\"\n";
@@ -13201,9 +13203,19 @@ static NativeValue native_generate_value(const NativeValue &module,
 }
 
 using NativeArgKwArgs =
-    std::initializer_list<std::pair<std::string, NativeValue>>;
+    std::vector<std::pair<std::string, NativeValue>>;
 
-static const NativeValue *native_arg_kw(NativeArgKwArgs kwargs,
+static NativeArgKwArgs native_arg_call_kwargs(
+    const std::vector<NativeCallKeyword> &kwargs) {
+  NativeArgKwArgs out;
+  out.reserve(kwargs.size());
+  for (const NativeCallKeyword &keyword : kwargs) {
+    out.push_back({keyword.name, keyword.value});
+  }
+  return out;
+}
+
+static const NativeValue *native_arg_kw(const NativeArgKwArgs &kwargs,
                                         const std::string &name) {
   for (const auto &entry : kwargs) {
     if (entry.first == name) return &entry.second;
@@ -13212,7 +13224,8 @@ static const NativeValue *native_arg_kw(NativeArgKwArgs kwargs,
 }
 
 static void native_arg_reject_unknown(
-    NativeArgKwArgs kwargs, std::initializer_list<const char *> allowed) {
+    const NativeArgKwArgs &kwargs,
+    std::initializer_list<const char *> allowed) {
   for (const auto &entry : kwargs) {
     bool ok = false;
     for (const char *name : allowed) {
@@ -13270,7 +13283,7 @@ native_arg_string_map(const NativeValue &value) {
 }
 
 static std::optional<std::string> native_arg_optional_text(
-    NativeArgKwArgs kwargs, const std::string &name) {
+    const NativeArgKwArgs &kwargs, const std::string &name) {
   const NativeValue *value = native_arg_kw(kwargs, name);
   if (value == nullptr || value->tag == NativeValue::Tag::Null) {
     return std::nullopt;
@@ -13278,7 +13291,7 @@ static std::optional<std::string> native_arg_optional_text(
   return native_arg_text(*value);
 }
 
-static bool native_arg_bool_kw(NativeArgKwArgs kwargs,
+static bool native_arg_bool_kw(const NativeArgKwArgs &kwargs,
                                const std::string &name, bool fallback) {
   const NativeValue *value = native_arg_kw(kwargs, name);
   if (value == nullptr) return fallback;
@@ -13286,7 +13299,7 @@ static bool native_arg_bool_kw(NativeArgKwArgs kwargs,
   return value->scalar_value != 0;
 }
 
-static NativeArgValueType native_arg_type_kw(NativeArgKwArgs kwargs,
+static NativeArgValueType native_arg_type_kw(const NativeArgKwArgs &kwargs,
                                              NativeArgValueType fallback) {
   const NativeValue *value = native_arg_kw(kwargs, "type");
   if (value == nullptr) return fallback;
@@ -13352,11 +13365,12 @@ static void native_arg_validate_spelling(const NativeArgParser &parser,
 }
 
 static NativeValue native_argparser_new(const NativeValue &module,
-                                        NativeArgKwArgs kwargs) {
+                                        const NativeArgKwArgs &kwargs) {
   if (module.tag != NativeValue::Tag::ArgParserModule) throw NativeBailout();
   native_arg_reject_unknown(kwargs,
                             {"cmdline", "name", "about", "env", "add_help"});
   NativeArgParser parser;
+  parser.cmdline = amber::runtime::current_runtime_process_arguments();
   if (const NativeValue *cmdline = native_arg_kw(kwargs, "cmdline")) {
     parser.cmdline = native_arg_string_list(*cmdline);
   }
@@ -13388,7 +13402,7 @@ static NativeValue native_argparser_named(const NativeValue &receiver,
 }
 
 static void native_arg_apply_choices(NativeArgParser::Spec *spec,
-                                     NativeArgKwArgs kwargs) {
+                                     const NativeArgKwArgs &kwargs) {
   const NativeValue *choices = native_arg_kw(kwargs, "choices");
   if (choices == nullptr || choices->tag == NativeValue::Tag::Null) return;
   const NativeList &list = as_list(*choices);
@@ -13398,7 +13412,8 @@ static void native_arg_apply_choices(NativeArgParser::Spec *spec,
 
 static NativeValue native_argparser_option(
     const NativeValue &receiver, const std::string &selector,
-    std::initializer_list<NativeValue> args, NativeArgKwArgs kwargs) {
+    std::initializer_list<NativeValue> args,
+    const NativeArgKwArgs &kwargs) {
   NativeArgParser &parser = as_mutable_arg_parser(receiver);
   const bool flag = selector == "flag";
   native_arg_reject_unknown(kwargs,
@@ -13436,7 +13451,7 @@ static NativeValue native_argparser_option(
 
 static NativeValue native_argparser_positional(
     const NativeValue &receiver, const std::string &selector,
-    const NativeValue &name_value, NativeArgKwArgs kwargs) {
+    const NativeValue &name_value, const NativeArgKwArgs &kwargs) {
   NativeArgParser &parser = as_mutable_arg_parser(receiver);
   const bool rest = selector == "rest";
   native_arg_reject_unknown(kwargs, {"type", "default", "required",
@@ -13601,14 +13616,14 @@ static bool native_arg_env_lookup(const NativeArgParser &parser,
 }
 
 static std::vector<std::string> native_arg_cmdline(
-    const NativeArgParser &parser, NativeArgKwArgs kwargs) {
+    const NativeArgParser &parser, const NativeArgKwArgs &kwargs) {
   const NativeValue *override_value = native_arg_kw(kwargs, "cmdline");
   if (override_value == nullptr) return parser.cmdline;
   return native_arg_string_list(*override_value);
 }
 
 static NativeValue native_argparser_parse_or_raise(const NativeValue &receiver,
-                                                   NativeArgKwArgs kwargs) {
+                                                   const NativeArgKwArgs &kwargs) {
   native_arg_reject_unknown(kwargs, {"cmdline"});
   const NativeArgParser &parser = as_arg_parser(receiver);
   const std::vector<std::string> cmdline = native_arg_cmdline(parser, kwargs);
@@ -16346,6 +16361,12 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "    return native_error_send(value, \"new\", args, "
          "std::move(block));\n";
   out << "  }\n";
+  out << "  if (value.tag == NativeValue::Tag::ArgParserModule) {\n";
+  out << "    if (!args.empty() || block.tag != NativeValue::Tag::Null) "
+         "throw NativeBailout();\n";
+  out << "    return native_argparser_new("
+         "value, native_arg_call_kwargs(kwargs));\n";
+  out << "  }\n";
   out << "  if (value.tag == NativeValue::Tag::Class) "
          "return native_user_send(value, \"new\", args, kwargs, "
          "std::move(block));\n";
@@ -17997,7 +18018,14 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   }
 
   out << "} // namespace\n\n";
-  out << "int main() {\n";
+  out << "int main(int argc, char **argv) {\n";
+  out << "  std::vector<std::string> process_arguments;\n";
+  out << "  process_arguments.reserve(argc > 1 ? "
+         "static_cast<std::size_t>(argc - 1) : 0U);\n";
+  out << "  for (int i = 1; i < argc; ++i) "
+         "process_arguments.emplace_back(argv[i]);\n";
+  out << "  amber::runtime::set_runtime_process_arguments("
+         "std::move(process_arguments));\n";
   out << "  const std::shared_ptr<amber::runtime::RuntimeTaskContext> "
          "root_task_context = amber::runtime::RuntimeTaskContext::create();\n";
   out << "  amber::runtime::RuntimeTaskContextScope root_task_scope("
@@ -18677,6 +18705,14 @@ int run_embedded_command(int argc, char **argv) {
     usage(std::cerr);
     return 2;
   }
+  std::vector<std::string> process_arguments;
+  process_arguments.reserve(
+      argc > 3 ? static_cast<std::size_t>(argc - 3) : 0U);
+  for (int i = 3; i < argc; ++i) {
+    process_arguments.emplace_back(argv[i]);
+  }
+  amber::runtime::set_runtime_process_arguments(
+      std::move(process_arguments));
   const EmbeddedExecutable executable = parse_embedded_executable(argv[2]);
   return run_runnable_module(executable.module_name, executable.entry_mode,
                              executable.bytes);

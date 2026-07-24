@@ -208,24 +208,28 @@ Consequences:
 
 ---
 
-## Gap 6 — Implicit self is out: bare identifiers stay lexical
+## Gap 6 — Lexical-first implicit self
 
-**Ruling: bare identifiers resolve lexically (locals → enclosing scopes →
-module scope) and are never implicit self member sends.** Instance and class
-members always require an explicit receiver inside bodies: `self.size`
-(which, being member access, gets bare-nullary behavior and invokes) and
-`@field` for storage.
+**Amended ruling (2026-07-24): name resolution is lexical first. If no
+lexical/import/module binding exists and the current procedure has an object
+receiver, a bare ordinary identifier is a dynamic member read on `self`. If
+there is no object receiver, the unresolved identifier is an error.**
 
-This extends the language's existing explicitness rule for fields (mandatory
-`@`) to methods, and eliminates Ruby's "local or self-send?" ambiguity class
-entirely. One normative sentence plus an example in the member-access
-section.
+The dynamic read uses exactly the existing bare-member rules:
 
-Caveat to verify during the spec patch: confirm the current binder/corpus
-does not already resolve unqualified calls `size()` inside method bodies to
-self methods. If it does, that existing rule must be stated explicitly
-either way — bare-nullary must not silently change unqualified-call
-resolution.
+- readable property → getter;
+- syntactically nullary method → zero-argument send;
+- non-nullary method → `AMB_BARE_NON_NULLARY` / `ArgumentError`;
+- missing member → ordinary missing-member handling.
+
+Lookup uses runtime class linearization, so inherited and `include`d members
+work without teaching the binder the framework's complete ancestry. A local,
+parameter, capture, import or module binding of the same name always shadows
+the member. Instance storage remains explicit as `@field`.
+
+This amendment aligns bare value access with the already implemented
+unqualified-call rule (`render(...)` inside a method sends to `self`) and
+keeps flat/module code unambiguous: it has no receiver fallback.
 
 ---
 

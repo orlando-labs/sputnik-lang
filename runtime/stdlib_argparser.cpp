@@ -1,3 +1,4 @@
+#include "runtime/context.h"
 #include "runtime/stdlib_registry.h"
 
 #include <algorithm>
@@ -822,6 +823,7 @@ SendStatus construct_parser(NativeStdlibCall &call) {
     return SendStatus::Faulted;
   }
   auto parser = std::make_shared<Parser>();
+  parser->cmdline = current_runtime_process_arguments();
   if (!apply_parser_metadata(call, parser.get())) {
     return SendStatus::Faulted;
   }

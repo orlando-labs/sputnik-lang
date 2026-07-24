@@ -398,6 +398,27 @@ void test_unresolved_name_diagnostics() {
   expect(literal_call[0].message == "undefined callable 'f'",
          "literal call diagnostic is callable-specific");
 
+  std::vector<amber::lexer::Diagnostic> inherited_bare =
+      unresolved_name_diagnostics_for("class Child:\n"
+                                      "  def action():\n"
+                                      "    params\n");
+  expect(inherited_bare.empty(),
+         "unresolved bare name in object method is an implicit self send");
+
+  std::vector<amber::lexer::Diagnostic> inherited_call =
+      unresolved_name_diagnostics_for("class Child:\n"
+                                      "  def action():\n"
+                                      "    render(text: \"ok\")\n");
+  expect(inherited_call.empty(),
+         "unresolved call in object method is an implicit self send");
+
+  std::vector<amber::lexer::Diagnostic> module_function_bare =
+      unresolved_name_diagnostics_for("def action():\n"
+                                      "  params\n");
+  expect(module_function_bare.size() == 1U &&
+             module_function_bare[0].message == "undefined name 'params'",
+         "module function without object self keeps undefined-name error");
+
   std::vector<amber::lexer::Diagnostic> reflective_send =
       unresolved_name_diagnostics_for("receiver = 1\n"
                                       "send(receiver, \"tick\")\n");

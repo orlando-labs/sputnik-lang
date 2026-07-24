@@ -5250,7 +5250,7 @@ A property descriptor is a named language-level member that may contain:
 The patch preserves the following existing design decisions (as amended by the accepted bare-nullary + dot-call RFC, 2026-06-12):
 
 1. Ordinary callable values are invoked with `fn(args...)` or with the chain-preserving dot-call `expr.(args...)`.
-2. Bare *identifiers* are ordinary binding reads and are never implicit call sites. Bare *member access* `receiver.name` resolves the member and may perform property get or an implicit zero-argument send when `name` is a syntactically nullary method (see the bare-nullary member access section).
+2. Bare identifiers resolve lexical/import/module bindings first. If none exists and the current procedure has an object receiver, the identifier resolves as bare member access on `self`; without an object receiver it is an undefined-name error. Bare *member access* `receiver.name` may perform property get or an implicit zero-argument send when `name` is a syntactically nullary method (see the bare-nullary member access section).
 3. `&target` creates an immutable callable reference object, not a raw machine address, and never invokes the target.
 4. `Class(args...)` remains ordinary `HCall` / `CALL` over a callable class object and follows the constructor path.
 5. Parser output remains syntax-faithful. A property declaration must not be erased into an ordinary method declaration at AST level.
@@ -5308,18 +5308,18 @@ settings.cache_dir
 clock.monotonic_time
 ```
 
-For bare *identifiers* this remains intentionally different from implicit nullary function calls:
+Lexically bound bare identifiers remain intentionally different from implicit nullary function calls:
 
 ```amber
 def f():
  42
 
-f # binding read; not f()
+f # lexical binding read; not f()
 f() # ordinary call
 &f # callable reference
 ```
 
-Bare ordinary identifiers remain value access, not hidden call sites. For *member access*, the accepted bare-nullary RFC additionally allows `receiver.name` to perform an implicit zero-argument send when `name` resolves to a syntactically nullary method, so `prop` and nullary `def` expose the same bare read surface:
+Bare ordinary identifiers that resolve lexically remain value access, not hidden call sites. Inside an instance/class method, a still-unresolved bare identifier falls back to `self.name`; this is member access and follows the accepted bare-nullary RFC. Thus inherited and included `prop`/nullary-`def` APIs expose the same concise read surface:
 
 ```amber
 collection.size # property get OR implicit nullary send
@@ -5346,7 +5346,7 @@ collection.size.() # call the value produced by `collection.size`
 | Ordinary method | A method declared with `def`, invoked with call syntax or ordinary send syntax. |
 | Callable reference | A first-class callable object created by `&target`. |
 
-Normative distinction (bare identifiers vs member access):
+Normative distinction (lexical identifiers vs member fallback):
 
 ```amber
 def f():
@@ -5355,11 +5355,26 @@ def f():
 prop g:
  42
 
-f # ordinary binding access; not an implicit call
+f # lexical binding access; not an implicit call
 f() # ordinary callable call
 &f # callable reference, when target is valid
 
 g # property get; evaluates the getter
+```
+
+Inside an object method, lexical resolution wins; only an unresolved name
+falls back to the current receiver:
+
+```amber
+class Controller:
+ def params(): 42
+
+ def inherited_api():
+  params # equivalent to self.params
+
+ def shadowed():
+  params = 7
+  params # local read; no send
 ```
 
 For object members the read surface is uniform across member kinds:
@@ -6196,7 +6211,7 @@ This section is source-compatible with existing Amber code unless that code alre
 
 `get` and `set` remain ordinary identifiers outside property arm-label position.
 
-Bare *identifiers* never become implicit call sites. Under the accepted bare-nullary RFC, bare *member access* `receiver.name` performs an implicit zero-argument send when `name` resolves to a syntactically nullary method; methods with any declared parameters (including defaults, rest, keyword or block parameters) are not bare-callable and diagnose `AMB_BARE_NON_NULLARY` / `ArgumentError`.
+Lexically resolved bare identifiers never become implicit call sites. A bare identifier unresolved after lexical/import/module lookup falls back to member access on `self` only in a procedure with an object receiver; otherwise it is an undefined-name error. Under the accepted bare-nullary RFC, this implicit-self access and explicit `receiver.name` both perform an implicit zero-argument send when `name` resolves to a syntactically nullary method; methods with any declared parameters (including defaults, rest, keyword or block parameters) are not bare-callable and diagnose `AMB_BARE_NON_NULLARY` / `ArgumentError`.
 
 Existing callable reference syntax remains unchanged:
 
@@ -7168,7 +7183,11 @@ obj.?.member()
 obj.member.?.()
 ```
 
-`&target` never invokes the target. Bare *identifiers* (`f`, locals, import-created bindings) remain ordinary binding reads and are never implicit call sites.
+`&target` never invokes the target. Bare identifiers that resolve to locals,
+parameters, captures, import-created bindings or module bindings are ordinary
+value reads and are never implicit call sites. In an object method only, a
+still-unresolved ordinary identifier is resolved as `self.name`; without an
+object receiver it is an undefined-name error.
 
 ### 2. Member read resolution (lookup-then-kind)
 

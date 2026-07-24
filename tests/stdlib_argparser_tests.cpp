@@ -3,6 +3,7 @@
 #include "frontend/hir/hir.h"
 #include "frontend/lexer/lexer.h"
 #include "frontend/parser/parser.h"
+#include "runtime/context.h"
 #include "runtime/vm.h"
 
 #include <cstdint>
@@ -386,6 +387,17 @@ void test_declaration_validation() {
                "ArgumentError", "duplicate option spelling");
 }
 
+void test_default_cmdline_uses_process_arguments() {
+  amber::runtime::set_runtime_process_arguments({"--count", "42"});
+  const amber::runtime::ExecutionResult result = execute_source(
+      "parser = ArgParser()\n"
+      "parser.arg(\"--count\", type: Int)\n"
+      "parser.parse_or_raise()[\"count\"]\n");
+  amber::runtime::set_runtime_process_arguments({});
+  expect_ok_integer(result, 42,
+                    "ArgParser default cmdline uses process arguments");
+}
+
 } // namespace
 
 int main() {
@@ -401,6 +413,7 @@ int main() {
   test_unhandled_error_name_and_trace();
   test_parse_cli_behavior();
   test_declaration_validation();
+  test_default_cmdline_uses_process_arguments();
 
   std::cout << "stdlib_argparser_tests: ok\n";
   return 0;

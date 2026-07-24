@@ -1,5 +1,6 @@
 #include "runtime/context.h"
 
+#include <mutex>
 #include <utility>
 
 namespace amber::runtime {
@@ -31,6 +32,21 @@ thread_local RuntimeIoParkRequest tls_runtime_io_park_request{};
 std::atomic<std::uint64_t> g_runtime_output_order{1};
 std::atomic<std::uint64_t> g_runtime_native_thread_ids{1};
 std::atomic<std::uint64_t> g_runtime_io_wait_ids{1};
+
+namespace {
+std::mutex g_runtime_process_arguments_mutex;
+std::vector<std::string> g_runtime_process_arguments;
+} // namespace
+
+void set_runtime_process_arguments(std::vector<std::string> arguments) {
+  std::lock_guard<std::mutex> lock(g_runtime_process_arguments_mutex);
+  g_runtime_process_arguments = std::move(arguments);
+}
+
+std::vector<std::string> current_runtime_process_arguments() {
+  std::lock_guard<std::mutex> lock(g_runtime_process_arguments_mutex);
+  return g_runtime_process_arguments;
+}
 
 RuntimeTextSourceLocationScope::RuntimeTextSourceLocationScope(
     RuntimeTextSourceLocation location)

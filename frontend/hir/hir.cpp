@@ -2191,11 +2191,28 @@ private:
       // text after binding, so their synthetic spans have no Reference entry.
       // The binder has still recorded every local/capture they use on the
       // enclosing procedure. Recover that binding by hygienic name before
-      // falling back to a constant lookup.
+      // considering an implicit receiver send.
       if (std::unique_ptr<Node> fallback = lower_procedure_name_fallback(
               expr, string_value(expr, "name"),
               string_value(expr, "syntax_context"))) {
         return fallback;
+      }
+      // Lexical resolution always wins. Only a still-unresolved ordinary name
+      // in an object method may fall back to a dynamic, syntactically-nullary
+      // send to the current receiver. This deliberately shares the existing
+      // bare-member path (`self.name`): inherited and included members resolve
+      // through runtime linearization, while non-nullary methods retain the
+      // AMB_BARE_NON_NULLARY/ArgumentError behavior. Module/top-level
+      // procedures have no object receiver and continue to produce an
+      // unresolved-name/constant-path error.
+      if (is_implicit_receiver_call(expr)) {
+        auto node = make_node("HSend", expr.span);
+        node->node_field("receiver", make_node("HSelf", expr.span));
+        node->string_field("selector", string_value(expr, "name"));
+        node->bool_field("property_access", true);
+        node->list_field("pos_args", {});
+        node->list_field("kw_args", {});
+        return node;
       }
       auto node = make_node("HLoadName", expr.span);
       node->string_field("name", string_value(expr, "name"));
@@ -2621,6 +2638,7 @@ private:
     }
     const std::string name = string_value(base, "name");
     if (name.empty() || name == "self" ||
+        binder::is_native_prelude_name(name) ||
         (name.front() >= 'A' && name.front() <= 'Z')) {
       return false;
     }

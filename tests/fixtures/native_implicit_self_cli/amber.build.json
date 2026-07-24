@@ -1,0 +1,20 @@
+{
+  "schema": "amber.build.v1",
+  "name": "native.implicit_self_cli",
+  "root": "native.implicit_self_cli.main",
+  "profiles": {
+    "required": ["core.v1"],
+    "optional": ["typed.v1"],
+    "forbidden": ["ffi.v1"]
+  },
+  "modules": [
+    {
+      "name": "native.implicit_self_cli.main",
+      "path": "src/main.am"
+    },
+    {
+      "name": "native.implicit_self_cli.framework",
+      "path": "src/framework.am"
+    }
+  ]
+}

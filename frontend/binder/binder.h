@@ -137,6 +137,10 @@ struct CallBindResult {
 
 BindResult bind_module(const std::vector<std::unique_ptr<ast::Expr>> &items,
                        const std::string &module_name);
+// True for names supplied by the runtime prelude rather than a lexical
+// binding. HIR uses the same predicate so these globals are never mistaken for
+// implicit receiver sends inside object methods.
+bool is_native_prelude_name(const std::string &name);
 std::vector<lexer::Diagnostic> unresolved_name_diagnostics(
     const std::vector<std::unique_ptr<ast::Expr>> &items,
     const BindGraph &graph);

@@ -1357,7 +1357,7 @@ bool contains_name_ref_key(const std::vector<NameRefKey> &keys,
   return false;
 }
 
-bool is_native_prelude_name(const std::string &name) {
+bool native_prelude_name_impl(const std::string &name) {
   static const std::set<std::string> names = {
       "Amber",
       "Array",
@@ -1487,6 +1487,10 @@ void collect_call_name_contexts(const ast::Expr &expr,
 } // namespace
 
 bool BindResult::ok() const { return diagnostics_ok(diagnostics); }
+
+bool is_native_prelude_name(const std::string &name) {
+  return native_prelude_name_impl(name);
+}
 
 CallSiteShape extract_call_shape(const ast::Expr &expr) {
   CallSiteShape result;
@@ -1683,6 +1687,32 @@ BindResult bind_module(const std::vector<std::unique_ptr<ast::Expr>> &items,
 std::vector<lexer::Diagnostic> unresolved_name_diagnostics(
     const std::vector<std::unique_ptr<ast::Expr>> &items,
     const BindGraph &graph) {
+  auto has_object_receiver = [&](int scope_index) {
+    for (int current = scope_index;
+         current >= 0 &&
+         static_cast<std::size_t>(current) < graph.scopes.size();
+         current = graph.scopes[current].parent_index) {
+      const std::string &kind = graph.scopes[current].kind;
+      if (kind == "class" || kind == "mixin") {
+        return true;
+      }
+      if (kind == "module") {
+        return false;
+      }
+    }
+    return false;
+  };
+  auto is_implicit_receiver_candidate = [&](const Reference &ref) {
+    if (!has_object_receiver(ref.scope_index) || ref.name.empty() ||
+        ref.name == "self") {
+      return false;
+    }
+    const unsigned char first =
+        static_cast<unsigned char>(ref.name.front());
+    return first < static_cast<unsigned char>('A') ||
+           first > static_cast<unsigned char>('Z');
+  };
+
   std::vector<NameRefKey> callable_names;
   std::vector<NameRefKey> reflective_names;
   for (const std::unique_ptr<ast::Expr> &item : items) {
@@ -1701,6 +1731,13 @@ std::vector<lexer::Diagnostic> unresolved_name_diagnostics(
       continue;
     }
     if (is_native_prelude_name(ref.name)) {
+      continue;
+    }
+    // An unresolved ordinary identifier inside an instance/class method is a
+    // dynamic send candidate. The runtime performs ancestry/mixin lookup and
+    // (for bare value access) enforces a syntactically-nullary signature.
+    // Outside an object-receiver scope it remains an undefined-name error.
+    if (is_implicit_receiver_candidate(ref)) {
       continue;
     }
     const bool callable = contains_name_ref_key(callable_names, key);

@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace amber::runtime {
 
@@ -161,5 +162,11 @@ std::uint64_t current_runtime_owner_strand_id();
 std::uint64_t current_runtime_resource_owner_id();
 
 std::uint32_t current_runtime_io_wait_depth();
+
+// Application arguments visible to ArgParser() when no explicit `cmdline:` is
+// supplied. Launchers set this once before Amber code starts; callers receive a
+// copy so parsing cannot mutate process-global state.
+void set_runtime_process_arguments(std::vector<std::string> arguments);
+std::vector<std::string> current_runtime_process_arguments();
 
 } // namespace amber::runtime

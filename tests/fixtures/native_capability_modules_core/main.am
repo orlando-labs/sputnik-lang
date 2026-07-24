@@ -34,5 +34,8 @@ def main() -> Int !{random, time, mut}:
     score = score + 1
   if delta.total_nanoseconds == 93784005000000 and shifted > base:
     score = score + 1
+  now = Time.now
+  if Time === now and now.unix_seconds > 0 and now.nanosecond >= 0 and now.nanosecond < 1000000000:
+    score = score + 1
 
   score

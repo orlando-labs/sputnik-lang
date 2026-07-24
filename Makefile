@@ -501,7 +501,7 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_str_bytes_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-str-bytes-core-build.json
 	$(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core.out
-	grep -q '^12$$' $(BUILD_DIR)/native-str-bytes-core.out
+	grep -q '^13$$' $(BUILD_DIR)/native-str-bytes-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_str_bytes_core/main.am > $(BUILD_DIR)/native-str-bytes-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-str-bytes-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-str-bytes-core.dump
@@ -515,7 +515,7 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_sequence_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-sequence-core-build.json
 	$(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core.out
-	grep -q '^18$$' $(BUILD_DIR)/native-sequence-core.out
+	grep -q '^20$$' $(BUILD_DIR)/native-sequence-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_sequence_core/main.am > $(BUILD_DIR)/native-sequence-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-sequence-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-sequence-core.dump
@@ -582,7 +582,7 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_capability_modules_core/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/native-capability-modules-core > $(BUILD_DIR)/native-capability-modules-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-capability-modules-core-build.json
 	$(BUILD_DIR)/native-capability-modules-core > $(BUILD_DIR)/native-capability-modules-core.out
-	grep -q '^10$$' $(BUILD_DIR)/native-capability-modules-core.out
+	grep -q '^11$$' $(BUILD_DIR)/native-capability-modules-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_capability_modules_core/main.am > $(BUILD_DIR)/native-capability-modules-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-capability-modules-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-capability-modules-core.dump

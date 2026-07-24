@@ -52,7 +52,7 @@ def main() -> int:
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     listener.bind(("127.0.0.1", 0))
-    listener.listen(2)
+    listener.listen(4)
     listener.settimeout(120)
     port = listener.getsockname()[1]
     received: list[bytes] = []
@@ -60,7 +60,7 @@ def main() -> int:
 
     def serve() -> None:
         try:
-            for index in range(3):
+            for index in range(4):
                 connection, _ = listener.accept()
                 with connection:
                     connection.settimeout(10)
@@ -83,7 +83,7 @@ def main() -> int:
     source.write_text(
         "package native.http_query\n\n"
         "import task\n"
-        "from net.http import Client, RequestBody, Server, ServerRequest, ServerResponse\n\n"
+        "from net.http import Client, Request, RequestBody, Server, ServerRequest, ServerResponse\n\n"
         "export main\n\n"
         "def main():\n"
         "  client = Client()\n"
@@ -104,7 +104,12 @@ def main() -> int:
         "    writer.write_all!(\"native-stream-body\".bytes)\n"
         f"  third = client.post(\"http://127.0.0.1:{port}/upload\", body: payload)\n"
         "  third_ok = third.status() == 209 and third.body_text() == \"native-query-ok-3\"\n"
+        f"  request = Request(method: :get, url: \"http://127.0.0.1:{port}/request\", headers: {{\"x-native-request\": \"preserved\"}})\n"
+        "  fourth = client.send(request)\n"
+        "  fourth_ok = fourth.status() == 210 and fourth.body_text() == \"native-query-ok-4\"\n"
         "  internal_server = Server(host: \"127.0.0.1\", port: 0, workers: 1)\n"
+        "  internal_endpoint = internal_server.local_endpoint()\n"
+        "  endpoint_ok = internal_endpoint.host() == \"127.0.0.1\" and internal_endpoint.family() == :inet\n"
         "  internal_port = internal_server.port()\n"
         "  runner = task.spawn:\n"
         "    internal_server.serve(max_requests: 1) |request|:\n"
@@ -120,7 +125,7 @@ def main() -> int:
         "  internal_trailer = internal.body().trailers().first(\"x-native-done\")\n"
         "  runner.wait()\n"
         "  internal_ok = internal.headers().first(\"transfer-encoding\") == \"chunked\" and internal.headers().first(\"x-native-one\") == \"one\" and internal.headers().first(\"x-native-two\") == \"two\" and internal_body == \"native-stream-response\" and internal_trailer == \"complete\"\n"
-        "  if types_ok and first_ok and second == \"native-query-ok-2\" and third_ok and internal_ok:\n"
+        "  if types_ok and first_ok and second == \"native-query-ok-2\" and third_ok and fourth_ok and endpoint_ok and internal_ok:\n"
         "    \"native-query-ok\"\n"
         "  else:\n"
         "    \"unexpected-query-result\"\n"
@@ -180,8 +185,8 @@ def main() -> int:
         fail(f"native executable exited {run.returncode}: {run.stderr}")
     if run.stdout != '"native-query-ok"\n':
         fail(f"unexpected stdout: {run.stdout!r}")
-    if len(received) != 3:
-        fail("server did not receive exactly three requests")
+    if len(received) != 4:
+        fail("server did not receive exactly four requests")
 
     for index, request in enumerate(received):
         head, separator, body = request.partition(b"\r\n\r\n")
@@ -191,7 +196,11 @@ def main() -> int:
         expected_line = (
             b"QUERY /search?active=1 HTTP/1.1"
             if index < 2
-            else b"POST /upload HTTP/1.1"
+            else (
+                b"POST /upload HTTP/1.1"
+                if index == 2
+                else b"GET /request HTTP/1.1"
+            )
         )
         if lines[0] != expected_line:
             fail(f"wrong request line: {lines[0]!r}")
@@ -204,10 +213,12 @@ def main() -> int:
             fail(f"wrong Content-Type: {headers.get(b'content-type')!r}")
         if index == 0 and headers.get(b"x-native-map") != b"preserved":
             fail(f"native Map bridge dropped a string key: {headers!r}")
+        if index == 3 and headers.get(b"x-native-request") != b"preserved":
+            fail(f"native Request bridge dropped a string key: {headers!r}")
         expected_body = (
             f"SELECT {index + 1}".encode()
             if index < 2
-            else b"native-stream-body"
+            else (b"native-stream-body" if index == 2 else b"")
         )
         if body != expected_body:
             fail(f"wrong request body: {body!r}")

@@ -1338,6 +1338,9 @@ bool native_cpp_collection_selector(const std::string &selector,
                                     std::uint32_t pos_count) {
   return ((selector == "[]" || selector == "[]?" || selector == "has_index?") &&
           pos_count == 1U) ||
+         (selector == "index" && (pos_count == 1U || pos_count == 2U)) ||
+         (selector == "rindex" && pos_count == 1U) ||
+         (selector == "times" && pos_count == 0U) ||
          (selector == "[]=" && pos_count == 2U) ||
          (selector == "store!" && pos_count == 2U) ||
          ((selector == "each" || selector == "each_with_index" ||
@@ -1417,7 +1420,8 @@ bool native_cpp_time_nullary_selector(const std::string &selector) {
          selector == "nanosecond" || selector == "weekday" ||
          selector == "yearday" || selector == "months" || selector == "days" ||
          selector == "nanoseconds" || selector == "fixed?" ||
-         selector == "total_nanoseconds" || selector == "monotonic";
+         selector == "total_nanoseconds" || selector == "monotonic" ||
+         selector == "now";
 }
 
 std::string native_cpp_time_selector_enum(const std::string &selector) {
@@ -1486,6 +1490,8 @@ std::string native_cpp_time_selector_enum(const std::string &selector) {
   }
   if (selector == "monotonic")
     return "NativeTimeSelector::Monotonic";
+  if (selector == "now")
+    return "NativeTimeSelector::Now";
   throw std::logic_error("unsupported native Time selector: " + selector);
 }
 
@@ -1842,7 +1848,7 @@ bool native_cpp_lookup_const_supported(
       native_cpp_constant_path_text(module, path_const_id);
   static const std::set<std::string> native_stdlib_bridge_paths = {
       "net", "net.http", "net.http.Client", "net.http.Server",
-      "net.http.RequestBody", "net.http.ServerRequest",
+      "net.http.Request", "net.http.RequestBody", "net.http.ServerRequest",
       "net.http.ServerResponse"};
   if (native_stdlib_bridge_paths.find(path_text) !=
       native_stdlib_bridge_paths.end()) {
@@ -2264,7 +2270,8 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
             selector == "map" || selector == "select" ||
             selector == "reject" || selector == "transform_keys" ||
             selector == "transform_values" || selector == "find" ||
-            selector == "any?" || selector == "all?" || selector == "none?") &&
+            selector == "any?" || selector == "all?" || selector == "none?" ||
+            selector == "times") &&
            pos_count == 0U && kw_count == 0U && !no_block) ||
           (selector == "reduce" && (pos_count == 0U || pos_count == 1U) &&
            kw_count == 0U && !no_block);
@@ -2607,6 +2614,8 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
                  pos_count == 1U) {
         http_send = kw_allowed(
             {"headers", "body", "timeout", "pool_timeout"});
+      } else if (selector == "send" && pos_count == 1U && no_block) {
+        http_send = kw_allowed({"timeout", "pool_timeout"});
       } else if (selector == "write_all!" && pos_count == 1U &&
                  kw_count == 0U && no_block) {
         http_send = true;
@@ -2636,7 +2645,8 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
                   selector == "client_error?" ||
                   selector == "server_error?" || selector == "closed?" ||
                   selector == "close!" || selector == "headers" ||
-                  selector == "body" || selector == "port" ||
+                  selector == "body" || selector == "host" ||
+                  selector == "family" || selector == "port" ||
                   selector == "local_endpoint" || selector == "workers" ||
                   selector == "max_concurrent_per_worker" ||
                   selector == "stats" || selector == "accepting?" ||
@@ -4509,6 +4519,11 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                 "NativeValue::runtime_handle(amber::runtime::Value::"
                 "native_type(amber::runtime::RuntimeNativeTypeKind::"
                 "NetHttpClient))";
+          } else if (path_text == "net.http.Request") {
+            native_module_expr =
+                "NativeValue::runtime_handle(amber::runtime::Value::"
+                "native_type(amber::runtime::RuntimeNativeTypeKind::"
+                "NetHttpRequest))";
           } else if (path_text == "net.http.Server") {
             native_module_expr =
                 "NativeValue::runtime_handle(amber::runtime::Value::"
@@ -5408,6 +5423,14 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       } else if (selector == "ends_with?") {
         write_reg_stmt(dst, "native_string_ends_with(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
+      } else if (selector == "index" || selector == "rindex") {
+        write_reg_stmt(
+            dst, "native_string_index(" + read_reg_expr(recv) + ", " +
+                     read_reg_expr(arg) + ", " +
+                     (pos_count == 2U ? read_reg_expr(arg2)
+                                      : "NativeValue::nullv()") +
+                     ", " + (pos_count == 2U ? "true" : "false") + ", " +
+                     (selector == "rindex" ? "true" : "false") + ")");
       } else if (selector == "split") {
         write_reg_stmt(dst, "native_string_split(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
@@ -5503,6 +5526,13 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                        "native_string_reverse(" + read_reg_expr(recv) + ")");
       } else if (selector == "chars") {
         write_reg_stmt(dst, "native_string_chars(" + read_reg_expr(recv) + ")");
+      } else if (selector == "times") {
+        write_reg_stmt(
+            dst, "native_integer_times(" + read_reg_expr(recv) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ")");
       } else if (selector == "concat") {
         write_reg_stmt(dst, "native_concat(" + read_reg_expr(recv) + ", " +
                                 read_reg_expr(arg) + ")");
@@ -6696,7 +6726,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
        ++const_id) {
     const std::string path = native_cpp_constant_path_text(module, const_id);
     if (path == "net" || path == "net.http" || path == "net.http.Client" ||
-        path == "net.http.Server" || path == "net.http.RequestBody" ||
+        path == "net.http.Request" || path == "net.http.Server" ||
+        path == "net.http.RequestBody" ||
         path == "net.http.ServerRequest" || path == "net.http.ServerResponse") {
       plan.uses_native_stdlib_bridge = true;
       break;
@@ -9179,6 +9210,36 @@ static void native_append_keyword_call_spread(
          "text.compare(text.size() - needle.size(), needle.size(), needle) "
          "== 0);\n";
   out << "}\n\n";
+  out << "static NativeValue native_string_index(const NativeValue &value, "
+         "const NativeValue &needle_value, const NativeValue &offset_value, "
+         "bool has_offset, bool reverse) {\n";
+  out << "  if (!native_value_is_string(value) || "
+         "!native_value_is_string(needle_value)) throw NativeBailout();\n";
+  out << "  const std::string &text = native_string_text(value);\n";
+  out << "  std::size_t start_byte = 0;\n";
+  out << "  if (has_offset) {\n";
+  out << "    if (offset_value.tag != NativeValue::Tag::Integer || "
+         "offset_value.scalar_value < 0) throw NativeBailout();\n";
+  out << "    std::int64_t remaining = offset_value.scalar_value;\n";
+  out << "    while (remaining > 0 && start_byte < text.size()) {\n";
+  out << "      ++start_byte;\n";
+  out << "      while (start_byte < text.size() && "
+         "(static_cast<unsigned char>(text[start_byte]) & 0xC0U) == 0x80U) "
+         "++start_byte;\n";
+  out << "      --remaining;\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  const std::size_t position = reverse "
+         "? text.rfind(native_string_text(needle_value)) "
+         ": text.find(native_string_text(needle_value), start_byte);\n";
+  out << "  if (position == std::string::npos) return NativeValue::nullv();\n";
+  out << "  std::int64_t codepoint_offset = 0;\n";
+  out << "  for (std::size_t index = 0; index < position; ++index) {\n";
+  out << "    if ((static_cast<unsigned char>(text[index]) & 0xC0U) "
+         "!= 0x80U) ++codepoint_offset;\n";
+  out << "  }\n";
+  out << "  return NativeValue::integer(codepoint_offset);\n";
+  out << "}\n\n";
   out << "static NativeValue native_string_split(const NativeValue &value, "
          "const NativeValue &separator) {\n";
   out << "  if (!native_value_is_string(value) || "
@@ -10750,6 +10811,28 @@ static NativeValue native_each(const NativeValue &value,
     return value;
   }
   throw NativeBailout();
+}
+
+static NativeValue native_integer_times(const NativeValue &value,
+                                        const NativeValue &block_value,
+                                        bool has_block) {
+  if (value.tag != NativeValue::Tag::Integer) throw NativeBailout();
+  const std::int64_t count = value.scalar_value;
+  if (!has_block) {
+    std::vector<NativeValue> indices;
+    if (count > 0) {
+      indices.reserve(static_cast<std::size_t>(count));
+      for (std::int64_t index = 0; index < count; ++index) {
+        indices.push_back(NativeValue::integer(index));
+      }
+    }
+    return NativeValue::list(std::move(indices));
+  }
+  for (std::int64_t index = 0; index < count; ++index) {
+    (void)amber_native_call_closure(
+        block_value, {NativeValue::integer(index)});
+  }
+  return NativeValue::nullv();
 }
 
 static NativeValue native_each_with_index(const NativeValue &value,
@@ -13781,6 +13864,7 @@ enum class NativeTimeSelector {
   FixedPredicate,
   TotalNanoseconds,
   Monotonic,
+  Now,
 };
 
 static bool native_time_selector_is_unit(NativeTimeSelector selector) {
@@ -13903,6 +13987,17 @@ static NativeValue native_time_period_unit(const NativeValue &receiver,
 
 static NativeValue native_time_nullary(const NativeValue &receiver,
                                        NativeTimeSelector selector) {
+  if (receiver.tag == NativeValue::Tag::TimeModule &&
+      selector == NativeTimeSelector::Now) {
+    const auto now = std::chrono::system_clock::now().time_since_epoch();
+    const std::int64_t nanoseconds =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now).count();
+    return NativeValue::time(NativeTime{
+        native_floor_div_i64(nanoseconds, kNativeNanosPerSecond),
+        static_cast<std::uint32_t>(
+            native_floor_mod_i64(nanoseconds, kNativeNanosPerSecond)),
+        0, "UTC", true});
+  }
   if (receiver.tag == NativeValue::Tag::TimeModule &&
       selector == NativeTimeSelector::Monotonic) {
     const auto now = std::chrono::steady_clock::now().time_since_epoch();
@@ -16527,7 +16622,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "    runtime_kwargs.push_back({kwarg.name, "
            "amber_native_bridge_argument(kwarg.value)});\n";
     out << "  }\n";
-    out << "  if (selector == \"query\" || selector == \"connect\" || "
+    out << "  if (selector == \"query\" || selector == \"send\" || "
+           "selector == \"connect\" || "
            "selector == \"write_all!\" || selector == \"read_all!\" || "
            "selector == \"body_text\" || "
            "selector == \"body_bytes\" || selector == \"close!\" || "
@@ -17260,6 +17356,19 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  if (matcher.tag == NativeValue::Tag::StrictMapType) "
          "return value.tag == NativeValue::Tag::StrictMapType || "
          "(value.tag == NativeValue::Tag::Map && as_map(value).strict);\n";
+  out << "  if (matcher.tag == NativeValue::Tag::UuidModule || "
+         "matcher.tag == NativeValue::Tag::RegexpModule || "
+         "matcher.tag == NativeValue::Tag::TimeModule || "
+         "matcher.tag == NativeValue::Tag::TimePeriodModule || "
+         "matcher.tag == NativeValue::Tag::BytesModule || "
+         "matcher.tag == NativeValue::Tag::RangeModule || "
+         "matcher.tag == NativeValue::Tag::UrlModule || "
+         "matcher.tag == NativeValue::Tag::BenchmarkModule || "
+         "matcher.tag == NativeValue::Tag::ArgParserModule) {\n";
+  out << "    NativeValue matched = native_type_matches(matcher, value);\n";
+  out << "    return matched.tag == NativeValue::Tag::Bool && "
+         "matched.scalar_value != 0;\n";
+  out << "  }\n";
   out << "  return native_value_equal(matcher, value);\n";
   out << "}\n\n";
   for (const amber::bytecode::BcCode &code : module.code_objects) {

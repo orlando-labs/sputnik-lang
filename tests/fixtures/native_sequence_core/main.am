@@ -52,4 +52,12 @@ def main():
     score = score + 1
   if [].empty?() and Range.new(5, 1).empty?():
     score = score + 1
+  indices = 3.times()
+  if indices.count() == 3 and indices[0] == 0 and indices[2] == 2:
+    score = score + 1
+  total = 0
+  4.times |index|:
+    total = total + index
+  if total == 6:
+    score = score + 1
   score

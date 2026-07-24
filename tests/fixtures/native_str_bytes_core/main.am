@@ -34,4 +34,6 @@ def main():
   picked = {a: 1, b: 2, c: 3}.slice("b", "c")
   if picked.count() == 2 and picked["c"] == 3:
     score = score + 1
+  if "aé:aé".index(":") == 2 and "aé:aé".index("a", 2) == 3 and "aé:aé".rindex(":") == 2 and "amber".rindex("z") == null:
+    score = score + 1
   score

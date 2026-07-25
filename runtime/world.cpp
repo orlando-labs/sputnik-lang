@@ -427,11 +427,34 @@ Value RuntimeWorld::symbol_value(std::string text) {
   return Value::symbol(id);
 }
 
-Value RuntimeWorld::list_value(std::vector<Value> items) {
+Value RuntimeWorld::list_value(std::vector<Value> items, bool frozen) {
   if (impl_ == nullptr || impl_->state == nullptr) {
     return Value::null();
   }
-  return impl_->state->heap.make_list_value(std::move(items));
+  return impl_->state->heap.make_list_value(std::move(items), frozen);
+}
+
+Value RuntimeWorld::tuple_value(std::vector<Value> items) {
+  if (impl_ == nullptr || impl_->state == nullptr) {
+    return Value::null();
+  }
+  return impl_->state->heap.make_tuple_value(std::move(items));
+}
+
+Value RuntimeWorld::set_value(std::vector<Value> items, bool frozen) {
+  if (impl_ == nullptr || impl_->state == nullptr) {
+    return Value::null();
+  }
+  return impl_->state->heap.make_set_value(std::move(items), frozen);
+}
+
+Value RuntimeWorld::symbol_map_value(std::vector<MapEntry> entries,
+                                     bool frozen, bool strict) {
+  if (impl_ == nullptr || impl_->state == nullptr) {
+    return Value::null();
+  }
+  return impl_->state->heap.make_symbol_map_value(std::move(entries), frozen,
+                                                   strict);
 }
 
 ExecutionResult RuntimeWorld::execute(std::uint32_t code_id,

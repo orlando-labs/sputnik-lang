@@ -354,7 +354,11 @@ public:
       Value block = Value::null());
   Value string_value(std::string text);
   Value symbol_value(std::string text);
-  Value list_value(std::vector<Value> items);
+  Value list_value(std::vector<Value> items, bool frozen = false);
+  Value tuple_value(std::vector<Value> items);
+  Value set_value(std::vector<Value> items, bool frozen = false);
+  Value symbol_map_value(std::vector<MapEntry> entries, bool frozen = false,
+                         bool strict = false);
 
   ExecutionResult define_instance_method(std::uint32_t class_index,
                                          bytecode::BcMethod method);

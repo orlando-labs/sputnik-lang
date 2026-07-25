@@ -4726,10 +4726,12 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         operand_u32_value(instruction, operand_index++, &kind);
         operand_u32_value(instruction, operand_index++, &slot);
         if (kind == 0U) {
-          out << "    next_closure->captures.push_back(local_cell(frame, "
+          out << "    native_closure_capture(next_closure, "
+                 "local_cell(frame, "
               << slot << "));\n";
         } else {
-          out << "    next_closure->captures.push_back(capture_cell(frame, "
+          out << "    native_closure_capture(next_closure, "
+                 "capture_cell(frame, "
               << slot << "));\n";
         }
       }
@@ -7443,17 +7445,78 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  std::unordered_map<std::string, NativeValue> ivars;\n";
   out << "  AMBER_NATIVE_POOL_NEW\n";
   out << "};\n";
-  out << "struct NativeCell { NativeValue value; };\n";
-  out << "struct NativeClosure {\n";
+  out << "struct NativeCell : NativeRcHeader { NativeValue value; };\n";
+  out << "static void native_cell_retain(NativeCell *cell);\n";
+  out << "static void native_cell_release(NativeCell *cell);\n";
+  out << "static void native_closure_delete(NativeClosure *closure);\n";
+  out << "struct NativeClosure : NativeRcHeader {\n";
   out << "  std::uint32_t code_id = 0;\n";
   out << "  std::vector<NativeCell *> captures;\n";
   out << "  NativeValue self = NativeValue::nullv();\n";
   out << "  NativeValue block = NativeValue::nullv();\n";
+  out << "  NativeClosure() = default;\n";
+  out << "  NativeClosure(const NativeClosure &other);\n";
+  out << "  NativeClosure(NativeClosure &&other) noexcept;\n";
+  out << "  NativeClosure &operator=(const NativeClosure &other);\n";
+  out << "  NativeClosure &operator=(NativeClosure &&other) noexcept;\n";
+  out << "  ~NativeClosure();\n";
   out << "};\n\n";
+  out << R"AMBERCPP(struct NativeTrackedAllocation {
+  NativeValue::Tag tag = NativeValue::Tag::Null;
+  std::uint64_t scope_id = 0;
+  bool cell = false;
+};
+static std::mutex native_tracked_allocations_mutex;
+static std::unordered_map<void *, NativeTrackedAllocation>
+    native_tracked_allocations;
+static std::atomic<std::uint64_t> native_next_cycle_scope_id{1};
+static thread_local std::uint64_t native_active_cycle_scope_id = 0;
+static void native_collect_cycle_scope(std::uint64_t scope_id);
+
+static void native_track_payload(NativeValue::Tag tag, void *payload) {
+  if (payload == nullptr || native_active_cycle_scope_id == 0) return;
+  std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+  native_tracked_allocations[payload] =
+      NativeTrackedAllocation{tag, native_active_cycle_scope_id, false};
+}
+static void native_track_cell(NativeCell *cell) {
+  if (cell == nullptr || native_active_cycle_scope_id == 0) return;
+  std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+  native_tracked_allocations[cell] =
+      NativeTrackedAllocation{NativeValue::Tag::Null,
+                              native_active_cycle_scope_id, true};
+}
+static void native_untrack_payload(void *payload) {
+  if (payload == nullptr) return;
+  std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+  native_tracked_allocations.erase(payload);
+}
+
+class NativeCycleScope {
+public:
+  NativeCycleScope()
+      : previous_scope_id_(native_active_cycle_scope_id),
+        scope_id_(native_next_cycle_scope_id.fetch_add(
+            1, std::memory_order_relaxed)) {
+    native_active_cycle_scope_id = scope_id_;
+  }
+  NativeCycleScope(const NativeCycleScope &) = delete;
+  NativeCycleScope &operator=(const NativeCycleScope &) = delete;
+  ~NativeCycleScope() {
+    native_active_cycle_scope_id = previous_scope_id_;
+    native_collect_cycle_scope(scope_id_);
+  }
+
+private:
+  std::uint64_t previous_scope_id_ = 0;
+  std::uint64_t scope_id_ = 0;
+};
+
+)AMBERCPP";
   out << R"AMBERCPP(// Refcounted tags are contiguous; the hot paths are a bit copy plus one
 // range test. Payload deletion is the only place that needs the type switch.
 inline bool native_value_tag_refcounted(NativeValue::Tag tag) {
-  return tag >= NativeValue::Tag::Bytes && tag <= NativeValue::Tag::Instance;
+  return tag >= NativeValue::Tag::Bytes && tag <= NativeValue::Tag::Closure;
 }
 inline bool native_value_is_string(const NativeValue &value) {
   return value.tag == NativeValue::Tag::String ||
@@ -7502,6 +7565,7 @@ AMBER_NATIVE_ALWAYS_INLINE NativeValue &NativeValue::operator=(NativeValue &&oth
 }
 AMBER_NATIVE_ALWAYS_INLINE NativeValue::~NativeValue() { destroy(); }
 static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
+  native_untrack_payload(payload);
   switch (tag) {
     case NativeValue::Tag::Bytes:
       delete static_cast<NativeBytes *>(payload); return;
@@ -7553,17 +7617,316 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
       delete static_cast<NativeRuntimeHandle *>(payload); return;
     case NativeValue::Tag::Instance:
       delete static_cast<NativeInstance *>(payload); return;
+    case NativeValue::Tag::Closure:
+      native_closure_delete(static_cast<NativeClosure *>(payload)); return;
     default: return;
   }
 }
 
 )AMBERCPP";
-  out << "struct NativeArena {\n";
-  out << "  std::mutex mutex;\n";
-  out << "  std::vector<std::unique_ptr<NativeClosure>> closures;\n";
-  out << "  std::vector<std::unique_ptr<NativeCell>> cells;\n";
-  out << "};\n";
-  out << "static NativeArena native_arena;\n\n";
+  out << R"AMBERCPP(static std::atomic<std::uint64_t> native_live_closures{0};
+static std::atomic<std::uint64_t> native_live_cells{0};
+static std::atomic<std::uint64_t> native_total_closures{0};
+static std::atomic<std::uint64_t> native_total_cells{0};
+
+static void native_closure_delete(NativeClosure *closure) {
+  native_live_closures.fetch_sub(1, std::memory_order_relaxed);
+  delete closure;
+}
+static void native_cell_retain(NativeCell *cell) {
+  if (cell != nullptr) {
+    cell->rc.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+static void native_cell_release(NativeCell *cell) {
+  if (cell != nullptr &&
+      cell->rc.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    native_untrack_payload(cell);
+    native_live_cells.fetch_sub(1, std::memory_order_relaxed);
+    delete cell;
+  }
+}
+NativeClosure::NativeClosure(const NativeClosure &other)
+    : NativeRcHeader(other), code_id(other.code_id), captures(other.captures),
+      self(other.self), block(other.block) {
+  for (NativeCell *cell : captures) native_cell_retain(cell);
+}
+NativeClosure::NativeClosure(NativeClosure &&other) noexcept
+    : NativeRcHeader(), code_id(other.code_id),
+      captures(std::move(other.captures)), self(std::move(other.self)),
+      block(std::move(other.block)) {
+  other.captures.clear();
+}
+NativeClosure &NativeClosure::operator=(const NativeClosure &other) {
+  if (this == &other) return *this;
+  NativeClosure copied(other);
+  *this = std::move(copied);
+  return *this;
+}
+NativeClosure &NativeClosure::operator=(NativeClosure &&other) noexcept {
+  if (this == &other) return *this;
+  for (NativeCell *cell : captures) native_cell_release(cell);
+  code_id = other.code_id;
+  captures = std::move(other.captures);
+  self = std::move(other.self);
+  block = std::move(other.block);
+  other.captures.clear();
+  return *this;
+}
+NativeClosure::~NativeClosure() {
+  for (NativeCell *cell : captures) native_cell_release(cell);
+}
+static void native_closure_capture(NativeClosure *closure, NativeCell *cell) {
+  if (closure == nullptr || cell == nullptr) throw NativeBailout();
+  native_cell_retain(cell);
+  closure->captures.push_back(cell);
+}
+
+)AMBERCPP";
+  out << R"AMBERCPP(struct NativeCycleNode {
+  void *payload = nullptr;
+  NativeTrackedAllocation allocation;
+  std::int64_t external_refs = 0;
+  std::vector<std::size_t> edges;
+  bool marked = false;
+};
+
+static void native_collect_cycle_scope(std::uint64_t scope_id) {
+  std::vector<NativeCycleNode> nodes;
+  {
+    std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+    for (const auto &[payload, allocation] : native_tracked_allocations) {
+      if (allocation.scope_id != scope_id) continue;
+      auto *header = static_cast<NativeRcHeader *>(payload);
+      nodes.push_back(NativeCycleNode{
+          payload, allocation,
+          static_cast<std::int64_t>(
+              header->rc.load(std::memory_order_acquire)),
+          {}, false});
+    }
+  }
+  if (nodes.empty()) return;
+
+  std::unordered_map<void *, std::size_t> node_indices;
+  node_indices.reserve(nodes.size());
+  for (std::size_t index = 0; index < nodes.size(); ++index) {
+    node_indices.emplace(nodes[index].payload, index);
+  }
+  const auto add_payload_edge =
+      [&](NativeCycleNode &node, void *payload) {
+        if (payload == nullptr) return;
+        const auto found = node_indices.find(payload);
+        if (found == node_indices.end()) return;
+        node.edges.push_back(found->second);
+        --nodes[found->second].external_refs;
+      };
+  const auto add_value_edge =
+      [&](NativeCycleNode &node, const NativeValue &value) {
+        if (native_value_tag_refcounted(value.tag)) {
+          add_payload_edge(node, value.heap_value);
+        }
+      };
+
+  for (NativeCycleNode &node : nodes) {
+    if (node.allocation.cell) {
+      add_value_edge(node, static_cast<NativeCell *>(node.payload)->value);
+      continue;
+    }
+    switch (node.allocation.tag) {
+      case NativeValue::Tag::List:
+        for (const NativeValue &value :
+             static_cast<NativeList *>(node.payload)->items) {
+          add_value_edge(node, value);
+        }
+        break;
+      case NativeValue::Tag::Tuple:
+        for (const NativeValue &value :
+             static_cast<NativeTuple *>(node.payload)->items) {
+          add_value_edge(node, value);
+        }
+        break;
+      case NativeValue::Tag::Set:
+        for (const NativeValue &value :
+             static_cast<NativeSet *>(node.payload)->items) {
+          add_value_edge(node, value);
+        }
+        break;
+      case NativeValue::Tag::Map:
+        for (const auto &[key, value] :
+             static_cast<NativeMap *>(node.payload)->entries) {
+          add_value_edge(node, key);
+          add_value_edge(node, value);
+        }
+        break;
+      case NativeValue::Tag::ArgParser:
+        for (const NativeArgParser::Spec &spec :
+             static_cast<NativeArgParser *>(node.payload)->specs) {
+          if (spec.has_default) add_value_edge(node, spec.default_value);
+          if (spec.has_choices) {
+            for (const NativeValue &choice : spec.choices) {
+              add_value_edge(node, choice);
+            }
+          }
+        }
+        break;
+      case NativeValue::Tag::RegexpMatch:
+        add_value_edge(
+            node, static_cast<NativeRegexpMatch *>(node.payload)->pattern);
+        break;
+      case NativeValue::Tag::Result:
+        add_value_edge(
+            node, static_cast<NativeResult *>(node.payload)->payload);
+        break;
+      case NativeValue::Tag::Atomic: {
+        auto *atomic = static_cast<NativeAtomic *>(node.payload);
+        std::lock_guard<std::mutex> guard(atomic->mutex);
+        add_value_edge(node, atomic->value);
+        break;
+      }
+      case NativeValue::Tag::ErrorInstance: {
+        auto *error = static_cast<NativeErrorInstance *>(node.payload);
+        add_value_edge(node, error->message);
+        for (const NativeValue &suppressed : error->suppressed) {
+          add_value_edge(node, suppressed);
+        }
+        break;
+      }
+      case NativeValue::Tag::Instance:
+        for (const auto &[name, value] :
+             static_cast<NativeInstance *>(node.payload)->ivars) {
+          (void)name;
+          add_value_edge(node, value);
+        }
+        break;
+      case NativeValue::Tag::Closure: {
+        auto *closure = static_cast<NativeClosure *>(node.payload);
+        add_value_edge(node, closure->self);
+        add_value_edge(node, closure->block);
+        for (NativeCell *cell : closure->captures) {
+          add_payload_edge(node, cell);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  std::vector<std::size_t> pending;
+  pending.reserve(nodes.size());
+  for (std::size_t index = 0; index < nodes.size(); ++index) {
+    // A non-zero residual is conservatively treated as an external root.
+    // Negative values indicate an incomplete edge model and must never make
+    // a potentially live allocation collectible.
+    if (nodes[index].external_refs != 0) {
+      nodes[index].marked = true;
+      pending.push_back(index);
+    }
+  }
+  while (!pending.empty()) {
+    const std::size_t index = pending.back();
+    pending.pop_back();
+    for (const std::size_t target : nodes[index].edges) {
+      if (nodes[target].marked) continue;
+      nodes[target].marked = true;
+      pending.push_back(target);
+    }
+  }
+
+  std::vector<std::size_t> garbage;
+  garbage.reserve(nodes.size());
+  {
+    std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+    for (std::size_t index = 0; index < nodes.size(); ++index) {
+      if (nodes[index].marked) continue;
+      garbage.push_back(index);
+      native_tracked_allocations.erase(nodes[index].payload);
+      static_cast<NativeRcHeader *>(nodes[index].payload)->rc.store(
+          std::numeric_limits<std::uint32_t>::max() / 2,
+          std::memory_order_release);
+    }
+  }
+  if (garbage.empty()) return;
+
+  // Break every outgoing edge while all garbage shells are still alive.
+  // This makes destruction order irrelevant even for densely connected
+  // closure/cell/container cycles.
+  for (const std::size_t index : garbage) {
+    NativeCycleNode &node = nodes[index];
+    if (node.allocation.cell) {
+      static_cast<NativeCell *>(node.payload)->value = NativeValue::nullv();
+      continue;
+    }
+    switch (node.allocation.tag) {
+      case NativeValue::Tag::List:
+        static_cast<NativeList *>(node.payload)->items.clear();
+        break;
+      case NativeValue::Tag::Tuple:
+        static_cast<NativeTuple *>(node.payload)->items.clear();
+        break;
+      case NativeValue::Tag::Set:
+        static_cast<NativeSet *>(node.payload)->items.clear();
+        break;
+      case NativeValue::Tag::Map: {
+        auto *map = static_cast<NativeMap *>(node.payload);
+        map->entries.clear();
+        map->name_index.clear();
+        map->inline_name_index_size = 0;
+        break;
+      }
+      case NativeValue::Tag::ArgParser:
+        static_cast<NativeArgParser *>(node.payload)->specs.clear();
+        break;
+      case NativeValue::Tag::RegexpMatch:
+        static_cast<NativeRegexpMatch *>(node.payload)->pattern =
+            NativeValue::nullv();
+        break;
+      case NativeValue::Tag::Result:
+        static_cast<NativeResult *>(node.payload)->payload =
+            NativeValue::nullv();
+        break;
+      case NativeValue::Tag::Atomic: {
+        auto *atomic = static_cast<NativeAtomic *>(node.payload);
+        std::lock_guard<std::mutex> guard(atomic->mutex);
+        atomic->value = NativeValue::nullv();
+        break;
+      }
+      case NativeValue::Tag::ErrorInstance: {
+        auto *error = static_cast<NativeErrorInstance *>(node.payload);
+        error->message = NativeValue::nullv();
+        error->suppressed.clear();
+        break;
+      }
+      case NativeValue::Tag::Instance:
+        static_cast<NativeInstance *>(node.payload)->ivars.clear();
+        break;
+      case NativeValue::Tag::Closure: {
+        auto *closure = static_cast<NativeClosure *>(node.payload);
+        closure->self = NativeValue::nullv();
+        closure->block = NativeValue::nullv();
+        for (NativeCell *cell : closure->captures) {
+          native_cell_release(cell);
+        }
+        closure->captures.clear();
+        break;
+      }
+      default:
+        break;
+    }
+  }
+
+  for (const std::size_t index : garbage) {
+    NativeCycleNode &node = nodes[index];
+    if (node.allocation.cell) {
+      native_live_cells.fetch_sub(1, std::memory_order_relaxed);
+      delete static_cast<NativeCell *>(node.payload);
+    } else {
+      native_value_delete_payload(node.allocation.tag, node.payload);
+    }
+  }
+}
+
+)AMBERCPP";
   out << "static amber::runtime::RuntimeErrorRegistry "
          "native_error_registry;\n";
   out << "static const std::string &native_error_namespace_path("
@@ -7644,39 +8007,49 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   out << "    if (key_id.has_value()) map.name_index.emplace(*key_id, i);\n";
   out << "  }\n";
   out << "}\n\n";
+  out << "static NativeValue native_track_value(NativeValue value) {\n";
+  out << "  native_track_payload(value.tag, value.heap_value);\n";
+  out << "  return value;\n";
+  out << "}\n";
   out << "NativeValue NativeValue::heap_string(std::string text) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeHeapString(std::move(text));\n";
-  out << "  out.tag = Tag::HeapString; return out;\n";
+  out << "  out.tag = Tag::HeapString; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::error_namespace(std::string path) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeHeapString(std::move(path));\n";
-  out << "  out.tag = Tag::ErrorNamespace; return out;\n";
+  out << "  out.tag = Tag::ErrorNamespace; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::bytes(std::string value) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *bytes = new NativeBytes();\n";
   out << "  bytes->bytes = std::move(value);\n";
-  out << "  out.heap_value = bytes; out.tag = Tag::Bytes; return out;\n";
+  out << "  out.heap_value = bytes; out.tag = Tag::Bytes; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::list(std::vector<NativeValue> items) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *list = new NativeList();\n";
   out << "  list->items = std::move(items);\n";
-  out << "  out.heap_value = list; out.tag = Tag::List; return out;\n";
+  out << "  out.heap_value = list; out.tag = Tag::List; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::tuple(std::vector<NativeValue> items) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *tuple = new NativeTuple();\n";
   out << "  tuple->items = std::move(items);\n";
-  out << "  out.heap_value = tuple; out.tag = Tag::Tuple; return out;\n";
+  out << "  out.heap_value = tuple; out.tag = Tag::Tuple; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::set(std::vector<NativeValue> items) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *set = new NativeSet();\n";
   out << "  set->items = std::move(items);\n";
-  out << "  out.heap_value = set; out.tag = Tag::Set; return out;\n";
+  out << "  out.heap_value = set; out.tag = Tag::Set; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::map_entries("
          "std::vector<std::pair<NativeValue, NativeValue>> entries, "
@@ -7685,7 +8058,8 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   out << "  auto *map = new NativeMap();\n";
   out << "  map->entries = std::move(entries); map->strict = strict; "
          "native_map_rebuild_index(*map);\n";
-  out << "  out.heap_value = map; out.tag = Tag::Map; return out;\n";
+  out << "  out.heap_value = map; out.tag = Tag::Map; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::map(std::vector<std::pair<std::string, "
          "NativeValue>> entries) {\n";
@@ -7701,34 +8075,40 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   out << "NativeValue NativeValue::range(NativeRange value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeRange(value);\n";
-  out << "  out.tag = Tag::Range; return out;\n";
+  out << "  out.tag = Tag::Range; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::arg_parser(NativeArgParser value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeArgParser(std::move(value));\n";
-  out << "  out.tag = Tag::ArgParser; return out;\n";
+  out << "  out.tag = Tag::ArgParser; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::fs_path(NativeFsPath value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeFsPath(std::move(value));\n";
-  out << "  out.tag = Tag::FsPath; return out;\n";
+  out << "  out.tag = Tag::FsPath; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::regexp(NativeRegexp value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeRegexp(std::move(value));\n";
-  out << "  out.tag = Tag::Regexp; return out;\n";
+  out << "  out.tag = Tag::Regexp; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::regexp_match(NativeRegexpMatch value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeRegexpMatch(std::move(value));\n";
-  out << "  out.tag = Tag::RegexpMatch; return out;\n";
+  out << "  out.tag = Tag::RegexpMatch; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::text_writer("
          "std::shared_ptr<amber::runtime::RuntimeTextWriter> value) {\n";
   out << "  if (value == nullptr) throw NativeBailout();\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeTextWriter(std::move(value));\n";
-  out << "  out.tag = Tag::TextWriter; return out;\n";
+  out << "  out.tag = Tag::TextWriter; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::task("
          "amber::runtime::RuntimeTaskHandle handle, "
@@ -7736,57 +8116,67 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeTask(std::move(handle), "
          "std::move(state));\n";
-  out << "  out.tag = Tag::Task; return out;\n";
+  out << "  out.tag = Tag::Task; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::task_local(bool inherit) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeTaskLocal(inherit);\n";
-  out << "  out.tag = Tag::TaskLocal; return out;\n";
+  out << "  out.tag = Tag::TaskLocal; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::task_local("
          "amber::runtime::RuntimeTaskLocalKey key) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeTaskLocal(std::move(key));\n";
-  out << "  out.tag = Tag::TaskLocal; return out;\n";
+  out << "  out.tag = Tag::TaskLocal; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::result(bool is_ok, NativeValue payload) {\n";
   out << "  NativeValue out; auto *result = new NativeResult();\n";
   out << "  result->is_ok = is_ok; result->payload = std::move(payload);\n";
-  out << "  out.heap_value = result; out.tag = Tag::Result; return out;\n";
+  out << "  out.heap_value = result; out.tag = Tag::Result; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::uuid(amber::runtime::RuntimeUuidValue "
          "value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeUuidBox{value};\n";
-  out << "  out.tag = Tag::Uuid; return out;\n";
+  out << "  out.tag = Tag::Uuid; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::time(amber::runtime::RuntimeTimeValue "
          "value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeTimeBox{value};\n";
-  out << "  out.tag = Tag::Time; return out;\n";
+  out << "  out.tag = Tag::Time; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::time_period("
          "amber::runtime::RuntimeTimePeriodValue value) {\n";
   out << "  NativeValue out;\n";
   out << "  out.heap_value = new NativeTimePeriodBox{value};\n";
-  out << "  out.tag = Tag::TimePeriod; return out;\n";
+  out << "  out.tag = Tag::TimePeriod; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::atomic(NativeValue value) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *atomic = new NativeAtomic();\n";
   out << "  atomic->value = std::move(value);\n";
-  out << "  out.heap_value = atomic; out.tag = Tag::Atomic; return out;\n";
+  out << "  out.heap_value = atomic; out.tag = Tag::Atomic; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::mutex() {\n";
   out << "  NativeValue out; out.heap_value = new NativeMutex();\n";
-  out << "  out.tag = Tag::Mutex; return out;\n";
+  out << "  out.tag = Tag::Mutex; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::error_instance("
          "std::uint16_t error_id, NativeValue message) {\n";
   out << "  NativeValue out; auto *error = new NativeErrorInstance();\n";
   out << "  error->error_id = error_id; error->message = std::move(message);\n";
-  out << "  out.heap_value = error; out.tag = Tag::ErrorInstance; return out;\n";
+  out << "  out.heap_value = error; out.tag = Tag::ErrorInstance; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::foreign_handle("
          "amber::runtime::Value value, std::uint32_t class_index) {\n";
@@ -7794,36 +8184,40 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   out << "  handle->value = std::move(value); "
          "handle->class_index = class_index;\n";
   out << "  out.heap_value = handle; out.tag = Tag::ForeignHandle; "
-         "return out;\n";
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::runtime_handle("
          "amber::runtime::Value value) {\n";
   out << "  NativeValue out; auto *handle = new NativeRuntimeHandle();\n";
   out << "  handle->value = std::move(value);\n";
   out << "  out.heap_value = handle; out.tag = Tag::RuntimeHandle; "
-         "return out;\n";
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::instance(std::uint32_t class_index) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *instance = new NativeInstance();\n";
   out << "  instance->class_index = class_index;\n";
-  out << "  out.heap_value = instance; out.tag = Tag::Instance; return out;\n";
+  out << "  out.heap_value = instance; out.tag = Tag::Instance; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n";
   out << "NativeValue NativeValue::closure(NativeClosure *value) {\n";
   out << "  NativeValue out; out.tag = Tag::Closure;\n";
-  out << "  out.heap_value = value; return out;\n";
+  out << "  out.heap_value = value; "
+         "return native_track_value(std::move(out));\n";
   out << "}\n\n";
   out << "static NativeClosure *make_native_closure() {\n";
-  out << "  auto value = std::make_unique<NativeClosure>();\n";
-  out << "  NativeClosure *raw = value.get();\n";
-  out << "  std::lock_guard<std::mutex> guard(native_arena.mutex);\n";
-  out << "  native_arena.closures.push_back(std::move(value)); return raw;\n";
+  out << "  native_total_closures.fetch_add(1, "
+         "std::memory_order_relaxed);\n";
+  out << "  native_live_closures.fetch_add(1, "
+         "std::memory_order_relaxed);\n";
+  out << "  return new NativeClosure();\n";
   out << "}\n";
   out << "static NativeCell *make_native_cell(NativeValue value) {\n";
-  out << "  auto cell = std::make_unique<NativeCell>(); cell->value = value;\n";
-  out << "  NativeCell *raw = cell.get();\n";
-  out << "  std::lock_guard<std::mutex> guard(native_arena.mutex);\n";
-  out << "  native_arena.cells.push_back(std::move(cell)); return raw;\n";
+  out << "  auto *cell = new NativeCell(); cell->value = std::move(value);\n";
+  out << "  native_total_cells.fetch_add(1, std::memory_order_relaxed);\n";
+  out << "  native_live_cells.fetch_add(1, std::memory_order_relaxed);\n";
+  out << "  native_track_cell(cell);\n";
+  out << "  return cell;\n";
   out << "}\n\n";
   std::set<std::uint32_t> module_function_code_ids;
   std::set<std::uint32_t> captureless_module_function_code_ids;
@@ -7949,9 +8343,13 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
        captured_module_function_dependencies) {
     out << "  case " << code_id << "U:\n";
     for (const std::uint32_t dependency : dependencies) {
-      out << "    closure->captures.push_back(make_native_cell("
+      out << "    {\n";
+      out << "      NativeCell *cell = make_native_cell("
              "native_module_function("
-          << dependency << "U)));\n";
+          << dependency << "U));\n";
+      out << "      native_closure_capture(closure, cell);\n";
+      out << "      native_cell_release(cell);\n";
+      out << "    }\n";
     }
     out << "    break;\n";
   }
@@ -7975,6 +8373,13 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   out << "    if (closure != nullptr) {\n";
   out << "      self = closure->self;\n";
   out << "      block = closure->block;\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  ~NativeFrame() {\n";
+  out << "    if (local_cells == nullptr) return;\n";
+  out << "    for (std::size_t index = 0; index < reg_count; ++index) {\n";
+  out << "      native_cell_release(local_cells[index]);\n";
+  out << "      local_cells[index] = nullptr;\n";
   out << "    }\n";
   out << "  }\n";
   out << "};\n\n";
@@ -8157,6 +8562,34 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
            "const NativeValue &arg);\n";
     out << "static amber::runtime::RuntimeWorld &"
            "amber_native_bridge_world();\n";
+    out << "struct AmberNativeBridgeState;\n";
+    out << "class AmberNativeBridgeRequestStateScope {\n";
+    out << "public:\n";
+    out << "  AmberNativeBridgeRequestStateScope();\n";
+    out << "  AmberNativeBridgeRequestStateScope("
+           "const AmberNativeBridgeRequestStateScope &) = delete;\n";
+    out << "  AmberNativeBridgeRequestStateScope &operator=("
+           "const AmberNativeBridgeRequestStateScope &) = delete;\n";
+    out << "  ~AmberNativeBridgeRequestStateScope();\n";
+    out << "private:\n";
+    out << "  AmberNativeBridgeState *previous_ = nullptr;\n";
+    out << "  AmberNativeBridgeState *state_ = nullptr;\n";
+    out << "  bool owns_state_ = false;\n";
+    out << "};\n";
+    out << "class AmberNativeBridgeGcScope {\n";
+    out << "public:\n";
+    out << "  explicit AmberNativeBridgeGcScope("
+           "amber::runtime::RuntimeWorld &world, bool force = false) "
+           ": world_(&world), force_(force) {}\n";
+    out << "  AmberNativeBridgeGcScope("
+           "const AmberNativeBridgeGcScope &) = delete;\n";
+    out << "  AmberNativeBridgeGcScope &operator=("
+           "const AmberNativeBridgeGcScope &) = delete;\n";
+    out << "  ~AmberNativeBridgeGcScope();\n";
+    out << "private:\n";
+    out << "  amber::runtime::RuntimeWorld *world_ = nullptr;\n";
+    out << "  bool force_ = false;\n";
+    out << "};\n";
     out << "static NativeValue amber_native_bridge_result_current("
            "const amber::runtime::Value &value);\n";
     out << "static NativeValue amber_native_bridge_execution_result("
@@ -9259,8 +9692,8 @@ static void native_append_keyword_call_spread(
   out << "    while (true) {\n";
   out << "      const std::size_t pos = text.find(sep, start);\n";
   out << "      if (pos == std::string::npos) {\n";
-  out << "        parts.push_back(NativeValue::string_ref("
-         "native_intern_string(text.substr(start))));\n";
+  out << "        parts.push_back(NativeValue::heap_string("
+         "text.substr(start)));\n";
   out << "        break;\n";
   out << "      }\n";
   out << "      parts.push_back(NativeValue::heap_string("
@@ -14025,8 +14458,8 @@ static NativeValue native_time_nullary(const NativeValue &receiver,
     case NativeTimeSelector::Iso8601:
     case NativeTimeSelector::ToStr:
     case NativeTimeSelector::Inspect:
-      return NativeValue::string_ref(
-          native_intern_string(amber::runtime::runtime_time_to_iso8601(time)));
+      return NativeValue::heap_string(
+          amber::runtime::runtime_time_to_iso8601(time));
     case NativeTimeSelector::UnixSeconds:
       return NativeValue::integer(time.epoch_seconds);
     case NativeTimeSelector::UnixMilliseconds:
@@ -16371,8 +16804,12 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  invocation.code_id = handler_code_id;\n";
   out << "  invocation.self = frame.self;\n";
   out << "  invocation.block = frame.block;\n";
-  out << "  if (frame.closure != nullptr) "
-         "invocation.captures = frame.closure->captures;\n";
+  out << "  if (frame.closure != nullptr) {\n";
+  out << "    invocation.captures.reserve("
+         "frame.closure->captures.size());\n";
+  out << "    for (NativeCell *cell : frame.closure->captures) "
+         "native_closure_capture(&invocation, cell);\n";
+  out << "  }\n";
   out << "  if (kind == " << amber::bytecode::kHandlerKindLegacyRescue
       << "U) {\n";
   out << "    NativeValue result;\n";
@@ -16566,6 +17003,10 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
            ": block_(std::move(block)) {}\n";
     out << "  amber::runtime::Value invoke(const "
            "std::vector<amber::runtime::Value> &args) override {\n";
+    out << "    NativeCycleScope cycle_scope;\n";
+    out << "    AmberNativeBridgeRequestStateScope bridge_state_scope;\n";
+    out << "    AmberNativeBridgeGcScope request_bridge_gc("
+           "amber_native_bridge_world(), true);\n";
     out << "    std::vector<NativeValue> native_args;\n";
     out << "    native_args.reserve(args.size());\n";
     out << "    for (const amber::runtime::Value &arg : args) "
@@ -16605,6 +17046,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block) {\n";
   if (plan.uses_native_stdlib_bridge) {
+    out << "  AmberNativeBridgeGcScope bridge_gc("
+           "amber_native_bridge_world());\n";
     out << "  const bool scoped_query = selector == \"query\" && "
            "block.tag != NativeValue::Tag::Null;\n";
     out << "  const bool bridged_block = !scoped_query && "
@@ -17481,10 +17924,11 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "  std::unique_ptr<amber::runtime::RuntimeWorld> world;\n";
     out << "  std::vector<std::string> runtime_strings;\n";
     out << "  std::vector<std::string> runtime_symbols;\n";
+    out << "  std::size_t pooled_request_uses = 0;\n";
     out << "};\n\n";
-    out << "static AmberNativeBridgeState &amber_native_bridge_state() {\n";
-    out << "  static thread_local AmberNativeBridgeState *state = [] {\n";
-    out << "    auto *out_state = new AmberNativeBridgeState();\n";
+    out << "static std::unique_ptr<AmberNativeBridgeState> "
+           "amber_native_bridge_make_state() {\n";
+    out << "  auto out_state = std::make_unique<AmberNativeBridgeState>();\n";
     out << "    out_state->decoded = "
            "amber::bytecode::deserialize_module(embedded_bytecode());\n";
     out << "    if (!out_state->decoded.ok()) throw NativeBailout();\n";
@@ -17497,14 +17941,70 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
            "options.capability_grants = embedded_capability_grants(); "
            "return std::make_unique<amber::runtime::RuntimeWorld>("
            "out_state->decoded.module, std::move(options)); }();\n";
-    out << "    return out_state;\n";
-    out << "  }();\n";
-    out << "  return *state;\n";
+    out << "  return out_state;\n";
     out << "}\n\n";
+    out << "static std::mutex amber_native_bridge_state_pool_mutex;\n";
+    out << "static std::vector<std::unique_ptr<AmberNativeBridgeState>> "
+           "amber_native_bridge_state_pool;\n";
+    out << "static thread_local AmberNativeBridgeState "
+           "*amber_native_bridge_request_state = nullptr;\n";
+    out << "static AmberNativeBridgeState &amber_native_bridge_state() {\n";
+    out << "  if (amber_native_bridge_request_state != nullptr) "
+           "return *amber_native_bridge_request_state;\n";
+    out << "  static thread_local std::unique_ptr<AmberNativeBridgeState> "
+           "fallback = amber_native_bridge_make_state();\n";
+    out << "  return *fallback;\n";
+    out << "}\n\n";
+    out << R"AMBERCPP(AmberNativeBridgeRequestStateScope::
+    AmberNativeBridgeRequestStateScope()
+    : previous_(amber_native_bridge_request_state) {
+  if (previous_ != nullptr) {
+    state_ = previous_;
+    return;
+  }
+  std::unique_ptr<AmberNativeBridgeState> acquired;
+  {
+    std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex);
+    if (!amber_native_bridge_state_pool.empty()) {
+      acquired = std::move(amber_native_bridge_state_pool.back());
+      amber_native_bridge_state_pool.pop_back();
+    }
+  }
+  if (acquired == nullptr) acquired = amber_native_bridge_make_state();
+  state_ = acquired.release();
+  ++state_->pooled_request_uses;
+  owns_state_ = true;
+  amber_native_bridge_request_state = state_;
+}
+
+AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
+  amber_native_bridge_request_state = previous_;
+  if (!owns_state_ || state_ == nullptr) return;
+  constexpr std::size_t kBridgeWorldRequestLimit = 256;
+  if (state_->pooled_request_uses >= kBridgeWorldRequestLimit) {
+    delete state_;
+    return;
+  }
+  std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex);
+  amber_native_bridge_state_pool.emplace_back(state_);
+}
+
+)AMBERCPP";
     out << "static amber::runtime::RuntimeWorld &amber_native_bridge_world() "
            "{\n";
     out << "  return *amber_native_bridge_state().world;\n";
     out << "}\n\n";
+    out << R"AMBERCPP(AmberNativeBridgeGcScope::~AmberNativeBridgeGcScope() {
+  if (world_ == nullptr) return;
+  constexpr std::uint64_t kBridgeGcLiveObjectThreshold = 2048;
+  if (force_ ||
+      world_->heap_stats().live_objects >= kBridgeGcLiveObjectThreshold) {
+    (void)world_->collect_garbage(
+        {}, amber::runtime::RuntimeGcCycle::Full);
+  }
+}
+
+)AMBERCPP";
     out << "static const std::vector<std::string> &"
            "amber_native_bridge_module_strings() {\n";
     out << "  return amber_native_bridge_state().decoded.module.strings;\n";
@@ -17524,15 +18024,16 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
            "NativeValue::integer(value.as_integer());\n";
     out << "  if (value.is_float()) return "
            "NativeValue::floating(value.as_float());\n";
-    // Runtime string ids are scoped to the host world; strings cross the
-    // bridge by content and re-intern into the native table.
+    // Runtime string ids are scoped to the host world. Their contents are
+    // dynamic request/application data, so crossing the bridge must create a
+    // refcounted string rather than grow the permanent literal intern table.
     out << "  if (value.is_string()) {\n";
     out << "    const std::uint32_t string_id = "
            "value.as_string().string_id;\n";
     out << "    if (string_id >= runtime_strings.size()) "
            "throw NativeBailout();\n";
-    out << "    return NativeValue::string_ref(native_intern_string("
-           "runtime_strings[string_id]));\n";
+    out << "    return NativeValue::heap_string("
+           "runtime_strings[string_id]);\n";
     out << "  }\n";
     out << "  if (value.is_symbol()) {\n";
     out << "    const std::uint32_t symbol_id = "
@@ -17707,7 +18208,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "    items.reserve(as_list(arg).items.size());\n";
     out << "    for (const NativeValue &item : as_list(arg).items) "
            "items.push_back(amber_native_bridge_argument(item));\n";
-    out << "    return amber::runtime::make_list_value("
+    out << "    return amber_native_bridge_world().list_value("
            "std::move(items), as_list(arg).frozen);\n";
     out << "  }\n";
     out << "  case NativeValue::Tag::Tuple: {\n";
@@ -17715,14 +18216,15 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "    items.reserve(as_tuple(arg).items.size());\n";
     out << "    for (const NativeValue &item : as_tuple(arg).items) "
            "items.push_back(amber_native_bridge_argument(item));\n";
-    out << "    return amber::runtime::make_tuple_value(std::move(items));\n";
+    out << "    return amber_native_bridge_world().tuple_value("
+           "std::move(items));\n";
     out << "  }\n";
     out << "  case NativeValue::Tag::Set: {\n";
     out << "    std::vector<amber::runtime::Value> items;\n";
     out << "    items.reserve(as_set(arg).items.size());\n";
     out << "    for (const NativeValue &item : as_set(arg).items) "
            "items.push_back(amber_native_bridge_argument(item));\n";
-    out << "    return amber::runtime::make_set_value("
+    out << "    return amber_native_bridge_world().set_value("
            "std::move(items), as_set(arg).frozen);\n";
     out << "  }\n";
     out << "  case NativeValue::Tag::Map: {\n";
@@ -17743,7 +18245,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "      }\n";
     out << "      entries.push_back(std::move(runtime_entry));\n";
     out << "    }\n";
-    out << "    return amber::runtime::make_symbol_map_value("
+    out << "    return amber_native_bridge_world().symbol_map_value("
            "std::move(entries), as_map(arg).frozen, as_map(arg).strict);\n";
     out << "  }\n";
     out << "  case NativeValue::Tag::Instance: "
@@ -17758,6 +18260,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
              "std::uint32_t code_id, "
              "const std::vector<NativeValue> &args, "
              "const NativeValue &self) {\n";
+      out << "  AmberNativeBridgeGcScope bridge_gc("
+             "amber_native_bridge_world());\n";
       out << "  std::vector<amber::runtime::Value> vm_args;\n";
       out << "  vm_args.reserve(args.size());\n";
       out << "  for (const NativeValue &arg : args) "
@@ -17792,6 +18296,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
              "std::uint32_t code_id, "
              "const std::vector<NativeValue> &args, "
              "const NativeValue &self) {\n";
+      out << "  AmberNativeBridgeGcScope bridge_gc("
+             "amber_native_bridge_world());\n";
       out << "  std::vector<amber::runtime::Value> extension_args;\n";
       out << "  extension_args.reserve(args.size());\n";
       out << "  for (const NativeValue &arg : args) "

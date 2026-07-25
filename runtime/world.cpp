@@ -362,8 +362,13 @@ struct RuntimeWorld::Impl {
   RuntimeReplayTrace trace;
   RuntimeReplayValidation replay_validation;
   std::size_t replay_cursor = 0;
+  std::unordered_map<std::string, std::uint32_t> string_index;
+  std::unordered_map<std::string, std::uint32_t> symbol_index;
+  std::size_t string_index_folded = 0;
+  std::size_t symbol_index_folded = 0;
   std::mutex value_mutex;
   std::recursive_mutex execution_mutex;
+  std::unique_ptr<RuntimeNativeStdlibSession> native_stdlib_session;
 };
 
 RuntimeWorld::RuntimeWorld(const bytecode::BcModule &module)
@@ -399,13 +404,23 @@ Value RuntimeWorld::string_value(std::string text) {
       impl_->execution_mutex);
   std::lock_guard<std::mutex> guard(impl_->value_mutex);
   std::vector<std::string> &strings = impl_->owned_module->strings;
-  const auto found = std::find(strings.begin(), strings.end(), text);
-  if (found != strings.end()) {
-    return Value::string(
-        static_cast<std::uint32_t>(std::distance(strings.begin(), found)));
+  if (impl_->string_index_folded > strings.size()) {
+    impl_->string_index.clear();
+    impl_->string_index_folded = 0;
+  }
+  while (impl_->string_index_folded < strings.size()) {
+    const std::size_t index = impl_->string_index_folded++;
+    impl_->string_index.emplace(strings[index],
+                                static_cast<std::uint32_t>(index));
+  }
+  const auto found = impl_->string_index.find(text);
+  if (found != impl_->string_index.end()) {
+    return Value::string(found->second);
   }
   const std::uint32_t id = static_cast<std::uint32_t>(strings.size());
-  strings.push_back(std::move(text));
+  strings.push_back(text);
+  impl_->string_index.emplace(std::move(text), id);
+  impl_->string_index_folded = strings.size();
   return Value::string(id);
 }
 
@@ -417,13 +432,23 @@ Value RuntimeWorld::symbol_value(std::string text) {
       impl_->execution_mutex);
   std::lock_guard<std::mutex> guard(impl_->value_mutex);
   std::vector<std::string> &symbols = impl_->owned_module->symbols;
-  const auto found = std::find(symbols.begin(), symbols.end(), text);
-  if (found != symbols.end()) {
-    return Value::symbol(
-        static_cast<std::uint32_t>(std::distance(symbols.begin(), found)));
+  if (impl_->symbol_index_folded > symbols.size()) {
+    impl_->symbol_index.clear();
+    impl_->symbol_index_folded = 0;
+  }
+  while (impl_->symbol_index_folded < symbols.size()) {
+    const std::size_t index = impl_->symbol_index_folded++;
+    impl_->symbol_index.emplace(symbols[index],
+                                static_cast<std::uint32_t>(index));
+  }
+  const auto found = impl_->symbol_index.find(text);
+  if (found != impl_->symbol_index.end()) {
+    return Value::symbol(found->second);
   }
   const std::uint32_t id = static_cast<std::uint32_t>(symbols.size());
-  symbols.push_back(std::move(text));
+  symbols.push_back(text);
+  impl_->symbol_index.emplace(std::move(text), id);
+  impl_->symbol_index_folded = symbols.size();
   return Value::symbol(id);
 }
 
@@ -613,25 +638,34 @@ ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
       impl_->execution_mutex);
   impl_->state->initialize_for_module(*impl_->module);
 
-  RuntimeVmExecutionContext context;
-  context.state = impl_->state;
-  context.module_id =
-      impl_->package.has_value() ? impl_->package->manifest.root_module : "";
-  context.world_options = &impl_->options;
-  context.capabilities = &impl_->capabilities;
-  context.effects = &impl_->effects;
-  context.trace_recorder = [impl = impl_](RuntimeTraceEvent event) {
-    impl->record_event(std::move(event));
-  };
-  context.native_registry = &impl_->native_registry;
-  context.module_registry = &impl_->module_registry;
-  context.type_registry = &impl_->type_registry;
-  context.dispatch_registry = &impl_->dispatch_registry;
-  context.error_registry = &impl_->error_registry;
-
-  ExecutionResult result = invoke_runtime_native_stdlib_send(
-      *impl_->module, std::move(context), std::move(receiver),
-      std::move(selector), args, keyword_args, std::move(block));
+  if (impl_->native_stdlib_session == nullptr) {
+    RuntimeVmExecutionContext context;
+    context.state = impl_->state;
+    context.module_id =
+        impl_->package.has_value() ? impl_->package->manifest.root_module : "";
+    context.world_options = &impl_->options;
+    context.capabilities = &impl_->capabilities;
+    context.effects = &impl_->effects;
+    const std::weak_ptr<Impl> weak_impl = impl_;
+    context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
+      if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
+        impl->record_event(std::move(event));
+      }
+    };
+    context.native_registry = &impl_->native_registry;
+    context.module_registry = &impl_->module_registry;
+    context.type_registry = &impl_->type_registry;
+    context.dispatch_registry = &impl_->dispatch_registry;
+    context.error_registry = &impl_->error_registry;
+    impl_->native_stdlib_session =
+        std::make_unique<RuntimeNativeStdlibSession>(
+            *impl_->module, std::move(context));
+  }
+  impl_->native_stdlib_session->synchronize_runtime_names(
+      impl_->owned_module->strings, impl_->owned_module->symbols);
+  ExecutionResult result = impl_->native_stdlib_session->invoke(
+      std::move(receiver), std::move(selector), args, keyword_args,
+      std::move(block));
   if (!result.runtime_strings.empty()) {
     impl_->owned_module->strings = result.runtime_strings;
   }
@@ -1873,6 +1907,11 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
   auto next_module =
       std::make_shared<bytecode::BcModule>(bytecode::BcModule(root->second));
 
+  impl_->native_stdlib_session.reset();
+  impl_->string_index.clear();
+  impl_->symbol_index.clear();
+  impl_->string_index_folded = 0;
+  impl_->symbol_index_folded = 0;
   impl_->state = std::move(next_state);
   impl_->owned_module = std::move(next_module);
   impl_->module = impl_->owned_module.get();

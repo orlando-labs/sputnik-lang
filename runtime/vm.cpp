@@ -1984,6 +1984,12 @@ public:
       const std::vector<Value> &args,
       const std::vector<std::pair<std::string, Value>> &keyword_args,
       Value block) {
+    // A persistent native-stdlib session reuses this Vm across independent
+    // sends. Fault/unwind state belongs to one send and must never poison the
+    // next invocation.
+    fault_.reset();
+    escaped_exception_.reset();
+    escaped_throw_.reset();
     if (current_runtime_task_context() == nullptr &&
         root_task_context_ == nullptr) {
       root_task_context_ = RuntimeTaskContext::create();
@@ -2011,6 +2017,38 @@ public:
         "NoMethodError", "native stdlib value has no method `" + selector +
                              "`",
         0, 0));
+  }
+
+  void synchronize_runtime_names(
+      const std::vector<std::string> &strings,
+      const std::vector<std::string> &symbols) {
+    // RuntimeWorld name tables are append-only between world reloads. A
+    // reloaded world discards its session, so size equality is sufficient on
+    // this hot path and avoids comparing every interned string on every send.
+    if (module_.strings.size() < strings.size()) {
+      module_.strings.insert(module_.strings.end(),
+                             strings.begin() + module_.strings.size(),
+                             strings.end());
+    } else if (module_.strings.size() > strings.size()) {
+      module_.strings = strings;
+      string_index_.clear();
+      string_index_folded_ = 0;
+    }
+    if (module_.symbols.size() < symbols.size()) {
+      module_.symbols.insert(module_.symbols.end(),
+                             symbols.begin() + module_.symbols.size(),
+                             symbols.end());
+    } else if (module_.symbols.size() > symbols.size()) {
+      module_.symbols = symbols;
+      symbol_index_.clear();
+      symbol_index_folded_ = 0;
+    }
+    accept_runtime_name_baseline();
+  }
+
+  void accept_runtime_name_baseline() {
+    initial_string_count_ = module_.strings.size();
+    initial_symbol_count_ = module_.symbols.size();
   }
 
   // Arm the compile-time step budget on this VM's (shared) runtime state.
@@ -31619,6 +31657,40 @@ private:
 };
 
 } // namespace
+
+struct RuntimeNativeStdlibSession::Impl {
+  Impl(const bytecode::BcModule &module, RuntimeVmExecutionContext context)
+      : vm(module, std::move(context.state), std::move(context.module_id),
+           context.world_options, context.capabilities, context.effects,
+           std::move(context.trace_recorder), context.native_registry,
+           context.module_registry, context.type_registry,
+           context.dispatch_registry, context.error_registry,
+           std::move(context.macro_block_executor)) {}
+
+  Vm vm;
+};
+
+RuntimeNativeStdlibSession::RuntimeNativeStdlibSession(
+    const bytecode::BcModule &module, RuntimeVmExecutionContext context)
+    : impl_(std::make_unique<Impl>(module, std::move(context))) {}
+
+RuntimeNativeStdlibSession::~RuntimeNativeStdlibSession() = default;
+
+void RuntimeNativeStdlibSession::synchronize_runtime_names(
+    const std::vector<std::string> &strings,
+    const std::vector<std::string> &symbols) {
+  impl_->vm.synchronize_runtime_names(strings, symbols);
+}
+
+ExecutionResult RuntimeNativeStdlibSession::invoke(
+    Value receiver, std::string selector, const std::vector<Value> &args,
+    const std::vector<std::pair<std::string, Value>> &keyword_args,
+    Value block) {
+  ExecutionResult result = impl_->vm.invoke_native_stdlib_send(
+      std::move(receiver), selector, args, keyword_args, std::move(block));
+  impl_->vm.accept_runtime_name_baseline();
+  return result;
+}
 
 ExecutionResult execute_runtime_vm(const bytecode::BcModule &module,
                                    RuntimeVmExecutionContext context,

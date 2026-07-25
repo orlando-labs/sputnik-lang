@@ -1,0 +1,24 @@
+package native.cycle_lifetime_core
+
+export main
+
+def discard_cycle(seed):
+  cycle = [
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+    seed, seed, seed, seed, seed, seed, seed, seed,
+  ]
+  cycle.push!(cycle)
+  null
+
+def main():
+  index = 0
+  while index < 300000:
+    discard_cycle(index)
+    index += 1
+  index

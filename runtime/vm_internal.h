@@ -642,6 +642,32 @@ struct RuntimeVmExecutionContext {
   std::int64_t step_budget = 0;
 };
 
+// Reusable narrow VM facade for RuntimeWorld::invoke_native_stdlib_send.
+// Native executables make many small sends through the same RuntimeWorld; a
+// session keeps the decoded module and VM-side lookup caches instead of
+// copying the complete BcModule for every selector.
+class RuntimeNativeStdlibSession {
+public:
+  RuntimeNativeStdlibSession(const bytecode::BcModule &module,
+                             RuntimeVmExecutionContext context);
+  ~RuntimeNativeStdlibSession();
+  RuntimeNativeStdlibSession(const RuntimeNativeStdlibSession &) = delete;
+  RuntimeNativeStdlibSession &
+  operator=(const RuntimeNativeStdlibSession &) = delete;
+
+  void synchronize_runtime_names(
+      const std::vector<std::string> &strings,
+      const std::vector<std::string> &symbols);
+  ExecutionResult invoke(
+      Value receiver, std::string selector, const std::vector<Value> &args,
+      const std::vector<std::pair<std::string, Value>> &keyword_args,
+      Value block);
+
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
+
 ExecutionResult execute_runtime_vm(const bytecode::BcModule &module,
                                    RuntimeVmExecutionContext context,
                                    std::uint32_t code_id,

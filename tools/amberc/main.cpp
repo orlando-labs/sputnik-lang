@@ -7018,6 +7018,9 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "defined(__OpenBSD__) || defined(__NetBSD__)\n";
   out << "#include <stdlib.h>\n";
   out << "#endif\n\n";
+  out << "#if defined(__APPLE__)\n";
+  out << "#include <malloc/malloc.h>\n";
+  out << "#endif\n\n";
   out << "namespace {\n\n";
   out << "#if defined(__GNUC__) || defined(__clang__)\n";
   out << "#define AMBER_NATIVE_ALWAYS_INLINE inline "
@@ -7471,6 +7474,8 @@ static std::mutex native_tracked_allocations_mutex;
 static std::unordered_map<void *, NativeTrackedAllocation>
     native_tracked_allocations;
 static std::vector<std::uint64_t> native_finished_cycle_scopes;
+static constexpr std::size_t native_cycle_scope_batch = 8;
+static constexpr std::size_t native_cycle_allocation_batch = 65536;
 static std::mutex native_cycle_gate_mutex;
 static std::condition_variable native_cycle_gate_cv;
 static std::size_t native_cycle_active_mutators = 0;
@@ -7549,7 +7554,8 @@ static void native_untrack_payload(void *payload) {
 
 class NativeCycleScope {
 public:
-  NativeCycleScope() {
+  explicit NativeCycleScope(bool enabled = true) : enabled_(enabled) {
+    if (!enabled_) return;
     previous_scope_id_ = native_active_cycle_scope_id;
     if (native_cycle_scope_depth == 0) {
       scope_id_ = native_next_cycle_scope_id.fetch_add(
@@ -7567,6 +7573,7 @@ public:
   NativeCycleScope(const NativeCycleScope &) = delete;
   NativeCycleScope &operator=(const NativeCycleScope &) = delete;
   ~NativeCycleScope() {
+    if (!enabled_) return;
     if (native_cycle_scope_depth == 0 || --native_cycle_scope_depth != 0) {
       if (acquired_lock_ && native_cycle_mutator_active) {
         native_cycle_leave_mutator();
@@ -7574,9 +7581,13 @@ public:
       return;
     }
     native_active_cycle_scope_id = previous_scope_id_;
+    bool collection_due = false;
     {
       std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
       native_finished_cycle_scopes.push_back(scope_id_);
+      collection_due =
+          native_finished_cycle_scopes.size() >= native_cycle_scope_batch ||
+          native_tracked_allocations.size() >= native_cycle_allocation_batch;
     }
     if (acquired_lock_ && native_cycle_mutator_active) {
       // Publish the completed scope before this thread can make the mutator
@@ -7584,6 +7595,7 @@ public:
       // native_cycle_leave_mutator() notifies it.
       native_cycle_leave_mutator();
     }
+    if (!collection_due) return;
 
     // New callbacks wait once collection is requested. A suspended mutator is
     // allowed to return ahead of the collector so it can release application
@@ -7612,6 +7624,7 @@ public:
   }
 
 private:
+  bool enabled_ = false;
   bool acquired_lock_ = false;
   std::uint64_t previous_scope_id_ = 0;
   std::uint64_t scope_id_ = 0;
@@ -8750,7 +8763,8 @@ static void native_collect_finished_cycles() {
     out << "struct AmberNativeBridgeState;\n";
     out << "class AmberNativeBridgeRequestStateScope {\n";
     out << "public:\n";
-    out << "  AmberNativeBridgeRequestStateScope();\n";
+    out << "  explicit AmberNativeBridgeRequestStateScope("
+           "bool enabled = true);\n";
     out << "  AmberNativeBridgeRequestStateScope("
            "const AmberNativeBridgeRequestStateScope &) = delete;\n";
     out << "  AmberNativeBridgeRequestStateScope &operator=("
@@ -8760,6 +8774,7 @@ static void native_collect_finished_cycles() {
     out << "  AmberNativeBridgeState *previous_ = nullptr;\n";
     out << "  AmberNativeBridgeState *state_ = nullptr;\n";
     out << "  bool owns_state_ = false;\n";
+    out << "  bool enabled_ = false;\n";
     out << "};\n";
     out << "class AmberNativeBridgeGcScope {\n";
     out << "public:\n";
@@ -16631,7 +16646,14 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "\nstatic NativeValue amber_native_call_code("
          "std::uint32_t code_id, const std::vector<NativeValue> &args, "
          "NativeClosure *current_closure, "
-         "NativeHandlerSeed *handler_seed = nullptr) {\n";
+         "NativeHandlerSeed *handler_seed = nullptr, "
+         "bool cycle_boundary = true) {\n";
+  out << "  NativeCycleScope cycle_scope(cycle_boundary);\n";
+  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty() ||
+      !plan.native_extension_code_ids.empty()) {
+    out << "  AmberNativeBridgeRequestStateScope bridge_state_scope("
+           "cycle_boundary);\n";
+  }
   out << "  try {\n";
   out << "  switch (code_id) {\n";
   for (std::uint32_t code_id : plan.native_code_ids) {
@@ -18140,9 +18162,19 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
            "out_state->decoded.module, std::move(options)); }();\n";
     out << "  return out_state;\n";
     out << "}\n\n";
-    out << "static std::mutex amber_native_bridge_state_pool_mutex;\n";
-    out << "static std::vector<std::unique_ptr<AmberNativeBridgeState>> "
-           "amber_native_bridge_state_pool;\n";
+    // Scheduler workers can still unwind request scopes while process-global
+    // destructors are running. Keep the tiny bridge-state pool alive until the
+    // OS tears down the process instead of racing its vector/mutex destructors.
+    out << "static std::mutex &amber_native_bridge_state_pool_mutex() {\n";
+    out << "  static auto *mutex = new std::mutex();\n";
+    out << "  return *mutex;\n";
+    out << "}\n";
+    out << "static std::vector<std::unique_ptr<AmberNativeBridgeState>> &"
+           "amber_native_bridge_state_pool() {\n";
+    out << "  static auto *pool = new std::vector<std::unique_ptr<"
+           "AmberNativeBridgeState>>();\n";
+    out << "  return *pool;\n";
+    out << "}\n";
     out << "static thread_local AmberNativeBridgeState "
            "*amber_native_bridge_request_state = nullptr;\n";
     out << "static AmberNativeBridgeState &amber_native_bridge_state() {\n";
@@ -18153,18 +18185,20 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "  return *fallback;\n";
     out << "}\n\n";
     out << R"AMBERCPP(AmberNativeBridgeRequestStateScope::
-    AmberNativeBridgeRequestStateScope()
-    : previous_(amber_native_bridge_request_state) {
+    AmberNativeBridgeRequestStateScope(bool enabled)
+    : previous_(amber_native_bridge_request_state), enabled_(enabled) {
+  if (!enabled_) return;
   if (previous_ != nullptr) {
     state_ = previous_;
     return;
   }
   std::unique_ptr<AmberNativeBridgeState> acquired;
   {
-    std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex);
-    if (!amber_native_bridge_state_pool.empty()) {
-      acquired = std::move(amber_native_bridge_state_pool.back());
-      amber_native_bridge_state_pool.pop_back();
+    std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex());
+    auto &pool = amber_native_bridge_state_pool();
+    if (!pool.empty()) {
+      acquired = std::move(pool.back());
+      pool.pop_back();
     }
   }
   if (acquired == nullptr) acquired = amber_native_bridge_make_state();
@@ -18175,15 +18209,22 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
 }
 
 AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
+  if (!enabled_) return;
   amber_native_bridge_request_state = previous_;
   if (!owns_state_ || state_ == nullptr) return;
   constexpr std::size_t kBridgeWorldRequestLimit = 256;
   if (state_->pooled_request_uses >= kBridgeWorldRequestLimit) {
     delete state_;
+#if defined(__APPLE__)
+    // A bridge world owns a decoded module, runtime string tables, and a VM
+    // session. Once those large allocations are gone, ask Darwin's system
+    // allocator to return unused pages instead of retaining an RSS high-water.
+    (void)malloc_zone_pressure_relief(nullptr, 0);
+#endif
     return;
   }
-  std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex);
-  amber_native_bridge_state_pool.emplace_back(state_);
+  std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex());
+  amber_native_bridge_state_pool().emplace_back(state_);
 }
 
 )AMBERCPP";
@@ -18852,7 +18893,7 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
   if (artifact.entry_mode != EntryExecutionMode::MainOnly &&
       artifact.has_entry_init_code_id) {
     out << "    NativeValue init_result = amber_native_call_code("
-        << init_code_id << ", {}, nullptr);\n";
+        << init_code_id << ", {}, nullptr, nullptr, false);\n";
     if (artifact.entry_mode == EntryExecutionMode::Init) {
       out << "    print_native_value(init_result);\n";
     } else {
@@ -18862,12 +18903,13 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
   if (artifact.entry_mode == EntryExecutionMode::MainAfterInit) {
     out << "    NativeValue main_closure = native_module_function("
         << main_code_id << "U);\n";
-    out << "    NativeValue result = amber_native_call_value("
-           "main_closure, {}, {}, NativeValue::nullv());\n";
+    out << "    NativeValue result = amber_native_call_code("
+        << main_code_id
+        << "U, {}, as_closure(main_closure), nullptr, false);\n";
     out << "    print_native_value(result);\n";
   } else if (artifact.entry_mode == EntryExecutionMode::MainOnly) {
     out << "    NativeValue result = amber_native_call_code(" << main_code_id
-        << "U, {}, nullptr);\n";
+        << "U, {}, nullptr, nullptr, false);\n";
     out << "    print_native_value(result);\n";
   }
   out << "    return 0;\n";

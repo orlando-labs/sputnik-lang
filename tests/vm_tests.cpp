@@ -4047,6 +4047,38 @@ void test_runtime_world_persists_runtime_strings_between_execute_calls() {
          "runtime world keeps dynamic string ids stable across execute calls");
 }
 
+void test_runtime_world_reuses_native_stdlib_session_after_fault() {
+  amber::bytecode::BcModule module;
+  amber::runtime::RuntimeWorld world(module);
+
+  const amber::runtime::Value first = world.string_value("amber");
+  const amber::runtime::ExecutionResult first_size =
+      world.invoke_native_stdlib_send(first, "size", {}, {},
+                                      amber::runtime::Value::null());
+  expect(first_size.ok() && first_size.value.is_integer() &&
+             first_size.value.as_integer() == 5,
+         "native stdlib session should execute its first send");
+
+  const amber::runtime::ExecutionResult missing =
+      world.invoke_native_stdlib_send(first, "missing_selector", {}, {},
+                                      amber::runtime::Value::null());
+  expect(!missing.ok() && missing.fault.has_value() &&
+             missing.fault->error_name == "NoMethodError",
+         "native stdlib session should report a missing selector");
+
+  const amber::runtime::Value second = world.string_value("persistent");
+  const amber::runtime::ExecutionResult second_size =
+      world.invoke_native_stdlib_send(second, "size", {}, {},
+                                      amber::runtime::Value::null());
+  expect(second_size.ok() && second_size.value.is_integer() &&
+             second_size.value.as_integer() == 10,
+         "native stdlib session should clear fault state and synchronize "
+         "new runtime strings");
+  expect(world.string_value("persistent").as_string().string_id ==
+             second.as_string().string_id,
+         "RuntimeWorld string index should preserve the first interned id");
+}
+
 void test_execute_emitted_copy_graphs() {
   const amber::runtime::ExecutionResult exec = execute_emitted_init(
       "class Box:\n"
@@ -10711,6 +10743,7 @@ int main() {
   test_execute_emitted_block_map_suffixes();
   test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
   test_runtime_world_persists_runtime_strings_between_execute_calls();
+  test_runtime_world_reuses_native_stdlib_session_after_fault();
   test_execute_emitted_copy_graphs();
   test_execute_emitted_user_index_methods();
   test_execute_emitted_v20_5_array_generation_and_optional_access();

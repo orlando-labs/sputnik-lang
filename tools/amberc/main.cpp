@@ -6985,6 +6985,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include <cerrno>\n";
   out << "#include <cctype>\n";
   out << "#include <cmath>\n";
+  out << "#include <condition_variable>\n";
   out << "#include <cstdint>\n";
   out << "#include <cstdio>\n";
   out << "#include <cstdlib>\n";
@@ -7469,22 +7470,76 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
 static std::mutex native_tracked_allocations_mutex;
 static std::unordered_map<void *, NativeTrackedAllocation>
     native_tracked_allocations;
+static std::vector<std::uint64_t> native_finished_cycle_scopes;
+static std::mutex native_cycle_gate_mutex;
+static std::condition_variable native_cycle_gate_cv;
+static std::size_t native_cycle_active_mutators = 0;
+static bool native_cycle_collector_waiting = false;
+static bool native_cycle_collector_running = false;
+static std::atomic_flag native_cycle_collector_active = ATOMIC_FLAG_INIT;
 static std::atomic<std::uint64_t> native_next_cycle_scope_id{1};
+static thread_local std::size_t native_cycle_scope_depth = 0;
 static thread_local std::uint64_t native_active_cycle_scope_id = 0;
-static void native_collect_cycle_scope(std::uint64_t scope_id);
+static thread_local bool native_cycle_mutator_active = false;
+static void native_collect_finished_cycles();
+
+static void native_cycle_enter_mutator(bool returning_mutator) {
+  std::unique_lock<std::mutex> lock(native_cycle_gate_mutex);
+  native_cycle_gate_cv.wait(lock, [&]() {
+    return !native_cycle_collector_running &&
+           (returning_mutator || !native_cycle_collector_waiting);
+  });
+  ++native_cycle_active_mutators;
+  native_cycle_mutator_active = true;
+}
+static void native_cycle_leave_mutator() {
+  std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
+  native_cycle_mutator_active = false;
+  if (native_cycle_active_mutators != 0) {
+    --native_cycle_active_mutators;
+  }
+  native_cycle_gate_cv.notify_all();
+}
+static void native_cycle_begin_collection() {
+  std::unique_lock<std::mutex> lock(native_cycle_gate_mutex);
+  native_cycle_collector_waiting = true;
+  native_cycle_gate_cv.wait(lock, []() {
+    return native_cycle_active_mutators == 0 &&
+           !native_cycle_collector_running;
+  });
+  native_cycle_collector_waiting = false;
+  native_cycle_collector_running = true;
+}
+static void native_cycle_end_collection() {
+  std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
+  native_cycle_collector_running = false;
+  native_cycle_gate_cv.notify_all();
+}
 
 static void native_track_payload(NativeValue::Tag tag, void *payload) {
-  if (payload == nullptr || native_active_cycle_scope_id == 0) return;
+  if (payload == nullptr || native_cycle_scope_depth == 0) return;
   std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-  native_tracked_allocations[payload] =
-      NativeTrackedAllocation{tag, native_active_cycle_scope_id, false};
+  const auto inserted = native_tracked_allocations.emplace(
+      payload,
+      NativeTrackedAllocation{tag, native_active_cycle_scope_id, false});
+  if (inserted.second) {
+    // The registry owns one anchor reference. It keeps a tracked shell valid
+    // while a quiescent collector snapshots refcounts and graph edges, even
+    // when an external RuntimeNativeBlock/task-local holder is destroyed on a
+    // runtime thread that is not currently executing generated native code.
+    static_cast<NativeRcHeader *>(payload)->rc.fetch_add(
+        1, std::memory_order_relaxed);
+  }
 }
 static void native_track_cell(NativeCell *cell) {
-  if (cell == nullptr || native_active_cycle_scope_id == 0) return;
+  if (cell == nullptr || native_cycle_scope_depth == 0) return;
   std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-  native_tracked_allocations[cell] =
-      NativeTrackedAllocation{NativeValue::Tag::Null,
-                              native_active_cycle_scope_id, true};
+  const auto inserted = native_tracked_allocations.emplace(
+      cell, NativeTrackedAllocation{NativeValue::Tag::Null,
+                                    native_active_cycle_scope_id, true});
+  if (inserted.second) {
+    cell->rc.fetch_add(1, std::memory_order_relaxed);
+  }
 }
 static void native_untrack_payload(void *payload) {
   if (payload == nullptr) return;
@@ -7494,22 +7549,93 @@ static void native_untrack_payload(void *payload) {
 
 class NativeCycleScope {
 public:
-  NativeCycleScope()
-      : previous_scope_id_(native_active_cycle_scope_id),
-        scope_id_(native_next_cycle_scope_id.fetch_add(
-            1, std::memory_order_relaxed)) {
-    native_active_cycle_scope_id = scope_id_;
+  NativeCycleScope() {
+    previous_scope_id_ = native_active_cycle_scope_id;
+    if (native_cycle_scope_depth == 0) {
+      scope_id_ = native_next_cycle_scope_id.fetch_add(
+          1, std::memory_order_relaxed);
+      native_active_cycle_scope_id = scope_id_;
+    } else {
+      scope_id_ = native_active_cycle_scope_id;
+    }
+    if (!native_cycle_mutator_active) {
+      native_cycle_enter_mutator(native_cycle_scope_depth != 0);
+      acquired_lock_ = true;
+    }
+    ++native_cycle_scope_depth;
   }
   NativeCycleScope(const NativeCycleScope &) = delete;
   NativeCycleScope &operator=(const NativeCycleScope &) = delete;
   ~NativeCycleScope() {
+    if (native_cycle_scope_depth == 0 || --native_cycle_scope_depth != 0) {
+      if (acquired_lock_ && native_cycle_mutator_active) {
+        native_cycle_leave_mutator();
+      }
+      return;
+    }
     native_active_cycle_scope_id = previous_scope_id_;
-    native_collect_cycle_scope(scope_id_);
+    {
+      std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+      native_finished_cycle_scopes.push_back(scope_id_);
+    }
+    if (acquired_lock_ && native_cycle_mutator_active) {
+      // Publish the completed scope before this thread can make the mutator
+      // count reach zero. A waiting collector may snapshot immediately after
+      // native_cycle_leave_mutator() notifies it.
+      native_cycle_leave_mutator();
+    }
+
+    // New callbacks wait once collection is requested. A suspended mutator is
+    // allowed to return ahead of the collector so it can release application
+    // locks; see NativeCycleSuspension.
+    if (native_cycle_collector_active.test_and_set(
+            std::memory_order_acquire)) {
+      return;
+    }
+    bool collection_started = false;
+    try {
+      native_cycle_begin_collection();
+      collection_started = true;
+      native_collect_finished_cycles();
+    } catch (...) {
+      // Cycle collection is an optimization. Refcount anchors make abandoning
+      // a failed collection safe (at worst retained until a later collection).
+    }
+    native_cycle_collector_active.clear(std::memory_order_release);
+    if (collection_started) {
+      // Publish the idle election flag before releasing blocked mutators.
+      // Otherwise a fast returning callback can finish in the window between
+      // the gate notification and this clear, leaving its scope pending until
+      // some unrelated future callback happens to elect a collector.
+      native_cycle_end_collection();
+    }
   }
 
 private:
+  bool acquired_lock_ = false;
   std::uint64_t previous_scope_id_ = 0;
   std::uint64_t scope_id_ = 0;
+};
+
+class NativeCycleSuspension {
+public:
+  NativeCycleSuspension() {
+    if (native_cycle_scope_depth != 0 &&
+        native_cycle_mutator_active) {
+      native_cycle_leave_mutator();
+      suspended_ = true;
+    }
+  }
+  NativeCycleSuspension(const NativeCycleSuspension &) = delete;
+  NativeCycleSuspension &operator=(const NativeCycleSuspension &) = delete;
+  ~NativeCycleSuspension() {
+    if (suspended_ && !native_cycle_mutator_active) {
+      native_cycle_enter_mutator(true);
+    }
+  }
+
+private:
+  bool suspended_ = false;
 };
 
 )AMBERCPP";
@@ -7691,21 +7817,46 @@ static void native_closure_capture(NativeClosure *closure, NativeCell *cell) {
   bool marked = false;
 };
 
-static void native_collect_cycle_scope(std::uint64_t scope_id) {
+static void native_collect_finished_cycles() {
+  std::vector<std::uint64_t> finished_scopes;
   std::vector<NativeCycleNode> nodes;
   {
     std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+    finished_scopes = native_finished_cycle_scopes;
+    if (finished_scopes.empty()) return;
     for (const auto &[payload, allocation] : native_tracked_allocations) {
-      if (allocation.scope_id != scope_id) continue;
+      if (std::find(finished_scopes.begin(), finished_scopes.end(),
+                    allocation.scope_id) == finished_scopes.end()) {
+        continue;
+      }
       auto *header = static_cast<NativeRcHeader *>(payload);
+      const std::uint32_t refs =
+          header->rc.load(std::memory_order_acquire);
       nodes.push_back(NativeCycleNode{
           payload, allocation,
-          static_cast<std::int64_t>(
-              header->rc.load(std::memory_order_acquire)),
+          refs == 0
+              ? -1
+              : static_cast<std::int64_t>(refs) - 1,
           {}, false});
     }
   }
-  if (nodes.empty()) return;
+  const auto forget_finished_scopes = [&]() {
+    std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
+    native_finished_cycle_scopes.erase(
+        std::remove_if(
+            native_finished_cycle_scopes.begin(),
+            native_finished_cycle_scopes.end(),
+            [&](std::uint64_t scope_id) {
+              return std::find(finished_scopes.begin(),
+                               finished_scopes.end(),
+                               scope_id) != finished_scopes.end();
+            }),
+        native_finished_cycle_scopes.end());
+  };
+  if (nodes.empty()) {
+    forget_finished_scopes();
+    return;
+  }
 
   std::unordered_map<void *, std::size_t> node_indices;
   node_indices.reserve(nodes.size());
@@ -7779,7 +7930,12 @@ static void native_collect_cycle_scope(std::uint64_t scope_id) {
         break;
       case NativeValue::Tag::Atomic: {
         auto *atomic = static_cast<NativeAtomic *>(node.payload);
-        std::lock_guard<std::mutex> guard(atomic->mutex);
+        std::unique_lock<std::mutex> guard(
+            atomic->mutex, std::try_to_lock);
+        // A suspended native callback may still own an Atomic lock while it
+        // waits in the runtime. Never wait while holding the collector gate:
+        // preserve the pending scopes and retry after that callback resumes.
+        if (!guard.owns_lock()) return;
         add_value_edge(node, atomic->value);
         break;
       }
@@ -7834,19 +7990,30 @@ static void native_collect_cycle_scope(std::uint64_t scope_id) {
   }
 
   std::vector<std::size_t> garbage;
+  std::vector<std::size_t> survivors;
   garbage.reserve(nodes.size());
+  survivors.reserve(nodes.size());
   {
     std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
     for (std::size_t index = 0; index < nodes.size(); ++index) {
-      if (nodes[index].marked) continue;
-      garbage.push_back(index);
+      if (nodes[index].marked) {
+        survivors.push_back(index);
+      } else {
+        garbage.push_back(index);
+      }
       native_tracked_allocations.erase(nodes[index].payload);
-      static_cast<NativeRcHeader *>(nodes[index].payload)->rc.store(
-          std::numeric_limits<std::uint32_t>::max() / 2,
-          std::memory_order_release);
     }
+    native_finished_cycle_scopes.erase(
+        std::remove_if(
+            native_finished_cycle_scopes.begin(),
+            native_finished_cycle_scopes.end(),
+            [&](std::uint64_t scope_id) {
+              return std::find(finished_scopes.begin(),
+                               finished_scopes.end(),
+                               scope_id) != finished_scopes.end();
+            }),
+        native_finished_cycle_scopes.end());
   }
-  if (garbage.empty()) return;
 
   // Break every outgoing edge while all garbage shells are still alive.
   // This makes destruction order irrelevant even for densely connected
@@ -7918,10 +8085,28 @@ static void native_collect_cycle_scope(std::uint64_t scope_id) {
   for (const std::size_t index : garbage) {
     NativeCycleNode &node = nodes[index];
     if (node.allocation.cell) {
-      native_live_cells.fetch_sub(1, std::memory_order_relaxed);
-      delete static_cast<NativeCell *>(node.payload);
+      native_cell_release(static_cast<NativeCell *>(node.payload));
     } else {
-      native_value_delete_payload(node.allocation.tag, node.payload);
+      auto *header = static_cast<NativeRcHeader *>(node.payload);
+      if (header->rc.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        native_value_delete_payload(node.allocation.tag, node.payload);
+      }
+    }
+  }
+  // Survivors leave cycle tracking after their creating invocation. Ordinary
+  // intrusive refcounts handle their future acyclic lifetime; cycles that did
+  // not escape the invocation were already selected above. This keeps the
+  // collector graph bounded by completed request/task scopes rather than by
+  // process lifetime.
+  for (const std::size_t index : survivors) {
+    NativeCycleNode &node = nodes[index];
+    if (node.allocation.cell) {
+      native_cell_release(static_cast<NativeCell *>(node.payload));
+    } else {
+      auto *header = static_cast<NativeRcHeader *>(node.payload);
+      if (header->rc.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        native_value_delete_payload(node.allocation.tag, node.payload);
+      }
     }
   }
 }
@@ -17076,10 +17261,14 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "  amber::runtime::Value runtime_block = bridged_block "
            "? amber::runtime::Value::io_value(std::make_shared<"
            "AmberNativeBlock>(block)) : amber::runtime::Value::null();\n";
-    out << "  NativeValue result = amber_native_bridge_execution_result("
-           "amber_native_bridge_world().invoke_native_stdlib_send("
+    out << "  auto runtime_result = [&]() {\n";
+    out << "    NativeCycleSuspension suspension;\n";
+    out << "    return amber_native_bridge_world().invoke_native_stdlib_send("
            "std::move(runtime_receiver), selector, runtime_args, "
-           "runtime_kwargs, std::move(runtime_block)));\n";
+           "runtime_kwargs, std::move(runtime_block));\n";
+    out << "  }();\n";
+    out << "  NativeValue result = amber_native_bridge_execution_result("
+           "runtime_result);\n";
     out << "  if (!scoped_query) return result;\n";
     out << "  try {\n";
     out << "    NativeValue block_result = "
@@ -17167,6 +17356,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "      native_commit_effect();\n";
   out << "      auto state = std::make_shared<NativeTaskState>();\n";
   out << "      auto function = [state, block]() mutable {\n";
+  out << "        NativeCycleScope cycle_scope;\n";
   out << "        try {\n";
   out << "          NativeValue value = amber_native_call_closure(block, {});\n";
   out << "          std::lock_guard<std::mutex> guard(state->mutex);\n";
@@ -17197,6 +17387,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "kwargs.empty() && block.tag == NativeValue::Tag::Null) {\n";
   out << "      native_commit_effect();\n";
   out << "      try {\n";
+  out << "        NativeCycleSuspension suspension;\n";
   out << "        native_task_runtime().sleep("
          "native_task_duration(*args.begin()));\n";
   out << "      } catch (const amber::runtime::RuntimeTaskCancelled &) {\n";
@@ -17310,9 +17501,15 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  if (selector == \"failed?\") return "
          "NativeValue::boolean(task.handle.failed());\n";
   out << "  if (selector == \"wait\") return "
-         "native_task_completed_value(task, task.handle.wait());\n";
+         "native_task_completed_value(task, [&]() {\n";
+  out << "    NativeCycleSuspension suspension;\n";
+  out << "    return task.handle.wait();\n";
+  out << "  }());\n";
   out << "  if (selector == \"result\") return "
-         "native_task_completed_value(task, task.handle.result());\n";
+         "native_task_completed_value(task, [&]() {\n";
+  out << "    NativeCycleSuspension suspension;\n";
+  out << "    return task.handle.result();\n";
+  out << "  }());\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue native_result_send("

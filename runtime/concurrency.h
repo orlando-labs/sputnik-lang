@@ -716,8 +716,15 @@ public:
   std::optional<RuntimeTaskSnapshot> task_snapshot(std::uint64_t task_id) const;
 
 private:
+  std::uint64_t spawn_managed_task(RuntimeTaskOptions options,
+                                   StrandFunction function);
+  void release_managed_task(std::uint64_t task_id);
+
   class Impl;
   std::shared_ptr<Impl> impl_;
+
+  friend class RuntimeTaskHandle;
+  friend class RuntimeTaskModule;
 };
 
 enum class RuntimeTaskHandleState {
@@ -792,6 +799,7 @@ public:
 
 private:
   struct State;
+  struct Lease;
 
   RuntimeTaskHandle(std::shared_ptr<RuntimeScheduler> scheduler,
                     std::uint64_t task_id, std::shared_ptr<State> state);
@@ -799,6 +807,7 @@ private:
   std::shared_ptr<RuntimeScheduler> scheduler_;
   std::uint64_t task_id_ = 0;
   std::shared_ptr<State> state_;
+  std::shared_ptr<Lease> lease_;
 
   friend class RuntimeTaskModule;
 };
@@ -831,6 +840,11 @@ private:
 
   std::shared_ptr<RuntimeScheduler> scheduler_;
 };
+
+// Wait until completed task bodies have released their captures. Native
+// executables use this after stopping their process-wide task scheduler so no
+// closure destructor can race generated static teardown.
+void runtime_drain_completed_task_functions();
 
 enum class RuntimeFlowFailurePolicy { First, Collect, Ignore };
 

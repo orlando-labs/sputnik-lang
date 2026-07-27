@@ -18889,6 +18889,12 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
   if (!plan.entry_native) {
     out << "  return run_vm_entry();\n";
   }
+  out << "  struct NativeTaskRuntimeShutdown {\n";
+  out << "    ~NativeTaskRuntimeShutdown() {\n";
+  out << "      native_task_runtime().scheduler().shutdown();\n";
+  out << "      amber::runtime::runtime_drain_completed_task_functions();\n";
+  out << "    }\n";
+  out << "  } native_task_runtime_shutdown;\n";
   out << "  try {\n";
   if (artifact.entry_mode != EntryExecutionMode::MainOnly &&
       artifact.has_entry_init_code_id) {

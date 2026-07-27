@@ -180,6 +180,35 @@ void test_std010_task_async_spawn_and_wait_return_values() {
   expect_integer(nonblocking.value, 42, "task.spawn result()");
 }
 
+void test_std010_task_completion_releases_function_captures() {
+  amber::runtime::RuntimeTaskModule task(1);
+  auto retained = std::make_shared<int>(42);
+  std::weak_ptr<int> retained_weak = retained;
+  std::uint64_t task_id = 0;
+  {
+    const amber::runtime::RuntimeTaskHandle handle =
+        task.spawn([retained]() {
+          return amber::runtime::Value::integer(*retained);
+        });
+    task_id = handle.task_id();
+    retained.reset();
+
+    const amber::runtime::RuntimeTaskPublicResult result =
+        handle.wait(std::chrono::milliseconds(1000));
+    expect(result.ok && result.ready,
+           "completed capture-release task should remain joinable");
+    expect_integer(result.value, 42,
+                   "completed capture-release task should preserve its result");
+    amber::runtime::runtime_drain_completed_task_functions();
+    expect(retained_weak.expired(),
+           "terminal task record must release executable closure captures");
+    expect(handle.done() && handle.result().ok,
+           "capture release must preserve terminal handle metadata and result");
+  }
+  expect(!task.scheduler().task_snapshot(task_id).has_value(),
+         "last handle release must reclaim terminal scheduler record");
+}
+
 void test_std010_task_wait_timeout_does_not_cancel_child() {
   amber::runtime::RuntimeTaskModule task(2);
 
@@ -2149,6 +2178,7 @@ int main() {
   test_strand_confinement_handoff_to_task();
   test_strand_confinement_socket_handoff_read_in_task();
   test_std010_task_async_spawn_and_wait_return_values();
+  test_std010_task_completion_releases_function_captures();
   test_std010_task_wait_timeout_does_not_cancel_child();
   test_std010_task_yield_sleep_and_cancel_surface();
   test_std010_task_sync_block_suppresses_cooperative_yield();

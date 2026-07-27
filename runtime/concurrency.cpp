@@ -26,6 +26,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#endif
+
 namespace amber::runtime {
 
 struct RuntimeTaskContext::State {
@@ -45,6 +49,78 @@ std::atomic<std::uint64_t> g_runtime_sync_owner_id{1};
 std::atomic<std::uint64_t> g_runtime_task_local_slot_id{1};
 std::atomic<std::uint64_t> g_runtime_task_local_live_contexts{0};
 std::atomic<std::uint64_t> g_runtime_task_local_retained_values{0};
+
+class CompletedTaskFunctionReaper {
+public:
+  CompletedTaskFunctionReaper() {
+    std::thread([this]() { run(); }).detach();
+  }
+
+  void retire(std::function<void()> function) {
+    if (!function) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      pending_.push_back(std::move(function));
+    }
+    cv_.notify_one();
+  }
+
+  void drain() {
+    std::unique_lock<std::mutex> lock(mutex_);
+    cv_.wait(lock,
+             [this]() { return pending_.empty() && !batch_active_; });
+  }
+
+private:
+  void run() {
+    auto last_pressure_relief = std::chrono::steady_clock::now();
+    while (true) {
+      std::deque<std::function<void()>> batch;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        cv_.wait(lock, [this]() { return !pending_.empty(); });
+        batch.swap(pending_);
+        batch_active_ = true;
+      }
+      // Destruct executable closures outside the scheduler worker that ran
+      // them. A resumable VM closure can own the last RuntimeTaskModule (and
+      // therefore its scheduler); releasing it on one of that scheduler's
+      // workers would make shutdown attempt to join the current thread.
+      batch.clear();
+#if defined(__APPLE__)
+      const auto now = std::chrono::steady_clock::now();
+      if (now - last_pressure_relief >= std::chrono::seconds(2)) {
+        // Completed persistent VMs release large request graphs here, after
+        // the generated bridge's own relief point has already passed. Return
+        // newly-empty Darwin malloc pages at a bounded cadence so RSS and
+        // physical footprint do not track the lifetime request count.
+        (void)malloc_zone_pressure_relief(nullptr, 0);
+        last_pressure_relief = now;
+      }
+#endif
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        batch_active_ = false;
+      }
+      cv_.notify_all();
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable cv_;
+  std::deque<std::function<void()>> pending_;
+  bool batch_active_ = false;
+};
+
+CompletedTaskFunctionReaper &completed_task_function_reaper() {
+  // Process-lifetime service: intentionally keep the queue and its detached
+  // thread alive through static destruction, when task closures may still be
+  // releasing other runtime singletons.
+  static auto *reaper = new CompletedTaskFunctionReaper();
+  return *reaper;
+}
 
 std::uint64_t allocate_runtime_task_local_slot_id() {
   std::uint64_t candidate =
@@ -568,6 +644,32 @@ RuntimeMutexResult runtime_mutex_cancelled_result() {
 }
 
 } // namespace
+
+void runtime_drain_completed_task_functions() {
+  completed_task_function_reaper().drain();
+}
+
+RuntimeTaskContextScope::RuntimeTaskContextScope(
+    std::shared_ptr<RuntimeTaskContext> context, bool only_if_unbound,
+    bool clear_on_exit)
+    : previous_(tls_runtime_task_context), clear_on_exit_(clear_on_exit) {
+  if (context == nullptr || (only_if_unbound && previous_ != nullptr)) {
+    return;
+  }
+  installed_context_ = std::move(context);
+  tls_runtime_task_context = installed_context_;
+  installed_ = true;
+}
+
+RuntimeTaskContextScope::~RuntimeTaskContextScope() {
+  if (!installed_) {
+    return;
+  }
+  if (clear_on_exit_ && installed_context_ != nullptr) {
+    installed_context_->clear();
+  }
+  tls_runtime_task_context = std::move(previous_);
+}
 
 RuntimeTaskLocalKey::RuntimeTaskLocalKey(bool inherit)
     : slot_id_(allocate_runtime_task_local_slot_id()), inherit_(inherit) {}
@@ -2526,6 +2628,12 @@ public:
                       options);
   }
 
+  std::uint64_t spawn_managed_task(RuntimeTaskOptions options,
+                                   StrandFunction function) {
+    return spawn_impl(std::chrono::milliseconds(0), std::move(function), false,
+                      options, true);
+  }
+
   std::uint64_t spawn_sleeping_task(std::chrono::milliseconds delay,
                                     StrandFunction function) {
     return spawn_impl(delay, std::move(function), true, RuntimeTaskOptions{});
@@ -2639,6 +2747,23 @@ public:
     const auto found = strands_.find(task_id);
     return found != strands_.end() &&
            found->second.cancellation_requested->load();
+  }
+
+  void release_managed_task(std::uint64_t task_id) {
+    StrandFunction retired_function;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      const auto found = strands_.find(task_id);
+      if (found == strands_.end() || !found->second.managed_handle) {
+        return;
+      }
+      found->second.handle_released = true;
+      if (is_terminal_state(found->second.state)) {
+        retired_function = std::move(found->second.function);
+        strands_.erase(found);
+      }
+    }
+    completed_task_function_reaper().retire(std::move(retired_function));
   }
 
   RuntimeTaskJoinResult join_task(std::uint64_t task_id,
@@ -2828,6 +2953,8 @@ private:
     bool park_wake_pending = false;
     std::optional<std::size_t> park_wake_worker_index;
     bool parked_once = false;
+    bool managed_handle = false;
+    bool handle_released = false;
     std::uint64_t explicit_wakes = 0;
     std::uint64_t timer_wakes = 0;
     std::uint64_t parent_task_id = 0;
@@ -2877,7 +3004,8 @@ private:
 
   std::uint64_t spawn_impl(std::chrono::milliseconds delay,
                            StrandFunction function, bool may_sleep,
-                           RuntimeTaskOptions options) {
+                           RuntimeTaskOptions options,
+                           bool managed_handle = false) {
     if (!function) {
       function = []() {};
     }
@@ -2909,6 +3037,7 @@ private:
     strand.state = RuntimeStrandState::Runnable;
     strand.supervisor_policy = options.policy;
     strand.resume_on_cancel = options.resume_on_cancel;
+    strand.managed_handle = managed_handle;
     strands_[strand_id] = std::move(strand);
     ++stats_.strands_created;
     ++stats_.tasks_created;
@@ -3201,6 +3330,14 @@ private:
     }
 
     propagate_child_terminal_locked(task_id);
+
+    const auto terminal = strands_.find(task_id);
+    if (terminal != strands_.end() && terminal->second.managed_handle &&
+        terminal->second.handle_released) {
+      StrandFunction retired_function = std::move(terminal->second.function);
+      strands_.erase(terminal);
+      completed_task_function_reaper().retire(std::move(retired_function));
+    }
   }
 
   void propagate_child_terminal_locked(std::uint64_t task_id) {
@@ -3285,6 +3422,7 @@ private:
       std::uint64_t strand_id = 0;
       std::uint64_t sync_owner_id = 0;
       StrandFunction function;
+      StrandFunction retired_function;
       std::shared_ptr<std::atomic<bool>> cancellation_requested;
       std::shared_ptr<RuntimeTaskContext> task_context;
       {
@@ -3376,6 +3514,14 @@ private:
         } else {
           if (found != strands_.end()) {
             found->second.worker_id = 0;
+            // The strand body has returned for the last time. Retaining its
+            // executable closure in the terminal record also retains every
+            // capture reachable from it (for a resumable VM this includes the
+            // VM, its frames, and request/task state). Move it out while the
+            // record is locked, then retire it below after releasing mutex_.
+            // Terminal metadata and RuntimeTaskHandle::State remain available
+            // to live handles.
+            retired_function = std::move(found->second.function);
           }
           if (running_count_ > 0) {
             --running_count_;
@@ -3383,6 +3529,7 @@ private:
           finish_or_wait_locked(strand_id, completion);
         }
       }
+      completed_task_function_reaper().retire(std::move(retired_function));
       cv_.notify_all();
     }
   }
@@ -3479,6 +3626,16 @@ std::uint64_t RuntimeScheduler::spawn_task(RuntimeTaskOptions options,
 }
 
 std::uint64_t
+RuntimeScheduler::spawn_managed_task(RuntimeTaskOptions options,
+                                     StrandFunction function) {
+  return impl_->spawn_managed_task(options, std::move(function));
+}
+
+void RuntimeScheduler::release_managed_task(std::uint64_t task_id) {
+  impl_->release_managed_task(task_id);
+}
+
+std::uint64_t
 RuntimeScheduler::spawn_sleeping_task(std::chrono::milliseconds delay,
                                       StrandFunction function) {
   return impl_->spawn_sleeping_task(delay, std::move(function));
@@ -3562,13 +3719,31 @@ struct RuntimeTaskHandle::State {
   std::string message;
 };
 
+struct RuntimeTaskHandle::Lease {
+  std::function<void()> release;
+
+  ~Lease() {
+    if (release) {
+      release();
+    }
+  }
+};
+
 RuntimeTaskHandle::RuntimeTaskHandle() = default;
 
 RuntimeTaskHandle::RuntimeTaskHandle(
     std::shared_ptr<RuntimeScheduler> scheduler, std::uint64_t task_id,
     std::shared_ptr<State> state)
     : scheduler_(std::move(scheduler)), task_id_(task_id),
-      state_(std::move(state)) {}
+      state_(std::move(state)), lease_(std::make_shared<Lease>()) {
+  const std::weak_ptr<RuntimeScheduler> scheduler_weak = scheduler_;
+  lease_->release = [scheduler_weak, task_id]() {
+    if (const std::shared_ptr<RuntimeScheduler> scheduler =
+            scheduler_weak.lock()) {
+      scheduler->release_managed_task(task_id);
+    }
+  };
+}
 
 bool RuntimeTaskHandle::active() const {
   return scheduler_ != nullptr && task_id_ != 0;
@@ -3901,12 +4076,9 @@ RuntimeTaskHandle RuntimeTaskModule::spawn_with_kind(
     }
   };
 
+  (void)kind;
   const std::uint64_t task_id =
-      options.resume_on_cancel
-          ? scheduler_->spawn_task(options, std::move(task_body))
-          : kind == SpawnKind::SameStrand
-                ? scheduler_->spawn_task(std::move(task_body))
-                : scheduler_->spawn_strand(std::move(task_body));
+      scheduler_->spawn_managed_task(options, std::move(task_body));
   return RuntimeTaskHandle(scheduler_, task_id, std::move(state));
 }
 

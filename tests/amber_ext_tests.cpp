@@ -690,17 +690,38 @@ void test_runtime_world_direct_native_extension_call() {
   NativeExtRegistry::global().register_package(std::move(package));
 
   RuntimeWorld world(module);
-  const amber::runtime::ExecutionResult result =
+  const amber::runtime::ExecutionResult faulted =
+      world.invoke_native_extension(7);
+  expect(!faulted.ok() && faulted.fault.has_value() &&
+             faulted.fault->error_name == "TypeError",
+         "persistent native extension session reports a thunk fault");
+
+  const amber::runtime::ExecutionResult recovered =
       world.invoke_native_extension(7, {Value::integer(41)});
-  expect(result.ok() && result.value.is_integer() &&
-             result.value.as_integer() == 42,
-         "RuntimeWorld invokes a native extension thunk directly");
+  expect(recovered.ok() && recovered.value.is_integer() &&
+             recovered.value.as_integer() == 42,
+         "persistent native extension session clears fault state");
+
+  const Value bridge_text = world.string_value("persistent");
+  const amber::runtime::ExecutionResult bridge_size =
+      world.invoke_native_stdlib_send(bridge_text, "size");
+  expect(bridge_size.ok() && bridge_size.value.is_integer() &&
+             bridge_size.value.as_integer() == 10,
+         "native extension and stdlib calls share a synchronized bridge "
+         "session");
 
   const amber::runtime::ExecutionResult missing =
       world.invoke_native_extension(8);
   expect(!missing.ok() && missing.fault.has_value() &&
              missing.fault->error_name == "NativeRequiredError",
          "direct native extension invocation rejects an unbound code id");
+
+  const amber::runtime::ExecutionResult after_missing =
+      world.invoke_native_extension(7, {Value::integer(1)});
+  expect(after_missing.ok() && after_missing.value.is_integer() &&
+             after_missing.value.as_integer() == 2,
+         "persistent native extension session remains reusable after an "
+         "unbound code id");
 }
 
 } // namespace

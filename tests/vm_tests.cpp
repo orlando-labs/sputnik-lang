@@ -4047,7 +4047,7 @@ void test_runtime_world_persists_runtime_strings_between_execute_calls() {
          "runtime world keeps dynamic string ids stable across execute calls");
 }
 
-void test_runtime_world_reuses_native_stdlib_session_after_fault() {
+void test_runtime_world_reuses_native_bridge_session_after_stdlib_fault() {
   amber::bytecode::BcModule module;
   amber::runtime::RuntimeWorld world(module);
 
@@ -10743,7 +10743,7 @@ int main() {
   test_execute_emitted_block_map_suffixes();
   test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
   test_runtime_world_persists_runtime_strings_between_execute_calls();
-  test_runtime_world_reuses_native_stdlib_session_after_fault();
+  test_runtime_world_reuses_native_bridge_session_after_stdlib_fault();
   test_execute_emitted_copy_graphs();
   test_execute_emitted_user_index_methods();
   test_execute_emitted_v20_5_array_generation_and_optional_access();

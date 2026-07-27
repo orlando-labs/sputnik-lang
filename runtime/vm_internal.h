@@ -642,23 +642,25 @@ struct RuntimeVmExecutionContext {
   std::int64_t step_budget = 0;
 };
 
-// Reusable narrow VM facade for RuntimeWorld::invoke_native_stdlib_send.
-// Native executables make many small sends through the same RuntimeWorld; a
-// session keeps the decoded module and VM-side lookup caches instead of
-// copying the complete BcModule for every selector.
-class RuntimeNativeStdlibSession {
+// Reusable narrow VM facade for native bridge calls made through RuntimeWorld.
+// Native executables make many small stdlib sends and native-extension calls
+// through the same world; a session keeps the decoded module and VM-side
+// lookup caches instead of copying the complete BcModule for every call.
+class RuntimeNativeBridgeSession {
 public:
-  RuntimeNativeStdlibSession(const bytecode::BcModule &module,
+  RuntimeNativeBridgeSession(const bytecode::BcModule &module,
                              RuntimeVmExecutionContext context);
-  ~RuntimeNativeStdlibSession();
-  RuntimeNativeStdlibSession(const RuntimeNativeStdlibSession &) = delete;
-  RuntimeNativeStdlibSession &
-  operator=(const RuntimeNativeStdlibSession &) = delete;
+  ~RuntimeNativeBridgeSession();
+  RuntimeNativeBridgeSession(const RuntimeNativeBridgeSession &) = delete;
+  RuntimeNativeBridgeSession &
+  operator=(const RuntimeNativeBridgeSession &) = delete;
 
   void synchronize_runtime_names(
       const std::vector<std::string> &strings,
       const std::vector<std::string> &symbols);
-  ExecutionResult invoke(
+  ExecutionResult invoke_extension(std::uint32_t code_id,
+                                   const std::vector<Value> &args, Value self);
+  ExecutionResult invoke_stdlib_send(
       Value receiver, std::string selector, const std::vector<Value> &args,
       const std::vector<std::pair<std::string, Value>> &keyword_args,
       Value block);

@@ -1949,6 +1949,12 @@ public:
   ExecutionResult invoke_native_extension(std::uint32_t code_id,
                                           const std::vector<Value> &args,
                                           Value self) {
+    // A persistent native bridge session reuses this Vm across independent
+    // extension calls. Fault/unwind state belongs to one call and must never
+    // poison the next invocation.
+    fault_.reset();
+    escaped_exception_.reset();
+    escaped_throw_.reset();
     if (current_runtime_task_context() == nullptr &&
         root_task_context_ == nullptr) {
       root_task_context_ = RuntimeTaskContext::create();
@@ -31658,7 +31664,7 @@ private:
 
 } // namespace
 
-struct RuntimeNativeStdlibSession::Impl {
+struct RuntimeNativeBridgeSession::Impl {
   Impl(const bytecode::BcModule &module, RuntimeVmExecutionContext context)
       : vm(module, std::move(context.state), std::move(context.module_id),
            context.world_options, context.capabilities, context.effects,
@@ -31670,19 +31676,27 @@ struct RuntimeNativeStdlibSession::Impl {
   Vm vm;
 };
 
-RuntimeNativeStdlibSession::RuntimeNativeStdlibSession(
+RuntimeNativeBridgeSession::RuntimeNativeBridgeSession(
     const bytecode::BcModule &module, RuntimeVmExecutionContext context)
     : impl_(std::make_unique<Impl>(module, std::move(context))) {}
 
-RuntimeNativeStdlibSession::~RuntimeNativeStdlibSession() = default;
+RuntimeNativeBridgeSession::~RuntimeNativeBridgeSession() = default;
 
-void RuntimeNativeStdlibSession::synchronize_runtime_names(
+void RuntimeNativeBridgeSession::synchronize_runtime_names(
     const std::vector<std::string> &strings,
     const std::vector<std::string> &symbols) {
   impl_->vm.synchronize_runtime_names(strings, symbols);
 }
 
-ExecutionResult RuntimeNativeStdlibSession::invoke(
+ExecutionResult RuntimeNativeBridgeSession::invoke_extension(
+    std::uint32_t code_id, const std::vector<Value> &args, Value self) {
+  ExecutionResult result =
+      impl_->vm.invoke_native_extension(code_id, args, std::move(self));
+  impl_->vm.accept_runtime_name_baseline();
+  return result;
+}
+
+ExecutionResult RuntimeNativeBridgeSession::invoke_stdlib_send(
     Value receiver, std::string selector, const std::vector<Value> &args,
     const std::vector<std::pair<std::string, Value>> &keyword_args,
     Value block) {

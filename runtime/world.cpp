@@ -368,7 +368,7 @@ struct RuntimeWorld::Impl {
   std::size_t symbol_index_folded = 0;
   std::mutex value_mutex;
   std::recursive_mutex execution_mutex;
-  std::unique_ptr<RuntimeNativeStdlibSession> native_stdlib_session;
+  std::unique_ptr<RuntimeNativeBridgeSession> native_bridge_session;
 };
 
 RuntimeWorld::RuntimeWorld(const bytecode::BcModule &module)
@@ -594,24 +594,33 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
   impl_->record_event(replay::make_event(
       "native_extension.started", {{"code_id", std::to_string(code_id)}}));
 
-  RuntimeVmExecutionContext context;
-  context.state = impl_->state;
-  context.module_id =
-      impl_->package.has_value() ? impl_->package->manifest.root_module : "";
-  context.world_options = &impl_->options;
-  context.capabilities = &impl_->capabilities;
-  context.effects = &impl_->effects;
-  context.trace_recorder = [impl = impl_](RuntimeTraceEvent event) {
-    impl->record_event(std::move(event));
-  };
-  context.native_registry = &impl_->native_registry;
-  context.module_registry = &impl_->module_registry;
-  context.type_registry = &impl_->type_registry;
-  context.dispatch_registry = &impl_->dispatch_registry;
-  context.error_registry = &impl_->error_registry;
-
-  ExecutionResult result = invoke_runtime_native_extension(
-      *impl_->module, std::move(context), code_id, args, std::move(self));
+  if (impl_->native_bridge_session == nullptr) {
+    RuntimeVmExecutionContext context;
+    context.state = impl_->state;
+    context.module_id =
+        impl_->package.has_value() ? impl_->package->manifest.root_module : "";
+    context.world_options = &impl_->options;
+    context.capabilities = &impl_->capabilities;
+    context.effects = &impl_->effects;
+    const std::weak_ptr<Impl> weak_impl = impl_;
+    context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
+      if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
+        impl->record_event(std::move(event));
+      }
+    };
+    context.native_registry = &impl_->native_registry;
+    context.module_registry = &impl_->module_registry;
+    context.type_registry = &impl_->type_registry;
+    context.dispatch_registry = &impl_->dispatch_registry;
+    context.error_registry = &impl_->error_registry;
+    impl_->native_bridge_session =
+        std::make_unique<RuntimeNativeBridgeSession>(
+            *impl_->module, std::move(context));
+  }
+  impl_->native_bridge_session->synchronize_runtime_names(
+      impl_->owned_module->strings, impl_->owned_module->symbols);
+  ExecutionResult result = impl_->native_bridge_session->invoke_extension(
+      code_id, args, std::move(self));
   if (!result.runtime_strings.empty()) {
     impl_->owned_module->strings = result.runtime_strings;
   }
@@ -638,7 +647,7 @@ ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
       impl_->execution_mutex);
   impl_->state->initialize_for_module(*impl_->module);
 
-  if (impl_->native_stdlib_session == nullptr) {
+  if (impl_->native_bridge_session == nullptr) {
     RuntimeVmExecutionContext context;
     context.state = impl_->state;
     context.module_id =
@@ -657,13 +666,13 @@ ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
     context.type_registry = &impl_->type_registry;
     context.dispatch_registry = &impl_->dispatch_registry;
     context.error_registry = &impl_->error_registry;
-    impl_->native_stdlib_session =
-        std::make_unique<RuntimeNativeStdlibSession>(
+    impl_->native_bridge_session =
+        std::make_unique<RuntimeNativeBridgeSession>(
             *impl_->module, std::move(context));
   }
-  impl_->native_stdlib_session->synchronize_runtime_names(
+  impl_->native_bridge_session->synchronize_runtime_names(
       impl_->owned_module->strings, impl_->owned_module->symbols);
-  ExecutionResult result = impl_->native_stdlib_session->invoke(
+  ExecutionResult result = impl_->native_bridge_session->invoke_stdlib_send(
       std::move(receiver), std::move(selector), args, keyword_args,
       std::move(block));
   if (!result.runtime_strings.empty()) {
@@ -1907,7 +1916,7 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
   auto next_module =
       std::make_shared<bytecode::BcModule>(bytecode::BcModule(root->second));
 
-  impl_->native_stdlib_session.reset();
+  impl_->native_bridge_session.reset();
   impl_->string_index.clear();
   impl_->symbol_index.clear();
   impl_->string_index_folded = 0;

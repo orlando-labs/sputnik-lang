@@ -6907,12 +6907,20 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
   return out.str();
 }
 
-std::string emit_embedded_hex_cpp(const std::vector<std::uint8_t> &bytes) {
-  const std::string hex = bytes_to_hex_text(bytes);
+std::string emit_embedded_bytecode_cpp(
+    const std::vector<std::uint8_t> &bytes) {
   std::ostringstream out;
-  out << "static const char *kEmbeddedBytecodeHex =\n";
-  for (std::size_t i = 0; i < hex.size(); i += 96U) {
-    out << "  \"" << hex.substr(i, 96U) << "\"\n";
+  out << "static constexpr char kEmbeddedBytecode[] =\n";
+  for (std::size_t i = 0; i < bytes.size(); i += 48U) {
+    out << "  \"";
+    const std::size_t end = std::min<std::size_t>(bytes.size(), i + 48U);
+    for (std::size_t j = i; j < end; ++j) {
+      const unsigned int byte = bytes[j];
+      out << '\\' << static_cast<char>('0' + ((byte >> 6U) & 7U))
+          << static_cast<char>('0' + ((byte >> 3U) & 7U))
+          << static_cast<char>('0' + (byte & 7U));
+    }
+    out << "\"\n";
   }
   out << ";\n\n";
   return out.str();
@@ -7597,7 +7605,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#else\n";
   out << "#define AMBER_NATIVE_ALWAYS_INLINE inline\n";
   out << "#endif\n\n";
-  out << emit_embedded_hex_cpp(artifact.bytes);
+  out << emit_embedded_bytecode_cpp(artifact.bytes);
   out << emit_module_strings_cpp(module);
   out << emit_embedded_capability_grants_cpp(artifact.capability_grants);
   out << "struct NativeBailout : public std::exception {\n";
@@ -20875,20 +20883,10 @@ static bool native_http_try_fast_server_response(
     }
   }
   out << "static std::vector<std::uint8_t> embedded_bytecode() {\n";
-  out << "  const std::string hex(kEmbeddedBytecodeHex);\n";
-  out << "  std::vector<std::uint8_t> bytes;\n";
-  out << "  bytes.reserve(hex.size() / 2U);\n";
-  out << "  auto digit = [](char c) -> int {\n";
-  out << "    if (c >= '0' && c <= '9') return c - '0';\n";
-  out << "    if (c >= 'a' && c <= 'f') return 10 + c - 'a';\n";
-  out << "    if (c >= 'A' && c <= 'F') return 10 + c - 'A';\n";
-  out << "    return -1;\n";
-  out << "  };\n";
-  out << "  for (std::size_t i = 0; i + 1U < hex.size(); i += 2U) {\n";
-  out << "    bytes.push_back(static_cast<std::uint8_t>((digit(hex[i]) << "
-         "4U) | digit(hex[i + 1U])));\n";
-  out << "  }\n";
-  out << "  return bytes;\n";
+  out << "  const auto *begin = reinterpret_cast<const std::uint8_t *>(\n";
+  out << "      kEmbeddedBytecode);\n";
+  out << "  return std::vector<std::uint8_t>(\n";
+  out << "      begin, begin + sizeof(kEmbeddedBytecode) - 1U);\n";
   out << "}\n\n";
   if (plan.uses_bytecode_fallback) {
     out << "static void print_fault(const amber::runtime::ExecutionResult "

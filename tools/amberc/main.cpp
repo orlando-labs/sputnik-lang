@@ -3241,8 +3241,9 @@ native_cpp_constant_expr(const amber::bytecode::Constant &constant) {
   }
 }
 
-bool native_cpp_code_uses_local_capture_cells(
+std::set<std::uint32_t> native_cpp_code_local_capture_slots(
     const amber::bytecode::BcCode &code) {
+  std::set<std::uint32_t> slots;
   for (const amber::bytecode::Instruction &instruction : code.instructions) {
     if (instruction.opcode != amber::bytecode::Opcode::MakeClosure) {
       continue;
@@ -3259,13 +3260,12 @@ bool native_cpp_code_uses_local_capture_cells(
           !operand_u32_value(instruction, operand_index++, &slot)) {
         break;
       }
-      (void)slot;
       if (kind == 0U) {
-        return true;
+        slots.insert(slot);
       }
     }
   }
-  return false;
+  return slots;
 }
 
 std::optional<std::uint32_t> native_cpp_direct_chars_each_block_at_pc(
@@ -4070,8 +4070,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                   &direct_chars_each_block_code_ids) {
   std::ostringstream out;
   const std::string fn = native_cpp_function_name(code.code_id);
-  const bool uses_local_capture_cells =
-      native_cpp_code_uses_local_capture_cells(code);
+  const std::set<std::uint32_t> local_capture_slots =
+      native_cpp_code_local_capture_slots(code);
+  const bool uses_local_capture_cells = !local_capture_slots.empty();
   const bool owns_handlers = !code.handler_table.empty();
   const bool is_handler_code = std::any_of(
       module.code_objects.begin(), module.code_objects.end(),
@@ -4126,8 +4127,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     }
   }
   const auto read_frame_reg_expr =
-      [uses_local_capture_cells](std::uint32_t reg) {
-        if (uses_local_capture_cells) {
+      [&local_capture_slots](std::uint32_t reg) {
+        if (local_capture_slots.find(reg) != local_capture_slots.end()) {
           return "read_reg(frame, " + std::to_string(reg) + ")";
         }
         return "frame.regs[" + std::to_string(reg) + "]";
@@ -4141,11 +4142,13 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
   const auto bool_lane_expr = [](std::uint32_t reg) {
     return "breg_" + std::to_string(reg);
   };
-  const auto write_reg_stmt = [&](std::uint32_t reg, const std::string &expr) {
-    if (uses_local_capture_cells) {
-      out << "  write_reg(frame, " << reg << ", " << expr << ");\n";
+  const auto write_reg_stmt = [&](std::uint32_t reg, const std::string &expr,
+                                  const char *indent = "  ") {
+    out << indent;
+    if (local_capture_slots.find(reg) != local_capture_slots.end()) {
+      out << "write_reg(frame, " << reg << ", " << expr << ");\n";
     } else {
-      out << "  frame.regs[" << reg << "] = " << expr << ";\n";
+      out << "frame.regs[" << reg << "] = " << expr << ";\n";
     }
   };
   const auto write_int_reg_stmt = [&](std::uint32_t reg,
@@ -4602,14 +4605,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           out << "    throw NativeBailout();\n";
         }
       }
-      out << "    ";
-      if (uses_local_capture_cells) {
-        out << "write_reg(frame, " << dst
-            << ", native_set_from_items(std::move(items)));\n";
-      } else {
-        out << "frame.regs[" << dst
-            << "] = native_set_from_items(std::move(items));\n";
-      }
+      write_reg_stmt(dst, "native_set_from_items(std::move(items))", "    ");
       out << "  }\n";
       emit_next(pc, next_scalar_state);
       break;
@@ -4634,16 +4630,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             << symbol_id << "), " << read_reg_expr(value_reg) << ", "
             << (strict ? "true" : "false") << ");\n";
       }
-      out << "    ";
-      if (uses_local_capture_cells) {
-        out << "write_reg(frame, " << dst
-            << ", NativeValue::map_entries(std::move(entries), "
-            << (strict ? "true" : "false") << "));\n";
-      } else {
-        out << "frame.regs[" << dst
-            << "] = NativeValue::map_entries(std::move(entries), "
-            << (strict ? "true" : "false") << ");\n";
-      }
+      write_reg_stmt(
+          dst, "NativeValue::map_entries(std::move(entries), " +
+                   std::string(strict ? "true" : "false") + ")",
+          "    ");
       out << "  }\n";
       emit_next(pc, next_scalar_state);
       break;
@@ -4668,16 +4658,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             << ", " << read_reg_expr(value_reg) << ", "
             << (strict ? "true" : "false") << ");\n";
       }
-      out << "    ";
-      if (uses_local_capture_cells) {
-        out << "write_reg(frame, " << dst
-            << ", NativeValue::map_entries(std::move(entries), "
-            << (strict ? "true" : "false") << "));\n";
-      } else {
-        out << "frame.regs[" << dst
-            << "] = NativeValue::map_entries(std::move(entries), "
-            << (strict ? "true" : "false") << ");\n";
-      }
+      write_reg_stmt(
+          dst, "NativeValue::map_entries(std::move(entries), " +
+                   std::string(strict ? "true" : "false") + ")",
+          "    ");
       out << "  }\n";
       emit_next(pc, next_scalar_state);
       break;
@@ -4716,16 +4700,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           out << "    throw NativeBailout();\n";
         }
       }
-      out << "    ";
-      if (uses_local_capture_cells) {
-        out << "write_reg(frame, " << dst
-            << ", NativeValue::map_entries(std::move(entries), "
-            << (strict ? "true" : "false") << "));\n";
-      } else {
-        out << "frame.regs[" << dst
-            << "] = NativeValue::map_entries(std::move(entries), "
-            << (strict ? "true" : "false") << ");\n";
-      }
+      write_reg_stmt(
+          dst, "NativeValue::map_entries(std::move(entries), " +
+                   std::string(strict ? "true" : "false") + ")",
+          "    ");
       out << "  }\n";
       emit_next(pc, next_scalar_state);
       break;
@@ -4959,11 +4937,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       out << "    NativeValue closure_value = "
              "NativeValue::closure(next_closure);\n";
       if (self_capture) {
-        if (uses_local_capture_cells) {
-          out << "    write_reg(frame, " << dst << ", closure_value);\n";
-        } else {
-          out << "    frame.regs[" << dst << "] = closure_value;\n";
-        }
+        out << "    write_reg(frame, " << dst << ", closure_value);\n";
       }
       operand_index = 3U;
       for (std::uint32_t capture_i = 0; capture_i < capture_count;
@@ -4982,7 +4956,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               << slot << "));\n";
         }
       }
-      if (uses_local_capture_cells) {
+      if (local_capture_slots.find(dst) != local_capture_slots.end()) {
         out << "    write_reg(frame, " << dst << ", closure_value);\n";
       } else {
         out << "    frame.regs[" << dst << "] = closure_value;\n";

@@ -3680,9 +3680,20 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
     return parse_brace_collection_literal(token, stop_mode);
   }
   if (token.kind == lexer::TokenKind::Plus ||
-      token.kind == lexer::TokenKind::Minus ||
-      token.kind == lexer::TokenKind::KeywordNot) {
+      token.kind == lexer::TokenKind::Minus) {
     std::unique_ptr<ast::Expr> operand = parse_expression(10, stop_mode);
+    auto expr =
+        ast::make_expr("AstUnary", ast::join_spans(token.span, operand->span));
+    expr->string_field("op", token.lexeme);
+    expr->node_field("operand", std::move(operand));
+    return expr;
+  }
+  if (token.kind == lexer::TokenKind::KeywordNot) {
+    // Logical `not` binds below comparisons but above `and`/`or`, matching
+    // the way conditions are read: `not Int === value` means
+    // `not (Int === value)`, while `not ready and enabled` keeps `and`
+    // outside the negation.
+    std::unique_ptr<ast::Expr> operand = parse_expression(4, stop_mode);
     auto expr =
         ast::make_expr("AstUnary", ast::join_spans(token.span, operand->span));
     expr->string_field("op", token.lexeme);

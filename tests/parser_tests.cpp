@@ -182,6 +182,20 @@ void test_new_binary_operators() {
   expect(node_field(*unary_multiply, "left").kind == "AstUnary",
          "multiplication lhs is unary");
 
+  std::unique_ptr<Expr> not_match = parse_ok("not Int === value\n");
+  expect(not_match->kind == "AstUnary", "logical not stays outside match");
+  expect(node_field(*not_match, "operand").kind == "AstBinary",
+         "comparison binds inside logical not");
+  expect(string_field(node_field(*not_match, "operand"), "op") == "===",
+         "logical not negates the complete type match");
+
+  std::unique_ptr<Expr> not_and = parse_ok("not ready and enabled\n");
+  expect(not_and->kind == "AstBinary" &&
+             string_field(*not_and, "op") == "and",
+         "and stays outside logical not");
+  expect(node_field(*not_and, "left").kind == "AstUnary",
+         "logical not binds to the left and operand");
+
   std::unique_ptr<Expr> xor_expr = parse_ok("x ^ y\n");
   expect(xor_expr->kind == "AstBinary", "xor parses as binary");
   expect(string_field(*xor_expr, "op") == "^", "xor op");

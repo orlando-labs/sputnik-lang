@@ -7860,6 +7860,28 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  std::string name;\n";
   out << "  NativeValue value = NativeValue::nullv();\n";
   out << "};\n\n";
+  out << "class NativeKeywordArgsView {\n";
+  out << "public:\n";
+  out << "  using const_iterator = const NativeCallKeyword *;\n";
+  out << "  NativeKeywordArgsView() = default;\n";
+  out << "  NativeKeywordArgsView("
+         "std::initializer_list<NativeCallKeyword> values) noexcept\n";
+  out << "      : data_(values.begin()), size_(values.size()) {}\n";
+  out << "  NativeKeywordArgsView("
+         "const std::vector<NativeCallKeyword> &values) noexcept\n";
+  out << "      : data_(values.data()), size_(values.size()) {}\n";
+  out << "  std::size_t size() const noexcept { return size_; }\n";
+  out << "  bool empty() const noexcept { return size_ == 0; }\n";
+  out << "  const NativeCallKeyword &front() const { return data_[0]; }\n";
+  out << "  const NativeCallKeyword &operator[](std::size_t index) const "
+         "{ return data_[index]; }\n";
+  out << "  const_iterator begin() const noexcept { return data_; }\n";
+  out << "  const_iterator end() const noexcept "
+         "{ return size_ == 0 ? data_ : data_ + size_; }\n";
+  out << "private:\n";
+  out << "  const NativeCallKeyword *data_ = nullptr;\n";
+  out << "  std::size_t size_ = 0;\n";
+  out << "};\n\n";
   out << "struct NativeRaised { NativeValue exception; };\n";
   out << "struct NativeNonlocalReturnTarget { "
          "std::atomic<bool> active{true}; };\n";
@@ -8033,6 +8055,12 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "};\n";
   out << "struct NativeRuntimeHandle : NativeRcHeader {\n";
   out << "  amber::runtime::Value value = amber::runtime::Value::null();\n";
+  out << "  bool http_server_request_snapshot_checked = false;\n";
+  out << "  std::unique_ptr<amber::runtime::"
+         "RuntimeNativeHttpServerRequestSnapshot> "
+         "http_server_request_snapshot;\n";
+  out << "  std::optional<std::vector<std::pair<std::string, std::string>>> "
+         "http_header_pairs;\n";
   out << "};\n";
   out << "static constexpr std::size_t kNativeInlineIvarCapacity = 4U;\n";
   out << "static constexpr std::uint32_t kNativeSuppressedExceptionsIvar = "
@@ -9908,7 +9936,7 @@ static void native_collect_finished_cycles() {
   out << "static NativeValue native_user_send(const NativeValue &receiver, "
          "const std::string &selector, "
          "const NativeArgsView &args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block = NativeValue::nullv(), "
          "NativeUserCallSiteCache *call_site = nullptr);\n\n";
   out << "static NativeValue native_atomic_send("
@@ -10049,12 +10077,12 @@ static void native_collect_finished_cycles() {
   out << "static NativeValue native_http_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block);\n\n";
   out << "static NativeValue native_task_send("
          "const NativeValue &receiver, const std::string &selector, "
          "std::initializer_list<NativeValue> args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block);\n\n";
   out << "static NativeValue native_result_send("
          "const NativeValue &receiver, const std::string &selector, "
@@ -14525,6 +14553,17 @@ static NativeValue native_type_matches(const NativeValue &module,
   } else if (module.tag == NativeValue::Tag::ArgParserModule) {
     matched = value.tag == NativeValue::Tag::ArgParser ||
               value.tag == NativeValue::Tag::ArgParserModule;
+  } else if (module.tag == NativeValue::Tag::RuntimeHandle &&
+             value.tag == NativeValue::Tag::RuntimeHandle) {
+    const amber::runtime::Value &runtime_matcher =
+        as_native_runtime_handle(module)->value;
+    if (!runtime_matcher.is_native_type()) throw NativeBailout();
+    const std::optional<bool> direct =
+        amber::runtime::runtime_native_io_type_matches(
+            as_native_runtime_handle(value)->value,
+            runtime_matcher.as_native_type().kind);
+    if (!direct.has_value()) throw NativeBailout();
+    matched = *direct;
   } else {
     throw NativeBailout();
   }
@@ -16342,7 +16381,7 @@ using NativeArgKwArgs =
     std::vector<std::pair<std::string, NativeValue>>;
 
 static NativeArgKwArgs native_arg_call_kwargs(
-    const std::vector<NativeCallKeyword> &kwargs) {
+    const NativeKeywordArgsView &kwargs) {
   NativeArgKwArgs out;
   out.reserve(kwargs.size());
   for (const NativeCallKeyword &keyword : kwargs) {
@@ -19260,7 +19299,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << R"AMBERCPP(static std::vector<NativeValue> native_shape_method_args(
     std::uint32_t code_id,
     const NativeArgsView &positional,
-    const std::vector<NativeCallKeyword> &keywords,
+    const NativeKeywordArgsView &keywords,
     const NativeValue &block, NativeClosure *invocation) {
   const std::optional<NativeMethodDescriptor> descriptor =
       native_method_descriptor(code_id);
@@ -19570,7 +19609,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "}\n\n";
   out << "static NativeValue amber_native_call_closure_with_keywords("
          "const NativeValue &value, const NativeArgsView &args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
   out << "  NativeClosure *closure = as_closure(value);\n";
   out << "  NativeClosure invocation = *closure;\n";
@@ -19597,7 +19636,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "}\n\n";
   out << "static NativeValue amber_native_call_value("
          "const NativeValue &value, const NativeArgsView &args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
   out << "  try {\n";
   out << "  if (value.tag == NativeValue::Tag::ResultOkFunction || "
@@ -19767,12 +19806,207 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "  NativeValue block_;\n";
     out << "};\n\n";
   }
+  out << R"AMBERCPP(static amber::runtime::RuntimeNativeHttpServerRequestSnapshot *
+native_http_server_request_snapshot(NativeRuntimeHandle &handle) {
+  if (!handle.http_server_request_snapshot_checked) {
+    handle.http_server_request_snapshot_checked = true;
+    auto snapshot = amber::runtime::runtime_native_http_server_request_snapshot(
+        handle.value);
+    if (snapshot.has_value()) {
+      handle.http_server_request_snapshot = std::make_unique<
+          amber::runtime::RuntimeNativeHttpServerRequestSnapshot>(
+              std::move(*snapshot));
+    }
+  }
+  return handle.http_server_request_snapshot.get();
+}
+
+static NativeValue native_http_runtime_handle_with_header_pairs(
+    const amber::runtime::Value &value,
+    const std::vector<std::pair<std::string, std::string>> &pairs) {
+  NativeValue result = NativeValue::runtime_handle(value);
+  as_native_runtime_handle(result)->http_header_pairs = pairs;
+  return result;
+}
+
+static bool native_http_try_fast_request_send(
+    const NativeValue &receiver, const std::string &selector,
+    const NativeArgsView &args, const NativeKeywordArgsView &kwargs,
+    const NativeValue &block, NativeValue *out) {
+  if (!args.empty() || !kwargs.empty() ||
+      block.tag != NativeValue::Tag::Null) {
+    return false;
+  }
+  NativeRuntimeHandle &handle = *as_native_runtime_handle(receiver);
+  auto *request = native_http_server_request_snapshot(handle);
+  if (request != nullptr) {
+    if (selector == "method") {
+      *out = NativeValue::heap_string(request->method);
+    } else if (selector == "target") {
+      *out = NativeValue::heap_string(request->target);
+    } else if (selector == "path") {
+      *out = NativeValue::heap_string(request->path);
+    } else if (selector == "query") {
+      *out = request->query.has_value()
+                 ? NativeValue::heap_string(*request->query)
+                 : NativeValue::nullv();
+    } else if (selector == "headers") {
+      *out = native_http_runtime_handle_with_header_pairs(
+          request->headers, request->header_pairs);
+    } else if (selector == "body_stream") {
+      *out = NativeValue::runtime_handle(request->body_stream);
+    } else if (selector == "local_endpoint") {
+      *out = NativeValue::runtime_handle(request->local_endpoint);
+    } else if (selector == "remote_endpoint") {
+      *out = NativeValue::runtime_handle(request->remote_endpoint);
+    } else {
+      return false;
+    }
+    return true;
+  }
+
+  if (handle.http_header_pairs.has_value() && selector == "to_pairs") {
+    std::vector<NativeValue> pairs;
+    pairs.reserve(handle.http_header_pairs->size());
+    for (const auto &[name, value] : *handle.http_header_pairs) {
+      pairs.push_back(NativeValue::tuple(
+          {NativeValue::heap_string(name), NativeValue::heap_string(value)}));
+    }
+    *out = NativeValue::list(std::move(pairs));
+    return true;
+  }
+
+  if (handle.value.is_io_value()) {
+    const auto endpoint = std::dynamic_pointer_cast<
+        amber::runtime::RuntimeEndpoint>(handle.value.as_io_value());
+    if (endpoint != nullptr) {
+      if (selector == "host") {
+        *out = NativeValue::heap_string(endpoint->host);
+      } else if (selector == "port") {
+        *out = NativeValue::integer(endpoint->port);
+      } else if (selector == "family") {
+        *out = NativeValue::symbol_ref(native_intern_symbol(endpoint->family()));
+      } else if (selector == "to_str" || selector == "str") {
+        *out = NativeValue::heap_string(endpoint->to_string());
+      } else {
+        return false;
+      }
+      return true;
+    }
+  }
+  return false;
+}
+
+static bool native_http_header_pairs_from_value(
+    const NativeValue &value,
+    std::vector<std::pair<std::string, std::string>> *out) {
+  if (value.tag == NativeValue::Tag::Null) return true;
+  if (value.tag != NativeValue::Tag::List &&
+      value.tag != NativeValue::Tag::Tuple) {
+    return false;
+  }
+  const std::vector<NativeValue> &pairs = value.tag == NativeValue::Tag::List
+      ? as_list(value).items
+      : as_tuple(value).items;
+  out->reserve(pairs.size());
+  for (const NativeValue &pair : pairs) {
+    const std::vector<NativeValue> *items = nullptr;
+    if (pair.tag == NativeValue::Tag::List) {
+      items = &as_list(pair).items;
+    } else if (pair.tag == NativeValue::Tag::Tuple) {
+      items = &as_tuple(pair).items;
+    }
+    if (items == nullptr || items->size() != 2U ||
+        (!native_value_is_string((*items)[0]) &&
+         (*items)[0].tag != NativeValue::Tag::Symbol) ||
+        !native_value_is_string((*items)[1])) {
+      return false;
+    }
+    const std::string name = (*items)[0].tag == NativeValue::Tag::Symbol
+        ? native_symbol_text((*items)[0].scalar_value)
+        : native_string_text((*items)[0]);
+    out->push_back({name, native_string_text((*items)[1])});
+  }
+  return true;
+}
+
+static bool native_http_try_fast_server_response(
+    const NativeValue &receiver, const std::string &selector,
+    const NativeArgsView &args, const NativeKeywordArgsView &kwargs,
+    const NativeValue &block, NativeValue *out) {
+  const amber::runtime::Value &runtime_receiver =
+      as_native_runtime_handle(receiver)->value;
+  if (!runtime_receiver.is_native_type() ||
+      runtime_receiver.as_native_type().kind !=
+          amber::runtime::RuntimeNativeTypeKind::NetHttpServerResponse ||
+      (selector != "new" && selector != "__call__") || !args.empty() ||
+      block.tag != NativeValue::Tag::Null) {
+    return false;
+  }
+
+  int status = 200;
+  std::optional<std::string> reason;
+  std::vector<std::pair<std::string, std::string>> headers;
+  std::string body;
+  for (const NativeCallKeyword &keyword : kwargs) {
+    if (keyword.name == "status") {
+      if (keyword.value.tag != NativeValue::Tag::Integer ||
+          keyword.value.scalar_value < 100 ||
+          keyword.value.scalar_value > 599) {
+        return false;
+      }
+      status = static_cast<int>(keyword.value.scalar_value);
+    } else if (keyword.name == "reason") {
+      if (native_value_is_string(keyword.value)) {
+        reason = native_string_text(keyword.value);
+      } else if (keyword.value.tag == NativeValue::Tag::Symbol) {
+        reason = native_symbol_text(keyword.value.scalar_value);
+      } else {
+        return false;
+      }
+    } else if (keyword.name == "headers") {
+      if (!native_http_header_pairs_from_value(keyword.value, &headers)) {
+        return false;
+      }
+    } else if (keyword.name == "body") {
+      if (keyword.value.tag == NativeValue::Tag::Null) {
+        body.clear();
+      } else if (native_value_is_string(keyword.value)) {
+        body = native_string_text(keyword.value);
+      } else if (keyword.value.tag == NativeValue::Tag::Bytes) {
+        body = as_bytes(keyword.value).bytes;
+      } else {
+        return false;
+      }
+    } else {
+      return false;
+    }
+  }
+
+  amber::runtime::ExecutionResult result =
+      amber::runtime::runtime_native_http_construct_server_response(
+          status, std::move(reason), headers, std::move(body));
+  if (!result.ok()) {
+    if (!result.fault.has_value()) throw NativeBailout();
+    throw NativeRaised{native_named_error(result.fault->error_name,
+                                          result.fault->message)};
+  }
+  *out = NativeValue::runtime_handle(std::move(result.value));
+  return true;
+}
+
+)AMBERCPP";
   out << "static NativeValue native_http_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
   if (plan.uses_native_stdlib_bridge) {
+    out << "  NativeValue fast_result;\n";
+    out << "  if (native_http_try_fast_request_send(receiver, selector, "
+           "args, kwargs, block, &fast_result) || "
+           "native_http_try_fast_server_response(receiver, selector, args, "
+           "kwargs, block, &fast_result)) return fast_result;\n";
     out << "  AmberNativeBridgeGcScope bridge_gc("
            "amber_native_bridge_world());\n";
     out << "  const bool scoped_query = selector == \"query\" && "
@@ -19876,7 +20110,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "static NativeValue native_task_send("
          "const NativeValue &receiver, const std::string &selector, "
          "std::initializer_list<NativeValue> args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
   out << "  if (receiver.tag == NativeValue::Tag::TaskModule) {\n";
   out << "    if (selector == \"local\" && args.size() == 0U && "
@@ -20397,7 +20631,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "static NativeValue native_user_send(const NativeValue &receiver, "
          "const std::string &selector, "
          "const NativeArgsView &args, "
-         "const std::vector<NativeCallKeyword> &kwargs, "
+         "const NativeKeywordArgsView &kwargs, "
          "NativeValue block, NativeUserCallSiteCache *call_site) {\n";
   out << "  const bool class_side = receiver.tag == NativeValue::Tag::Class;\n";
   out << "  const std::uint32_t class_index = class_side\n";
@@ -20545,6 +20779,13 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "const NativeValue &value) {\n";
   out << "  if (matcher.tag == NativeValue::Tag::RuntimeHandle && "
          "as_native_runtime_handle(matcher)->value.is_native_type()) {\n";
+  out << "    if (value.tag == NativeValue::Tag::RuntimeHandle) {\n";
+  out << "      const auto direct = "
+         "amber::runtime::runtime_native_io_type_matches("
+         "as_native_runtime_handle(value)->value, "
+         "as_native_runtime_handle(matcher)->value.as_native_type().kind);\n";
+  out << "      if (direct.has_value()) return *direct;\n";
+  out << "    }\n";
   out << "    NativeValue matched = native_http_send("
          "matcher, \"===\", {value}, {}, NativeValue::nullv());\n";
   out << "    if (matched.tag != NativeValue::Tag::Bool) "

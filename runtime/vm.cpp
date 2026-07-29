@@ -32057,6 +32057,108 @@ private:
 
 } // namespace
 
+std::optional<RuntimeNativeHttpServerRequestSnapshot>
+runtime_native_http_server_request_snapshot(const Value &value) {
+  if (!value.is_io_value()) {
+    return std::nullopt;
+  }
+  const auto request =
+      std::dynamic_pointer_cast<RuntimeHttpServerRequest>(value.as_io_value());
+  if (request == nullptr) {
+    return std::nullopt;
+  }
+
+  RuntimeNativeHttpServerRequestSnapshot snapshot;
+  snapshot.method = request->method;
+  snapshot.target = request->target;
+  snapshot.path = request->path;
+  if (!request->query.empty()) {
+    snapshot.query = request->query;
+  }
+  snapshot.header_pairs = request->headers.pairs();
+
+  auto headers = std::make_shared<RuntimeHttpHeaders>();
+  headers->headers = request->headers;
+  headers->read_only = true;
+  snapshot.headers = Value::io_value(std::move(headers));
+  snapshot.body_stream = Value::io_value(request->body_stream);
+  snapshot.local_endpoint = Value::io_value(
+      std::make_shared<RuntimeEndpoint>(request->local_endpoint));
+  snapshot.remote_endpoint = Value::io_value(
+      std::make_shared<RuntimeEndpoint>(request->remote_endpoint));
+  return snapshot;
+}
+
+std::optional<bool>
+runtime_native_io_type_matches(const Value &value,
+                               RuntimeNativeTypeKind kind) {
+  const auto type_name_is = [&](const char *expected) {
+    if (!value.is_io_value()) {
+      return false;
+    }
+    const std::shared_ptr<RuntimeIoValue> io = value.as_io_value();
+    return io != nullptr && std::string_view(io->type_name()) == expected;
+  };
+
+  switch (kind) {
+  case RuntimeNativeTypeKind::Bytes:
+    return type_name_is("Bytes");
+  case RuntimeNativeTypeKind::ByteBuffer:
+    return type_name_is("io.ByteBuffer");
+  case RuntimeNativeTypeKind::ByteSlice:
+    return type_name_is("io.ByteSlice");
+  case RuntimeNativeTypeKind::IoPipe:
+    return type_name_is("io.Pipe");
+  case RuntimeNativeTypeKind::FsPath:
+    return type_name_is("fs.Path");
+  case RuntimeNativeTypeKind::FsFile:
+    return type_name_is("fs.File");
+  case RuntimeNativeTypeKind::NetEndpoint:
+    return type_name_is("net.Endpoint");
+  case RuntimeNativeTypeKind::NetHttpClient:
+    return type_name_is("net.http.Client");
+  case RuntimeNativeTypeKind::NetHttpRequest:
+    return type_name_is("net.http.Request");
+  case RuntimeNativeTypeKind::NetHttpRequestBody:
+    return type_name_is("net.http.RequestBody");
+  case RuntimeNativeTypeKind::NetHttpHeaders:
+    return type_name_is("net.http.Headers");
+  case RuntimeNativeTypeKind::NetHttpServer:
+    return type_name_is("net.http.Server");
+  case RuntimeNativeTypeKind::NetHttpServerRequest:
+    return type_name_is("net.http.ServerRequest");
+  case RuntimeNativeTypeKind::NetHttpServerResponse:
+    return type_name_is("net.http.ServerResponse");
+  default:
+    return std::nullopt;
+  }
+}
+
+ExecutionResult runtime_native_http_construct_server_response(
+    int status, std::optional<std::string> reason,
+    const std::vector<std::pair<std::string, std::string>> &headers,
+    std::string body) {
+  if (status < 100 || status > 599) {
+    return {Value::null(),
+            Fault{"ArgumentError", "status must be between 100 and 599", 0,
+                  0}};
+  }
+
+  auto response = std::make_shared<RuntimeHttpServerResponse>();
+  response->status = status;
+  if (reason.has_value()) {
+    response->reason = std::move(*reason);
+  }
+  for (const auto &[name, value] : headers) {
+    std::string error;
+    if (!response->headers.add(name, value, &error)) {
+      return {Value::null(), Fault{"InvalidHeaderError", error, 0, 0}};
+    }
+  }
+  response->body = std::move(body);
+  return {Value::io_value(std::move(response)), std::nullopt};
+}
+
 struct RuntimeNativeBridgeSession::Impl {
   Impl(const bytecode::BcModule &module, RuntimeVmExecutionContext context)
       : vm(module, std::move(context.state), std::move(context.module_id),

@@ -105,9 +105,11 @@ result are direct-native eligible. The scoped block form invokes its native
 closure with the Response and closes the Response on both normal and exceptional
 exit. Capability grants are copied into the host world, so the ordinary
 per-origin `net.connect` check remains authoritative.
-`tests/native_http_query_test.py` requires full native coverage, asserts that
-the executable contains no bytecode fallback, and verifies the QUERY request
-line, Content-Type, body, status, and response body against a loopback server.
+`tests/native_http_query_test.py` requires complete generated native-body
+coverage, asserts that the executable contains no bytecode-body fallback, and
+also asserts that the remaining `vm-stdlib-send-v1` bridge is reported rather
+than mislabeled VM-independent full native. It verifies the QUERY request line,
+Content-Type, body, status, and response body against a loopback server.
 
 ## Per-function VM fallback (step 2, scalar bridge)
 

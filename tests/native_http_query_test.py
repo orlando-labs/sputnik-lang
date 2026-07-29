@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Full-native net.http QUERY smoke test against a loopback server."""
+"""Native-body-covered net.http QUERY smoke test against a loopback server."""
 
 from __future__ import annotations
 

@@ -362,9 +362,9 @@ def markdown_report(payload: Dict[str, Any]) -> str:
     }
     labels = {
         "amber": (
-            "Amber `net.http` (full native)"
+            "Amber `net.http` (native bodies; VM stdlib bridge)"
             if stack == "raw"
-            else "Amber + Ember (full native)"
+            else "Amber + Ember (native bodies; VM stdlib bridge)"
         ),
         "go": "Go `net/http`",
         "rust": "Rust `std::net`",
@@ -379,7 +379,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         f"Date: `{payload['timestamp']}`  ",
         f"Host: `{payload['host']}`  ",
-        f"Client: the unchanged full-native Amber client from `ember/examples/soak/client.am`  ",
+        f"Client: the unchanged native-body-covered Amber client from `ember/examples/soak/client.am`  ",
         f"Stack: `{stack}`  ",
         f"Load: `{payload['client_count']}` concurrent clients, `{payload['duration_seconds']}` seconds per server, `mixed`, negative suite every 25 iterations.",
         "",

@@ -2,12 +2,13 @@
 
 Date: `2026-07-28T14:14:13.964959+03:00`
 Host: `Darwin 25.5.0 / arm64 / arm`
-Client: the unchanged full-native Amber client from `ember/examples/soak/client.am`
+Client: the unchanged native-body-covered Amber client from `ember/examples/soak/client.am`
 Load: `4` concurrent clients, `60` seconds per server, `mixed`, negative suite every 25 iterations.
+Execution model: generated native bodies with the reported `vm-stdlib-send-v1` bridge; this run was not VM-independent full native.
 
 | Server | RPS | Requests | Valid | Invalid | Peak server RSS | vs Amber |
 |---|---:|---:|---:|---:|---:|---:|
-| Amber + Ember (full native) | 1301.57 | 78,232 | 48,656 | 29,576 | 66.1 MiB | 1.00× |
+| Amber + Ember (native bodies; VM stdlib bridge) | 1301.57 | 78,232 | 48,656 | 29,576 | 66.1 MiB | 1.00× |
 | Go `net/http` | 12393.54 | 743,648 | 463,184 | 280,464 | 20.6 MiB | 9.52× |
 | Python `ThreadingHTTPServer` | 7774.92 | 466,568 | 290,544 | 176,024 | 17.8 MiB | 5.97× |
 

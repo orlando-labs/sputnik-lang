@@ -1439,6 +1439,31 @@ void test_http_server_allows_cooperative_concurrency_per_worker() {
                  "net.http.Server workers/concurrency handles parked hooks");
 }
 
+void test_http_server_idle_headers_do_not_occupy_worker() {
+  const amber::runtime::ExecutionResult result = execute_source(
+      "import net\n"
+      "import task\n"
+      "from net.http import Client, Server, ServerResponse\n"
+      "\n"
+      "server = Server(host: \"127.0.0.1\", port: 0, workers: 1, "
+      "max_concurrent_per_worker: 2, read_timeout: 5.0)\n"
+      "port = server.port()\n"
+      "runner = task.spawn:\n"
+      "  server.serve(max_requests: 2) |req|:\n"
+      "    ServerResponse.text(req.path())\n"
+      "\n"
+      "idle = net.tcp.connect(\"127.0.0.1\", port)\n"
+      "task.sleep(20)\n"
+      "body = Client(timeout: 1.0).get("
+      "\"http://127.0.0.1:#{port}/ready\").body_text()\n"
+      "idle.close!()\n"
+      "stats = runner.wait()\n"
+      "body == \"/ready\" and stats[\"accepted\"] == 2 and "
+      "stats[\"completed\"] == 2\n");
+  expect_ok_true(result,
+                 "idle request headers release the HTTP scheduler worker");
+}
+
 void test_http_server_streaming_response_extensions_and_trailer() {
   const amber::runtime::ExecutionResult result = execute_source(
       "import task\n"
@@ -1717,6 +1742,7 @@ int main() {
   test_http_server_serves_request_hook();
   test_http_server_rejects_query_without_content_type();
   test_http_server_allows_cooperative_concurrency_per_worker();
+  test_http_server_idle_headers_do_not_occupy_worker();
   test_http_server_streaming_response_extensions_and_trailer();
   test_http_server_reads_chunked_request_by_wire_chunk();
   test_http_server_streaming_is_full_duplex();

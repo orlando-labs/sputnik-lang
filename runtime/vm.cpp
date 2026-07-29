@@ -897,8 +897,7 @@ class RuntimeHttpServer final : public RuntimeIoResource {
 
 public:
   RuntimeHttpServer()
-      : RuntimeIoResource(RuntimeIsolationMode::Unchecked),
-        task(std::make_shared<RuntimeTaskModule>()) {}
+      : RuntimeIoResource(RuntimeIsolationMode::Unchecked) {}
   const char *type_name() const override { return "net.http.Server"; }
   bool shareable() const override { return true; }
 
@@ -13461,6 +13460,28 @@ private:
     return true;
   }
 
+  bool park_current_task_for_pending_io(
+      const std::shared_ptr<RuntimeTaskModule> &task) {
+    if (task == nullptr || !tls_runtime_io_park_requested) {
+      return false;
+    }
+    const RuntimeIoParkRequest request = tls_runtime_io_park_request;
+    tls_runtime_io_park_requested = false;
+    const std::uint64_t self_id = current_runtime_strand_id();
+    if (!task->scheduler().park_current(std::nullopt)) {
+      return false;
+    }
+    runtime_mark_task_parked();
+    RuntimeReactor::instance().wait_async(
+        request.fd,
+        request.want_write ? ReactorInterest::Write : ReactorInterest::Read,
+        request.deadline, tls_runtime_task_cancel_flag,
+        [task, self_id](ReactorOutcome) {
+          task->scheduler().wake_strand(self_id);
+        });
+    return true;
+  }
+
   std::optional<Value>
   keyword_arg_value(const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
                     const std::string &name) {
@@ -16195,6 +16216,7 @@ private:
     bool ok = false;
     bool eof = false;
     bool timed_out = false;
+    bool parked = false;
     int error_status = 400;
     std::string message;
     std::shared_ptr<RuntimeHttpServerRequest> request;
@@ -16277,18 +16299,15 @@ private:
   RuntimeHttpServerReadResult
   read_http_server_request(const std::shared_ptr<RuntimeHttpServer> &server,
                            const std::shared_ptr<RuntimeTcpStream> &stream,
-                           std::string initial_bytes = {},
-                           std::optional<std::chrono::milliseconds> timeout =
-                               std::nullopt) {
+                           std::string &bytes,
+                           std::optional<std::chrono::steady_clock::time_point>
+                               deadline) {
     RuntimeHttpServerReadResult result;
     if (server == nullptr || stream == nullptr) {
       result.message = "invalid server stream";
       return result;
     }
 
-    std::string bytes = std::move(initial_bytes);
-    const std::chrono::milliseconds header_timeout =
-        timeout.value_or(server->read_timeout);
     std::size_t header_end = std::string::npos;
     while ((header_end = bytes.find("\r\n\r\n")) == std::string::npos) {
       if (bytes.size() > server->max_header_bytes) {
@@ -16297,7 +16316,23 @@ private:
         return result;
       }
       RuntimeByteBuffer buffer(4096);
-      RuntimeIoStatus read = stream->read(buffer, header_timeout);
+      const auto now = std::chrono::steady_clock::now();
+      const std::chrono::milliseconds remaining =
+          !deadline.has_value()
+              ? std::chrono::milliseconds::max()
+              : now >= *deadline
+                    ? std::chrono::milliseconds(0)
+                    : std::chrono::duration_cast<std::chrono::milliseconds>(
+                          *deadline - now);
+      RuntimeIoStatus read;
+      {
+        IoParkGuard park_guard(true);
+        read = stream->read(buffer, remaining);
+      }
+      if (read.park) {
+        result.parked = true;
+        return result;
+      }
       if (read.eof) {
         result.eof = bytes.empty();
         result.message = "connection closed before request headers";
@@ -16458,6 +16493,7 @@ private:
     body->stream = stream;
     body->framing = framing;
     body->buffered = bytes.substr(header_end + 4U);
+    bytes.clear();
     body->content_remaining = content_length_value;
     body->max_body_bytes = server->max_body_bytes;
     body->max_header_bytes = server->max_header_bytes;
@@ -16869,11 +16905,11 @@ private:
     }
     server->listener = std::move(listening.listener);
     server->port = server->listener->local_endpoint().port;
-    // Header/idle reads are bounded blocking operations. Provision one worker
-    // per admitted connection so an idle keep-alive socket cannot starve
-    // another connection while preserving the configured hard capacity.
+    // Cooperative header, body, and streaming IO lets each scheduler worker
+    // multiplex the configured number of admitted connections. Keep the OS
+    // thread count independent from the hard connection capacity.
     server->task = std::make_shared<RuntimeTaskModule>(
-        RuntimeSchedulerConfig{server->capacity(), 1});
+        RuntimeSchedulerConfig{server->workers, 1});
     *out = Value::io_value(std::move(server));
     return SendStatus::Matched;
   }
@@ -16929,6 +16965,7 @@ private:
       bool close_after_response = true;
       bool request_in_flight = false;
       std::size_t request_count = 0;
+      std::optional<std::chrono::steady_clock::time_point> header_deadline;
       bool request_started = false;
       bool headers_sent = false;
       bool released = false;
@@ -17008,12 +17045,26 @@ private:
         while (true) {
           if (!state->request_started) {
             const bool keepalive_read = state->request_count > 0;
+            if (!state->header_deadline.has_value()) {
+              const std::chrono::milliseconds timeout =
+                  keepalive_read ? server->idle_timeout : server->read_timeout;
+              if (timeout != std::chrono::milliseconds::max()) {
+                state->header_deadline =
+                    std::chrono::steady_clock::now() + timeout;
+              }
+            }
             RuntimeHttpServerReadResult read = read_http_server_request(
-                server, state->stream, std::move(state->buffered),
-                keepalive_read
-                    ? std::optional<std::chrono::milliseconds>(
-                          server->idle_timeout)
-                    : std::nullopt);
+                server, state->stream, state->buffered,
+                state->header_deadline);
+            if (read.parked) {
+              if (!park_current_task_for_pending_io(server->task)) {
+                finish_task(state, true);
+                throw RuntimeTaskFailure(
+                    "VMError", "HTTP request task could not park for IO");
+              }
+              return Value::null();
+            }
+            state->header_deadline.reset();
             if (!read.ok) {
               if (!read.eof && !(keepalive_read && read.timed_out)) {
                 RuntimeHttpServerResponse response = http_server_error_response(

@@ -17,7 +17,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
-#include <mutex>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -882,19 +882,34 @@ std::shared_ptr<const ZoneData> load_zone_data_uncached(
 }
 
 std::shared_ptr<const ZoneData> zone_data_for_name(const std::string &name) {
-  static std::mutex mutex;
-  static std::unordered_map<std::string, std::shared_ptr<const ZoneData>> cache;
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    const auto it = cache.find(name);
-    if (it != cache.end()) {
-      return it->second;
+  using ZoneCache =
+      std::unordered_map<std::string, std::shared_ptr<const ZoneData>>;
+  static std::shared_ptr<const ZoneCache> cache =
+      std::make_shared<const ZoneCache>();
+  std::shared_ptr<const ZoneCache> snapshot =
+      std::atomic_load_explicit(&cache, std::memory_order_acquire);
+  if (const auto found = snapshot->find(name); found != snapshot->end()) {
+    return found->second;
+  }
+
+  // Zone discovery is cold and may race harmlessly. Publish an immutable
+  // copy-on-write snapshot so Time.zone reads never serialize independent
+  // strands on a process-wide cache mutex.
+  std::shared_ptr<const ZoneData> loaded = load_zone_data_uncached(name);
+  while (true) {
+    snapshot = std::atomic_load_explicit(&cache, std::memory_order_acquire);
+    if (const auto found = snapshot->find(name); found != snapshot->end()) {
+      return found->second;
+    }
+    auto updated = std::make_shared<ZoneCache>(*snapshot);
+    updated->emplace(name, loaded);
+    std::shared_ptr<const ZoneCache> desired = std::move(updated);
+    if (std::atomic_compare_exchange_weak_explicit(
+            &cache, &snapshot, desired, std::memory_order_release,
+            std::memory_order_acquire)) {
+      return loaded;
     }
   }
-  std::shared_ptr<const ZoneData> loaded = load_zone_data_uncached(name);
-  std::lock_guard<std::mutex> lock(mutex);
-  cache.emplace(name, loaded);
-  return loaded;
 }
 
 ZoneInstantInfo zone_info_from_data(const ZoneData &data,

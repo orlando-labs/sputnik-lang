@@ -963,24 +963,21 @@ public:
   }
 
   void begin_request(bool keepalive) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ++stats_.requests;
-    ++active_requests_;
+    request_count_.fetch_add(1, std::memory_order_relaxed);
+    active_requests_.fetch_add(1, std::memory_order_relaxed);
     if (keepalive) {
-      ++stats_.keepalive_requests;
+      keepalive_request_count_.fetch_add(1, std::memory_order_relaxed);
     }
-    stats_.active_requests = static_cast<std::uint64_t>(active_requests_);
   }
 
   void end_request() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      if (active_requests_ > 0) {
-        --active_requests_;
-      }
-      stats_.active_requests = static_cast<std::uint64_t>(active_requests_);
+    std::size_t active =
+        active_requests_.load(std::memory_order_relaxed);
+    while (active != 0 &&
+           !active_requests_.compare_exchange_weak(
+               active, active - 1U, std::memory_order_relaxed,
+               std::memory_order_relaxed)) {
     }
-    cv_.notify_all();
   }
 
   void release_connection(std::uint64_t id, bool failed) {
@@ -1001,11 +998,7 @@ public:
   }
 
   void reject_request() {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      ++stats_.rejected;
-    }
-    cv_.notify_all();
+    rejected_request_count_.fetch_add(1, std::memory_order_relaxed);
   }
 
   void wait_until_quiescent() {
@@ -1071,7 +1064,12 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     RuntimeHttpServerStats out = stats_;
     out.active = static_cast<std::uint64_t>(active_connections_.size());
-    out.active_requests = static_cast<std::uint64_t>(active_requests_);
+    out.requests = request_count_.load(std::memory_order_relaxed);
+    out.active_requests = static_cast<std::uint64_t>(
+        active_requests_.load(std::memory_order_relaxed));
+    out.keepalive_requests =
+        keepalive_request_count_.load(std::memory_order_relaxed);
+    out.rejected = rejected_request_count_.load(std::memory_order_relaxed);
     out.capacity = static_cast<std::uint64_t>(capacity());
     return out;
   }
@@ -1094,7 +1092,10 @@ private:
   std::condition_variable cv_;
   bool accepting_ = true;
   std::uint64_t next_connection_id_ = 1;
-  std::size_t active_requests_ = 0;
+  std::atomic<std::uint64_t> request_count_{0};
+  std::atomic<std::size_t> active_requests_{0};
+  std::atomic<std::uint64_t> keepalive_request_count_{0};
+  std::atomic<std::uint64_t> rejected_request_count_{0};
   std::unordered_map<std::uint64_t, ActiveConnection> active_connections_;
   RuntimeHttpServerStats stats_;
 };
@@ -1209,24 +1210,47 @@ public:
 
 class Vm : public StdlibHost {
 public:
-  explicit Vm(const BcModule &module,
-              std::shared_ptr<RuntimeState> state = nullptr,
-              std::string module_id = {},
-              const RuntimeWorldOptions *world_options = nullptr,
-              const RuntimeCapabilityResolution *capabilities = nullptr,
-              const RuntimeEffectValidation *effects = nullptr,
-              std::function<void(RuntimeTraceEvent)> trace_recorder = {},
-              const NativeRegistry *native_registry = nullptr,
-              const RuntimeModuleRegistry *module_registry = nullptr,
-              const RuntimeTypeRegistry *type_registry = nullptr,
-              const RuntimeDispatchRegistry *dispatch_registry = nullptr,
-              const RuntimeErrorRegistry *error_registry = nullptr,
-              std::function<ExecutionResult(const Value &)>
-                  macro_block_executor = {})
-      : module_(module), initial_string_count_(module.strings.size()),
-        initial_symbol_count_(module.symbols.size()),
+  explicit Vm(
+      const BcModule &module, std::shared_ptr<RuntimeState> state = nullptr,
+      std::string module_id = {},
+      const RuntimeWorldOptions *world_options = nullptr,
+      const RuntimeCapabilityResolution *capabilities = nullptr,
+      const RuntimeEffectValidation *effects = nullptr,
+      std::function<void(RuntimeTraceEvent)> trace_recorder = {},
+      const NativeRegistry *native_registry = nullptr,
+      const RuntimeModuleRegistry *module_registry = nullptr,
+      const RuntimeTypeRegistry *type_registry = nullptr,
+      const RuntimeDispatchRegistry *dispatch_registry = nullptr,
+      const RuntimeErrorRegistry *error_registry = nullptr,
+      std::function<ExecutionResult(const Value &)> macro_block_executor = {},
+      bool isolate_inline_caches = false)
+      : Vm(std::make_shared<const BcModule>(module), std::move(state),
+           std::move(module_id), world_options, capabilities, effects,
+           std::move(trace_recorder), native_registry, module_registry,
+           type_registry, dispatch_registry, error_registry,
+           std::move(macro_block_executor), isolate_inline_caches) {}
+
+  explicit Vm(
+      std::shared_ptr<const BcModule> module,
+      std::shared_ptr<RuntimeState> state = nullptr, std::string module_id = {},
+      const RuntimeWorldOptions *world_options = nullptr,
+      const RuntimeCapabilityResolution *capabilities = nullptr,
+      const RuntimeEffectValidation *effects = nullptr,
+      std::function<void(RuntimeTraceEvent)> trace_recorder = {},
+      const NativeRegistry *native_registry = nullptr,
+      const RuntimeModuleRegistry *module_registry = nullptr,
+      const RuntimeTypeRegistry *type_registry = nullptr,
+      const RuntimeDispatchRegistry *dispatch_registry = nullptr,
+      const RuntimeErrorRegistry *error_registry = nullptr,
+      std::function<ExecutionResult(const Value &)> macro_block_executor = {},
+      bool isolate_inline_caches = false)
+      : module_owner_(std::move(module)), module_(*module_owner_),
+        runtime_strings_(module_.strings), runtime_symbols_(module_.symbols),
+        initial_string_count_(runtime_strings_.size()),
+        initial_symbol_count_(runtime_symbols_.size()),
         state_(state == nullptr ? std::make_shared<RuntimeState>()
                                 : std::move(state)),
+        isolate_inline_caches_(isolate_inline_caches),
         module_id_(std::move(module_id)), world_options_(world_options),
         capabilities_(capabilities), effects_(effects),
         trace_recorder_(std::move(trace_recorder)),
@@ -1336,8 +1360,8 @@ public:
     }
     if (value.is_symbol()) {
       const std::uint32_t sid = value.as_symbol().symbol_id;
-      if (sid < module_.symbols.size()) {
-        return module_.symbols[sid];
+      if (sid < runtime_symbols_.size()) {
+        return runtime_symbols_[sid];
       }
     }
     return std::nullopt;
@@ -1345,7 +1369,8 @@ public:
   std::string stdlib_display_string(const void * /*frame*/,
                                     const Value &value) override {
     return runtime_stringify_value(value, RuntimeStringifyMode::Display,
-                                   &module_, nullptr, nullptr,
+                                   &module_, &runtime_strings_,
+                                   &runtime_symbols_,
                                    RuntimePrettyPrintOptions{});
   }
   std::optional<std::string> stdlib_bytes_of(const void *frame,
@@ -1851,7 +1876,7 @@ public:
       root_task_context_ = RuntimeTaskContext::create();
     }
     RuntimeTaskContextScope task_context_scope(root_task_context_, true, true);
-    const std::size_t watch_event_start = state_->watch_events.size();
+    const std::size_t watch_event_start = state_->watch_event_count();
     if (!numeric_profile_error_.empty()) {
       return with_runtime_names(
           fail("UnsupportedProfileError", numeric_profile_error_, code_id, 0));
@@ -1927,23 +1952,19 @@ public:
       step();
     }
     state_->heap.drain_remote_frees();
-    std::vector<RuntimeWatchEvent> watch_events;
-    if (watch_event_start <= state_->watch_events.size()) {
-      watch_events.assign(state_->watch_events.begin() +
-                              static_cast<std::ptrdiff_t>(watch_event_start),
-                          state_->watch_events.end());
-    }
+    auto watch_snapshot = state_->watch_events_since(watch_event_start);
     if (fault_.has_value()) {
       unwind_all_frame_scopes();
       return with_runtime_names({Value::null(),
                                  fault_,
                                  {},
-                                 std::move(watch_events),
-                                 state_->watch_epoch});
+                                 std::move(watch_snapshot.first),
+                                 watch_snapshot.second});
     }
     return with_runtime_names({final_value_, std::nullopt,
                                completed_locals_for(*entry),
-                               std::move(watch_events), state_->watch_epoch});
+                               std::move(watch_snapshot.first),
+                               watch_snapshot.second});
   }
 
   ExecutionResult invoke_native_extension(std::uint32_t code_id,
@@ -2010,8 +2031,8 @@ public:
 
     Frame frame;
     Value out = Value::null();
-    const SendStatus status = try_apply_scalar_send(
-        frame, receiver, selector, args, block, kw_args, &out);
+    const SendStatus status = try_apply_scalar_send(frame, receiver, selector,
+                                                    args, block, kw_args, &out);
     state_->heap.drain_remote_frees();
     if (status == SendStatus::Matched && !fault_.has_value()) {
       return with_runtime_names({std::move(out), std::nullopt});
@@ -2019,33 +2040,31 @@ public:
     if (status == SendStatus::Faulted || fault_.has_value()) {
       return with_runtime_names({Value::null(), fault_});
     }
-    return with_runtime_names(fail(
-        "NoMethodError", "native stdlib value has no method `" + selector +
-                             "`",
-        0, 0));
+    return with_runtime_names(
+        fail("NoMethodError",
+             "native stdlib value has no method `" + selector + "`", 0, 0));
   }
 
-  void synchronize_runtime_names(
-      const std::vector<std::string> &strings,
-      const std::vector<std::string> &symbols) {
+  void synchronize_runtime_names(const std::vector<std::string> &strings,
+                                 const std::vector<std::string> &symbols) {
     // RuntimeWorld name tables are append-only between world reloads. A
     // reloaded world discards its session, so size equality is sufficient on
     // this hot path and avoids comparing every interned string on every send.
-    if (module_.strings.size() < strings.size()) {
-      module_.strings.insert(module_.strings.end(),
-                             strings.begin() + module_.strings.size(),
-                             strings.end());
-    } else if (module_.strings.size() > strings.size()) {
-      module_.strings = strings;
+    if (runtime_strings_.size() < strings.size()) {
+      runtime_strings_.insert(runtime_strings_.end(),
+                              strings.begin() + runtime_strings_.size(),
+                              strings.end());
+    } else if (runtime_strings_.size() > strings.size()) {
+      runtime_strings_ = strings;
       string_index_.clear();
       string_index_folded_ = 0;
     }
-    if (module_.symbols.size() < symbols.size()) {
-      module_.symbols.insert(module_.symbols.end(),
-                             symbols.begin() + module_.symbols.size(),
-                             symbols.end());
-    } else if (module_.symbols.size() > symbols.size()) {
-      module_.symbols = symbols;
+    if (runtime_symbols_.size() < symbols.size()) {
+      runtime_symbols_.insert(runtime_symbols_.end(),
+                              symbols.begin() + runtime_symbols_.size(),
+                              symbols.end());
+    } else if (runtime_symbols_.size() > symbols.size()) {
+      runtime_symbols_ = symbols;
       symbol_index_.clear();
       symbol_index_folded_ = 0;
     }
@@ -2053,8 +2072,8 @@ public:
   }
 
   void accept_runtime_name_baseline() {
-    initial_string_count_ = module_.strings.size();
-    initial_symbol_count_ = module_.symbols.size();
+    initial_string_count_ = runtime_strings_.size();
+    initial_symbol_count_ = runtime_symbols_.size();
   }
 
   // Arm the compile-time step budget on this VM's (shared) runtime state.
@@ -2103,11 +2122,11 @@ private:
   }
 
   ExecutionResult with_runtime_names(ExecutionResult result) const {
-    if (module_.strings.size() != initial_string_count_) {
-      result.runtime_strings = module_.strings;
+    if (runtime_strings_.size() != initial_string_count_) {
+      result.runtime_strings = runtime_strings_;
     }
-    if (module_.symbols.size() != initial_symbol_count_) {
-      result.runtime_symbols = module_.symbols;
+    if (runtime_symbols_.size() != initial_symbol_count_) {
+      result.runtime_symbols = runtime_symbols_;
     }
     return result;
   }
@@ -2119,10 +2138,10 @@ private:
   }
 
   std::string string_or_empty(std::uint32_t string_id) const {
-    if (string_id >= module_.strings.size()) {
+    if (string_id >= runtime_strings_.size()) {
       return "";
     }
-    return module_.strings[string_id];
+    return runtime_strings_[string_id];
   }
 
   std::optional<std::string>
@@ -2234,11 +2253,12 @@ private:
 
     if (!state_->module_init_completed && module_.init.has_entry_code_id &&
         module_.init.entry_code_id != code_id) {
-      Vm init_vm(module_, state_, module_id_, world_options_, capabilities_,
-                 effects_, trace_recorder_, child_native_registry(),
-                 child_module_registry(), child_type_registry(),
-                 child_dispatch_registry(), child_error_registry(),
-                 macro_block_executor_);
+      Vm init_vm(module_owner_, state_, module_id_, world_options_,
+                 capabilities_, effects_, trace_recorder_,
+                 child_native_registry(), child_module_registry(),
+                 child_type_registry(), child_dispatch_registry(),
+                 child_error_registry(), macro_block_executor_);
+      sync_runtime_names_to(init_vm);
       ExecutionResult init_result = init_vm.execute(
           module_.init.entry_code_id, {}, Value::null(), Value::null());
       if (!init_result.ok()) {
@@ -2923,10 +2943,10 @@ private:
         [&](const Instruction &insn) -> std::optional<std::string> {
       std::uint32_t selector_id = 0;
       if (!quick_operand_u32(insn, 2, &selector_id) ||
-          selector_id >= module_.symbols.size()) {
+          selector_id >= runtime_symbols_.size()) {
         return std::nullopt;
       }
-      return module_.symbols[selector_id];
+      return runtime_symbols_[selector_id];
     };
 
     for (const Instruction &insn : code.instructions) {
@@ -3424,10 +3444,12 @@ private:
       sync_runtime_names_to(*lease.vm);
     } else {
       lease.vm = std::make_unique<Vm>(
-          module_, state_, module_id_, world_options_, capabilities_, effects_,
-          trace_recorder_, child_native_registry(), child_module_registry(),
-          child_type_registry(), child_dispatch_registry(),
-          child_error_registry(), macro_block_executor_);
+          module_owner_, state_, module_id_, world_options_, capabilities_,
+          effects_, trace_recorder_, child_native_registry(),
+          child_module_registry(), child_type_registry(),
+          child_dispatch_registry(), child_error_registry(),
+          macro_block_executor_, isolate_inline_caches_);
+      sync_runtime_names_to(*lease.vm);
       // Block results flow through final_value_; nobody reads the completed
       // register snapshot, so skip the per-return register copy.
       lease.vm->capture_completed_frames_ = false;
@@ -3441,32 +3463,32 @@ private:
     // ids name unrelated strings after the child is reused. The parent is the
     // canonical table at lease time, so refresh a divergent child in full and
     // rebuild its lazy interning index.
-    if (nested.module_.strings != module_.strings) {
-      nested.module_.strings = module_.strings;
+    if (nested.runtime_strings_ != runtime_strings_) {
+      nested.runtime_strings_ = runtime_strings_;
       nested.string_index_.clear();
       nested.string_index_folded_ = 0;
     }
-    if (nested.module_.symbols != module_.symbols) {
-      nested.module_.symbols = module_.symbols;
+    if (nested.runtime_symbols_ != runtime_symbols_) {
+      nested.runtime_symbols_ = runtime_symbols_;
       nested.symbol_index_.clear();
       nested.symbol_index_folded_ = 0;
     }
   }
 
   void merge_runtime_names_from(const Vm &nested) {
-    if (module_.strings.size() < nested.module_.strings.size()) {
-      module_.strings.insert(
-          module_.strings.end(),
-          nested.module_.strings.begin() +
-              static_cast<std::ptrdiff_t>(module_.strings.size()),
-          nested.module_.strings.end());
+    if (runtime_strings_.size() < nested.runtime_strings_.size()) {
+      runtime_strings_.insert(
+          runtime_strings_.end(),
+          nested.runtime_strings_.begin() +
+              static_cast<std::ptrdiff_t>(runtime_strings_.size()),
+          nested.runtime_strings_.end());
     }
-    if (module_.symbols.size() < nested.module_.symbols.size()) {
-      module_.symbols.insert(
-          module_.symbols.end(),
-          nested.module_.symbols.begin() +
-              static_cast<std::ptrdiff_t>(module_.symbols.size()),
-          nested.module_.symbols.end());
+    if (runtime_symbols_.size() < nested.runtime_symbols_.size()) {
+      runtime_symbols_.insert(
+          runtime_symbols_.end(),
+          nested.runtime_symbols_.begin() +
+              static_cast<std::ptrdiff_t>(runtime_symbols_.size()),
+          nested.runtime_symbols_.end());
     }
   }
 
@@ -3564,11 +3586,8 @@ private:
       (void)name;
       append_value_root(&roots, value);
     }
-    for (const ClassRuntimeState &klass : state_->classes) {
-      for (const auto &[name, value] : klass.cvars) {
-        (void)name;
-        append_value_root(&roots, value);
-      }
+    for (const Value &value : state_->cvar_roots_snapshot()) {
+      append_value_root(&roots, value);
     }
     runtime_append_task_local_gc_roots(&roots);
     return roots;
@@ -4725,8 +4744,8 @@ private:
     }
     std::uint32_t selector_id = 0;
     return quick_operand_u32(insn, 2, &selector_id) &&
-           selector_id < module_.symbols.size() &&
-           module_.symbols[selector_id] == selector;
+           selector_id < runtime_symbols_.size() &&
+           runtime_symbols_[selector_id] == selector;
   }
 
   DirectClosureKind classify_direct_closure(const BcCode &code) const {
@@ -5231,8 +5250,8 @@ private:
   std::uint32_t declared_closure_param_count(const BcCode &code) const {
     std::uint32_t count = 0;
     for (const bytecode::SlotLayoutEntry &entry : code.local_layout) {
-      if (entry.slot != count || entry.role_str_id >= module_.strings.size() ||
-          module_.strings[entry.role_str_id] != "param") {
+      if (entry.slot != count || entry.role_str_id >= runtime_strings_.size() ||
+          runtime_strings_[entry.role_str_id] != "param") {
         break;
       }
       ++count;
@@ -6459,11 +6478,11 @@ private:
     out->clear();
     out->reserve(constant.items.size());
     for (std::uint32_t symbol_id : constant.items) {
-      if (symbol_id >= module_.symbols.size()) {
+      if (symbol_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError", "path symbol ref is out of range");
         return false;
       }
-      out->push_back(module_.symbols[symbol_id]);
+      out->push_back(runtime_symbols_[symbol_id]);
     }
     return true;
   }
@@ -6526,8 +6545,8 @@ private:
     const std::string full_path = join_path_segments(segments);
     for (std::uint32_t index = 0; index < module_.classes.size(); ++index) {
       const std::uint32_t symbol_id = module_.classes[index].class_name_sym_id;
-      if (symbol_id < module_.symbols.size() &&
-          module_.symbols[symbol_id] == full_path) {
+      if (symbol_id < runtime_symbols_.size() &&
+          runtime_symbols_[symbol_id] == full_path) {
         return index;
       }
     }
@@ -6536,10 +6555,10 @@ private:
     std::optional<std::uint32_t> match;
     for (std::uint32_t index = 0; index < module_.classes.size(); ++index) {
       const std::uint32_t symbol_id = module_.classes[index].class_name_sym_id;
-      if (symbol_id >= module_.symbols.size()) {
+      if (symbol_id >= runtime_symbols_.size()) {
         continue;
       }
-      const std::string &class_name = module_.symbols[symbol_id];
+      const std::string &class_name = runtime_symbols_[symbol_id];
       const std::size_t separator = class_name.rfind('.');
       const std::string class_leaf =
           separator == std::string::npos ? class_name
@@ -7051,12 +7070,12 @@ private:
   keyword_spread_symbol_id_from_key(const Frame &frame, const Value &key) {
     if (key.is_symbol()) {
       const std::uint32_t symbol_id = key.as_symbol().symbol_id;
-      if (symbol_id >= module_.symbols.size()) {
+      if (symbol_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError",
                   "keyword argument spread symbol key ref is invalid");
         return std::nullopt;
       }
-      if (!keyword_identifier_text(module_.symbols[symbol_id])) {
+      if (!keyword_identifier_text(runtime_symbols_[symbol_id])) {
         set_fault(frame, "KeywordArgumentError",
                   "keyword argument spread key is not keyword-convertible");
         return std::nullopt;
@@ -7233,8 +7252,8 @@ private:
         key = string_text_from_id(entry.key.as_string().string_id);
       } else if (entry.key.is_symbol()) {
         const std::uint32_t symbol_id = entry.key.as_symbol().symbol_id;
-        if (symbol_id < module_.symbols.size()) {
-          key = module_.symbols[symbol_id];
+        if (symbol_id < runtime_symbols_.size()) {
+          key = runtime_symbols_[symbol_id];
         }
       }
       if (!key.has_value() || *key != "schema" || !entry.value.is_string()) {
@@ -7360,7 +7379,7 @@ private:
                                const std::string &context) {
     if (key.is_symbol()) {
       const std::uint32_t symbol_id = key.as_symbol().symbol_id;
-      if (symbol_id >= module_.symbols.size()) {
+      if (symbol_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError", context + " symbol key ref is invalid");
         return std::nullopt;
       }
@@ -7688,11 +7707,11 @@ private:
       std::int64_t default_step) {
     std::optional<std::int64_t> step;
     for (const auto &[symbol_id, value] : kw_args) {
-      if (symbol_id >= module_.symbols.size()) {
+      if (symbol_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError", "keyword symbol ref is out of range");
         return std::nullopt;
       }
-      if (module_.symbols[symbol_id] != "step") {
+      if (runtime_symbols_[symbol_id] != "step") {
         set_fault(frame, "TypeError", "unknown keyword argument");
         return std::nullopt;
       }
@@ -7849,13 +7868,13 @@ private:
     if (left.is_symbol() && right.is_symbol()) {
       const std::uint32_t lhs_id = left.as_symbol().symbol_id;
       const std::uint32_t rhs_id = right.as_symbol().symbol_id;
-      if (lhs_id >= module_.symbols.size() ||
-          rhs_id >= module_.symbols.size()) {
+      if (lhs_id >= runtime_symbols_.size() ||
+          rhs_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError", "sort symbol ref is invalid");
         return std::nullopt;
       }
-      const std::string &lhs = module_.symbols[lhs_id];
-      const std::string &rhs = module_.symbols[rhs_id];
+      const std::string &lhs = runtime_symbols_[lhs_id];
+      const std::string &rhs = runtime_symbols_[rhs_id];
       return lhs < rhs ? -1 : (lhs > rhs ? 1 : 0);
     }
     if (left.is_list() && right.is_list()) {
@@ -8009,8 +8028,8 @@ private:
     Value using_comparator = Value::null();
     bool reverse_result = false;
     for (const auto &[keyword_id, keyword_value] : kw_args) {
-      const std::string keyword = keyword_id < module_.symbols.size()
-                                      ? module_.symbols[keyword_id]
+      const std::string keyword = keyword_id < runtime_symbols_.size()
+                                      ? runtime_symbols_[keyword_id]
                                       : std::string();
       if (keyword == "reverse") {
         reverse_result = is_truthy(keyword_value);
@@ -8454,8 +8473,8 @@ private:
           joined += separator;
         }
         joined += runtime_stringify_value(
-            items[i], RuntimeStringifyMode::Display, &module_, nullptr, nullptr,
-            RuntimePrettyPrintOptions{});
+            items[i], RuntimeStringifyMode::Display, &module_,
+            &runtime_strings_, &runtime_symbols_, RuntimePrettyPrintOptions{});
       }
       return string_value_from_text(joined);
     }
@@ -9866,24 +9885,24 @@ private:
 
   std::optional<std::string>
   selector_text_from_symbol(std::uint32_t symbol_id) {
-    if (symbol_id >= module_.symbols.size()) {
+    if (symbol_id >= runtime_symbols_.size()) {
       return std::nullopt;
     }
-    return module_.symbols[symbol_id];
+    return runtime_symbols_[symbol_id];
   }
 
   std::optional<std::string> string_text_from_id(std::uint32_t string_id) {
-    if (string_id >= module_.strings.size()) {
+    if (string_id >= runtime_strings_.size()) {
       return std::nullopt;
     }
-    return module_.strings[string_id];
+    return runtime_strings_[string_id];
   }
 
   const std::string *string_text_ptr_from_id(std::uint32_t string_id) {
-    if (string_id >= module_.strings.size()) {
+    if (string_id >= runtime_strings_.size()) {
       return nullptr;
     }
-    return &module_.strings[string_id];
+    return &runtime_strings_[string_id];
   }
 
   // Fold any string-table slots that were appended outside intern (e.g.
@@ -9891,15 +9910,15 @@ private:
   // folded-count watermark suffices; each hash bucket stores table ids rather
   // than another owned copy of the text. First content match still wins.
   void fold_string_index() {
-    for (std::size_t i = string_index_folded_; i < module_.strings.size();
+    for (std::size_t i = string_index_folded_; i < runtime_strings_.size();
          ++i) {
-      const std::string &text = module_.strings[i];
+      const std::string &text = runtime_strings_[i];
       const std::size_t hash = std::hash<std::string>{}(text);
       std::vector<std::uint32_t> &bucket = string_index_[hash];
       bool duplicate = false;
       for (const std::uint32_t existing_id : bucket) {
-        if (existing_id < module_.strings.size() &&
-            module_.strings[existing_id] == text) {
+        if (existing_id < runtime_strings_.size() &&
+            runtime_strings_[existing_id] == text) {
           duplicate = true;
           break;
         }
@@ -9908,7 +9927,7 @@ private:
         bucket.push_back(static_cast<std::uint32_t>(i));
       }
     }
-    string_index_folded_ = module_.strings.size();
+    string_index_folded_ = runtime_strings_.size();
   }
 
   std::uint32_t intern_runtime_string(const std::string &text) {
@@ -9917,24 +9936,24 @@ private:
     const auto existing = string_index_.find(hash);
     if (existing != string_index_.end()) {
       for (const std::uint32_t id : existing->second) {
-        if (id < module_.strings.size() && module_.strings[id] == text) {
+        if (id < runtime_strings_.size() && runtime_strings_[id] == text) {
           return id;
         }
       }
     }
-    const std::uint32_t id = static_cast<std::uint32_t>(module_.strings.size());
-    module_.strings.push_back(text);
+    const std::uint32_t id = static_cast<std::uint32_t>(runtime_strings_.size());
+    runtime_strings_.push_back(text);
     string_index_[hash].push_back(id);
-    string_index_folded_ = module_.strings.size();
+    string_index_folded_ = runtime_strings_.size();
     return id;
   }
 
   void fold_symbol_index() {
-    for (std::size_t i = symbol_index_folded_; i < module_.symbols.size();
+    for (std::size_t i = symbol_index_folded_; i < runtime_symbols_.size();
          ++i) {
-      symbol_index_.emplace(module_.symbols[i], static_cast<std::uint32_t>(i));
+      symbol_index_.emplace(runtime_symbols_[i], static_cast<std::uint32_t>(i));
     }
-    symbol_index_folded_ = module_.symbols.size();
+    symbol_index_folded_ = runtime_symbols_.size();
   }
 
   std::optional<std::uint32_t> symbol_id_for_text(const std::string &text) {
@@ -9951,10 +9970,10 @@ private:
             symbol_id_for_text(text)) {
       return *existing;
     }
-    const std::uint32_t id = static_cast<std::uint32_t>(module_.symbols.size());
-    module_.symbols.push_back(text);
+    const std::uint32_t id = static_cast<std::uint32_t>(runtime_symbols_.size());
+    runtime_symbols_.push_back(text);
     symbol_index_.emplace(text, id);
-    symbol_index_folded_ = module_.symbols.size();
+    symbol_index_folded_ = runtime_symbols_.size();
     return id;
   }
 
@@ -10178,7 +10197,8 @@ private:
     }
     return conversion_ok(
         Value::string(intern_runtime_string(runtime_stringify_value(
-            value, RuntimeStringifyMode::Display, &module_))));
+            value, RuntimeStringifyMode::Display, &module_, &runtime_strings_,
+            &runtime_symbols_))));
   }
 
   ConversionResult convert_value_to_native_type(const Frame &frame,
@@ -10494,10 +10514,10 @@ private:
     }
     if (value.is_string()) {
       const std::uint32_t string_id = value.as_string().string_id;
-      if (string_id >= module_.strings.size()) {
+      if (string_id >= runtime_strings_.size()) {
         return std::nullopt;
       }
-      return module_.strings[string_id];
+      return runtime_strings_[string_id];
     }
     return std::nullopt;
   }
@@ -10508,10 +10528,10 @@ private:
     }
     const std::uint32_t symbol_id =
         module_.classes[class_index].class_name_sym_id;
-    if (symbol_id >= module_.symbols.size()) {
+    if (symbol_id >= runtime_symbols_.size()) {
       return std::nullopt;
     }
-    return module_.symbols[symbol_id];
+    return runtime_symbols_[symbol_id];
   }
 
   bool class_has_flag(std::uint32_t class_index, std::uint32_t flag) const {
@@ -10536,10 +10556,10 @@ private:
     std::vector<std::string> segments;
     segments.reserve(constant.items.size());
     for (const std::uint32_t symbol_id : constant.items) {
-      if (symbol_id >= module_.symbols.size()) {
+      if (symbol_id >= runtime_symbols_.size()) {
         return std::nullopt;
       }
-      segments.push_back(module_.symbols[symbol_id]);
+      segments.push_back(runtime_symbols_[symbol_id]);
     }
     bool ambiguous = false;
     return lookup_class_by_path_segments_no_fault(segments, &ambiguous);
@@ -10573,10 +10593,10 @@ private:
     }
     const std::uint32_t symbol_id =
         module_.classes[class_index].class_name_sym_id;
-    if (symbol_id >= module_.symbols.size()) {
+    if (symbol_id >= runtime_symbols_.size()) {
       return std::nullopt;
     }
-    return error_registry().error_id(module_.symbols[symbol_id]);
+    return error_registry().error_id(runtime_symbols_[symbol_id]);
   }
 
   bool native_error_matcher_matches(std::uint16_t matcher_error_id,
@@ -10667,7 +10687,8 @@ private:
       }
     }
     return "unhandled exception " +
-           value_to_debug_string(exception, &module_);
+           value_to_debug_string(exception, &module_, &runtime_strings_,
+                                 &runtime_symbols_);
   }
 
   Value
@@ -10715,16 +10736,44 @@ private:
     return shape;
   }
 
+  std::unordered_map<std::uint64_t, CallCacheEntry> &call_caches() {
+    return isolate_inline_caches_ ? isolated_call_caches_
+                                  : state_->call_caches;
+  }
+
+  std::unordered_map<std::uint64_t, IvarCacheEntry> &ivar_caches() {
+    return isolate_inline_caches_ ? isolated_ivar_caches_
+                                  : state_->ivar_caches;
+  }
+
+  void record_call_cache_hit() {
+    if (!isolate_inline_caches_) {
+      ++state_->call_cache_hits;
+    }
+  }
+
+  void record_call_cache_miss() {
+    if (!isolate_inline_caches_) {
+      ++state_->call_cache_misses;
+    }
+  }
+
+  void record_call_cache_update() {
+    if (!isolate_inline_caches_) {
+      ++state_->call_cache_updates;
+    }
+  }
+
   const bytecode::BcMethod *probe_call_cache(
       const Frame &frame, std::uint32_t site_id,
       std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
       std::uint32_t selector_symbol_id, std::uint32_t positional_count,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
       const Value &block) {
-    const auto found =
-        state_->call_caches.find(inline_cache_key(frame, site_id));
-    if (found == state_->call_caches.end()) {
-      ++state_->call_cache_misses;
+    auto &cache = call_caches();
+    const auto found = cache.find(inline_cache_key(frame, site_id));
+    if (found == cache.end()) {
+      record_call_cache_miss();
       return nullptr;
     }
     const CallCacheEntry &entry = found->second;
@@ -10738,10 +10787,10 @@ private:
         receiver_class_index >= state_->classes.size() ||
         entry.method_version !=
             state_->classes[receiver_class_index].method_version) {
-      ++state_->call_cache_misses;
+      record_call_cache_miss();
       return nullptr;
     }
-    ++state_->call_cache_hits;
+    record_call_cache_hit();
     return &entry.method;
   }
 
@@ -10765,17 +10814,17 @@ private:
     entry.method_version = state_->classes[receiver_class_index].method_version;
     entry.world_epoch = state_->world_epoch;
     entry.method = method;
-    state_->call_caches[inline_cache_key(frame, site_id)] = entry;
-    ++state_->call_cache_updates;
+    call_caches()[inline_cache_key(frame, site_id)] = entry;
+    record_call_cache_update();
   }
 
   std::optional<std::uint32_t> probe_ivar_cache(const Frame &frame,
                                                 std::uint32_t site_id,
                                                 const InstanceValue &instance,
                                                 std::uint32_t symbol_id) {
-    const auto found =
-        state_->ivar_caches.find(inline_cache_key(frame, site_id));
-    if (found == state_->ivar_caches.end()) {
+    auto &cache = ivar_caches();
+    const auto found = cache.find(inline_cache_key(frame, site_id));
+    if (found == cache.end()) {
       return std::nullopt;
     }
     const IvarCacheEntry &entry = found->second;
@@ -10806,7 +10855,7 @@ private:
     entry.shape_id = shape->shape_id;
     entry.shape_version = shape->shape_version;
     entry.slot_index = slot_index;
-    state_->ivar_caches[inline_cache_key(frame, site_id)] = std::move(entry);
+    ivar_caches()[inline_cache_key(frame, site_id)] = std::move(entry);
   }
 
   bool has_optional_reg(std::int64_t raw) const {
@@ -11178,7 +11227,7 @@ private:
         if (fault_.has_value()) {
           return false;
         }
-        state_->classes[class_index].cvars[target->substr(2)] = value;
+        state_->store_cvar(class_index, target->substr(2), value);
         continue;
       }
       if (target->empty() || (*target)[0] != '@') {
@@ -11397,11 +11446,12 @@ private:
                     "missing default thunk for parameter slot");
           return false;
         }
-        Vm nested(module_, state_, module_id_, world_options_, capabilities_,
-                  effects_, trace_recorder_, child_native_registry(),
-                  child_module_registry(), child_type_registry(),
-                  child_dispatch_registry(), child_error_registry(),
-                  macro_block_executor_);
+        Vm nested(module_owner_, state_, module_id_, world_options_,
+                  capabilities_, effects_, trace_recorder_,
+                  child_native_registry(), child_module_registry(),
+                  child_type_registry(), child_dispatch_registry(),
+                  child_error_registry(), macro_block_executor_);
+        sync_runtime_names_to(nested);
         const ExecutionResult result =
             nested.execute(method.default_thunk_ids[thunk_index], frame.regs,
                            frame.self, frame.block);
@@ -11462,11 +11512,12 @@ private:
       return out;
     }
 
-    Vm nested(module_, state_, module_id_, world_options_, capabilities_,
+    Vm nested(module_owner_, state_, module_id_, world_options_, capabilities_,
               effects_, trace_recorder_, child_native_registry(),
               child_module_registry(), child_type_registry(),
               child_dispatch_registry(), child_error_registry(),
               macro_block_executor_);
+    sync_runtime_names_to(nested);
     if (const std::string *label = active_no_suspend_label()) {
       nested.inherited_no_suspend_label_ = *label;
     }
@@ -11499,11 +11550,12 @@ private:
 
   NestedExecution execute_prepared_frame(Frame frame) {
     NestedExecution out;
-    Vm nested(module_, state_, module_id_, world_options_, capabilities_,
+    Vm nested(module_owner_, state_, module_id_, world_options_, capabilities_,
               effects_, trace_recorder_, child_native_registry(),
               child_module_registry(), child_type_registry(),
               child_dispatch_registry(), child_error_registry(),
               macro_block_executor_);
+    sync_runtime_names_to(nested);
     if (const std::string *label = active_no_suspend_label()) {
       nested.inherited_no_suspend_label_ = *label;
     }
@@ -11922,7 +11974,8 @@ private:
         instance->message =
             string_text_from_id(pos_args[0].as_string().string_id).value_or("");
       } else {
-        instance->message = value_to_debug_string(pos_args[0], &module_);
+        instance->message = value_to_debug_string(
+            pos_args[0], &module_, &runtime_strings_, &runtime_symbols_);
       }
     }
 
@@ -11930,12 +11983,12 @@ private:
         error_registry().error_effective_field_mask(error_id);
     bool message_keyword_seen = false;
     for (const auto &[name_id, value] : kw_args) {
-      if (name_id >= module_.symbols.size()) {
+      if (name_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError",
                   "error class keyword symbol ref is out of range");
         return SendStatus::Faulted;
       }
-      const std::string &name = module_.symbols[name_id];
+      const std::string &name = runtime_symbols_[name_id];
       if (name == "message") {
         if (!pos_args.empty() || message_keyword_seen) {
           set_fault(frame, "KeywordArgumentError",
@@ -11947,7 +12000,8 @@ private:
           instance->message =
               string_text_from_id(value.as_string().string_id).value_or("");
         } else {
-          instance->message = value_to_debug_string(value, &module_);
+          instance->message = value_to_debug_string(
+              value, &module_, &runtime_strings_, &runtime_symbols_);
         }
         continue;
       }
@@ -12400,11 +12454,11 @@ private:
             ? runtime_owner.class_method_table
             : runtime_owner.instance_method_table;
     for (const auto &[selector_id, method] : method_table.entries) {
-      if (selector_id >= module_.symbols.size()) {
+      if (selector_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError", "method selector symbol ref is invalid");
         return nullptr;
       }
-      if (module_.symbols[selector_id] == selector) {
+      if (runtime_symbols_[selector_id] == selector) {
         return &method;
       }
     }
@@ -12898,7 +12952,9 @@ private:
         fault_ =
             make_fault(completed_frame, "UncaughtThrowError",
                        "uncaught throw " +
-                           value_to_debug_string(pending_throw->tag, &module_));
+                           value_to_debug_string(
+                               pending_throw->tag, &module_, &runtime_strings_,
+                               &runtime_symbols_));
       } else {
         final_value_ = value;
       }
@@ -13009,7 +13065,9 @@ private:
         fault_ =
             make_fault(fault_frame, "UncaughtThrowError",
                        "uncaught throw " +
-                           value_to_debug_string(active_throw.tag, &module_));
+                           value_to_debug_string(
+                               active_throw.tag, &module_, &runtime_strings_,
+                               &runtime_symbols_));
         return false;
       }
       if (target_index >= frames_.size()) {
@@ -13162,7 +13220,9 @@ private:
       return std::nullopt;
     }
 
-    BcModule module_copy = module_;
+    std::shared_ptr<const BcModule> module = module_owner_;
+    std::vector<std::string> runtime_strings = runtime_strings_;
+    std::vector<std::string> runtime_symbols = runtime_symbols_;
     std::shared_ptr<RuntimeState> runtime_state = state_;
     std::string module_id = module_id_;
     const RuntimeWorldOptions *world_options = world_options_;
@@ -13173,18 +13233,22 @@ private:
     std::vector<Value> captures = closure->captures;
     Value self = closure->self;
     return
-        [module_copy = std::move(module_copy),
+        [module = std::move(module),
+         runtime_strings = std::move(runtime_strings),
+         runtime_symbols = std::move(runtime_symbols),
          runtime_state = std::move(runtime_state),
          module_id = std::move(module_id), code_id,
          captures = std::move(captures), self = std::move(self), world_options,
          capabilities, effects, trace_recorder = std::move(trace_recorder)](
             const std::vector<Value> &args) mutable {
-          const BcCode *code = find_code(module_copy, code_id);
+          const BcCode *code = find_code(*module, code_id);
           if (code == nullptr) {
             throw RuntimeTaskFailure("VMError", "closure code id is unknown");
           }
-          Vm nested(module_copy, runtime_state, module_id, world_options,
-                    capabilities, effects, trace_recorder);
+          Vm nested(module, runtime_state, module_id, world_options,
+                    capabilities, effects, trace_recorder, nullptr, nullptr,
+                    nullptr, nullptr, nullptr, {}, true);
+          nested.synchronize_runtime_names(runtime_strings, runtime_symbols);
           nested.push_frame(*code, args, captures, self, Value::null(),
                             std::nullopt);
           while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
@@ -13200,6 +13264,35 @@ private:
 
   using ResumableTaskFactory =
       std::function<std::function<Value()>(std::vector<Value> args)>;
+
+  // A resumable factory is copied into every scheduler task that it creates.
+  // Keep its large, immutable execution template behind one shared owner so
+  // those copies do not deep-copy the complete bytecode module. In
+  // particular, a completed scheduler function is destroyed directly after
+  // its terminal record is unlinked; retaining this small shared owner there
+  // is bounded, while retaining a private BcModule per connection is not.
+  struct ResumableTaskTemplate {
+    std::shared_ptr<const BcModule> module;
+    std::vector<std::string> runtime_strings;
+    std::vector<std::string> runtime_symbols;
+    std::shared_ptr<RuntimeState> runtime_state;
+    std::string module_id;
+    const RuntimeWorldOptions *world_options = nullptr;
+    const RuntimeCapabilityResolution *capabilities = nullptr;
+    const RuntimeEffectValidation *effects = nullptr;
+    std::function<void(RuntimeTraceEvent)> trace_recorder;
+    std::uint32_t code_id = 0;
+    std::vector<Value> captures;
+    Value self = Value::null();
+    std::shared_ptr<RuntimeTaskModule> task;
+    std::shared_ptr<RuntimeTextWriter> inherited_stdout;
+    std::shared_ptr<RuntimeTextWriter> inherited_stderr;
+    const NativeRegistry *child_registry = nullptr;
+    const RuntimeModuleRegistry *child_modules = nullptr;
+    const RuntimeTypeRegistry *child_types = nullptr;
+    const RuntimeDispatchRegistry *child_dispatch = nullptr;
+    const RuntimeErrorRegistry *child_errors = nullptr;
+  };
 
   std::optional<ResumableTaskFactory>
   make_resumable_task_factory(const Frame &frame, const Value &block,
@@ -13238,53 +13331,59 @@ private:
       return std::nullopt;
     }
 
-    BcModule module_template = module_;
-    std::shared_ptr<RuntimeState> runtime_state = state_;
-    std::string module_id = module_id_;
-    const RuntimeWorldOptions *world_options = world_options_;
-    const RuntimeCapabilityResolution *capabilities = capabilities_;
-    const RuntimeEffectValidation *effects = effects_;
-    std::function<void(RuntimeTraceEvent)> trace_recorder = trace_recorder_;
-    const std::uint32_t code_id = closure->code_id;
-    std::vector<Value> captures = closure->captures;
-    Value self = closure->self;
-    const std::shared_ptr<RuntimeTextWriter> inherited_stdout =
-        current_runtime_stdout();
-    const std::shared_ptr<RuntimeTextWriter> inherited_stderr =
-        current_runtime_stderr();
-    const NativeRegistry *child_registry = child_native_registry();
-    const RuntimeModuleRegistry *child_modules = child_module_registry();
-    const RuntimeTypeRegistry *child_types = child_type_registry();
-    const RuntimeDispatchRegistry *child_dispatch = child_dispatch_registry();
-    const RuntimeErrorRegistry *child_errors = child_error_registry();
+    auto mutable_template = std::make_shared<ResumableTaskTemplate>();
+    mutable_template->module = module_owner_;
+    mutable_template->runtime_strings = runtime_strings_;
+    mutable_template->runtime_symbols = runtime_symbols_;
+    mutable_template->runtime_state = state_;
+    mutable_template->module_id = module_id_;
+    mutable_template->world_options = world_options_;
+    mutable_template->capabilities = capabilities_;
+    mutable_template->effects = effects_;
+    mutable_template->trace_recorder = trace_recorder_;
+    mutable_template->code_id = closure->code_id;
+    mutable_template->captures = closure->captures;
+    mutable_template->self = closure->self;
+    mutable_template->task = std::move(task);
+    mutable_template->inherited_stdout = current_runtime_stdout();
+    mutable_template->inherited_stderr = current_runtime_stderr();
+    mutable_template->child_registry = child_native_registry();
+    mutable_template->child_modules = child_module_registry();
+    mutable_template->child_types = child_type_registry();
+    mutable_template->child_dispatch = child_dispatch_registry();
+    mutable_template->child_errors = child_error_registry();
+    std::shared_ptr<const ResumableTaskTemplate> template_state =
+        std::move(mutable_template);
 
-    return [module_template = std::move(module_template),
-            runtime_state = std::move(runtime_state),
-            module_id = std::move(module_id), code_id,
-            captures = std::move(captures), self = std::move(self), task,
-            inherited_stdout, inherited_stderr, world_options, capabilities,
-            effects, trace_recorder = std::move(trace_recorder), child_registry,
-            child_modules, child_types, child_dispatch, child_errors](
-               std::vector<Value> args) mutable -> std::function<Value()> {
-      // The persistent VM owns its own copy of the module, so the entry frame's
-      // code pointer (into vm->module_) stays valid for the task's whole life,
-      // independent of the spawning VM.
+    return [template_state](std::vector<Value> args) -> std::function<Value()> {
+      // The persistent VM shares the immutable module image while keeping its
+      // runtime name overlay private. The shared owner keeps frame code
+      // pointers valid independently of the spawning VM.
       std::shared_ptr<Vm> vm(
-          new Vm(module_template, runtime_state, module_id, world_options,
-                 capabilities, effects, trace_recorder, child_registry,
-                 child_modules, child_types, child_dispatch, child_errors));
+          new Vm(template_state->module, template_state->runtime_state,
+                 template_state->module_id, template_state->world_options,
+                 template_state->capabilities, template_state->effects,
+                 template_state->trace_recorder, template_state->child_registry,
+                 template_state->child_modules, template_state->child_types,
+                 template_state->child_dispatch, template_state->child_errors,
+                 {}, true));
+      vm->synchronize_runtime_names(template_state->runtime_strings,
+                                    template_state->runtime_symbols);
+      const std::shared_ptr<RuntimeTaskModule> task = template_state->task;
       vm->parkable_ = true;
       vm->task_module_ = task;
-      const BcCode *code = find_code(vm->module_, code_id);
+      const BcCode *code = find_code(vm->module_, template_state->code_id);
       if (code == nullptr) {
         return []() -> Value {
           throw RuntimeTaskFailure("VMError", "closure code id is unknown");
         };
       }
-      vm->push_frame(*code, std::move(args), captures, self, Value::null(),
-                     std::nullopt);
+      vm->push_frame(*code, std::move(args), template_state->captures,
+                     template_state->self, Value::null(), std::nullopt);
 
-      return [vm, task, inherited_stdout, inherited_stderr]() mutable -> Value {
+      return [vm, task, inherited_stdout = template_state->inherited_stdout,
+              inherited_stderr =
+                  template_state->inherited_stderr]() mutable -> Value {
         RuntimeOutputScope output_scope(inherited_stdout, inherited_stderr);
         vm->park_request_.reset();
         while (vm->fault_ == std::nullopt && !vm->park_request_.has_value() &&
@@ -13773,8 +13872,8 @@ private:
       std::string name;
       if (entry.key.is_symbol()) {
         const std::uint32_t sid = entry.key.as_symbol().symbol_id;
-        if (sid < module_.symbols.size()) {
-          name = module_.symbols[sid];
+        if (sid < runtime_symbols_.size()) {
+          name = runtime_symbols_[sid];
         }
       } else if (entry.key.is_string()) {
         name =
@@ -14004,7 +14103,7 @@ private:
     } else {
       for (const Value &arg : args) {
         const std::string text = runtime_stringify_value(
-            arg, mode, &module_, nullptr, nullptr, options);
+            arg, mode, &module_, &runtime_strings_, &runtime_symbols_, options);
         if (!set_fault_from_text_write_result(frame, writer->write_str(text)) ||
             !set_fault_from_text_write_result(frame, writer->write_str("\n"))) {
           return SendStatus::Faulted;
@@ -16845,9 +16944,18 @@ private:
         state->request_in_flight = false;
         server->end_request();
       }
+      // Strip request-local VMs and IO graphs before releasing the connection
+      // handle so terminal closure destruction has only a light graph to
+      // reclaim.
+      state->handler = {};
+      state->producer = {};
+      state->writer.reset();
+      state->request_body.reset();
       if (state->stream != nullptr) {
         (void)state->stream->close();
       }
+      state->stream.reset();
+      state->buffered.clear();
       server->release_connection(state->connection_id, failed);
     };
 
@@ -20164,8 +20272,8 @@ private:
           name = string_text_from_id(args[0].as_string().string_id).value_or("");
         } else if (args[0].is_symbol()) {
           const std::uint32_t id = args[0].as_symbol().symbol_id;
-          if (id < module_.symbols.size()) {
-            name = module_.symbols[id];
+          if (id < runtime_symbols_.size()) {
+            name = runtime_symbols_[id];
           }
         } else {
           set_fault(frame, "TypeError",
@@ -20355,7 +20463,8 @@ private:
           return SendStatus::Faulted;
         }
         *out = string_value_from_text(runtime_stringify_value(
-            args[0], stringify_mode, &module_, nullptr, nullptr, options));
+            args[0], stringify_mode, &module_, &runtime_strings_,
+            &runtime_symbols_, options));
         return SendStatus::Matched;
       }
       if (kind == RuntimeNativeTypeKind::Ast) {
@@ -28702,7 +28811,7 @@ private:
     }
     const std::optional<std::uint32_t> slot = probe_ivar_cache(
         frame, static_cast<std::uint32_t>(quick.imm), *instance, quick.b);
-    if (!slot.has_value() || quick.b >= module_.symbols.size()) {
+    if (!slot.has_value() || quick.b >= runtime_symbols_.size()) {
       return FastSendStatus::NotHandled;
     }
     Value value = read_reg(frame, quick.c);
@@ -28715,7 +28824,7 @@ private:
     instance->ivar_storage[*slot] = value;
     // The string-keyed map mirrors slot storage; GC tracing and legacy
     // lookups read it, so it must stay in sync.
-    instance->ivars[module_.symbols[quick.b]] = std::move(value);
+    instance->ivars[runtime_symbols_[quick.b]] = std::move(value);
     instance->ivar_shape_version = instance->header.shape->shape_version;
     return FastSendStatus::Matched;
   }
@@ -28758,11 +28867,11 @@ private:
       if (!operand_u32(frame, insn, operand_index++, &selector_id)) {
         return false;
       }
-      if (selector_id >= module_.symbols.size()) {
+      if (selector_id >= runtime_symbols_.size()) {
         set_fault(frame, "VMError", "selector symbol ref is out of range");
         return false;
       }
-      const std::string &static_selector = module_.symbols[selector_id];
+      const std::string &static_selector = runtime_symbols_[selector_id];
       if (!expanded) {
         const FastSendStatus fast_status =
             step_fast_static_send(frame, insn, dst, recv_reg, static_selector);
@@ -30375,10 +30484,7 @@ private:
         set_fault(frame, "VMError", "cvar symbol ref is out of range");
         return;
       }
-      const auto cvar = state_->classes[class_index].cvars.find(*cvar_name);
-      const Value value = cvar == state_->classes[class_index].cvars.end()
-                              ? Value::null()
-                              : cvar->second;
+      const Value value = state_->load_cvar(class_index, *cvar_name);
       if (!write_reg(frame, dst, value)) {
         return;
       }
@@ -30447,7 +30553,7 @@ private:
         set_fault(frame, "VMError", "cvar symbol ref is out of range");
         return;
       }
-      state_->classes[class_index].cvars[*cvar_name] = read_reg(frame, src);
+      state_->store_cvar(class_index, *cvar_name, read_reg(frame, src));
       if (fault_.has_value()) {
         return;
       }
@@ -31571,14 +31677,20 @@ private:
     }
   }
 
-  BcModule module_;
+  // Bytecode, class metadata, constants, and debug tables are immutable while
+  // a VM executes. Persistent/nested VMs share that large image and keep only
+  // their append-only runtime name tables private.
+  std::shared_ptr<const BcModule> module_owner_;
+  const BcModule &module_;
+  std::vector<std::string> runtime_strings_;
+  std::vector<std::string> runtime_symbols_;
   std::size_t initial_string_count_ = 0;
   std::size_t initial_symbol_count_ = 0;
-  // O(1) interning indices over module_.strings / module_.symbols, folded
+  // O(1) interning indices over runtime_strings_ / runtime_symbols_, folded
   // lazily (see fold_string_index/fold_symbol_index) so they stay consistent
   // when the tables are appended to outside intern. The string index stores
   // hash buckets of canonical ids to avoid a second permanent copy of every
-  // runtime-created string; collisions are resolved against module_.strings.
+  // runtime-created string; collisions are resolved against runtime_strings_.
   // Does not yet bound table growth (Layer-2b); ids and dedup semantics remain
   // unchanged.
   std::unordered_map<std::size_t, std::vector<std::uint32_t>> string_index_;
@@ -31586,6 +31698,13 @@ private:
   std::unordered_map<std::string, std::uint32_t> symbol_index_;
   std::size_t symbol_index_folded_ = 0;
   std::shared_ptr<RuntimeState> state_;
+  // RuntimeWorld's host entry points are session-serialized and retain their
+  // shared inline caches across calls. Scheduler tasks are not serialized:
+  // every persistent/detached task VM owns these maps so independent strands
+  // never mutate one process-wide cache (or need a cache lock) on Send/ivar.
+  bool isolate_inline_caches_ = false;
+  std::unordered_map<std::uint64_t, CallCacheEntry> isolated_call_caches_;
+  std::unordered_map<std::uint64_t, IvarCacheEntry> isolated_ivar_caches_;
   std::string module_id_;
   const RuntimeWorldOptions *world_options_ = nullptr;
   const RuntimeCapabilityResolution *capabilities_ = nullptr;
@@ -31673,12 +31792,28 @@ struct RuntimeNativeBridgeSession::Impl {
            context.dispatch_registry, context.error_registry,
            std::move(context.macro_block_executor)) {}
 
+  Impl(std::shared_ptr<const bytecode::BcModule> module,
+       RuntimeVmExecutionContext context)
+      : vm(std::move(module), std::move(context.state),
+           std::move(context.module_id), context.world_options,
+           context.capabilities, context.effects,
+           std::move(context.trace_recorder), context.native_registry,
+           context.module_registry, context.type_registry,
+           context.dispatch_registry, context.error_registry,
+           std::move(context.macro_block_executor)) {}
+
   Vm vm;
 };
 
 RuntimeNativeBridgeSession::RuntimeNativeBridgeSession(
     const bytecode::BcModule &module, RuntimeVmExecutionContext context)
     : impl_(std::make_unique<Impl>(module, std::move(context))) {}
+
+RuntimeNativeBridgeSession::RuntimeNativeBridgeSession(
+    std::shared_ptr<const bytecode::BcModule> module,
+    RuntimeVmExecutionContext context)
+    : impl_(
+          std::make_unique<Impl>(std::move(module), std::move(context))) {}
 
 RuntimeNativeBridgeSession::~RuntimeNativeBridgeSession() = default;
 
@@ -31714,6 +31849,28 @@ ExecutionResult execute_runtime_vm(const bytecode::BcModule &module,
   static const std::vector<std::pair<std::uint32_t, Value>> no_kw_args;
   return execute_runtime_vm(module, std::move(context), code_id, args,
                             no_kw_args, std::move(self), std::move(block));
+}
+
+ExecutionResult execute_runtime_vm(
+    std::shared_ptr<const bytecode::BcModule> module,
+    const std::vector<std::string> &runtime_strings,
+    const std::vector<std::string> &runtime_symbols,
+    RuntimeVmExecutionContext context, std::uint32_t code_id,
+    const std::vector<Value> &args, Value self, Value block) {
+  Vm vm(std::move(module), std::move(context.state),
+        std::move(context.module_id), context.world_options,
+        context.capabilities, context.effects,
+        std::move(context.trace_recorder), context.native_registry,
+        context.module_registry, context.type_registry,
+        context.dispatch_registry, context.error_registry,
+        std::move(context.macro_block_executor));
+  vm.synchronize_runtime_names(runtime_strings, runtime_symbols);
+  if (context.step_budget > 0) {
+    vm.enable_step_budget(context.step_budget);
+  }
+  static const std::vector<std::pair<std::uint32_t, Value>> no_kw_args;
+  return vm.execute(code_id, args, no_kw_args, std::move(self),
+                    std::move(block));
 }
 
 ExecutionResult

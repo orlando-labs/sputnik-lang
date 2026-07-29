@@ -1,0 +1,16 @@
+schema: amber.build.v1
+name: amber.bench.polyglot.http_rps_server
+root: amber.bench.polyglot.http_rps_server
+
+profiles:
+  required: [core.v1, ffi.v1, macro.v1]
+  optional: []
+  forbidden: []
+
+modules:
+  - name: ember
+    path: ../../../../ember/src/ember.am
+  - name: ember.telemetry
+    path: ../../../../ember/src/ember/telemetry.am
+  - name: amber.bench.polyglot.http_rps_server
+    path: http_rps_server.am

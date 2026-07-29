@@ -1,0 +1,360 @@
+package amber.bench.polyglot.http_rps_server
+
+import ember
+import task
+from ember.telemetry import MetricsRegistry, Telemetry
+from sync import Mutex
+
+export main
+
+def bounded_text?(value, minimum, maximum):
+  Str === value and value.length >= minimum and value.length <= maximum
+
+def upper_ascii?(value):
+  return false unless Str === value
+  value.chars.all? |char|: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains?(char)
+
+def valid_sku?(value):
+  return false unless bounded_text?(value, 3, 64)
+  value.chars.all? |char|:
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".contains?(char)
+
+def catalog_category?(value):
+  Str === value and ["hardware", "software", "service", "accessory"].include?(value)
+
+def catalog_status?(value):
+  Str === value and ["draft", "active", "paused", "retired"].include?(value)
+
+def integer_between?(value, minimum, maximum):
+  Int === value and value >= minimum and value <= maximum
+
+def valid_barcode?(value):
+  return false unless bounded_text?(value, 8, 32)
+  value.chars.all? |char|: "0123456789".contains?(char)
+
+def valid_tags?(tags):
+  Array === tags and tags.count <= 16
+    and tags.all? |tag|: bounded_text?(tag, 1, 32)
+
+def valid_metadata?(metadata):
+  Map === metadata and metadata.count == 3
+    and bounded_text?(metadata[:source], 1, 64)
+    and bounded_text?(metadata[:batch], 1, 64)
+    and Bool === metadata[:fragile]
+
+def invalid_item_field(attrs):
+  return ["sku", "invalid_format"] unless valid_sku?(attrs[:sku])
+  return ["name", "invalid_length"] unless bounded_text?(attrs[:name], 1, 160)
+  return ["description", "invalid_length"] unless bounded_text?(attrs[:description], 1, 2000)
+  return ["category", "unsupported"] unless catalog_category?(attrs[:category])
+  return ["status", "unsupported"] unless catalog_status?(attrs[:status])
+  return ["price_cents", "out_of_range"] unless integer_between?(attrs[:price_cents], 0, 1000000000)
+  return ["currency", "invalid_format"] unless Str === attrs[:currency] and attrs[:currency].length == 3 and upper_ascii?(attrs[:currency])
+  return ["stock_count", "out_of_range"] unless integer_between?(attrs[:stock_count], 0, 1000000)
+  return ["weight_grams", "out_of_range"] unless integer_between?(attrs[:weight_grams], 1, 10000000)
+  return ["active", "invalid"] unless Bool === attrs[:active]
+  return ["manufacturer", "invalid_length"] unless bounded_text?(attrs[:manufacturer], 1, 120)
+  return ["country_code", "invalid_format"] unless Str === attrs[:country_code] and attrs[:country_code].length == 2 and upper_ascii?(attrs[:country_code])
+  return ["barcode", "invalid_format"] unless valid_barcode?(attrs[:barcode])
+  return ["color", "invalid_length"] unless bounded_text?(attrs[:color], 1, 40)
+  return ["size", "invalid_length"] unless bounded_text?(attrs[:size], 1, 40)
+  return ["rating_milli", "out_of_range"] unless integer_between?(attrs[:rating_milli], 0, 5000)
+  return ["tags", "invalid"] unless valid_tags?(attrs[:tags])
+  return ["metadata", "invalid"] unless valid_metadata?(attrs[:metadata])
+  null
+
+class Schemas:
+  attr create_item
+  attr patch_item
+  attr list_item
+
+  def init():
+    @create_item = ember.params(root: :item, unknown: :reject):
+      field(:sku, required: true)
+      field(:name, required: true)
+      field(:description, required: true)
+      field(:category, required: true)
+      field(:status, required: true)
+      field(:price_cents, type: Int, required: true)
+      field(:currency, required: true)
+      field(:stock_count, type: Int, required: true)
+      field(:weight_grams, type: Int, required: true)
+      field(:active, type: Bool, required: true)
+      field(:manufacturer, required: true)
+      field(:country_code, required: true)
+      field(:barcode, required: true)
+      field(:color, required: true)
+      field(:size, required: true)
+      field(:rating_milli, type: Int, required: true)
+      array(:tags, of: Str, required: true)
+      object(:metadata, required: true, unknown: :reject):
+        field(:source, required: true)
+        field(:batch, required: true)
+        field(:fragile, type: Bool, required: true)
+
+    @patch_item = ember.params(root: :item, unknown: :reject):
+      field(:sku)
+      field(:name)
+      field(:description)
+      field(:category)
+      field(:status)
+      field(:price_cents, type: Int)
+      field(:currency)
+      field(:stock_count, type: Int)
+      field(:weight_grams, type: Int)
+      field(:active, type: Bool)
+      field(:manufacturer)
+      field(:country_code)
+      field(:barcode)
+      field(:color)
+      field(:size)
+      field(:rating_milli, type: Int)
+      array(:tags, of: Str)
+      object(:metadata, unknown: :reject):
+        field(:source, required: true)
+        field(:batch, required: true)
+        field(:fragile, type: Bool, required: true)
+
+    @list_item = ember.params(unknown: :reject):
+      field(:status)
+
+def problem(status, code, message, details: []):
+  ember.render(
+    json: {error: {code: code, message: message, details: details}},
+    status: status)
+
+def validation_problem(issue):
+  problem(
+    422,
+    "validation_failed",
+    "catalog item is invalid",
+    details: [{field: issue[0], code: issue[1]}])
+
+def map_without(values, omitted):
+  result = {}
+  values.each |key, value|:
+    result[key] = value unless key == omitted
+  result
+
+class MemoryStore:
+  def init():
+    @mutex = Mutex.new()
+    @next_id = 1
+    @items = {}
+    @sku_ids = {}
+
+  def create(attrs):
+    @mutex.synchronize:
+      if @sku_ids[?attrs[:sku]]:
+        {kind: "conflict"}
+      else:
+        now = Time.now.iso8601
+        item = attrs.copy
+        item[:id] = @next_id
+        item[:version] = 1
+        item[:created_at] = now
+        item[:updated_at] = now
+        @next_id += 1
+        @items[item[:id]] = item
+        @sku_ids[item[:sku]] = item[:id]
+        {kind: "ok", item: item.copy}
+
+  def find(id):
+    @mutex.synchronize:
+      item = @items[?id]
+      if item then item.copy else null
+
+  def list(status):
+    @mutex.synchronize:
+      result = []
+      @items.each |id, item|:
+        if status == null or item[:status] == status:
+          result.push!(item.copy)
+      result
+
+  def update(id, attrs, version):
+    @mutex.synchronize:
+      item = @items[?id]
+      if item == null:
+        {kind: "not_found"}
+      else if item[:version] != version:
+        {kind: "version_conflict"}
+      else:
+        candidate = item.copy
+        attrs.each |name, value|:
+          candidate[name] = value
+        issue = invalid_item_field(candidate)
+        if issue:
+          {kind: "invalid", issue: issue}
+        else if candidate[:sku] != item[:sku] and @sku_ids[?candidate[:sku]]:
+          {kind: "conflict"}
+        else:
+          if candidate[:sku] != item[:sku]:
+            @sku_ids = map_without(@sku_ids, item[:sku])
+            @sku_ids[candidate[:sku]] = id
+          candidate[:version] = item[:version] + 1
+          candidate[:updated_at] = Time.now.iso8601
+          @items[id] = candidate
+          {kind: "ok", item: candidate.copy}
+
+  def delete(id, version):
+    @mutex.synchronize:
+      item = @items[?id]
+      if item == null:
+        {kind: "not_found"}
+      else if item[:version] != version:
+        {kind: "version_conflict"}
+      else:
+        @items = map_without(@items, id)
+        @sku_ids = map_without(@sku_ids, item[:sku])
+        {kind: "ok"}
+
+def requested_version(request):
+  raw = request.header("if-match")
+  return Err(problem(428, "precondition_required", "If-Match is required")) unless raw
+  text = raw.trim
+  valid = text.present? and text.length <= 18
+  valid = valid and text.chars.all? |char|: "0123456789".contains?(char)
+  return Err(problem(400, "invalid_precondition", "If-Match must be a positive integer")) unless valid
+  version = text.to_int()
+  return Err(problem(400, "invalid_precondition", "If-Match must be a positive integer")) unless version > 0
+  Ok(version)
+
+def store_problem(result):
+  return problem(404, "not_found", "catalog item was not found") if result[:kind] == "not_found"
+  return problem(409, "version_conflict", "catalog item version is stale") if result[:kind] == "version_conflict"
+  return problem(409, "sku_conflict", "catalog item SKU already exists") if result[:kind] == "conflict"
+  return validation_problem(result[:issue]) if result[:kind] == "invalid"
+  null
+
+class Items < ember.Controller:
+  def index():
+    filters = params.query.expect(service(:schemas).list_item)
+    if filters.has_key?(:status) and not catalog_status?(filters[:status]):
+      return problem(
+        422,
+        "validation_failed",
+        "catalog filter is invalid",
+        details: [{field: "status", code: "unsupported"}])
+    status = if filters.has_key?(:status) then filters[:status] else null
+    items = service(:store).list(status)
+    render(json: {
+      data: items.take(100),
+      meta: {count: items.count, truncated: items.count > 100}
+    })
+
+  def create():
+    attrs = params.json.expect(service(:schemas).create_item)
+    issue = invalid_item_field(attrs)
+    return validation_problem(issue) if issue
+    result = service(:store).create(attrs)
+    error = store_problem(result)
+    return error if error
+    item = result[:item]
+    render(
+      json: item,
+      status: 201,
+      headers: {
+        "location": "/v1/items/" + item[:id].to_str,
+        "etag": item[:version].to_str
+      })
+
+  def show(id as Int):
+    item = service(:store).find(id)
+    return problem(404, "not_found", "catalog item was not found") unless item
+    render(json: item, headers: {"etag": item[:version].to_str})
+
+  def replace(id as Int):
+    return problem(404, "not_found", "catalog item was not found") unless service(:store).find(id)
+    version = requested_version(request)
+    return version.error if version.err?
+    attrs = params.json.expect(service(:schemas).create_item)
+    result = service(:store).update(id, attrs, version.value)
+    error = store_problem(result)
+    return error if error
+    item = result[:item]
+    render(json: item, headers: {"etag": item[:version].to_str})
+
+  def patch(id as Int):
+    return problem(404, "not_found", "catalog item was not found") unless service(:store).find(id)
+    version = requested_version(request)
+    return version.error if version.err?
+    attrs = params.json.expect(service(:schemas).patch_item)
+    if attrs.empty?:
+      return problem(
+        422,
+        "validation_failed",
+        "catalog item is invalid",
+        details: [{field: "item", code: "empty"}])
+    result = service(:store).update(id, attrs, version.value)
+    error = store_problem(result)
+    return error if error
+    item = result[:item]
+    render(json: item, headers: {"etag": item[:version].to_str})
+
+  def destroy(id as Int):
+    return problem(404, "not_found", "catalog item was not found") unless service(:store).find(id)
+    version = requested_version(request)
+    return version.error if version.err?
+    result = service(:store).delete(id, version.value)
+    error = store_problem(result)
+    return error if error
+    render(status: 204)
+
+class QuietSink:
+  def emit(kind, fields):
+    null
+
+def liveness(request):
+  request.service(:telemetry).health.liveness(request)
+
+def readiness(request):
+  request.service(:telemetry).health.readiness(request)
+
+def service_routes():
+  ember.routes:
+    get "/v1/items", to: &Items#index
+    post "/v1/items", to: &Items#create
+    get "/v1/items/:id", to: &Items#show, params: {id: Int}
+    put "/v1/items/:id", to: &Items#replace, params: {id: Int}
+    patch "/v1/items/:id", to: &Items#patch, params: {id: Int}
+    delete "/v1/items/:id", to: &Items#destroy, params: {id: Int}
+    get "/health/live", to: &liveness
+    get "/health/ready", to: &readiness
+
+def arguments():
+  parser = ArgParser()
+  parser.name("amber-polyglot-http-rps-server")
+  parser.arg("--host", default: "127.0.0.1")
+  parser.arg("--port", type: Int, default: 3340)
+  parser.arg("--workers", type: Int, default: 4)
+  parser.parse_or_raise()
+
+def main():
+  args = arguments()
+  telemetry = Telemetry(
+    sink: QuietSink(),
+    metrics: MetricsRegistry(max_series: 256),
+    tracer: false)
+  app = ember.App(
+    routes: service_routes(),
+    services: {
+      telemetry: telemetry,
+      schemas: Schemas(),
+      store: MemoryStore()
+    },
+    security: ember.SecurityPolicy(allowed_hosts: ["localhost", "127.0.0.1", "::1"]),
+    telemetry: telemetry)
+  app.server(
+    host: args["host"],
+    port: args["port"],
+    workers: args["workers"],
+    max_concurrent_per_worker: 32,
+    backlog: 128,
+    max_header_bytes: 32768,
+    max_body_bytes: 65536,
+    read_timeout: 15.0,
+    write_timeout: 15.0,
+    idle_timeout: 10.0,
+    max_requests_per_connection: 500,
+    shutdown_timeout: 30.0).serve()

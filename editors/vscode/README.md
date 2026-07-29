@@ -4,10 +4,11 @@ Editor support for the [Amber](https://github.com/orlando-labs/amber-lang) progr
 
 ## Features (v1)
 
-- **Syntax highlighting** — keywords, instance/class variables (`@x`, `@@x`), numbers
-  (`0x`/`0b`/`0o`, floats, `_` separators), strings (`"..."` with `#{ }` interpolation and
-  `'...'` literal), comments, `def`/`class`/`mixin` definitions, and operators. Unicode
-  identifiers (e.g. `α`, `@масса`) are supported.
+- **Syntax highlighting** — control/declaration keywords (including contextual `then`,
+  `as`, and `next` forms), callable references (`&fn`, `&Type.method`, `&Type#method`),
+  properties, instance/class variables (`@x`, `@@x`), placeholders and `$_`, symbols,
+  numeric forms, operators, strings and tagged text blocks. Double-quoted strings support
+  nested `#{ }` interpolation. Unicode identifiers (e.g. `α`, `@масса`) are supported.
 - **Run / Build tasks** — run or compile the current file via `amberc`:
   - **Amber: Run File** — `amberc <file>` (output streams to the integrated terminal).
   - **Amber: Build File** — `amberc build <file> -o <outDir>/<stem> --target <target>`.
@@ -42,6 +43,7 @@ Build it from the repository root with `make build`.
 cd editors/vscode
 npm install
 npm run compile      # or: npm run watch
+npm test             # TextMate/Oniguruma grammar regression tests
 ```
 
 Press **F5** to launch an Extension Development Host. Package a `.vsix` with

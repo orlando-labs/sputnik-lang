@@ -12,6 +12,7 @@
 #include "runtime/stdlib_registry.h"
 #include "runtime/vm_internal.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -4047,6 +4048,54 @@ void test_runtime_world_persists_runtime_strings_between_execute_calls() {
          "runtime world keeps dynamic string ids stable across execute calls");
 }
 
+void test_runtime_world_shared_module_keeps_runtime_names_private() {
+  amber::bytecode::BcModule source;
+  source.strings.push_back("compiled");
+  source.symbols.push_back("compiled_symbol");
+  const auto module =
+      std::make_shared<const amber::bytecode::BcModule>(std::move(source));
+  amber::runtime::RuntimeWorld world(
+      module, amber::runtime::RuntimeWorldOptions{});
+
+  const amber::runtime::Value text = world.string_value("runtime");
+  const amber::runtime::Value symbol = world.symbol_value("runtime_symbol");
+  expect(text.is_string() && text.as_string().string_id == 1,
+         "shared RuntimeWorld should append to its private string overlay");
+  expect(symbol.is_symbol() && symbol.as_symbol().symbol_id == 1,
+         "shared RuntimeWorld should append to its private symbol overlay");
+  expect(module->strings.size() == 1 && module->strings[0] == "compiled",
+         "shared RuntimeWorld must not mutate compiled strings");
+  expect(module->symbols.size() == 1 &&
+             module->symbols[0] == "compiled_symbol",
+         "shared RuntimeWorld must not mutate compiled symbols");
+
+  const amber::runtime::ExecutionResult size =
+      world.invoke_native_stdlib_send(text, "size", {}, {},
+                                      amber::runtime::Value::null(), false);
+  expect(size.ok() && size.value.is_integer() &&
+             size.value.as_integer() == 7,
+         "shared RuntimeWorld should synchronize private names to its VM");
+  expect(size.runtime_string_offset == 1 &&
+             size.runtime_strings == std::vector<std::string>{"runtime"} &&
+             size.runtime_symbol_offset == 1 &&
+             size.runtime_symbols ==
+                 std::vector<std::string>{"runtime_symbol"},
+         "incremental native bridge calls should publish appended names");
+
+  const amber::runtime::ExecutionResult unchanged =
+      world.invoke_native_stdlib_send(text, "size", {}, {},
+                                      amber::runtime::Value::null(), false);
+  expect(unchanged.ok() && unchanged.runtime_strings.empty() &&
+             unchanged.runtime_symbols.empty(),
+         "incremental native bridge calls should omit unchanged name tables");
+
+  const amber::runtime::ExecutionResult compatible =
+      world.invoke_native_stdlib_send(text, "size");
+  expect(compatible.ok() && compatible.runtime_strings.size() == 2 &&
+             compatible.runtime_symbols.size() == 2,
+         "default native bridge calls should keep full-table compatibility");
+}
+
 void test_runtime_world_reuses_native_bridge_session_after_stdlib_fault() {
   amber::bytecode::BcModule module;
   amber::runtime::RuntimeWorld world(module);
@@ -4347,6 +4396,82 @@ void test_runtime_watch_local_storage_replacement() {
          "execution local exposes watch revision");
   expect(x_local->value.is_integer() && x_local->value.as_integer() == 2,
          "execution local exposes unwrapped watched value");
+}
+
+void test_runtime_watch_parallel_task_bookkeeping() {
+  const amber::bytecode::EmitResult emit_result = emit_ok(
+      "def watched(start):\n"
+      "  value = start\n"
+      "  Kernel.watch(value)\n"
+      "  200.times:\n"
+      "    value += 1\n"
+      "  value\n"
+      "first = task.spawn:\n"
+      "  watched(0)\n"
+      "second = task.spawn:\n"
+      "  watched(1000)\n"
+      "third = task.spawn:\n"
+      "  watched(2000)\n"
+      "fourth = task.spawn:\n"
+      "  watched(3000)\n"
+      "first.wait() + second.wait() + third.wait() + fourth.wait()\n");
+  const amber::bytecode::DecodeResult decoded =
+      amber::bytecode::deserialize_module(
+          amber::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  expect(decoded.module.init.has_entry_code_id,
+         "parallel watch module init");
+
+  amber::runtime::RuntimeWorld world(decoded.module);
+  const amber::runtime::ExecutionResult exec =
+      world.execute(decoded.module.init.entry_code_id);
+  expect(exec.ok(), "parallel watched tasks should execute");
+  expect(exec.value.is_integer() && exec.value.as_integer() == 6800,
+         "parallel watched tasks preserve task-local values");
+
+  constexpr std::uint64_t kExpectedEvents = 4U * 201U;
+  const std::vector<amber::runtime::RuntimeWatchEvent> events =
+      world.watch_events();
+  expect(world.watch_epoch() == kExpectedEvents &&
+             events.size() == kExpectedEvents,
+         "parallel watched tasks retain every event");
+  for (std::size_t index = 0; index < events.size(); ++index) {
+    expect(events[index].watch_epoch == index + 1U,
+           "parallel watch epochs remain unique and ordered");
+  }
+}
+
+void test_runtime_amber_tasks_execute_without_global_interpreter_lock() {
+  const amber::bytecode::EmitResult emit_result = emit_ok(
+      "from sync import Atomic\n"
+      "def rendezvous(counter):\n"
+      "  counter.update: _1 + 1\n"
+      "  spins = 0\n"
+      "  while counter.get < 2 and spins < 200000:\n"
+      "    spins += 1\n"
+      "  if counter.get == 2:\n"
+      "    1\n"
+      "  else:\n"
+      "    0\n"
+      "counter = Atomic.new(0)\n"
+      "first = task.spawn:\n"
+      "  rendezvous(counter)\n"
+      "second = task.spawn:\n"
+      "  rendezvous(counter)\n"
+      "first.wait() + second.wait()\n");
+  const amber::bytecode::DecodeResult decoded =
+      amber::bytecode::deserialize_module(
+          amber::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  expect(decoded.module.init.has_entry_code_id,
+         "no-GIL rendezvous module init");
+
+  amber::runtime::RuntimeWorld world(decoded.module);
+  const amber::runtime::ExecutionResult exec =
+      world.execute(decoded.module.init.entry_code_id);
+  expect(exec.ok(), "parallel Amber rendezvous should execute");
+  expect(exec.value.is_integer() && exec.value.as_integer() == 2,
+         "different Amber strands must make CPU progress concurrently");
 }
 
 void test_runtime_integer_specialized_op_preserves_watch_local_write() {
@@ -5712,6 +5837,67 @@ void test_runtime_heap_allocation_heavy_smoke() {
          "allocation-heavy smoke should free all local lists");
   expect(stats.local_frees == 4096,
          "allocation-heavy smoke should use local arena frees");
+}
+
+void test_runtime_heap_parallel_allocation_registry() {
+  constexpr std::uint64_t kWorkers = 8;
+  constexpr std::uint64_t kAllocationsPerWorker = 2048;
+  amber::runtime::RuntimeHeap heap;
+  std::atomic<std::uint64_t> ready{0};
+  std::atomic<bool> go{false};
+  std::mutex ids_mutex;
+  std::vector<std::uint64_t> allocation_ids;
+  allocation_ids.reserve(kWorkers * kAllocationsPerWorker);
+  std::vector<std::thread> threads;
+
+  for (std::uint64_t worker = 0; worker < kWorkers; ++worker) {
+    threads.emplace_back([&, worker]() {
+      amber::runtime::RuntimeWorkerScope scope(100 + worker);
+      ready.fetch_add(1, std::memory_order_release);
+      while (!go.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+
+      std::vector<amber::runtime::Value> values;
+      std::vector<std::uint64_t> local_ids;
+      values.reserve(kAllocationsPerWorker);
+      local_ids.reserve(kAllocationsPerWorker);
+      for (std::uint64_t index = 0; index < kAllocationsPerWorker; ++index) {
+        values.push_back(heap.make_list_value(
+            {amber::runtime::Value::integer(
+                static_cast<std::int64_t>(index))}));
+        local_ids.push_back(values.back().as_list()->header.allocation_id);
+      }
+      {
+        std::lock_guard<std::mutex> lock(ids_mutex);
+        allocation_ids.insert(allocation_ids.end(), local_ids.begin(),
+                              local_ids.end());
+      }
+      values.clear();
+    });
+  }
+
+  while (ready.load(std::memory_order_acquire) != kWorkers) {
+    std::this_thread::yield();
+  }
+  go.store(true, std::memory_order_release);
+  for (std::thread &thread : threads) {
+    thread.join();
+  }
+
+  std::sort(allocation_ids.begin(), allocation_ids.end());
+  const auto duplicate =
+      std::adjacent_find(allocation_ids.begin(), allocation_ids.end());
+  expect(duplicate == allocation_ids.end(),
+         "parallel heap allocation ids should remain unique");
+  const amber::runtime::RuntimeHeapStats stats = heap.stats();
+  expect(stats.allocations == kWorkers * kAllocationsPerWorker,
+         "parallel heap registry should retain every allocation record");
+  expect(stats.live_objects == 0 &&
+             stats.local_frees == kWorkers * kAllocationsPerWorker,
+         "parallel heap registry should release every worker-local object");
+  expect(stats.worker_count == kWorkers,
+         "parallel heap registry should preserve independent worker arenas");
 }
 
 void test_runtime_gc_full_cycle_preserves_root_address() {
@@ -10743,12 +10929,15 @@ int main() {
   test_execute_emitted_block_map_suffixes();
   test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
   test_runtime_world_persists_runtime_strings_between_execute_calls();
+  test_runtime_world_shared_module_keeps_runtime_names_private();
   test_runtime_world_reuses_native_bridge_session_after_stdlib_fault();
   test_execute_emitted_copy_graphs();
   test_execute_emitted_user_index_methods();
   test_execute_emitted_v20_5_array_generation_and_optional_access();
   test_runtime_map_get_or_set();
   test_runtime_watch_local_storage_replacement();
+  test_runtime_watch_parallel_task_bookkeeping();
+  test_runtime_amber_tasks_execute_without_global_interpreter_lock();
   test_runtime_integer_specialized_op_preserves_watch_local_write();
   test_runtime_compare_branch_preserves_debug_local();
   test_runtime_watch_capture_uses_shared_storage_cell();
@@ -10771,6 +10960,7 @@ int main() {
   test_runtime_heap_worker_arena_headers();
   test_runtime_heap_remote_free_queue_drains_on_owner();
   test_runtime_heap_allocation_heavy_smoke();
+  test_runtime_heap_parallel_allocation_registry();
   test_runtime_gc_full_cycle_preserves_root_address();
   test_runtime_gc_reclaims_unrooted_reference_cycle();
   test_runtime_gc_write_barrier_remembers_mature_to_young_edge();

@@ -10,6 +10,7 @@
 #include "runtime/watch.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -25,10 +26,6 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
-#if defined(__APPLE__)
-#include <malloc/malloc.h>
-#endif
 
 namespace amber::runtime {
 
@@ -50,78 +47,6 @@ std::atomic<std::uint64_t> g_runtime_task_local_slot_id{1};
 std::atomic<std::uint64_t> g_runtime_task_local_live_contexts{0};
 std::atomic<std::uint64_t> g_runtime_task_local_retained_values{0};
 
-class CompletedTaskFunctionReaper {
-public:
-  CompletedTaskFunctionReaper() {
-    std::thread([this]() { run(); }).detach();
-  }
-
-  void retire(std::function<void()> function) {
-    if (!function) {
-      return;
-    }
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      pending_.push_back(std::move(function));
-    }
-    cv_.notify_one();
-  }
-
-  void drain() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    cv_.wait(lock,
-             [this]() { return pending_.empty() && !batch_active_; });
-  }
-
-private:
-  void run() {
-    auto last_pressure_relief = std::chrono::steady_clock::now();
-    while (true) {
-      std::deque<std::function<void()>> batch;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        cv_.wait(lock, [this]() { return !pending_.empty(); });
-        batch.swap(pending_);
-        batch_active_ = true;
-      }
-      // Destruct executable closures outside the scheduler worker that ran
-      // them. A resumable VM closure can own the last RuntimeTaskModule (and
-      // therefore its scheduler); releasing it on one of that scheduler's
-      // workers would make shutdown attempt to join the current thread.
-      batch.clear();
-#if defined(__APPLE__)
-      const auto now = std::chrono::steady_clock::now();
-      if (now - last_pressure_relief >= std::chrono::seconds(2)) {
-        // Completed persistent VMs release large request graphs here, after
-        // the generated bridge's own relief point has already passed. Return
-        // newly-empty Darwin malloc pages at a bounded cadence so RSS and
-        // physical footprint do not track the lifetime request count.
-        (void)malloc_zone_pressure_relief(nullptr, 0);
-        last_pressure_relief = now;
-      }
-#endif
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        batch_active_ = false;
-      }
-      cv_.notify_all();
-    }
-  }
-
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  std::deque<std::function<void()>> pending_;
-  bool batch_active_ = false;
-};
-
-CompletedTaskFunctionReaper &completed_task_function_reaper() {
-  // Process-lifetime service: intentionally keep the queue and its detached
-  // thread alive through static destruction, when task closures may still be
-  // releasing other runtime singletons.
-  static auto *reaper = new CompletedTaskFunctionReaper();
-  return *reaper;
-}
-
 std::uint64_t allocate_runtime_task_local_slot_id() {
   std::uint64_t candidate =
       g_runtime_task_local_slot_id.load(std::memory_order_relaxed);
@@ -137,10 +62,15 @@ std::uint64_t allocate_runtime_task_local_slot_id() {
                            "task-local slot identity space is exhausted");
 }
 
-struct RuntimeTaskContextRegistry {
+struct RuntimeTaskContextRegistryShard {
   std::mutex mutex;
   std::vector<RuntimeTaskContext *> contexts;
   std::vector<std::size_t> free_slots;
+};
+
+struct RuntimeTaskContextRegistry {
+  static constexpr std::size_t kShardCount = 64U;
+  std::array<RuntimeTaskContextRegistryShard, kShardCount> shards;
 };
 
 RuntimeTaskContextRegistry &runtime_task_context_registry() {
@@ -645,10 +575,6 @@ RuntimeMutexResult runtime_mutex_cancelled_result() {
 
 } // namespace
 
-void runtime_drain_completed_task_functions() {
-  completed_task_function_reaper().drain();
-}
-
 RuntimeTaskContextScope::RuntimeTaskContextScope(
     std::shared_ptr<RuntimeTaskContext> context, bool only_if_unbound,
     bool clear_on_exit)
@@ -704,31 +630,38 @@ RuntimeTaskContext::~RuntimeTaskContext() {
 
 void RuntimeTaskContext::register_gc_roots() {
   RuntimeTaskContextRegistry &registry = runtime_task_context_registry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  if (!registry.free_slots.empty()) {
-    registry_slot_ = registry.free_slots.back();
-    registry.free_slots.pop_back();
-    registry.contexts[registry_slot_] = this;
+  registry_shard_ = static_cast<std::size_t>(
+      current_runtime_resource_owner_id() %
+      RuntimeTaskContextRegistry::kShardCount);
+  RuntimeTaskContextRegistryShard &shard = registry.shards[registry_shard_];
+  std::lock_guard<std::mutex> lock(shard.mutex);
+  if (!shard.free_slots.empty()) {
+    registry_slot_ = shard.free_slots.back();
+    shard.free_slots.pop_back();
+    shard.contexts[registry_slot_] = this;
   } else {
-    registry_slot_ = registry.contexts.size();
-    registry.contexts.push_back(this);
+    registry_slot_ = shard.contexts.size();
+    shard.contexts.push_back(this);
   }
   g_runtime_task_local_live_contexts.fetch_add(1, std::memory_order_relaxed);
 }
 
 void RuntimeTaskContext::unregister_gc_roots() {
-  if (registry_slot_ == static_cast<std::size_t>(-1)) {
+  if (registry_shard_ == static_cast<std::size_t>(-1) ||
+      registry_slot_ == static_cast<std::size_t>(-1)) {
     return;
   }
   RuntimeTaskContextRegistry &registry = runtime_task_context_registry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  if (registry_slot_ < registry.contexts.size() &&
-      registry.contexts[registry_slot_] == this) {
-    registry.contexts[registry_slot_] = nullptr;
-    registry.free_slots.push_back(registry_slot_);
+  RuntimeTaskContextRegistryShard &shard = registry.shards[registry_shard_];
+  std::lock_guard<std::mutex> lock(shard.mutex);
+  if (registry_slot_ < shard.contexts.size() &&
+      shard.contexts[registry_slot_] == this) {
+    shard.contexts[registry_slot_] = nullptr;
+    shard.free_slots.push_back(registry_slot_);
     g_runtime_task_local_live_contexts.fetch_sub(1,
                                                   std::memory_order_relaxed);
   }
+  registry_shard_ = static_cast<std::size_t>(-1);
   registry_slot_ = static_cast<std::size_t>(-1);
 }
 
@@ -900,10 +833,12 @@ void runtime_append_task_local_gc_roots(std::vector<Value> *roots) {
     return;
   }
   RuntimeTaskContextRegistry &registry = runtime_task_context_registry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  for (RuntimeTaskContext *context : registry.contexts) {
-    if (context != nullptr) {
-      context->append_runtime_roots(roots);
+  for (RuntimeTaskContextRegistryShard &shard : registry.shards) {
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    for (RuntimeTaskContext *context : shard.contexts) {
+      if (context != nullptr) {
+        context->append_runtime_roots(roots);
+      }
     }
   }
 }
@@ -918,8 +853,12 @@ std::uint64_t runtime_task_local_retained_value_count() {
 
 std::uint64_t runtime_task_local_registry_capacity() {
   RuntimeTaskContextRegistry &registry = runtime_task_context_registry();
-  std::lock_guard<std::mutex> lock(registry.mutex);
-  return static_cast<std::uint64_t>(registry.contexts.size());
+  std::uint64_t capacity = 0;
+  for (RuntimeTaskContextRegistryShard &shard : registry.shards) {
+    std::lock_guard<std::mutex> lock(shard.mutex);
+    capacity += static_cast<std::uint64_t>(shard.contexts.size());
+  }
+  return capacity;
 }
 
 RuntimeTaskLocal::RuntimeTaskLocal(bool inherit) : key_(inherit) {}
@@ -2566,7 +2505,8 @@ RuntimeBarrierResult RuntimeBarrier::wait(std::chrono::milliseconds timeout) {
 
 RuntimeBarrierStats RuntimeBarrier::stats() const { return impl_->stats(); }
 
-class RuntimeScheduler::Impl {
+class RuntimeScheduler::Impl
+    : public std::enable_shared_from_this<RuntimeScheduler::Impl> {
 public:
   explicit Impl(RuntimeSchedulerConfig config)
       : worker_count_(normalize_worker_count(config.worker_count)),
@@ -2585,8 +2525,9 @@ public:
     }
     started_ = true;
     workers_.reserve(worker_count_);
+    const std::shared_ptr<Impl> self = shared_from_this();
     for (std::size_t index = 0; index < worker_count_; ++index) {
-      workers_.emplace_back([this, index]() { worker_loop(index); });
+      workers_.emplace_back([self, index]() { self->worker_loop(index); });
     }
   }
 
@@ -2598,9 +2539,27 @@ public:
       }
       shutdown_requested_ = true;
     }
-    cv_.notify_all();
+    worker_cv_.notify_all();
+    state_cv_.notify_all();
+    const std::thread::id caller = std::this_thread::get_id();
+    bool called_from_worker = false;
+    for (const std::thread &worker : workers_) {
+      if (worker.joinable() && worker.get_id() == caller) {
+        called_from_worker = true;
+        break;
+      }
+    }
     for (std::thread &worker : workers_) {
-      if (worker.joinable()) {
+      if (!worker.joinable()) {
+        continue;
+      }
+      if (called_from_worker) {
+        // Each worker holds `self` for its complete loop. Detaching the pool
+        // here lets a scheduler whose last external owner is a task closure
+        // request shutdown from that worker without joining itself. The Impl
+        // remains alive until every detached loop observes shutdown and exits.
+        worker.detach();
+      } else {
         worker.join();
       }
     }
@@ -2656,8 +2615,7 @@ public:
       return false;
     }
     return wake_strand_impl(
-        strand_id,
-        static_cast<std::size_t>(worker_id - first_worker_id_));
+        strand_id, static_cast<std::size_t>(worker_id - first_worker_id_));
   }
 
   bool wake_strand_impl(std::uint64_t strand_id,
@@ -2695,9 +2653,9 @@ public:
     if (worker_index.has_value()) {
       // A targeted test wake is consumable only by that worker. Waking an
       // arbitrary waiter can otherwise leave the selected worker asleep.
-      cv_.notify_all();
+      worker_cv_.notify_all();
     } else {
-      cv_.notify_one();
+      worker_cv_.notify_one();
     }
     return true;
   }
@@ -2728,10 +2686,15 @@ public:
 
   bool cancel_task(std::uint64_t task_id) {
     bool cancelled;
+    std::vector<StrandFunction> retired_functions;
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      cancelled = request_cancel_locked(task_id);
-      cv_.notify_all();
+      cancelled = request_cancel_locked(task_id, retired_functions);
+      worker_cv_.notify_all();
+      state_cv_.notify_all();
+    }
+    if (!retired_functions.empty()) {
+      retired_functions.clear();
     }
     // Wake the reactor so a strand parked on a blocking IO wait observes its
     // (or an ancestor's) freshly-set cancel flag now, rather than at the next
@@ -2763,7 +2726,9 @@ public:
         strands_.erase(found);
       }
     }
-    completed_task_function_reaper().retire(std::move(retired_function));
+    if (retired_function) {
+      retired_function = {};
+    }
   }
 
   RuntimeTaskJoinResult join_task(std::uint64_t task_id,
@@ -2798,7 +2763,7 @@ public:
         if (running_count_ > 0) {
           --running_count_;
         }
-        cv_.notify_all();
+        state_cv_.notify_all();
       }
     }
 
@@ -2820,11 +2785,11 @@ public:
 
     bool completed = false;
     if (timeout == std::chrono::milliseconds::max()) {
-      cv_.wait(lock, wait_done);
+      state_cv_.wait(lock, wait_done);
       completed = target_is_terminal();
     } else {
       completed =
-          cv_.wait_for(lock, timeout, wait_done) && target_is_terminal();
+          state_cv_.wait_for(lock, timeout, wait_done) && target_is_terminal();
     }
 
     if (caller_waiting) {
@@ -2861,7 +2826,8 @@ public:
 
   bool wait_until_idle(std::chrono::milliseconds timeout) {
     std::unique_lock<std::mutex> lock(mutex_);
-    return cv_.wait_for(lock, timeout, [this]() { return idle_locked(); });
+    return state_cv_.wait_for(lock, timeout,
+                              [this]() { return idle_locked(); });
   }
 
   RuntimeSchedulerStats stats() const {
@@ -3016,10 +2982,9 @@ private:
                                   : parent_context->inherited_snapshot();
     std::lock_guard<std::mutex> lock(mutex_);
     const std::uint64_t strand_id = next_strand_id_++;
-    std::uint64_t parent_task_id =
-        current_runtime_scheduler_identity() == this
-            ? current_runtime_task_id()
-            : 0;
+    std::uint64_t parent_task_id = current_runtime_scheduler_identity() == this
+                                       ? current_runtime_task_id()
+                                       : 0;
     auto parent = strands_.find(parent_task_id);
     if (parent == strands_.end() || is_terminal_state(parent->second.state)) {
       parent_task_id = 0;
@@ -3060,7 +3025,7 @@ private:
     } else {
       enqueue_runnable_locked(strand_id, std::nullopt);
     }
-    cv_.notify_one();
+    worker_cv_.notify_one();
     return strand_id;
   }
 
@@ -3171,6 +3136,7 @@ private:
   }
 
   bool request_cancel_locked(std::uint64_t task_id,
+                             std::vector<StrandFunction> &retired_functions,
                              std::uint64_t excluded_child_id = 0) {
     auto found = strands_.find(task_id);
     if (found == strands_.end() || is_terminal_state(found->second.state)) {
@@ -3179,7 +3145,8 @@ private:
 
     StrandRecord &task = found->second;
     mark_cancel_requested_locked(task);
-    cancel_active_children_locked(task_id, excluded_child_id);
+    cancel_active_children_locked(task_id, retired_functions,
+                                  excluded_child_id);
 
     if (task.state == RuntimeStrandState::Running) {
       // A resumable VM may already have requested a cooperative park while
@@ -3212,12 +3179,14 @@ private:
     TaskCompletion completion;
     completion.state = RuntimeStrandState::Cancelled;
     completion.error = cancelled_error();
-    finish_or_wait_locked(task_id, completion);
+    finish_or_wait_locked(task_id, completion, retired_functions);
     return true;
   }
 
-  void cancel_active_children_locked(std::uint64_t parent_task_id,
-                                     std::uint64_t excluded_child_id = 0) {
+  void
+  cancel_active_children_locked(std::uint64_t parent_task_id,
+                                std::vector<StrandFunction> &retired_functions,
+                                std::uint64_t excluded_child_id = 0) {
     auto found = strands_.find(parent_task_id);
     if (found == strands_.end()) {
       return;
@@ -3226,13 +3195,15 @@ private:
                                         found->second.child_task_ids.end());
     for (const std::uint64_t child_id : children) {
       if (child_id != excluded_child_id) {
-        request_cancel_locked(child_id);
+        request_cancel_locked(child_id, retired_functions);
       }
     }
   }
 
-  std::uint64_t cancel_children_after_locked(std::uint64_t parent_task_id,
-                                             std::uint64_t failed_child_id) {
+  std::uint64_t
+  cancel_children_after_locked(std::uint64_t parent_task_id,
+                               std::uint64_t failed_child_id,
+                               std::vector<StrandFunction> &retired_functions) {
     auto found = strands_.find(parent_task_id);
     if (found == strands_.end()) {
       return 0;
@@ -3244,7 +3215,7 @@ private:
         after_failed = true;
         continue;
       }
-      if (after_failed && request_cancel_locked(child_id)) {
+      if (after_failed && request_cancel_locked(child_id, retired_functions)) {
         ++cancelled;
       }
     }
@@ -3252,7 +3223,8 @@ private:
   }
 
   void finish_or_wait_locked(std::uint64_t task_id,
-                             const TaskCompletion &completion) {
+                             const TaskCompletion &completion,
+                             std::vector<StrandFunction> &retired_functions) {
     auto found = strands_.find(task_id);
     if (found == strands_.end() || is_terminal_state(found->second.state)) {
       return;
@@ -3266,7 +3238,7 @@ private:
 
     if (completion.state == RuntimeStrandState::Failed ||
         completion.state == RuntimeStrandState::Cancelled) {
-      cancel_active_children_locked(task_id);
+      cancel_active_children_locked(task_id, retired_functions);
     }
 
     if (has_active_children_locked(task)) {
@@ -3278,10 +3250,11 @@ private:
       return;
     }
 
-    finalize_task_locked(task_id);
+    finalize_task_locked(task_id, retired_functions);
   }
 
-  void finalize_task_locked(std::uint64_t task_id) {
+  void finalize_task_locked(std::uint64_t task_id,
+                            std::vector<StrandFunction> &retired_functions) {
     auto found = strands_.find(task_id);
     if (found == strands_.end() || is_terminal_state(found->second.state)) {
       return;
@@ -3329,18 +3302,23 @@ private:
       ++stats_.tasks_failed;
     }
 
-    propagate_child_terminal_locked(task_id);
+    propagate_child_terminal_locked(task_id, retired_functions);
 
     const auto terminal = strands_.find(task_id);
+    if (terminal != strands_.end() && terminal->second.function) {
+      // A task cancelled before its first dispatch has no worker invocation
+      // that can move this closure out. Terminal records keep only metadata;
+      // release executable captures through the caller's after-unlock batch.
+      retired_functions.push_back(std::move(terminal->second.function));
+    }
     if (terminal != strands_.end() && terminal->second.managed_handle &&
         terminal->second.handle_released) {
-      StrandFunction retired_function = std::move(terminal->second.function);
       strands_.erase(terminal);
-      completed_task_function_reaper().retire(std::move(retired_function));
     }
   }
 
-  void propagate_child_terminal_locked(std::uint64_t task_id) {
+  void propagate_child_terminal_locked(
+      std::uint64_t task_id, std::vector<StrandFunction> &retired_functions) {
     auto child = strands_.find(task_id);
     if (child == strands_.end() || child->second.parent_task_id == 0) {
       return;
@@ -3359,20 +3337,23 @@ private:
       case RuntimeSupervisorPolicy::CancelScope:
         mark_cancel_requested_locked(parent->second);
         ++stats_.first_failure_cancellations;
-        cancel_active_children_locked(parent_task_id, task_id);
+        cancel_active_children_locked(parent_task_id, retired_functions,
+                                      task_id);
         break;
       case RuntimeSupervisorPolicy::OneForOne:
         ++stats_.supervisor_one_for_one_failures;
         break;
       case RuntimeSupervisorPolicy::OneForAll:
         ++stats_.first_failure_cancellations;
-        cancel_active_children_locked(parent_task_id, task_id);
+        cancel_active_children_locked(parent_task_id, retired_functions,
+                                      task_id);
         ++stats_.supervisor_one_for_all_cancellations;
         break;
       case RuntimeSupervisorPolicy::RestForOne:
         ++stats_.first_failure_cancellations;
         stats_.supervisor_rest_for_one_cancellations +=
-            cancel_children_after_locked(parent_task_id, task_id);
+            cancel_children_after_locked(parent_task_id, task_id,
+                                         retired_functions);
         break;
       }
     }
@@ -3380,7 +3361,7 @@ private:
     if (parent->second.state == RuntimeStrandState::Waiting &&
         parent->second.pending_completion_state != RuntimeStrandState::New &&
         !has_active_children_locked(parent->second)) {
-      finalize_task_locked(parent_task_id);
+      finalize_task_locked(parent_task_id, retired_functions);
     }
   }
 
@@ -3418,11 +3399,12 @@ private:
     const std::uint64_t worker_id =
         first_worker_id_ + static_cast<std::uint64_t>(worker_index);
     RuntimeWorkerScope worker_scope(worker_id);
+    std::vector<StrandFunction> retired_functions;
+    retired_functions.reserve(4);
     while (true) {
       std::uint64_t strand_id = 0;
       std::uint64_t sync_owner_id = 0;
       StrandFunction function;
-      StrandFunction retired_function;
       std::shared_ptr<std::atomic<bool>> cancellation_requested;
       std::shared_ptr<RuntimeTaskContext> task_context;
       {
@@ -3437,9 +3419,9 @@ private:
             break;
           }
           if (timers_.empty()) {
-            cv_.wait(lock);
+            worker_cv_.wait(lock);
           } else {
-            cv_.wait_until(lock, timers_.top().deadline);
+            worker_cv_.wait_until(lock, timers_.top().deadline);
           }
         }
         if (shutdown_requested_) {
@@ -3521,16 +3503,24 @@ private:
             // record is locked, then retire it below after releasing mutex_.
             // Terminal metadata and RuntimeTaskHandle::State remain available
             // to live handles.
-            retired_function = std::move(found->second.function);
+            if (found->second.function) {
+              retired_functions.push_back(std::move(found->second.function));
+            }
           }
           if (running_count_ > 0) {
             --running_count_;
           }
-          finish_or_wait_locked(strand_id, completion);
+          finish_or_wait_locked(strand_id, completion, retired_functions);
         }
       }
-      completed_task_function_reaper().retire(std::move(retired_function));
-      cv_.notify_all();
+      if (!retired_functions.empty()) {
+        // All scheduler records have been unlinked and mutex_ is no longer
+        // held. Destruct task captures immediately. If one owns the last
+        // RuntimeScheduler, worker-held Impl ownership keeps this loop alive
+        // while shutdown detaches the pool and prevents a self-join.
+        retired_functions.clear();
+      }
+      state_cv_.notify_all();
     }
   }
 
@@ -3557,7 +3547,12 @@ private:
   }
 
   mutable std::mutex mutex_;
-  std::condition_variable cv_;
+  // Worker availability and externally observed task state are distinct
+  // events. Keeping their wait sets separate prevents every task park or
+  // completion from waking the complete worker pool just to notify join/idle
+  // observers.
+  std::condition_variable worker_cv_;
+  std::condition_variable state_cv_;
   std::size_t worker_count_ = 0;
   std::uint64_t first_worker_id_ = 1;
   std::vector<std::thread> workers_;
@@ -3584,9 +3579,22 @@ RuntimeScheduler::RuntimeScheduler(RuntimeSchedulerConfig config)
 RuntimeScheduler::RuntimeScheduler(RuntimeScheduler &&) noexcept = default;
 
 RuntimeScheduler &
-RuntimeScheduler::operator=(RuntimeScheduler &&) noexcept = default;
+RuntimeScheduler::operator=(RuntimeScheduler &&other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  if (impl_ != nullptr) {
+    impl_->shutdown();
+  }
+  impl_ = std::move(other.impl_);
+  return *this;
+}
 
-RuntimeScheduler::~RuntimeScheduler() = default;
+RuntimeScheduler::~RuntimeScheduler() {
+  if (impl_ != nullptr) {
+    impl_->shutdown();
+  }
+}
 
 void RuntimeScheduler::start() { impl_->start(); }
 

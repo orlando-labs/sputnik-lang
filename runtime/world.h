@@ -323,6 +323,11 @@ struct ExecutionResult {
   std::uint64_t watch_epoch = 0;
   std::vector<std::string> runtime_strings;
   std::vector<std::string> runtime_symbols;
+  // Native bridge calls may return only an append-only suffix. Callers apply
+  // each non-empty vector at its offset; ordinary execute results use offset
+  // zero and therefore retain their full-table semantics.
+  std::size_t runtime_string_offset = 0;
+  std::size_t runtime_symbol_offset = 0;
 
   bool ok() const { return !fault.has_value(); }
 };
@@ -331,6 +336,8 @@ class RuntimeWorld {
 public:
   explicit RuntimeWorld(const bytecode::BcModule &module);
   RuntimeWorld(const bytecode::BcModule &module, RuntimeWorldOptions options);
+  RuntimeWorld(std::shared_ptr<const bytecode::BcModule> module,
+               RuntimeWorldOptions options);
   explicit RuntimeWorld(const pkg::PackageArtifact &artifact);
   RuntimeWorld(const pkg::PackageArtifact &artifact,
                RuntimeWorldOptions options);
@@ -342,7 +349,7 @@ public:
                           Value block = Value::null());
   ExecutionResult invoke_native_extension(
       std::uint32_t code_id, const std::vector<Value> &args = {},
-      Value self = Value::null());
+      Value self = Value::null(), bool include_runtime_names = true);
   // Invoke one builtin/native-stdlib send without entering the bytecode
   // interpreter. Native executable backends use this narrow bridge for
   // effectful stdlib objects whose implementation and ownership live in the
@@ -351,7 +358,7 @@ public:
       Value receiver, std::string selector,
       const std::vector<Value> &args = {},
       const std::vector<std::pair<std::string, Value>> &keyword_args = {},
-      Value block = Value::null());
+      Value block = Value::null(), bool include_runtime_names = true);
   Value string_value(std::string text);
   Value symbol_value(std::string text);
   Value list_value(std::vector<Value> items, bool frozen = false);

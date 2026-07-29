@@ -152,11 +152,14 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
+    "test": "node test/grammar.test.js",
     "watch": "tsc -watch -p ./"
   },
   "devDependencies": {
     "@types/node": "^18.19.0",
     "@types/vscode": "^1.75.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }

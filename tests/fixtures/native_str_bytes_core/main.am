@@ -2,6 +2,13 @@ package native.str_bytes_core
 
 export main
 
+class CaseProbe:
+  def downcase():
+    "same"
+
+  def upcase():
+    "different"
+
 def main():
   score = 0
   text = "  Héllo  "
@@ -12,10 +19,35 @@ def main():
     score = score + 1
   if trimmed.downcase().upcase().starts_with?("H"):
     score = score + 1
+  if "A".downcase() != "A".upcase() and "z".upcase() != "z".downcase():
+    score = score + 1
+  if "9".downcase() == "9".upcase() and "é".upcase() == "é".downcase():
+    score = score + 1
+  probe = CaseProbe()
+  if probe.downcase() != probe.upcase():
+    score = score + 1
   if "abé".reverse() == "éba":
     score = score + 1
   chars = "Aé!".chars()
   if chars.count() == 3 and chars[1] == "é":
+    score = score + 1
+  if chars[0] == "A" and chars[2] == "!":
+    score = score + 1
+  iterated = ""
+  "Aé!".chars().each |char|:
+    iterated = iterated + char
+  if iterated == "Aé!":
+    score = score + 1
+  mutable_chars = "ab".chars()
+  visited = ""
+  mutable_chars.each |char|:
+    visited = visited + char
+    if char == "a":
+      mutable_chars.push!("c")
+  if visited == "ab" and mutable_chars == ["a", "b", "c"]:
+    score = score + 1
+  all_single_chars = "Az9".chars().all? |char|: char.length() == 1
+  if all_single_chars:
     score = score + 1
   parts = "a|bé|c".split("|")
   if parts[1] == "bé" and parts.count() == 3:

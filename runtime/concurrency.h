@@ -299,6 +299,7 @@ private:
 
   std::shared_ptr<const State> state_;
   std::atomic<std::uint64_t> next_scope_token_{1};
+  std::size_t registry_shard_ = static_cast<std::size_t>(-1);
   std::size_t registry_slot_ = static_cast<std::size_t>(-1);
 };
 
@@ -840,11 +841,6 @@ private:
 
   std::shared_ptr<RuntimeScheduler> scheduler_;
 };
-
-// Wait until completed task bodies have released their captures. Native
-// executables use this after stopping their process-wide task scheduler so no
-// closure destructor can race generated static teardown.
-void runtime_drain_completed_task_functions();
 
 enum class RuntimeFlowFailurePolicy { First, Collect, Ignore };
 

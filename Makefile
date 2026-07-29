@@ -501,7 +501,7 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_str_bytes_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-str-bytes-core-build.json
 	$(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core.out
-	grep -q '^13$$' $(BUILD_DIR)/native-str-bytes-core.out
+	grep -q '^20$$' $(BUILD_DIR)/native-str-bytes-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_str_bytes_core/main.am > $(BUILD_DIR)/native-str-bytes-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-str-bytes-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-str-bytes-core.dump
@@ -515,21 +515,21 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_sequence_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-sequence-core-build.json
 	$(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core.out
-	grep -q '^20$$' $(BUILD_DIR)/native-sequence-core.out
+	grep -q '^25$$' $(BUILD_DIR)/native-sequence-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_sequence_core/main.am > $(BUILD_DIR)/native-sequence-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-sequence-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-sequence-core.dump
 	$(BUILD_DIR)/amberc build tests/fixtures/native_higher_order_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-higher-order-core > $(BUILD_DIR)/native-higher-order-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-higher-order-core-build.json
 	$(BUILD_DIR)/native-higher-order-core > $(BUILD_DIR)/native-higher-order-core.out
-	grep -q '^13$$' $(BUILD_DIR)/native-higher-order-core.out
+	grep -q '^25$$' $(BUILD_DIR)/native-higher-order-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_higher_order_core/main.am > $(BUILD_DIR)/native-higher-order-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-higher-order-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-higher-order-core.dump
 	$(BUILD_DIR)/amberc build tests/fixtures/native_keyed_collections_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-keyed-collections-core-build.json
 	$(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core.out
-	grep -q '^19$$' $(BUILD_DIR)/native-keyed-collections-core.out
+	grep -q '^26$$' $(BUILD_DIR)/native-keyed-collections-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_keyed_collections_core/main.am > $(BUILD_DIR)/native-keyed-collections-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-keyed-collections-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-keyed-collections-core.dump
@@ -540,7 +540,7 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_set_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-set-core > $(BUILD_DIR)/native-set-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-set-core-build.json
 	$(BUILD_DIR)/native-set-core > $(BUILD_DIR)/native-set-core.out
-	grep -q '^9$$' $(BUILD_DIR)/native-set-core.out
+	grep -q '^12$$' $(BUILD_DIR)/native-set-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_set_core/main.am > $(BUILD_DIR)/native-set-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-set-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-set-core.dump
@@ -629,6 +629,9 @@ test: build
 	$(BUILD_DIR)/amberc build corpus/run/task_mutex_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel-build.json
 	$(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel.out
 	grep -q '^0$$' $(BUILD_DIR)/task-mutex-parallel.out
+	$(BUILD_DIR)/amberc build corpus/run/native_no_gil_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel-build.json
+	$(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel.out
+	grep -q '^2$$' $(BUILD_DIR)/native-no-gil-parallel.out
 	$(BUILD_DIR)/amberc build corpus/run/native_clause_method/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-clause-method > $(BUILD_DIR)/native-clause-method-build.json
 	$(BUILD_DIR)/native-clause-method > $(BUILD_DIR)/native-clause-method.out
 	grep -q '^3$$' $(BUILD_DIR)/native-clause-method.out

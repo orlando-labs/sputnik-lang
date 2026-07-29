@@ -111,4 +111,67 @@ def main():
   if indexed_pairs[0][0] == 10 and indexed_pairs[0][1] == 0 and indexed_pairs[1][0] == 20 and indexed_pairs[1][1] == 1:
     score = score + 1
 
+  deleted_map = {name: 1, keep: 2, absent: null}
+  deleted_alias = deleted_map
+  removed_name = deleted_map.delete!("name")
+  missing_value = deleted_map.delete!(:missing)
+  deleted_map.compact!()
+  deleted_map.merge!({extra: 3})
+  deleted_map.update!({keep: 20})
+  deleted_map.select! |key, value|: value >= 3
+  deleted_map.transform_values! |value, key|: value * 2
+  deleted_map.transform_keys! |key, value|: key.to_str.upcase
+  shifted = deleted_map.shift!()
+  deleted_map.replace!({done: 42})
+  if removed_name == 1 and missing_value == null and deleted_alias[:done] == 42 and shifted[1] >= 6:
+    score = score + 1
+
+  cleared_map = {a: 1, b: 2}
+  cleared_map.reject! |key, value|: value == 1
+  cleared_map.keep_if! |key, value|: value == 2
+  cleared_map.delete_if! |key, value|: false
+  cleared_map.clear!()
+  if cleared_map.empty?():
+    score = score + 1
+
+  nested_map = {a: {b: [10, {c: 20}]}}
+  fetched = nested_map.fetch(:a)
+  fallback = nested_map.fetch(:missing, 99)
+  if fetched[:b][0] == 10 and fallback == 99 and nested_map.dig(:a, :b, 1, :c) == 20 and nested_map.dig(:missing) == null:
+    score = score + 1
+
+  mapped_values = {a: 1, b: 2, c: 3}.filter_map |key, value|:
+    if value > 1:
+      value * 10
+    else:
+      null
+  transformed_pairs = {a: 1, b: 2}.transform |key, value|: [key.to_str.upcase, value * 2]
+  selected_keys = {a: 1, b: 2}.deconstruct_keys([:b])
+  if mapped_values == [20, 30] and transformed_pairs["A"] == 2 and transformed_pairs["B"] == 4 and selected_keys[:b] == 2 and selected_keys.count() == 1:
+    score = score + 1
+
+  plus_merged = {a: 1} + {b: 2}
+  union_merged = {a: 1} | {a: 3, c: 4}
+  resolved_merge = {a: 2}.merge({a: 5}) |key, old_value, new_value|: old_value + new_value
+  if plus_merged[:b] == 2 and union_merged[:a] == 3 and union_merged[:c] == 4 and resolved_merge[:a] == 7:
+    score = score + 1
+
+  pair_rows = {a: 1, b: 2}.each_pair()
+  pair_total = 0
+  {a: 1, b: 2}.each_pair |key, value|:
+    pair_total = pair_total + value
+  if pair_rows == [(:a, 1), (:b, 2)] and pair_total == 3:
+    score = score + 1
+
+  path_payload = Json.parse("{\"items\":[{\"id\":1},{\"id\":2},{\"id\":3}]}")
+  path_ids = Json.paths(path_payload, "$.items[*].id")
+  path_first = path_payload.path("$.items[*].id")
+  path_fold = path_payload.paths("$.items[*]", 0) |element, accumulator|:
+    if element[:id] == 2:
+      Json.stop(accumulator + 20)
+    accumulator + element[:id]
+  strict_path = StrictMap{name: 1, "name": 2}.path("$.name")
+  if path_ids == [1, 2, 3] and path_first == 1 and path_fold == 21 and strict_path == 2:
+    score = score + 1
+
   score

@@ -39,6 +39,23 @@ python3 bench/polyglot/run_benchmark.py --workload string-ops --repeats 3
 python3 bench/polyglot/run_benchmark.py --workload map-words --repeats 3
 ```
 
+The HTTP RPS benchmark is a separate server-side comparison. It compiles the
+unchanged full-native Amber client from the sibling Ember checkout and uses
+that same executable, with the soak workload's default four clients, against
+Amber/Ember, Go, Rust, and Python servers. Every server first has to pass the full
+76-request mixed contract iteration (CRUD plus the schema/model-validation and
+protocol negative suite); each accepted row is then measured for 60 seconds:
+
+```sh
+python3 bench/polyglot/run_http_rps.py --duration 60 --clients 4
+```
+
+The three servers use mutex-protected in-memory stores so the timed table
+compares HTTP/framework execution instead of unrelated database drivers. The
+production Ember 72-hour qualification soak remains SQLite-backed. The HTTP
+runner writes both machine-readable JSON and a Markdown comparison table to
+`bench/polyglot/results/`.
+
 The script prints mean/best wall-clock time and peak RSS reported by a small
 Python measurement helper via `resource.getrusage(RUSAGE_CHILDREN)`. It also
 validates that every implementation returns the same checksum for the selected

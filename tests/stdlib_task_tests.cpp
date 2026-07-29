@@ -186,10 +186,8 @@ void test_std010_task_completion_releases_function_captures() {
   std::weak_ptr<int> retained_weak = retained;
   std::uint64_t task_id = 0;
   {
-    const amber::runtime::RuntimeTaskHandle handle =
-        task.spawn([retained]() {
-          return amber::runtime::Value::integer(*retained);
-        });
+    const amber::runtime::RuntimeTaskHandle handle = task.spawn(
+        [retained]() { return amber::runtime::Value::integer(*retained); });
     task_id = handle.task_id();
     retained.reset();
 
@@ -199,7 +197,6 @@ void test_std010_task_completion_releases_function_captures() {
            "completed capture-release task should remain joinable");
     expect_integer(result.value, 42,
                    "completed capture-release task should preserve its result");
-    amber::runtime::runtime_drain_completed_task_functions();
     expect(retained_weak.expired(),
            "terminal task record must release executable closure captures");
     expect(handle.done() && handle.result().ok,
@@ -207,6 +204,87 @@ void test_std010_task_completion_releases_function_captures() {
   }
   expect(!task.scheduler().task_snapshot(task_id).has_value(),
          "last handle release must reclaim terminal scheduler record");
+}
+
+void test_std010_last_scheduler_owner_can_release_on_worker() {
+  auto task = std::make_shared<amber::runtime::RuntimeTaskModule>(2);
+  std::weak_ptr<amber::runtime::RuntimeTaskModule> task_weak = task;
+  auto entered = std::make_shared<std::atomic<bool>>(false);
+  auto release = std::make_shared<std::atomic<bool>>(false);
+  auto returned = std::make_shared<std::atomic<bool>>(false);
+
+  amber::runtime::RuntimeTaskHandle handle = task->spawn(
+      [task, entered, release, returned]() -> amber::runtime::Value {
+        entered->store(true, std::memory_order_release);
+        while (!release->load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        (void)task->sync_active();
+        returned->store(true, std::memory_order_release);
+        return amber::runtime::Value::null();
+      });
+
+  expect(wait_for_condition(
+             [entered]() { return entered->load(std::memory_order_acquire); },
+             std::chrono::milliseconds(1000)),
+         "self-owned scheduler task should start");
+  task.reset();
+  handle = amber::runtime::RuntimeTaskHandle();
+  release->store(true, std::memory_order_release);
+
+  expect(wait_for_condition(
+             [returned]() { return returned->load(std::memory_order_acquire); },
+             std::chrono::milliseconds(1000)),
+         "self-owned scheduler task should return");
+  expect(wait_for_condition([task_weak]() { return task_weak.expired(); },
+                            std::chrono::milliseconds(2000)),
+         "last RuntimeTaskModule owner should release on its worker without "
+         "a self-join or retirement thread");
+}
+
+void test_std010_cancel_releases_terminal_capture_outside_scheduler_lock() {
+  amber::runtime::RuntimeTaskModule task(1);
+  auto blocker_entered = std::make_shared<std::atomic<bool>>(false);
+  auto release_blocker = std::make_shared<std::atomic<bool>>(false);
+  const amber::runtime::RuntimeTaskHandle blocker =
+      task.spawn([blocker_entered, release_blocker]() -> amber::runtime::Value {
+        blocker_entered->store(true, std::memory_order_release);
+        while (!release_blocker->load(std::memory_order_acquire)) {
+          std::this_thread::yield();
+        }
+        return amber::runtime::Value::null();
+      });
+  expect(wait_for_condition(
+             [blocker_entered]() {
+               return blocker_entered->load(std::memory_order_acquire);
+             },
+             std::chrono::milliseconds(1000)),
+         "cancellation capture blocker should start");
+
+  std::atomic<bool> capture_destroyed{false};
+  struct ReentrantCapture {
+    amber::runtime::RuntimeScheduler *scheduler = nullptr;
+    std::atomic<bool> *destroyed = nullptr;
+    ~ReentrantCapture() {
+      (void)scheduler->stats();
+      destroyed->store(true, std::memory_order_release);
+    }
+  };
+  auto capture = std::make_shared<ReentrantCapture>();
+  capture->scheduler = &task.scheduler();
+  capture->destroyed = &capture_destroyed;
+  const amber::runtime::RuntimeTaskHandle cancelled =
+      task.spawn([capture]() { return amber::runtime::Value::null(); });
+  capture.reset();
+
+  expect(cancelled.cancel(), "queued capture task should cancel");
+  expect(capture_destroyed.load(std::memory_order_acquire),
+         "cancelled terminal closure should be destroyed before cancel returns "
+         "and outside the scheduler lock");
+  release_blocker->store(true, std::memory_order_release);
+  expect(blocker.wait(std::chrono::milliseconds(1000)).ok,
+         "cancellation capture blocker should finish");
+  expect(cancelled.cancelled(), "queued capture task should remain cancelled");
 }
 
 void test_std010_task_wait_timeout_does_not_cancel_child() {
@@ -2179,6 +2257,8 @@ int main() {
   test_strand_confinement_socket_handoff_read_in_task();
   test_std010_task_async_spawn_and_wait_return_values();
   test_std010_task_completion_releases_function_captures();
+  test_std010_last_scheduler_owner_can_release_on_worker();
+  test_std010_cancel_releases_terminal_capture_outside_scheduler_lock();
   test_std010_task_wait_timeout_does_not_cancel_child();
   test_std010_task_yield_sleep_and_cancel_surface();
   test_std010_task_sync_block_suppresses_cooperative_yield();

@@ -218,16 +218,29 @@ root_module_or_empty_for_package(const pkg::PackageArtifact &artifact,
 
 struct RuntimeWorld::Impl {
   explicit Impl(const bytecode::BcModule &module_ref)
-      : Impl(bytecode::BcModule(module_ref), std::nullopt,
+      : Impl(std::make_shared<const bytecode::BcModule>(module_ref),
+             std::nullopt,
              RuntimeWorldOptions{}) {}
 
   Impl(bytecode::BcModule module_value,
        std::optional<RuntimePackageImage> package_image,
        RuntimeWorldOptions world_options = {})
-      : owned_module(
-            std::make_shared<bytecode::BcModule>(std::move(module_value))),
-        module(owned_module.get()), state(std::make_shared<RuntimeState>()),
+      : Impl(std::make_shared<const bytecode::BcModule>(
+                 std::move(module_value)),
+             std::move(package_image), std::move(world_options)) {}
+
+  Impl(std::shared_ptr<const bytecode::BcModule> module_value,
+       std::optional<RuntimePackageImage> package_image,
+       RuntimeWorldOptions world_options = {})
+      : module_owner(std::move(module_value)), module(module_owner.get()),
+        runtime_strings(module == nullptr ? std::vector<std::string>{}
+                                          : module->strings),
+        runtime_symbols(module == nullptr ? std::vector<std::string>{}
+                                          : module->symbols),
+        state(std::make_shared<RuntimeState>()),
         package(std::move(package_image)), options(std::move(world_options)) {
+    native_bridge_reported_runtime_string_count = runtime_strings.size();
+    native_bridge_reported_runtime_symbol_count = runtime_symbols.size();
     state->initialize_for_module(*module);
     register_builtin_stdlib(native_registry);
     register_core_prelude_bindings(module_registry);
@@ -339,8 +352,40 @@ struct RuntimeWorld::Impl {
     return result;
   }
 
-  std::shared_ptr<bytecode::BcModule> owned_module;
+  void publish_native_bridge_runtime_names(ExecutionResult &result,
+                                           bool include_full_tables) {
+    if (include_full_tables) {
+      result.runtime_string_offset = 0;
+      result.runtime_symbol_offset = 0;
+      result.runtime_strings = runtime_strings;
+      result.runtime_symbols = runtime_symbols;
+      return;
+    }
+
+    const auto publish_delta = [](const std::vector<std::string> &source,
+                                  std::size_t &reported_count,
+                                  std::vector<std::string> &delta,
+                                  std::size_t &offset) {
+      if (reported_count > source.size()) reported_count = 0;
+      offset = reported_count;
+      delta.assign(source.begin() + static_cast<std::ptrdiff_t>(reported_count),
+                   source.end());
+      reported_count = source.size();
+    };
+    publish_delta(runtime_strings,
+                  native_bridge_reported_runtime_string_count,
+                  result.runtime_strings, result.runtime_string_offset);
+    publish_delta(runtime_symbols,
+                  native_bridge_reported_runtime_symbol_count,
+                  result.runtime_symbols, result.runtime_symbol_offset);
+  }
+
+  std::shared_ptr<const bytecode::BcModule> module_owner;
   const bytecode::BcModule *module = nullptr;
+  std::vector<std::string> runtime_strings;
+  std::vector<std::string> runtime_symbols;
+  std::size_t native_bridge_reported_runtime_string_count = 0;
+  std::size_t native_bridge_reported_runtime_symbol_count = 0;
   std::shared_ptr<RuntimeState> state;
   std::optional<RuntimePackageImage> package;
   NativeRegistry native_registry;
@@ -379,6 +424,12 @@ RuntimeWorld::RuntimeWorld(const bytecode::BcModule &module,
     : impl_(std::make_shared<Impl>(bytecode::BcModule(module), std::nullopt,
                                    std::move(options))) {}
 
+RuntimeWorld::RuntimeWorld(
+    std::shared_ptr<const bytecode::BcModule> module,
+    RuntimeWorldOptions options)
+    : impl_(std::make_shared<Impl>(std::move(module), std::nullopt,
+                                   std::move(options))) {}
+
 RuntimeWorld::RuntimeWorld(const pkg::PackageArtifact &artifact) {
   std::optional<RuntimePackageImage> image;
   bytecode::BcModule root = root_module_or_empty_for_package(artifact, &image);
@@ -397,13 +448,13 @@ RuntimeWorld::RuntimeWorld(const pkg::PackageArtifact &artifact,
 RuntimeWorld::~RuntimeWorld() = default;
 
 Value RuntimeWorld::string_value(std::string text) {
-  if (impl_ == nullptr || impl_->owned_module == nullptr) {
+  if (impl_ == nullptr || impl_->module_owner == nullptr) {
     return Value::null();
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
   std::lock_guard<std::mutex> guard(impl_->value_mutex);
-  std::vector<std::string> &strings = impl_->owned_module->strings;
+  std::vector<std::string> &strings = impl_->runtime_strings;
   if (impl_->string_index_folded > strings.size()) {
     impl_->string_index.clear();
     impl_->string_index_folded = 0;
@@ -425,13 +476,13 @@ Value RuntimeWorld::string_value(std::string text) {
 }
 
 Value RuntimeWorld::symbol_value(std::string text) {
-  if (impl_ == nullptr || impl_->owned_module == nullptr) {
+  if (impl_ == nullptr || impl_->module_owner == nullptr) {
     return Value::null();
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
   std::lock_guard<std::mutex> guard(impl_->value_mutex);
-  std::vector<std::string> &symbols = impl_->owned_module->symbols;
+  std::vector<std::string> &symbols = impl_->runtime_symbols;
   if (impl_->symbol_index_folded > symbols.size()) {
     impl_->symbol_index.clear();
     impl_->symbol_index_folded = 0;
@@ -557,20 +608,21 @@ ExecutionResult RuntimeWorld::execute(std::uint32_t code_id,
   vm_context.type_registry = &impl_->type_registry;
   vm_context.dispatch_registry = &impl_->dispatch_registry;
   vm_context.error_registry = &impl_->error_registry;
-  ExecutionResult result =
-      execute_runtime_vm(*impl_->module, std::move(vm_context), code_id, args,
-                         std::move(self), std::move(block));
+  ExecutionResult result = execute_runtime_vm(
+      impl_->module_owner, impl_->runtime_strings, impl_->runtime_symbols,
+      std::move(vm_context), code_id, args, std::move(self),
+      std::move(block));
   if (!result.runtime_strings.empty()) {
-    impl_->owned_module->strings = result.runtime_strings;
+    impl_->runtime_strings = result.runtime_strings;
   }
   if (!result.runtime_symbols.empty()) {
-    impl_->owned_module->symbols = result.runtime_symbols;
+    impl_->runtime_symbols = result.runtime_symbols;
   }
   // Values stored in the persistent world may refer to names interned by an
   // earlier execute call. Always return the world's current tables so callers
   // can decode such values even when this particular call added no names.
-  result.runtime_strings = impl_->owned_module->strings;
-  result.runtime_symbols = impl_->owned_module->symbols;
+  result.runtime_strings = impl_->runtime_strings;
+  result.runtime_symbols = impl_->runtime_symbols;
   if (result.ok()) {
     impl_->record_event(replay::make_event(
         "task.completed", {{"code_id", std::to_string(code_id)}}));
@@ -583,7 +635,8 @@ ExecutionResult RuntimeWorld::execute(std::uint32_t code_id,
 }
 
 ExecutionResult RuntimeWorld::invoke_native_extension(
-    std::uint32_t code_id, const std::vector<Value> &args, Value self) {
+    std::uint32_t code_id, const std::vector<Value> &args, Value self,
+    bool include_runtime_names) {
   if (impl_ == nullptr || impl_->module == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
@@ -614,21 +667,20 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
     context.dispatch_registry = &impl_->dispatch_registry;
     context.error_registry = &impl_->error_registry;
     impl_->native_bridge_session =
-        std::make_unique<RuntimeNativeBridgeSession>(
-            *impl_->module, std::move(context));
+        std::make_unique<RuntimeNativeBridgeSession>(impl_->module_owner,
+                                                     std::move(context));
   }
   impl_->native_bridge_session->synchronize_runtime_names(
-      impl_->owned_module->strings, impl_->owned_module->symbols);
+      impl_->runtime_strings, impl_->runtime_symbols);
   ExecutionResult result = impl_->native_bridge_session->invoke_extension(
       code_id, args, std::move(self));
   if (!result.runtime_strings.empty()) {
-    impl_->owned_module->strings = result.runtime_strings;
+    impl_->runtime_strings = result.runtime_strings;
   }
   if (!result.runtime_symbols.empty()) {
-    impl_->owned_module->symbols = result.runtime_symbols;
+    impl_->runtime_symbols = result.runtime_symbols;
   }
-  result.runtime_strings = impl_->owned_module->strings;
-  result.runtime_symbols = impl_->owned_module->symbols;
+  impl_->publish_native_bridge_runtime_names(result, include_runtime_names);
   impl_->record_event(replay::make_event(
       result.ok() ? "native_extension.completed" : "native_extension.failed",
       {{"code_id", std::to_string(code_id)}}));
@@ -638,7 +690,7 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
 ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
     Value receiver, std::string selector, const std::vector<Value> &args,
     const std::vector<std::pair<std::string, Value>> &keyword_args,
-    Value block) {
+    Value block, bool include_runtime_names) {
   if (impl_ == nullptr || impl_->module == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
@@ -667,22 +719,21 @@ ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
     context.dispatch_registry = &impl_->dispatch_registry;
     context.error_registry = &impl_->error_registry;
     impl_->native_bridge_session =
-        std::make_unique<RuntimeNativeBridgeSession>(
-            *impl_->module, std::move(context));
+        std::make_unique<RuntimeNativeBridgeSession>(impl_->module_owner,
+                                                     std::move(context));
   }
   impl_->native_bridge_session->synchronize_runtime_names(
-      impl_->owned_module->strings, impl_->owned_module->symbols);
+      impl_->runtime_strings, impl_->runtime_symbols);
   ExecutionResult result = impl_->native_bridge_session->invoke_stdlib_send(
       std::move(receiver), std::move(selector), args, keyword_args,
       std::move(block));
   if (!result.runtime_strings.empty()) {
-    impl_->owned_module->strings = result.runtime_strings;
+    impl_->runtime_strings = result.runtime_strings;
   }
   if (!result.runtime_symbols.empty()) {
-    impl_->owned_module->symbols = result.runtime_symbols;
+    impl_->runtime_symbols = result.runtime_symbols;
   }
-  result.runtime_strings = impl_->owned_module->strings;
-  result.runtime_symbols = impl_->owned_module->symbols;
+  impl_->publish_native_bridge_runtime_names(result, include_runtime_names);
   return result;
 }
 
@@ -1913,8 +1964,7 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
 
   auto next_state = std::make_shared<RuntimeState>(*impl_->state);
   next_state->replace_module_runtime_state(root->second);
-  auto next_module =
-      std::make_shared<bytecode::BcModule>(bytecode::BcModule(root->second));
+  auto next_module = std::make_shared<const bytecode::BcModule>(root->second);
 
   impl_->native_bridge_session.reset();
   impl_->string_index.clear();
@@ -1922,8 +1972,14 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
   impl_->string_index_folded = 0;
   impl_->symbol_index_folded = 0;
   impl_->state = std::move(next_state);
-  impl_->owned_module = std::move(next_module);
-  impl_->module = impl_->owned_module.get();
+  impl_->module_owner = std::move(next_module);
+  impl_->module = impl_->module_owner.get();
+  impl_->runtime_strings = impl_->module->strings;
+  impl_->runtime_symbols = impl_->module->symbols;
+  impl_->native_bridge_reported_runtime_string_count =
+      impl_->runtime_strings.size();
+  impl_->native_bridge_reported_runtime_symbol_count =
+      impl_->runtime_symbols.size();
   impl_->package = std::move(decoded.image);
   impl_->capabilities = capability::resolve_capabilities(
       impl_->module->capabilities, impl_->options.capability_grants);
@@ -2134,14 +2190,14 @@ std::uint64_t RuntimeWorld::watch_epoch() const {
   if (impl_ == nullptr || impl_->state == nullptr) {
     return 0;
   }
-  return impl_->state->watch_epoch;
+  return impl_->state->watch_epoch_snapshot();
 }
 
 std::vector<RuntimeWatchEvent> RuntimeWorld::watch_events() const {
   if (impl_ == nullptr || impl_->state == nullptr) {
     return {};
   }
-  return impl_->state->watch_events;
+  return impl_->state->watch_events_snapshot();
 }
 
 void RuntimeWorld::begin_dependency_capture(std::uint64_t notebook_cell_id) {
@@ -2245,7 +2301,7 @@ RuntimeWorldMirror RuntimeWorld::world_mirror() const {
   mirror.state = impl_->state->world_frozen ? RuntimeWorldState::Frozen
                                             : RuntimeWorldState::Open;
   mirror.world_epoch = impl_->state->world_epoch;
-  mirror.watch_epoch = impl_->state->watch_epoch;
+  mirror.watch_epoch = impl_->state->watch_epoch_snapshot();
   mirror.package = package_mirror_for(*impl_->module);
   mirror.owners.reserve(impl_->module->classes.size());
   for (std::uint32_t index = 0; index < impl_->module->classes.size();
@@ -2315,12 +2371,9 @@ RuntimeGcResult RuntimeWorld::collect_garbage(const std::vector<Value> &roots,
       all_roots.push_back(root);
     }
   }
-  for (const ClassRuntimeState &klass : impl_->state->classes) {
-    for (const auto &[name, value] : klass.cvars) {
-      (void)name;
-      if (value_has_heap_payload_tag(value)) {
-        all_roots.push_back(value);
-      }
+  for (const Value &value : impl_->state->cvar_roots_snapshot()) {
+    if (value_has_heap_payload_tag(value)) {
+      all_roots.push_back(value);
     }
   }
   runtime_append_task_local_gc_roots(&all_roots);

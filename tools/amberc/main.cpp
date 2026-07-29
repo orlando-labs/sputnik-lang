@@ -1357,6 +1357,7 @@ bool native_cpp_collection_selector(const std::string &selector,
            selector == "entries" || selector == "reversed" ||
            selector == "sorted" || selector == "min" || selector == "max" ||
            selector == "minmax" || selector == "init" || selector == "tail" ||
+           selector == "lazy" ||
            selector == "copy" || selector == "deep_copy" ||
            selector == "freeze") &&
           pos_count == 0U) ||
@@ -1397,6 +1398,61 @@ bool native_cpp_collection_selector(const std::string &selector,
           pos_count == 0U) ||
          (selector == "zip" && pos_count >= 1U) ||
          (selector == "concat" && pos_count == 1U);
+}
+
+bool native_cpp_collection_mutator_selector(const std::string &selector,
+                                            std::uint32_t pos_count) {
+  return ((selector == "unshift!" || selector == "prepend!") &&
+          pos_count >= 1U) ||
+         (selector == "insert!" && pos_count >= 2U) ||
+         ((selector == "pop!" || selector == "shift!" ||
+           selector == "clear!" || selector == "reverse!" ||
+           selector == "sort!" || selector == "uniq!" ||
+           selector == "compact!" ||
+           selector == "delete_if!" || selector == "keep_if!" ||
+           selector == "select!" || selector == "reject!" ||
+           selector == "map!" || selector == "filter_map!" ||
+           selector == "transform_keys!" ||
+           selector == "transform_values!") &&
+          pos_count == 0U) ||
+         (selector == "flatten!" && pos_count <= 1U) ||
+         ((selector == "delete_at!" || selector == "delete!" ||
+           selector == "replace!" || selector == "merge!" ||
+           selector == "update!") &&
+         pos_count == 1U);
+}
+
+bool native_cpp_collection_query_selector(const std::string &selector,
+                                          std::uint32_t pos_count,
+                                          bool has_block) {
+  return ((selector == "filter_map" || selector == "flat_map" ||
+           selector == "group" || selector == "find_index" ||
+           selector == "take_while" || selector == "drop_while" ||
+           selector == "partition" || selector == "transform") &&
+          pos_count == 0U) ||
+         ((selector == "uniq" || selector == "tally" ||
+           selector == "each_pair") && pos_count == 0U) ||
+         ((selector == "sorted" || selector == "min" ||
+           selector == "max" || selector == "minmax") &&
+          pos_count == 0U) ||
+         ((selector == "each" || selector == "each_slice") &&
+          pos_count == 1U) ||
+         ((selector == "sum" || selector == "product" ||
+           selector == "flattened" || selector == "last") &&
+          pos_count <= 1U) ||
+         (selector == "count" &&
+          (pos_count == 1U || (pos_count == 0U && has_block))) ||
+         ((selector == "each_cons" || selector == "combination") &&
+          pos_count == 1U) ||
+         (selector == "permutation" && pos_count <= 1U) ||
+         (selector == "fetch" && (pos_count == 1U || pos_count == 2U)) ||
+         (selector == "dig" && pos_count >= 1U) ||
+         (selector == "deconstruct_keys" && pos_count == 1U) ||
+         ((selector == "collect" || selector == "filter" ||
+           selector == "find_all" || selector == "detect") &&
+          pos_count == 0U) ||
+         (selector == "collect_concat" && pos_count == 0U) ||
+         (selector == "inject" && pos_count <= 1U);
 }
 
 bool native_cpp_time_unit_selector(const std::string &selector) {
@@ -1862,7 +1918,7 @@ bool native_cpp_lookup_const_supported(
       "Bool",         "Symbol",       "Null",        "Object",
       "Array",        "Tuple",        "Set",         "Map",
       "StrictMap",
-      "Amber",        "Ok",           "Err",
+      "Amber",        "Ok",           "Err",         "desc",
       "Math",         "Json",         "Yaml",        "Bytes",
       "Base64",       "Base64Url",    "Hex",         "Digest",
       "Benchmark",    "Url",          "ArgParser",   "Regexp",
@@ -2267,18 +2323,77 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
       const bool scalar = scalar_shape && kw_count == 0U && no_block;
       const bool collection_block_send =
           ((selector == "each" || selector == "each_with_index" ||
-            selector == "map" || selector == "select" ||
-            selector == "reject" || selector == "transform_keys" ||
+            selector == "map" || selector == "collect" ||
+            selector == "select" || selector == "filter" ||
+            selector == "find_all" || selector == "detect" ||
+            selector == "collect_concat" || selector == "inject" ||
+            selector == "reject" || selector == "filter_map" ||
+            selector == "flat_map" || selector == "group" ||
+            selector == "find_index" || selector == "take_while" ||
+            selector == "drop_while" || selector == "partition" ||
+            selector == "count" || selector == "uniq" ||
+            selector == "each_pair" || selector == "transform" ||
+            selector == "sorted" || selector == "delete_if!" ||
+            selector == "keep_if!" || selector == "select!" ||
+            selector == "reject!" || selector == "map!" ||
+            selector == "filter_map!" || selector == "sort!" ||
+            selector == "uniq!" || selector == "min" ||
+            selector == "max" || selector == "minmax" ||
+            selector == "merge!" || selector == "update!" ||
+            selector == "transform_keys!" ||
+            selector == "transform_values!" || selector == "transform_keys" ||
             selector == "transform_values" || selector == "find" ||
             selector == "any?" || selector == "all?" || selector == "none?" ||
             selector == "times") &&
            pos_count == 0U && kw_count == 0U && !no_block) ||
           (selector == "reduce" && (pos_count == 0U || pos_count == 1U) &&
-           kw_count == 0U && !no_block);
+           kw_count == 0U && !no_block) ||
+          ((selector == "fetch" || selector == "each_cons" ||
+            selector == "merge!" || selector == "update!" ||
+            selector == "inject" || selector == "merge" ||
+            selector == "+" || selector == "|" || selector == "each" ||
+            selector == "each_slice") &&
+           pos_count == 1U && kw_count == 0U && !no_block);
+      bool collection_keyword_send = false;
+      if (kw_count != 0U &&
+          (((selector == "sorted" || selector == "sort!") &&
+            pos_count == 0U) ||
+           ((selector == "each" || selector == "each_slice") &&
+            pos_count == 1U))) {
+        collection_keyword_send = true;
+        for (std::uint32_t index = 0; index < kw_count; ++index) {
+          std::uint32_t keyword_id = 0;
+          if (!operand_u32_value(instruction, kw_index + 1U + index * 2U,
+                                 &keyword_id) ||
+              keyword_id >= module.symbols.size()) {
+            collection_keyword_send = false;
+            break;
+          }
+          const std::string &keyword = module.symbols[keyword_id];
+          if ((selector == "each" || selector == "each_slice")
+                  ? keyword != "step"
+                  : (keyword != "reverse" && keyword != "using")) {
+            collection_keyword_send = false;
+            break;
+          }
+        }
+      }
       const bool map_get_or_set_send =
           selector == "get_or_set!" && kw_count == 0U &&
           ((pos_count == 2U && no_block) ||
            (pos_count == 1U && !no_block));
+      const bool array_factory_send =
+          kw_count == 0U &&
+          (((selector == "of" || selector == "build") &&
+            pos_count == 1U && !no_block) ||
+           (selector == "filled" && pos_count == 2U && no_block));
+      const bool data_path_send =
+          kw_count == 0U &&
+          ((selector == "path" &&
+            (pos_count == 1U || pos_count == 2U) && no_block) ||
+           (selector == "paths" &&
+            ((no_block && (pos_count == 1U || pos_count == 2U)) ||
+             (!no_block && (pos_count == 2U || pos_count == 3U)))));
       bool json_send = false;
       if ((selector == "to_json" && pos_count == 0U && kw_count == 0U &&
            no_block) ||
@@ -2695,7 +2810,12 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           native_cpp_user_method_selector(module, selector) ||
           native_cpp_open_protocol_selector(selector);
       if (!scalar && !native_cpp_collection_selector(selector, pos_count) &&
-          !map_get_or_set_send &&
+          !native_cpp_collection_mutator_selector(selector, pos_count) &&
+          !native_cpp_collection_query_selector(selector, pos_count,
+                                                !no_block) &&
+          !collection_block_send &&
+          !collection_keyword_send &&
+          !map_get_or_set_send && !array_factory_send && !data_path_send &&
           !json_send && !codec_send && !digest_send && !range_send &&
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
@@ -2714,9 +2834,15 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !io_send && !task_send && !http_send && !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send &&
-          !map_get_or_set_send &&
-          (kw_count != 0U || (!no_block && !collection_block_send))) {
-        *reason = "keyword/block SEND still uses VM fallback";
+          !map_get_or_set_send && !array_factory_send && !data_path_send &&
+          ((kw_count != 0U && !collection_keyword_send) ||
+           (!no_block && !collection_block_send &&
+            !collection_keyword_send))) {
+        *reason = "keyword/block SEND selector '" + selector + "' (pos=" +
+                  std::to_string(pos_count) + ", kw=" +
+                  std::to_string(kw_count) + ", block=" +
+                  (no_block ? "false" : "true") +
+                  ") still uses VM fallback";
         return false;
       }
       break;
@@ -3979,7 +4105,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     return "truthy(" + boxed_reg_expr(reg, state) + ")";
   };
   out << "static NativeValue " << fn
-      << "(const std::vector<NativeValue> &args, "
+      << "(const NativeArgsView &args, "
          "NativeClosure *current_closure, NativeHandlerSeed *handler_seed) {\n";
   out << "  std::array<NativeValue, " << code.reg_count << "> regs{};\n";
   if (uses_local_capture_cells) {
@@ -4576,6 +4702,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             native_module_expr = "NativeValue::result_constructor(true)";
           } else if (name == "Err") {
             native_module_expr = "NativeValue::result_constructor(false)";
+          } else if (name == "desc") {
+            native_module_expr = "NativeValue::desc_function()";
           } else if (name == "Math") {
             native_module_expr = "NativeValue::math_module()";
           } else if (name == "Json") {
@@ -4971,6 +5099,87 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       }
       const bool has_block = !no_block;
       const std::string selector = module.symbols[symbol_id];
+      const auto simple_send_shape =
+          [&](const amber::bytecode::Instruction &candidate,
+              std::uint32_t expected_pos_count, std::uint32_t *candidate_dst,
+              std::uint32_t *candidate_recv, std::uint32_t *candidate_arg,
+              std::string *candidate_selector) {
+            if (candidate.opcode != Opcode::Send) {
+              return false;
+            }
+            std::uint32_t candidate_symbol = 0;
+            std::uint32_t candidate_pos_count = 0;
+            if (!operand_u32_value(candidate, 0U, candidate_dst) ||
+                !operand_u32_value(candidate, 1U, candidate_recv) ||
+                !operand_u32_value(candidate, 2U, &candidate_symbol) ||
+                !operand_u32_value(candidate, 3U, &candidate_pos_count) ||
+                candidate_pos_count != expected_pos_count ||
+                candidate_symbol >= module.symbols.size()) {
+              return false;
+            }
+            if (expected_pos_count != 0U &&
+                !operand_u32_value(candidate, 4U, candidate_arg)) {
+              return false;
+            }
+            const std::size_t candidate_kw_index =
+                4U + candidate_pos_count;
+            std::uint32_t candidate_kw_count = 0;
+            if (!operand_u32_value(candidate, candidate_kw_index,
+                                   &candidate_kw_count) ||
+                candidate_kw_count != 0U) {
+              return false;
+            }
+            const std::size_t candidate_block_index =
+                candidate_kw_index + 1U;
+            if (candidate_block_index < candidate.operands.size() &&
+                !operand_is_no_block(candidate, candidate_block_index)) {
+              return false;
+            }
+            *candidate_selector = module.symbols[candidate_symbol];
+            return true;
+          };
+      bool fused_case_comparison = false;
+      bool fused_case_comparison_equal = false;
+      std::uint32_t fused_case_comparison_dst = 0;
+      if ((selector == "downcase" || selector == "upcase") &&
+          pos_count == 0U && kw_count == 0U && !has_block &&
+          pc + 2U < code.instructions.size()) {
+        std::uint32_t next_dst = 0;
+        std::uint32_t next_recv = 0;
+        std::uint32_t unused_arg = 0;
+        std::string next_selector;
+        std::uint32_t compare_recv = 0;
+        std::uint32_t compare_arg = 0;
+        std::string compare_selector;
+        if (simple_send_shape(code.instructions[pc + 1U], 0U, &next_dst,
+                              &next_recv, &unused_arg, &next_selector) &&
+            next_recv == recv &&
+            ((selector == "downcase" && next_selector == "upcase") ||
+             (selector == "upcase" && next_selector == "downcase")) &&
+            simple_send_shape(code.instructions[pc + 2U], 1U,
+                              &fused_case_comparison_dst, &compare_recv,
+                              &compare_arg, &compare_selector) &&
+            (compare_selector == "==" || compare_selector == "!=") &&
+            ((compare_recv == dst && compare_arg == next_dst) ||
+             (compare_recv == next_dst && compare_arg == dst))) {
+          fused_case_comparison = true;
+          fused_case_comparison_equal = compare_selector == "==";
+        }
+      }
+      if (fused_case_comparison) {
+        out << "  if (native_value_is_string(" << read_reg_expr(recv)
+            << ")) {\n";
+        write_bool_reg_stmt(
+            fused_case_comparison_dst,
+            std::string(fused_case_comparison_equal ? "!" : "") +
+                "native_string_has_case_distinction(" +
+                read_reg_expr(recv) + ")");
+        const std::vector<NativeScalarKind> &fused_scalar_state =
+            uses_scalar_lanes ? scalar_flow.after_pc[pc + 2U]
+                              : empty_scalar_state;
+        emit_goto_pc(pc + 3U, fused_scalar_state);
+        out << "  }\n";
+      }
       const auto pos_args_expr = [&](std::uint32_t first_index) {
         std::ostringstream args_expr;
         args_expr << "{";
@@ -5138,30 +5347,90 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                               static_cast<std::uint32_t>(block_reg))
                         : "NativeValue::nullv()") +
                    ")");
-      out << "  } else if (native_value_is_benchmark_receiver("
-          << read_reg_expr(recv) << ")) {\n";
-      write_reg_stmt(
-          dst, "native_benchmark_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
-                   pos_args_expr(0U) + ", " + kw_args_expr() + ", " +
-                   (has_block
-                        ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
-                        : "NativeValue::nullv()") +
-                   ", " + (has_block ? "true" : "false") + ")");
+      static const std::set<std::string> benchmark_selectors{
+          "section",          "time",          "measure",
+          "run",              "profile",       "compare",
+          "from_map",         "from_json",     "label",
+          "kind",             "data",          "value",
+          "elapsed",          "elapsed_ns",    "iterations",
+          "samples",          "per_iteration", "per_iteration_ns",
+          "mean",             "mean_ns",       "min",
+          "min_ns",           "max",           "max_ns",
+          "p50",              "p50_ns",        "p90",
+          "p90_ns",           "p95",           "p95_ns",
+          "p99",              "p99_ns",        "ops_per_second",
+          "sample_times",     "sample_ns",     "cases",
+          "fastest",          "slowest",       "relative",
+          "total",            "total_ns",      "spans",
+          "summary",          "find",          "to_str",
+          "inspect",          "map",           "to_map",
+          "to_json",          "format",        "table",
+          "pretty"};
+      if (benchmark_selectors.find(selector) != benchmark_selectors.end()) {
+        out << "  } else if (native_value_is_benchmark_receiver("
+            << read_reg_expr(recv) << ")) {\n";
+        write_reg_stmt(
+            dst, "native_benchmark_send(" + read_reg_expr(recv) +
+                     ", native_hex_to_string(\"" +
+                     string_to_hex_text(selector) + "\"), " +
+                     pos_args_expr(0U) + ", " + kw_args_expr() + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ")");
+      }
       out << "  } else {\n";
       if (selector == "stringify") {
         write_reg_stmt(dst, "native_amber_stringify(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ", " +
                                 kw_args_expr() + ")");
+      } else if (selector == "path" || selector == "paths") {
+        write_reg_stmt(
+            dst, "native_json_data_path(" + read_reg_expr(recv) +
+                     ", native_hex_to_string(\"" +
+                     string_to_hex_text(selector) + "\"), " +
+                     pos_args_expr(0U) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ")");
+      } else if (selector == "of" || selector == "filled") {
+        write_reg_stmt(
+            dst, "native_array_factory(" + read_reg_expr(recv) +
+                     ", native_hex_to_string(\"" +
+                     string_to_hex_text(selector) + "\"), " +
+                     pos_args_expr(0U) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ")");
+      } else if (selector == "build") {
+        write_reg_stmt(
+            dst, "(" + read_reg_expr(recv) +
+                     ".tag == NativeValue::Tag::ArrayType "
+                     "? native_array_factory(" + read_reg_expr(recv) +
+                     ", native_hex_to_string(\"6275696c64\"), " +
+                     pos_args_expr(0U) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ") "
+                     ": native_url_build(" + read_reg_expr(recv) + ", " +
+                     read_reg_expr(arg) + "))");
       } else if (native_cpp_math_selector(selector, pos_count)) {
         write_reg_stmt(dst, "native_math_send(" + read_reg_expr(recv) +
                                 ", native_hex_to_string(\"" +
                                 string_to_hex_text(selector) + "\"), " +
                                 pos_args_expr(0U) + ")");
       } else if (selector == "+") {
-        write_reg_stmt(dst, "native_numeric_fast_add(" + read_reg_expr(recv) +
-                                ", " + read_reg_expr(arg) + ")");
+        write_reg_stmt(
+            dst, has_block
+                     ? "native_map_merge_with_block(" + read_reg_expr(recv) +
+                           ", " + read_reg_expr(arg) + ", " +
+                           read_reg_expr(static_cast<std::uint32_t>(block_reg)) +
+                           ", true)"
+                     : "native_numeric_fast_add(" + read_reg_expr(recv) +
+                           ", " + read_reg_expr(arg) + ")");
       } else if (selector == "-") {
         write_reg_stmt(dst, "native_numeric_fast_sub(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
@@ -5208,17 +5477,25 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         write_reg_stmt(dst, "native_numeric_fast_cmp(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
       } else if (selector == "&") {
-        write_reg_stmt(dst, "NativeValue::integer(bit_and_int64(as_int(" +
-                                read_reg_expr(recv) + "), as_int(" +
-                                read_reg_expr(arg) + ")))");
+        write_reg_stmt(dst, "native_collection_binary(" +
+                                read_reg_expr(recv) + ", " +
+                                read_reg_expr(arg) +
+                                ", native_hex_to_string(\"26\"))");
       } else if (selector == "|") {
-        write_reg_stmt(dst, "NativeValue::integer(bit_or_int64(as_int(" +
-                                read_reg_expr(recv) + "), as_int(" +
-                                read_reg_expr(arg) + ")))");
+        write_reg_stmt(
+            dst, has_block
+                     ? "native_map_merge_with_block(" + read_reg_expr(recv) +
+                           ", " + read_reg_expr(arg) + ", " +
+                           read_reg_expr(static_cast<std::uint32_t>(block_reg)) +
+                           ", true)"
+                     : "native_collection_binary(" + read_reg_expr(recv) +
+                           ", " + read_reg_expr(arg) +
+                           ", native_hex_to_string(\"7c\"))");
       } else if (selector == "^") {
-        write_reg_stmt(dst, "NativeValue::integer(bit_xor_int64(as_int(" +
-                                read_reg_expr(recv) + "), as_int(" +
-                                read_reg_expr(arg) + ")))");
+        write_reg_stmt(dst, "native_collection_binary(" +
+                                read_reg_expr(recv) + ", " +
+                                read_reg_expr(arg) +
+                                ", native_hex_to_string(\"5e\"))");
       } else if (selector == "**") {
         write_reg_stmt(dst, "native_numeric_fast_pow(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
@@ -5312,6 +5589,29 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                           ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
                           : "NativeValue::nullv()") +
                      ", " + (has_block ? "true" : "false") + ")");
+      } else if (native_cpp_collection_mutator_selector(selector, pos_count)) {
+        write_reg_stmt(
+            dst, "native_collection_mutate(" + read_reg_expr(recv) +
+                     ", native_hex_to_string(\"" +
+                     string_to_hex_text(selector) + "\"), " +
+                     pos_args_expr(0U) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ", " +
+                     kw_args_expr() + ")");
+      } else if (native_cpp_collection_query_selector(selector, pos_count,
+                                                       has_block)) {
+        write_reg_stmt(
+            dst, "native_collection_query(" + read_reg_expr(recv) +
+                     ", native_hex_to_string(\"" +
+                     string_to_hex_text(selector) + "\"), " +
+                     pos_args_expr(0U) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ", " +
+                     kw_args_expr() + ")");
       } else if (selector == "has_index?") {
         write_reg_stmt(dst, "native_has_index(" + read_reg_expr(recv) + ", " +
                                 read_reg_expr(arg) + ")");
@@ -5393,6 +5693,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         write_reg_stmt(dst, "native_deconstruct(" + read_reg_expr(recv) + ")");
       } else if (selector == "to_array") {
         write_reg_stmt(dst, "native_to_array(" + read_reg_expr(recv) + ")");
+      } else if (selector == "lazy") {
+        write_reg_stmt(dst, read_reg_expr(recv));
       } else if (selector == "keys") {
         write_reg_stmt(dst, "native_map_keys(" + read_reg_expr(recv) + ")");
       } else if (selector == "values") {
@@ -5481,8 +5783,13 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         write_reg_stmt(dst, "native_map_except(" + read_reg_expr(recv) + ", " +
                                 pos_args_expr(0U) + ")");
       } else if (selector == "merge") {
-        write_reg_stmt(dst, "native_map_merge(" + read_reg_expr(recv) + ", " +
-                                read_reg_expr(arg) + ")");
+        write_reg_stmt(
+            dst, "native_map_merge_with_block(" + read_reg_expr(recv) +
+                     ", " + read_reg_expr(arg) + ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + (has_block ? "true" : "false") + ")");
       } else if (selector == "compact") {
         write_reg_stmt(dst, "native_map_compact(" + read_reg_expr(recv) + ")");
       } else if (selector == "inserted") {
@@ -5796,8 +6103,19 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         write_reg_stmt(dst, "native_time_nullary(" + read_reg_expr(recv) +
                                 ", " + selector_enum + ")");
       } else if (native_cpp_open_protocol_selector(selector)) {
-        write_reg_stmt(dst, "native_missing_selector(native_hex_to_string(\"" +
-                                string_to_hex_text(selector) + "\"))");
+        if (selector == "stop") {
+          write_reg_stmt(
+              dst, "(" + read_reg_expr(recv) +
+                       ".tag == NativeValue::Tag::JsonModule "
+                       "? native_json_stop(" + read_reg_expr(recv) + ", " +
+                       pos_args_expr(0U) + ") "
+                       ": native_missing_selector(native_hex_to_string(\"" +
+                       string_to_hex_text(selector) + "\")))");
+        } else {
+          write_reg_stmt(
+              dst, "native_missing_selector(native_hex_to_string(\"" +
+                       string_to_hex_text(selector) + "\"))");
+        }
       }
       out << "  }\n";
       emit_next(pc, next_scalar_state);
@@ -6388,7 +6706,7 @@ std::string emit_module_strings_cpp(const amber::bytecode::BcModule &module) {
   out << "};\n";
   out << "static const std::size_t kModuleStringCount = "
       << module.strings.size() << "U;\n\n";
-  out << "static std::string native_hex_to_string(const char *hex) {\n";
+  out << "static std::string native_decode_hex_string(const char *hex) {\n";
   out << "  std::string text;\n";
   out << "  auto digit = [](char c) -> int {\n";
   out << "    if (c >= '0' && c <= '9') return c - '0';\n";
@@ -6403,82 +6721,54 @@ std::string emit_module_strings_cpp(const amber::bytecode::BcModule &module) {
   out << "  }\n";
   out << "  return text;\n";
   out << "}\n\n";
-  out << "static std::deque<std::string> &native_strings() {\n";
-  out << "  static std::deque<std::string> *table = [] {\n";
-  out << "    auto *out_table = new std::deque<std::string>();\n";
+  // Every generated invocation below passes a string literal. A unique lambda
+  // type gives each call site its own function-local static, so selectors,
+  // ivar names, and keyword names are decoded once instead of allocating and
+  // decoding on every send. Module string/symbol tables use the raw decoder
+  // explicitly because their argument is selected dynamically in a loop.
+  out << "#define native_hex_to_string(hex) ([]() -> const std::string & { "
+         "static const std::string text = native_decode_hex_string(hex); "
+         "return text; }())\n\n";
+  out << "struct NativeStringTable {\n";
+  out << "  std::vector<std::string> values;\n";
+  out << "  std::array<std::int64_t, 128> ascii_ids{};\n";
+  out << "};\n";
+  out << "static const NativeStringTable &native_string_table() {\n";
+  out << "  static const auto *table = [] {\n";
+  out << "    auto *out_table = new NativeStringTable();\n";
+  out << "    out_table->values.reserve(kModuleStringCount + 128U);\n";
+  out << "    std::unordered_map<std::string, std::int64_t> index;\n";
+  out << "    index.reserve(kModuleStringCount + 128U);\n";
   out << "    for (std::size_t i = 0; i < kModuleStringCount; ++i) {\n";
-  out << "      out_table->push_back(native_hex_to_string("
+  out << "      out_table->values.push_back(native_decode_hex_string("
          "kModuleStringHex[i]));\n";
+  out << "      index.emplace(out_table->values.back(), "
+         "static_cast<std::int64_t>(i));\n";
+  out << "    }\n";
+  out << "    for (std::size_t i = 0; i < 128U; ++i) {\n";
+  out << "      const std::string text(1, static_cast<char>(i));\n";
+  out << "      const auto found = index.find(text);\n";
+  out << "      if (found != index.end()) {\n";
+  out << "        out_table->ascii_ids[i] = found->second;\n";
+  out << "        continue;\n";
+  out << "      }\n";
+  out << "      const std::int64_t id = static_cast<std::int64_t>("
+         "out_table->values.size());\n";
+  out << "      out_table->values.push_back(text);\n";
+  out << "      index.emplace(out_table->values.back(), id);\n";
+  out << "      out_table->ascii_ids[i] = id;\n";
   out << "    }\n";
   out << "    return out_table;\n";
   out << "  }();\n";
   out << "  return *table;\n";
   out << "}\n\n";
-  out << "static std::mutex &native_string_mutex() {\n";
-  out << "  static auto *mutex = new std::mutex();\n";
-  out << "  return *mutex;\n";
-  out << "}\n\n";
-  out << "static std::unordered_map<std::size_t, std::vector<std::int64_t>> &"
-         "native_string_index() {\n";
-  out << "  static std::unordered_map<std::size_t, "
-         "std::vector<std::int64_t>> *index = [] {\n";
-  out << "    auto *out_index = new std::unordered_map<std::size_t, "
-         "std::vector<std::int64_t>>();\n";
-  out << "    const std::deque<std::string> &table = native_strings();\n";
-  out << "    for (std::size_t i = 0; i < table.size(); ++i) {\n";
-  out << "      std::vector<std::int64_t> &bucket = "
-         "(*out_index)[std::hash<std::string>{}(table[i])];\n";
-  out << "      bool duplicate = false;\n";
-  out << "      for (const std::int64_t existing_id : bucket) {\n";
-  out << "        if (existing_id >= 0 && "
-         "static_cast<std::size_t>(existing_id) < table.size() && "
-         "table[static_cast<std::size_t>(existing_id)] == table[i]) {\n";
-  out << "          duplicate = true;\n";
-  out << "          break;\n";
-  out << "        }\n";
-  out << "      }\n";
-  out << "      if (!duplicate) "
-         "bucket.push_back(static_cast<std::int64_t>(i));\n";
-  out << "    }\n";
-  out << "    return out_index;\n";
-  out << "  }();\n";
-  out << "  return *index;\n";
-  out << "}\n\n";
-  out << "static std::int64_t native_intern_string(const std::string &text) "
-         "{\n";
-  out << "  std::lock_guard<std::mutex> guard(native_string_mutex());\n";
-  out << "  auto &index = native_string_index();\n";
-  out << "  const std::size_t hash = std::hash<std::string>{}(text);\n";
-  out << "  std::deque<std::string> &table = native_strings();\n";
-  out << "  const auto found = index.find(hash);\n";
-  out << "  if (found != index.end()) {\n";
-  out << "    for (const std::int64_t id : found->second) {\n";
-  out << "      if (id >= 0 && static_cast<std::size_t>(id) < table.size() && "
-         "table[static_cast<std::size_t>(id)] == text) return id;\n";
-  out << "    }\n";
-  out << "  }\n";
-  out << "  const std::int64_t id = "
-         "static_cast<std::int64_t>(table.size());\n";
-  out << "  table.push_back(text);\n";
-  out << "  index[hash].push_back(id);\n";
-  out << "  return id;\n";
-  out << "}\n\n";
-  // No-insert probe used by map read paths so absent lookups neither grow
-  // the table nor pay the insert.
-  out << "static std::optional<std::int64_t> native_intern_string_lookup("
-         "const std::string &text) {\n";
-  out << "  std::lock_guard<std::mutex> guard(native_string_mutex());\n";
-  out << "  auto &index = native_string_index();\n";
-  out << "  const std::size_t hash = std::hash<std::string>{}(text);\n";
-  out << "  std::deque<std::string> &table = native_strings();\n";
-  out << "  const auto found = index.find(hash);\n";
-  out << "  if (found != index.end()) {\n";
-  out << "    for (const std::int64_t id : found->second) {\n";
-  out << "      if (id >= 0 && static_cast<std::size_t>(id) < table.size() && "
-         "table[static_cast<std::size_t>(id)] == text) return id;\n";
-  out << "    }\n";
-  out << "  }\n";
-  out << "  return std::nullopt;\n";
+  out << "static const std::vector<std::string> &native_strings() {\n";
+  out << "  return native_string_table().values;\n";
+  out << "}\n";
+  out << "static std::int64_t native_ascii_string_id(unsigned char value) {\n";
+  out << "  if (value >= 128U) throw std::out_of_range("
+         "\"native ASCII string id\");\n";
+  out << "  return native_string_table().ascii_ids[value];\n";
   out << "}\n\n";
   out << "static const char *kModuleSymbolHex[] = {\n";
   for (const std::string &text : module.symbols) {
@@ -6490,25 +6780,25 @@ std::string emit_module_strings_cpp(const amber::bytecode::BcModule &module) {
   out << "};\n";
   out << "static const std::size_t kModuleSymbolCount = "
       << module.symbols.size() << "U;\n\n";
-  out << "static std::vector<std::string> &native_symbols() {\n";
-  out << "  static std::vector<std::string> *table = [] {\n";
+  out << "static const std::vector<std::string> &native_symbols() {\n";
+  out << "  static const auto *table = [] {\n";
   out << "    auto *out_table = new std::vector<std::string>();\n";
   out << "    out_table->reserve(kModuleSymbolCount);\n";
   out << "    for (std::size_t i = 0; i < kModuleSymbolCount; ++i) {\n";
-  out << "      out_table->push_back(native_hex_to_string("
+  out << "      out_table->push_back(native_decode_hex_string("
          "kModuleSymbolHex[i]));\n";
   out << "    }\n";
   out << "    return out_table;\n";
   out << "  }();\n";
   out << "  return *table;\n";
   out << "}\n\n";
-  out << "static std::unordered_map<std::string, std::int64_t> &"
-         "native_symbol_index() {\n";
-  out << "  static std::unordered_map<std::string, std::int64_t> *index = "
+  out << "static const std::unordered_map<std::string, std::int64_t> &"
+         "native_module_symbol_index() {\n";
+  out << "  static const auto *index = "
          "[] {\n";
   out << "    auto *out_index = new std::unordered_map<std::string, "
          "std::int64_t>();\n";
-  out << "    const std::vector<std::string> &table = native_symbols();\n";
+  out << "    const auto &table = native_symbols();\n";
   out << "    for (std::size_t i = 0; i < table.size(); ++i) {\n";
   out << "      out_index->emplace(table[i], "
          "static_cast<std::int64_t>(i));\n";
@@ -6517,23 +6807,55 @@ std::string emit_module_strings_cpp(const amber::bytecode::BcModule &module) {
   out << "  }();\n";
   out << "  return *index;\n";
   out << "}\n\n";
+  out << "struct NativeDynamicSymbolTable {\n";
+  out << "  std::vector<std::shared_ptr<const std::string>> symbols;\n";
+  out << "  std::unordered_map<std::string, std::int64_t> index;\n";
+  out << "};\n";
+  out << "static std::shared_ptr<const NativeDynamicSymbolTable> &"
+         "native_dynamic_symbol_snapshot_storage() {\n";
+  out << "  static auto *snapshot = new std::shared_ptr<const "
+         "NativeDynamicSymbolTable>("
+         "std::make_shared<const NativeDynamicSymbolTable>());\n";
+  out << "  return *snapshot;\n";
+  out << "}\n\n";
   out << "static std::int64_t native_intern_symbol(const std::string &text) "
          "{\n";
-  out << "  auto &index = native_symbol_index();\n";
-  out << "  const auto found = index.find(text);\n";
-  out << "  if (found != index.end()) return found->second;\n";
-  out << "  std::vector<std::string> &table = native_symbols();\n";
-  out << "  const std::int64_t id = "
-         "static_cast<std::int64_t>(table.size());\n";
-  out << "  table.push_back(text);\n";
-  out << "  index.emplace(text, id);\n";
-  out << "  return id;\n";
+  out << "  const auto &module_index = native_module_symbol_index();\n";
+  out << "  const auto module_found = module_index.find(text);\n";
+  out << "  if (module_found != module_index.end()) "
+         "return module_found->second;\n";
+  out << "  while (true) {\n";
+  out << "    auto snapshot = std::atomic_load_explicit("
+         "&native_dynamic_symbol_snapshot_storage(), "
+         "std::memory_order_acquire);\n";
+  out << "    const auto found = snapshot->index.find(text);\n";
+  out << "    if (found != snapshot->index.end()) return found->second;\n";
+  out << "    auto next = "
+         "std::make_shared<NativeDynamicSymbolTable>(*snapshot);\n";
+  out << "    const std::int64_t id = static_cast<std::int64_t>("
+         "kModuleSymbolCount + next->symbols.size());\n";
+  out << "    auto symbol = std::make_shared<const std::string>(text);\n";
+  out << "    next->symbols.push_back(symbol);\n";
+  out << "    next->index.emplace(*symbol, id);\n";
+  out << "    std::shared_ptr<const NativeDynamicSymbolTable> desired("
+         "std::move(next));\n";
+  out << "    if (std::atomic_compare_exchange_weak_explicit("
+         "&native_dynamic_symbol_snapshot_storage(), &snapshot, desired, "
+         "std::memory_order_release, std::memory_order_acquire)) "
+         "return id;\n";
+  out << "  }\n";
   out << "}\n\n";
   out << "static const std::string &native_symbol_text(std::int64_t id) {\n";
-  out << "  const auto &symbols = native_symbols();\n";
-  out << "  if (id < 0 || static_cast<std::size_t>(id) >= symbols.size()) "
+  out << "  if (id < 0) throw std::out_of_range(\"native symbol id\");\n";
+  out << "  const std::size_t index = static_cast<std::size_t>(id);\n";
+  out << "  if (index < kModuleSymbolCount) return native_symbols()[index];\n";
+  out << "  const std::size_t dynamic_index = index - kModuleSymbolCount;\n";
+  out << "  const auto snapshot = std::atomic_load_explicit("
+         "&native_dynamic_symbol_snapshot_storage(), "
+         "std::memory_order_acquire);\n";
+  out << "  if (dynamic_index >= snapshot->symbols.size()) "
          "throw std::out_of_range(\"native symbol id\");\n";
-  out << "  return symbols[static_cast<std::size_t>(id)];\n";
+  out << "  return *snapshot->symbols[dynamic_index];\n";
   out << "}\n\n";
   return out.str();
 }
@@ -7004,10 +7326,12 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include <optional>\n";
   out << "#include <charconv>\n";
   out << "#include <regex>\n";
+  out << "#include <shared_mutex>\n";
   out << "#include <sstream>\n";
   out << "#include <stdexcept>\n";
   out << "#include <string>\n";
   out << "#include <string_view>\n";
+  out << "#include <thread>\n";
   out << "#include <unordered_map>\n";
   out << "#include <utility>\n";
   out << "#include <vector>\n\n";
@@ -7094,7 +7418,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "SecureRandomModule, UuidModule, "
          "RangeModule, TimeModule, "
          "TimePeriodModule, MutexModule, AtomicModule, ResultOkFunction, "
-         "ResultErrFunction, ErrorClass, Class, "
+         "ResultErrFunction, DescFunction, ErrorClass, Class, "
          "Bytes, List, "
          "Tuple, Set, "
          "Map, Range, "
@@ -7203,6 +7527,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  static NativeValue result_constructor(bool is_ok) { "
          "NativeValue out; out.tag = is_ok ? Tag::ResultOkFunction : "
          "Tag::ResultErrFunction; out.scalar_value = 0; return out; }\n";
+  out << "  static NativeValue desc_function() { NativeValue out; out.tag = "
+         "Tag::DescFunction; out.scalar_value = 0; return out; }\n";
   out << "  static NativeValue secure_random_module() { NativeValue out; "
          "out.tag = Tag::SecureRandomModule; out.scalar_value = 0; return "
          "out; }\n";
@@ -7258,6 +7584,30 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  static NativeValue instance(std::uint32_t class_index);\n";
   out << "  static NativeValue closure(NativeClosure *value);\n";
   out << "};\n\n";
+  out << "class NativeArgsView {\n";
+  out << "public:\n";
+  out << "  using const_iterator = const NativeValue *;\n";
+  out << "  NativeArgsView() = default;\n";
+  out << "  NativeArgsView(std::initializer_list<NativeValue> values) "
+         "noexcept\n";
+  out << "      : data_(values.begin()), size_(values.size()) {}\n";
+  out << "  NativeArgsView(const std::vector<NativeValue> &values) noexcept\n";
+  out << "      : data_(values.data()), size_(values.size()) {}\n";
+  out << "  const NativeValue *data() const noexcept { return data_; }\n";
+  out << "  std::size_t size() const noexcept { return size_; }\n";
+  out << "  bool empty() const noexcept { return size_ == 0; }\n";
+  out << "  const NativeValue &front() const { return data_[0]; }\n";
+  out << "  const NativeValue &operator[](std::size_t index) const "
+         "{ return data_[index]; }\n";
+  out << "  const_iterator begin() const noexcept { return data_; }\n";
+  out << "  const_iterator end() const noexcept "
+         "{ return size_ == 0 ? data_ : data_ + size_; }\n";
+  out << "  std::vector<NativeValue> to_vector() const "
+         "{ return std::vector<NativeValue>(begin(), end()); }\n";
+  out << "private:\n";
+  out << "  const NativeValue *data_ = nullptr;\n";
+  out << "  std::size_t size_ = 0;\n";
+  out << "};\n\n";
   out << "struct NativeCallKeyword {\n";
   out << "  std::uint32_t symbol_id = "
          "std::numeric_limits<std::uint32_t>::max();\n";
@@ -7269,38 +7619,25 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   // uniform header instead of a per-type switch on the hot path.
   out << "struct NativeRcHeader {\n";
   out << "  std::atomic<std::uint32_t> rc{1};\n";
+  out << "  std::atomic<std::uint8_t> cycle_tracked{0};\n";
   out << "  NativeRcHeader() = default;\n";
-  out << "  NativeRcHeader(const NativeRcHeader &) : rc(1) {}\n";
+  out << "  NativeRcHeader(const NativeRcHeader &) "
+         ": rc(1), cycle_tracked(0) {}\n";
   out << "  NativeRcHeader &operator=(const NativeRcHeader &) { return *this; }\n";
   out << "};\n";
-  // Per-type free list: dead payload shells are recycled instead of paying a
-  // malloc/free round-trip per value. Growth is bounded by the peak live
-  // count of each type. Single-threaded like the rest of the native lane.
-  out << "#define AMBER_NATIVE_POOL_NEW \\\n";
-  out << "  static void *&native_pool_head() { "
-         "static void *head = nullptr; return head; } \\\n";
-  out << "  static std::mutex &native_pool_mutex() { "
-         "static auto *mutex = new std::mutex(); return *mutex; } \\\n";
-  out << "  static void *operator new(std::size_t size) { \\\n";
-  out << "    std::lock_guard<std::mutex> guard(native_pool_mutex()); \\\n";
-  out << "    void *&head = native_pool_head(); \\\n";
-  out << "    if (head != nullptr) { \\\n";
-  out << "      void *taken = head; \\\n";
-  out << "      head = *static_cast<void **>(taken); \\\n";
-  out << "      return taken; \\\n";
-  out << "    } \\\n";
-  out << "    return ::operator new(size); \\\n";
-  out << "  } \\\n";
-  out << "  static void operator delete(void *pointer) noexcept { \\\n";
-  out << "    std::lock_guard<std::mutex> guard(native_pool_mutex()); \\\n";
-  out << "    void *&head = native_pool_head(); \\\n";
-  out << "    *static_cast<void **>(pointer) = head; \\\n";
-  out << "    head = pointer; \\\n";
-  out << "  }\n";
+  // Let the platform allocator handle payload shells. The former process-wide
+  // per-type free lists serialized every native worker on a mutex. Thread-local
+  // ownership is also a poor fit because payloads routinely cross runtime
+  // worker boundaries; producer/consumer traffic either retains excess memory
+  // or needs another remote-free mechanism. The system allocator already has
+  // scalable size-class caches and preserves bounded RSS on this workload.
+  out << "#define AMBER_NATIVE_POOL_NEW\n";
   out << "struct NativeBytes : NativeRcHeader { std::string bytes; "
          "AMBER_NATIVE_POOL_NEW };\n";
   out << "struct NativeList : NativeRcHeader { "
-         "std::vector<NativeValue> items; bool frozen = false; "
+         "std::vector<NativeValue> items; "
+         "NativeValue lazy_char_source; "
+         "bool frozen = false; bool lazy_chars = false; "
          "AMBER_NATIVE_POOL_NEW };\n";
   out << "struct NativeTuple : NativeRcHeader { "
          "std::vector<NativeValue> items; AMBER_NATIVE_POOL_NEW };\n";
@@ -7311,10 +7648,10 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "8;\n";
   out << "struct NativeMap : NativeRcHeader {\n";
   out << "  std::vector<std::pair<NativeValue, NativeValue>> entries;\n";
-  out << "  std::array<std::pair<std::int64_t, std::size_t>, "
+  out << "  std::array<std::pair<std::size_t, std::size_t>, "
          "kNativeMapInlineNameIndexCapacity> inline_name_index{};\n";
   out << "  std::size_t inline_name_index_size = 0;\n";
-  out << "  std::unordered_map<std::int64_t, std::size_t> name_index;\n";
+  out << "  std::unordered_multimap<std::size_t, std::size_t> name_index;\n";
   out << "  bool strict = false;\n";
   out << "  bool frozen = false;\n";
   out << "  AMBER_NATIVE_POOL_NEW\n";
@@ -7323,6 +7660,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  std::int64_t start = 0;\n";
   out << "  std::int64_t finish = 0;\n";
   out << "  std::int64_t step = 1;\n";
+  out << "  bool has_start = true;\n";
+  out << "  bool has_finish = true;\n";
   out << "  bool inclusive_end = true;\n";
   out << "};\n";
   out << "struct NativeFsPath : NativeRcHeader {\n";
@@ -7452,10 +7791,95 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "struct NativeCell : NativeRcHeader { NativeValue value; };\n";
   out << "static void native_cell_retain(NativeCell *cell);\n";
   out << "static void native_cell_release(NativeCell *cell);\n";
+  out << "static void native_value_delete_payload("
+         "NativeValue::Tag tag, void *payload);\n";
   out << "static void native_closure_delete(NativeClosure *closure);\n";
+  out << R"AMBERCPP(class NativeCaptureList {
+public:
+  static constexpr std::size_t kInlineCapacity = 2U;
+
+  NativeCaptureList() = default;
+  NativeCaptureList(const NativeCaptureList &other) : size_(other.size_) {
+    if (other.uses_heap()) {
+      heap_ = other.heap_;
+    } else {
+      inline_ = other.inline_;
+    }
+  }
+  NativeCaptureList(NativeCaptureList &&other) noexcept
+      : inline_(other.inline_), heap_(std::move(other.heap_)),
+        size_(other.size_) {
+    other.inline_.fill(nullptr);
+    other.heap_.clear();
+    other.size_ = 0U;
+  }
+  NativeCaptureList &operator=(const NativeCaptureList &other) {
+    if (this == &other) return *this;
+    NativeCaptureList copied(other);
+    swap(copied);
+    return *this;
+  }
+  NativeCaptureList &operator=(NativeCaptureList &&other) noexcept {
+    if (this == &other) return *this;
+    NativeCaptureList moved(std::move(other));
+    swap(moved);
+    return *this;
+  }
+
+  void swap(NativeCaptureList &other) noexcept {
+    inline_.swap(other.inline_);
+    heap_.swap(other.heap_);
+    std::swap(size_, other.size_);
+  }
+  void reserve(std::size_t capacity) {
+    if (capacity > kInlineCapacity) heap_.reserve(capacity);
+  }
+  void push_back(NativeCell *cell) {
+    if (size_ < kInlineCapacity) {
+      inline_[size_++] = cell;
+      return;
+    }
+    if (size_ == kInlineCapacity) {
+      heap_.insert(heap_.end(), inline_.begin(), inline_.end());
+    }
+    heap_.push_back(cell);
+    ++size_;
+  }
+  void clear() noexcept {
+    if (uses_heap()) {
+      heap_.clear();
+    }
+    inline_.fill(nullptr);
+    size_ = 0U;
+  }
+  std::size_t size() const noexcept { return size_; }
+  bool empty() const noexcept { return size_ == 0U; }
+  NativeCell *operator[](std::size_t index) const noexcept {
+    return uses_heap() ? heap_[index] : inline_[index];
+  }
+  NativeCell **begin() noexcept { return data(); }
+  NativeCell **end() noexcept { return data() + size_; }
+  NativeCell *const *begin() const noexcept { return data(); }
+  NativeCell *const *end() const noexcept { return data() + size_; }
+
+private:
+  bool uses_heap() const noexcept { return size_ > kInlineCapacity; }
+  NativeCell **data() noexcept {
+    return uses_heap() ? heap_.data() : inline_.data();
+  }
+  NativeCell *const *data() const noexcept {
+    return uses_heap() ? heap_.data() : inline_.data();
+  }
+
+  std::array<NativeCell *, kInlineCapacity> inline_{};
+  std::vector<NativeCell *> heap_;
+  std::size_t size_ = 0U;
+};
+
+)AMBERCPP";
   out << "struct NativeClosure : NativeRcHeader {\n";
   out << "  std::uint32_t code_id = 0;\n";
-  out << "  std::vector<NativeCell *> captures;\n";
+  out << "  NativeCaptureList captures;\n";
   out << "  NativeValue self = NativeValue::nullv();\n";
   out << "  NativeValue block = NativeValue::nullv();\n";
   out << "  NativeClosure() = default;\n";
@@ -7466,103 +7890,364 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  ~NativeClosure();\n";
   out << "};\n\n";
   out << R"AMBERCPP(struct NativeTrackedAllocation {
+  void *payload = nullptr;
   NativeValue::Tag tag = NativeValue::Tag::Null;
-  std::uint64_t scope_id = 0;
   bool cell = false;
 };
-static std::mutex native_tracked_allocations_mutex;
-static std::unordered_map<void *, NativeTrackedAllocation>
-    native_tracked_allocations;
-static std::vector<std::uint64_t> native_finished_cycle_scopes;
-static constexpr std::size_t native_cycle_scope_batch = 8;
-static constexpr std::size_t native_cycle_allocation_batch = 65536;
+struct NativeFinishedCycleScopePool;
+struct NativeFinishedCycleScope {
+  std::vector<NativeTrackedAllocation> allocations;
+  NativeFinishedCycleScopePool *owner_pool = nullptr;
+  NativeFinishedCycleScope *next = nullptr;
+};
+struct NativeFinishedCycleScopePool {
+  std::atomic<NativeFinishedCycleScope *> returned{nullptr};
+  NativeFinishedCycleScope *local = nullptr;
+};
+// The registry anchor keeps every tracked shell alive until collection. That
+// makes a per-allocation global map unnecessary: each mutator records into its
+// current thread-local scope and publishes the whole batch once at scope exit.
+static std::atomic<std::size_t> native_tracked_allocation_count{0};
+static std::atomic<NativeFinishedCycleScope *>
+    native_finished_cycle_scopes{nullptr};
+static std::atomic<std::size_t> native_finished_cycle_scope_count{0};
+// Threshold publishers set this bit. Ordinary nested calls do not repeatedly
+// read the contended counters; the next outer request/task boundary observes
+// the read-mostly bit and performs the deferred collection after application
+// locks have been released.
+static std::atomic<bool> native_cycle_collection_pending{false};
+// Scope count is only the low-allocation latency trigger; the allocation cap
+// below remains the hard bound for allocation-heavy scopes. Collecting every
+// a handful of short native callbacks turns the quiescent graph walk
+// into a hot-path barrier on server workloads.
+static constexpr std::size_t native_cycle_scope_batch = 4096;
+static constexpr std::size_t native_cycle_allocation_batch = 32768;
+// Nested native calls share one allocation log. Pruning that log at every
+// method return makes ordinary calls pay an O(allocations-in-call) collector
+// tax and turns the cycle boundary into one of the hottest server paths.
+// Checkpoint only allocation-heavy outer invocations; short requests are
+// pruned once at their natural request/task boundary.
+static constexpr std::size_t native_cycle_checkpoint_allocation_batch = 1024;
+static constexpr std::size_t native_cycle_cooperation_allocation_batch = 4096;
+static constexpr std::uint8_t native_cycle_gate_idle = 0;
+static constexpr std::uint8_t native_cycle_gate_requested = 1;
+static constexpr std::uint8_t native_cycle_gate_running = 2;
+static constexpr std::size_t native_cycle_mutator_slot_count = 256;
+struct alignas(64) NativeCycleMutatorSlot {
+  std::atomic<std::uint32_t> count{0};
+};
 static std::mutex native_cycle_gate_mutex;
 static std::condition_variable native_cycle_gate_cv;
-static std::size_t native_cycle_active_mutators = 0;
-static bool native_cycle_collector_waiting = false;
-static bool native_cycle_collector_running = false;
+// Ordinary callbacks update a padded thread-affine slot, not one process-wide
+// counter cache line. The read-mostly gate and mutex/CV change only when a
+// collector requests a quiescent point.
+static std::array<NativeCycleMutatorSlot, native_cycle_mutator_slot_count>
+    native_cycle_mutator_slots;
+static std::atomic<std::uint8_t> native_cycle_gate_state{
+    native_cycle_gate_idle};
 static std::atomic_flag native_cycle_collector_active = ATOMIC_FLAG_INIT;
-static std::atomic<std::uint64_t> native_next_cycle_scope_id{1};
 static thread_local std::size_t native_cycle_scope_depth = 0;
-static thread_local std::uint64_t native_active_cycle_scope_id = 0;
+static thread_local std::size_t native_cycle_application_lock_depth = 0;
 static thread_local bool native_cycle_mutator_active = false;
+static thread_local std::size_t
+    native_cycle_allocations_since_quiescence = 0;
+static thread_local std::size_t native_cycle_checkpoint_start = 0;
+static thread_local std::vector<NativeTrackedAllocation>
+    native_active_cycle_allocations;
+// Each mutator owns its recycling pool. The sole elected collector returns
+// detached nodes through an MPSC handoff; only the owner consumes them. This
+// avoids both a process-wide pool cache line and the ABA hazard of a Treiber
+// stack whose nodes are popped and immediately reused by arbitrary threads.
+static thread_local NativeFinishedCycleScopePool
+    *native_finished_cycle_scope_pool =
+        new NativeFinishedCycleScopePool();
 static void native_collect_finished_cycles();
 
+static NativeFinishedCycleScope *native_acquire_finished_cycle_scope() {
+  NativeFinishedCycleScopePool *pool = native_finished_cycle_scope_pool;
+  if (pool->local == nullptr) {
+    pool->local =
+        pool->returned.exchange(nullptr, std::memory_order_acquire);
+  }
+  NativeFinishedCycleScope *scope = pool->local;
+  if (scope != nullptr) pool->local = scope->next;
+  if (scope == nullptr) {
+    scope = new NativeFinishedCycleScope();
+  }
+  scope->allocations.clear();
+  scope->owner_pool = pool;
+  scope->next = nullptr;
+  return scope;
+}
+static void native_recycle_finished_cycle_scope(
+    NativeFinishedCycleScope *scope) {
+  scope->allocations.clear();
+  NativeFinishedCycleScopePool *pool = scope->owner_pool;
+  if (pool == nullptr) std::terminate();
+  NativeFinishedCycleScope *head =
+      pool->returned.load(std::memory_order_relaxed);
+  do {
+    scope->next = head;
+  } while (!pool->returned.compare_exchange_weak(
+      head, scope, std::memory_order_release, std::memory_order_relaxed));
+}
+static std::size_t native_publish_finished_cycle_scope(
+    NativeFinishedCycleScope *scope) {
+  NativeFinishedCycleScope *head =
+      native_finished_cycle_scopes.load(std::memory_order_relaxed);
+  do {
+    scope->next = head;
+  } while (!native_finished_cycle_scopes.compare_exchange_weak(
+      head, scope, std::memory_order_release, std::memory_order_relaxed));
+  return native_finished_cycle_scope_count.fetch_add(
+             1U, std::memory_order_acq_rel) +
+         1U;
+}
+
+static NativeCycleMutatorSlot &native_cycle_mutator_slot() {
+  static thread_local const std::size_t index =
+      std::hash<std::thread::id>{}(std::this_thread::get_id()) %
+      native_cycle_mutator_slot_count;
+  return native_cycle_mutator_slots[index];
+}
+static bool native_cycle_has_active_mutators() {
+  for (const NativeCycleMutatorSlot &slot : native_cycle_mutator_slots) {
+    if (slot.count.load(std::memory_order_acquire) != 0U) return true;
+  }
+  return false;
+}
+static bool native_cycle_gate_open(std::uint8_t state,
+                                   bool returning_mutator) {
+  return state == native_cycle_gate_idle ||
+         (returning_mutator && state == native_cycle_gate_requested);
+}
 static void native_cycle_enter_mutator(bool returning_mutator) {
-  std::unique_lock<std::mutex> lock(native_cycle_gate_mutex);
-  native_cycle_gate_cv.wait(lock, [&]() {
-    return !native_cycle_collector_running &&
-           (returning_mutator || !native_cycle_collector_waiting);
-  });
-  ++native_cycle_active_mutators;
-  native_cycle_mutator_active = true;
+  NativeCycleMutatorSlot &slot = native_cycle_mutator_slot();
+  while (true) {
+    std::uint8_t state =
+        native_cycle_gate_state.load(std::memory_order_acquire);
+    if (native_cycle_gate_open(state, returning_mutator)) {
+      const std::uint32_t previous =
+          slot.count.fetch_add(1U, std::memory_order_acq_rel);
+      if (previous == std::numeric_limits<std::uint32_t>::max()) {
+        slot.count.fetch_sub(1U, std::memory_order_release);
+        throw std::overflow_error("native cycle mutator count overflow");
+      }
+      state = native_cycle_gate_state.load(std::memory_order_acquire);
+      if (native_cycle_gate_open(state, returning_mutator)) {
+        native_cycle_mutator_active = true;
+        return;
+      }
+      slot.count.fetch_sub(1U, std::memory_order_release);
+      if (state != native_cycle_gate_idle) {
+        std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
+        native_cycle_gate_cv.notify_all();
+      }
+    }
+    std::unique_lock<std::mutex> lock(native_cycle_gate_mutex);
+    native_cycle_gate_cv.wait(lock, [&]() {
+      return native_cycle_gate_open(
+          native_cycle_gate_state.load(std::memory_order_acquire),
+          returning_mutator);
+    });
+  }
 }
 static void native_cycle_leave_mutator() {
-  std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
   native_cycle_mutator_active = false;
-  if (native_cycle_active_mutators != 0) {
-    --native_cycle_active_mutators;
+  native_cycle_allocations_since_quiescence = 0;
+  NativeCycleMutatorSlot &slot = native_cycle_mutator_slot();
+  const std::uint32_t previous =
+      slot.count.fetch_sub(1U, std::memory_order_acq_rel);
+  if (previous == 0U) {
+    std::terminate();
   }
-  native_cycle_gate_cv.notify_all();
+  if (native_cycle_gate_state.load(std::memory_order_acquire) !=
+      native_cycle_gate_idle) {
+    // Synchronize with a collector between its slot scan and sleep so the
+    // final mutator departure cannot be lost.
+    std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
+    native_cycle_gate_cv.notify_all();
+  }
 }
 static void native_cycle_begin_collection() {
   std::unique_lock<std::mutex> lock(native_cycle_gate_mutex);
-  native_cycle_collector_waiting = true;
-  native_cycle_gate_cv.wait(lock, []() {
-    return native_cycle_active_mutators == 0 &&
-           !native_cycle_collector_running;
-  });
-  native_cycle_collector_waiting = false;
-  native_cycle_collector_running = true;
+  native_cycle_gate_state.store(
+      native_cycle_gate_requested, std::memory_order_release);
+  while (true) {
+    std::uint8_t expected = native_cycle_gate_requested;
+    if (native_cycle_gate_state.compare_exchange_strong(
+            expected, native_cycle_gate_running,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+      if (!native_cycle_has_active_mutators()) return;
+      // A returning suspended callback may have entered while collection was
+      // merely requested. Re-open that narrow path until every slot drains.
+      native_cycle_gate_state.store(
+          native_cycle_gate_requested, std::memory_order_release);
+      native_cycle_gate_cv.notify_all();
+    }
+    native_cycle_gate_cv.wait(lock, []() {
+      return !native_cycle_has_active_mutators();
+    });
+  }
 }
 static void native_cycle_end_collection() {
-  std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
-  native_cycle_collector_running = false;
+  {
+    std::lock_guard<std::mutex> guard(native_cycle_gate_mutex);
+    native_cycle_gate_state.store(
+        native_cycle_gate_idle, std::memory_order_release);
+  }
   native_cycle_gate_cv.notify_all();
 }
 
+inline bool native_value_tag_may_participate_in_cycle(NativeValue::Tag tag) {
+  switch (tag) {
+    case NativeValue::Tag::List:
+    case NativeValue::Tag::Tuple:
+    case NativeValue::Tag::Set:
+    case NativeValue::Tag::Map:
+    case NativeValue::Tag::ArgParser:
+    case NativeValue::Tag::RegexpMatch:
+    case NativeValue::Tag::Result:
+    case NativeValue::Tag::Atomic:
+    case NativeValue::Tag::ErrorInstance:
+    case NativeValue::Tag::Instance:
+    case NativeValue::Tag::Closure:
+      return true;
+    default:
+      return false;
+  }
+}
+
 static void native_track_payload(NativeValue::Tag tag, void *payload) {
-  if (payload == nullptr || native_cycle_scope_depth == 0) return;
-  std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-  const auto inserted = native_tracked_allocations.emplace(
-      payload,
-      NativeTrackedAllocation{tag, native_active_cycle_scope_id, false});
-  if (inserted.second) {
-    // The registry owns one anchor reference. It keeps a tracked shell valid
-    // while a quiescent collector snapshots refcounts and graph edges, even
-    // when an external RuntimeNativeBlock/task-local holder is destroyed on a
-    // runtime thread that is not currently executing generated native code.
-    static_cast<NativeRcHeader *>(payload)->rc.fetch_add(
-        1, std::memory_order_relaxed);
+  if (payload == nullptr || native_cycle_scope_depth == 0 ||
+      !native_value_tag_may_participate_in_cycle(tag)) {
+    return;
+  }
+  auto *header = static_cast<NativeRcHeader *>(payload);
+  std::uint8_t expected = 0;
+  if (!header->cycle_tracked.compare_exchange_strong(
+          expected, 1, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return;
+  }
+  // The pending scope owns one anchor reference. Only a write that can add a
+  // back edge reaches this path; ordinary bottom-up allocations remain plain
+  // intrusive-RC values and never enter the cycle log.
+  header->rc.fetch_add(1, std::memory_order_relaxed);
+  try {
+    native_active_cycle_allocations.push_back(NativeTrackedAllocation{
+        payload, tag, false});
+  } catch (...) {
+    header->cycle_tracked.store(0, std::memory_order_release);
+    header->rc.fetch_sub(1, std::memory_order_acq_rel);
+    throw;
   }
 }
 static void native_track_cell(NativeCell *cell) {
   if (cell == nullptr || native_cycle_scope_depth == 0) return;
-  std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-  const auto inserted = native_tracked_allocations.emplace(
-      cell, NativeTrackedAllocation{NativeValue::Tag::Null,
-                                    native_active_cycle_scope_id, true});
-  if (inserted.second) {
-    cell->rc.fetch_add(1, std::memory_order_relaxed);
+  std::uint8_t expected = 0;
+  if (!cell->cycle_tracked.compare_exchange_strong(
+          expected, 1, std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return;
+  }
+  cell->rc.fetch_add(1, std::memory_order_relaxed);
+  try {
+    native_active_cycle_allocations.push_back(NativeTrackedAllocation{
+        cell, NativeValue::Tag::Null, true});
+  } catch (...) {
+    cell->cycle_tracked.store(0, std::memory_order_release);
+    cell->rc.fetch_sub(1, std::memory_order_acq_rel);
+    throw;
   }
 }
+static void native_cycle_write_barrier(
+    const NativeValue &owner, const NativeValue &candidate) {
+  if (!native_value_tag_may_participate_in_cycle(candidate.tag)) return;
+  native_track_payload(owner.tag, owner.heap_value);
+}
+static void native_cycle_write_barrier(
+    const NativeValue &owner,
+    std::initializer_list<NativeValue> candidates) {
+  for (const NativeValue &candidate : candidates) {
+    if (!native_value_tag_may_participate_in_cycle(candidate.tag)) continue;
+    native_track_payload(owner.tag, owner.heap_value);
+    return;
+  }
+}
+static void native_cycle_write_barrier(
+    const NativeValue &owner,
+    const std::vector<NativeValue> &candidates) {
+  for (const NativeValue &candidate : candidates) {
+    if (!native_value_tag_may_participate_in_cycle(candidate.tag)) continue;
+    native_track_payload(owner.tag, owner.heap_value);
+    return;
+  }
+}
+static void native_cycle_cell_write_barrier(
+    NativeCell *cell, const NativeValue &candidate) {
+  if (!native_value_tag_may_participate_in_cycle(candidate.tag)) return;
+  native_track_cell(cell);
+}
 static void native_untrack_payload(void *payload) {
-  if (payload == nullptr) return;
-  std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-  native_tracked_allocations.erase(payload);
+  (void)payload;
+}
+static void native_clear_tracked_flag(
+    const NativeTrackedAllocation &allocation) {
+  static_cast<NativeRcHeader *>(allocation.payload)->cycle_tracked.store(
+      0, std::memory_order_release);
+}
+static void native_release_tracked_anchor(
+    const NativeTrackedAllocation &allocation) {
+  native_clear_tracked_flag(allocation);
+  if (allocation.cell) {
+    native_cell_release(static_cast<NativeCell *>(allocation.payload));
+    return;
+  }
+  auto *header = static_cast<NativeRcHeader *>(allocation.payload);
+  if (header->rc.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    native_value_delete_payload(allocation.tag, allocation.payload);
+  }
+}
+static void native_prune_acyclic_scope_allocations(
+    std::size_t allocation_start) {
+  if (allocation_start >= native_active_cycle_allocations.size()) return;
+  std::size_t released = 0;
+  // Native values are normally constructed bottom-up. Walking the allocation
+  // log backwards releases an anchor-only parent first; destroying it can make
+  // its earlier children anchor-only before this loop reaches them. A real
+  // cycle cannot enter this path because every member has at least its anchor
+  // plus one internal incoming reference.
+  for (std::size_t index = native_active_cycle_allocations.size();
+       index != allocation_start; --index) {
+    NativeTrackedAllocation &allocation =
+        native_active_cycle_allocations[index - 1U];
+    auto *header = static_cast<NativeRcHeader *>(allocation.payload);
+    if (header->rc.load(std::memory_order_acquire) != 1U) continue;
+    NativeTrackedAllocation releasing = allocation;
+    allocation.payload = nullptr;
+    native_release_tracked_anchor(releasing);
+    ++released;
+  }
+  if (released == 0) return;
+  native_active_cycle_allocations.erase(
+      std::remove_if(
+          native_active_cycle_allocations.begin() +
+              static_cast<std::ptrdiff_t>(allocation_start),
+          native_active_cycle_allocations.end(),
+          [](const NativeTrackedAllocation &allocation) {
+            return allocation.payload == nullptr;
+          }),
+      native_active_cycle_allocations.end());
 }
 
 class NativeCycleScope {
 public:
   explicit NativeCycleScope(bool enabled = true) : enabled_(enabled) {
     if (!enabled_) return;
-    previous_scope_id_ = native_active_cycle_scope_id;
     if (native_cycle_scope_depth == 0) {
-      scope_id_ = native_next_cycle_scope_id.fetch_add(
-          1, std::memory_order_relaxed);
-      native_active_cycle_scope_id = scope_id_;
-    } else {
-      scope_id_ = native_active_cycle_scope_id;
+      native_cycle_checkpoint_start =
+          native_active_cycle_allocations.size();
     }
     if (!native_cycle_mutator_active) {
       native_cycle_enter_mutator(native_cycle_scope_depth != 0);
@@ -7574,65 +8259,147 @@ public:
   NativeCycleScope &operator=(const NativeCycleScope &) = delete;
   ~NativeCycleScope() {
     if (!enabled_) return;
-    if (native_cycle_scope_depth == 0 || --native_cycle_scope_depth != 0) {
-      if (acquired_lock_ && native_cycle_mutator_active) {
+    if (native_cycle_scope_depth == 0) std::terminate();
+    --native_cycle_scope_depth;
+    const bool outermost = native_cycle_scope_depth == 0;
+
+    if (native_cycle_checkpoint_start >
+        native_active_cycle_allocations.size()) {
+      std::terminate();
+    }
+    const bool checkpoint_due =
+        outermost ||
+        native_active_cycle_allocations.size() -
+                native_cycle_checkpoint_start >=
+            native_cycle_checkpoint_allocation_batch;
+    if (!checkpoint_due) return;
+
+    const std::size_t allocation_start =
+        native_cycle_checkpoint_start;
+    native_prune_acyclic_scope_allocations(allocation_start);
+    bool collection_due = false;
+    if (allocation_start < native_active_cycle_allocations.size()) {
+      NativeFinishedCycleScope *finished =
+          native_acquire_finished_cycle_scope();
+      if (allocation_start == 0) {
+        // Swapping with a recycled node gives this thread a cleared,
+        // capacity-retaining vector for its next outer scope.
+        finished->allocations.swap(native_active_cycle_allocations);
+      } else {
+        auto first = native_active_cycle_allocations.begin() +
+                     static_cast<std::ptrdiff_t>(allocation_start);
+        finished->allocations.insert(
+            finished->allocations.end(),
+            std::make_move_iterator(first),
+            std::make_move_iterator(native_active_cycle_allocations.end()));
+        native_active_cycle_allocations.erase(
+            first, native_active_cycle_allocations.end());
+      }
+      const std::size_t published_allocation_count =
+          finished->allocations.size();
+      native_tracked_allocation_count.fetch_add(
+          published_allocation_count, std::memory_order_relaxed);
+      native_cycle_allocations_since_quiescence +=
+          published_allocation_count;
+      const std::size_t finished_scope_count =
+          native_publish_finished_cycle_scope(finished);
+      collection_due =
+          finished_scope_count >= native_cycle_scope_batch ||
+          native_tracked_allocation_count.load(std::memory_order_relaxed) >=
+              native_cycle_allocation_batch;
+      if (collection_due) {
+        native_cycle_collection_pending.store(
+            true, std::memory_order_release);
+      }
+    }
+    native_cycle_checkpoint_start =
+        native_active_cycle_allocations.size();
+    // A threshold may have been crossed inside an Amber Atomic/Mutex, where
+    // collection must be deferred. The enclosing request/task boundary is the
+    // first point guaranteed to be outside that lock. Checking one published
+    // bit there avoids two shared counter loads at every nested method call.
+    if (!collection_due && outermost) {
+      collection_due = native_cycle_collection_pending.load(
+          std::memory_order_acquire);
+    }
+
+    if (collection_due && native_cycle_application_lock_depth == 0 &&
+        !native_cycle_collector_active.test_and_set(
+            std::memory_order_acquire)) {
+      const bool resume_outer_mutator =
+          !outermost && native_cycle_mutator_active;
+      if (native_cycle_mutator_active) {
+        // The current callback is itself at a safe boundary. Leave its slot
+        // while it performs collection so the quiescence test never waits for
+        // the elected collector.
         native_cycle_leave_mutator();
       }
-      return;
+      bool collection_started = false;
+      try {
+        native_cycle_begin_collection();
+        collection_started = true;
+        native_collect_finished_cycles();
+        const bool still_due =
+            native_finished_cycle_scope_count.load(
+                std::memory_order_acquire) >= native_cycle_scope_batch ||
+            native_tracked_allocation_count.load(
+                std::memory_order_acquire) >= native_cycle_allocation_batch;
+        native_cycle_collection_pending.store(
+            still_due, std::memory_order_release);
+      } catch (...) {
+        // Cycle collection is an optimization. Refcount anchors make
+        // abandoning a failed collection safe until a later collection.
+        native_cycle_collection_pending.store(
+            true, std::memory_order_release);
+      }
+      native_cycle_collector_active.clear(std::memory_order_release);
+      if (collection_started) {
+        native_cycle_end_collection();
+      }
+      if (resume_outer_mutator) {
+        native_cycle_enter_mutator(true);
+      }
     }
-    native_active_cycle_scope_id = previous_scope_id_;
-    bool collection_due = false;
-    {
-      std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-      native_finished_cycle_scopes.push_back(scope_id_);
-      collection_due =
-          native_finished_cycle_scopes.size() >= native_cycle_scope_batch ||
-          native_tracked_allocations.size() >= native_cycle_allocation_batch;
-    }
-    if (acquired_lock_ && native_cycle_mutator_active) {
-      // Publish the completed scope before this thread can make the mutator
-      // count reach zero. A waiting collector may snapshot immediately after
-      // native_cycle_leave_mutator() notifies it.
-      native_cycle_leave_mutator();
-    }
-    if (!collection_due) return;
 
-    // New callbacks wait once collection is requested. A suspended mutator is
-    // allowed to return ahead of the collector so it can release application
-    // locks; see NativeCycleSuspension.
-    if (native_cycle_collector_active.test_and_set(
-            std::memory_order_acquire)) {
-      return;
+    if (!outermost && native_cycle_mutator_active &&
+        native_cycle_application_lock_depth == 0 &&
+        native_cycle_allocations_since_quiescence >=
+            native_cycle_cooperation_allocation_batch &&
+        native_cycle_gate_state.load(std::memory_order_acquire) !=
+            native_cycle_gate_idle) {
+      // A long-running allocation-heavy callback must eventually yield a
+      // quiescent point or it can retain an unbounded pending graph. Short
+      // request/method chains never reach this local batch and therefore do
+      // not poll or wait on the process-wide gate at ordinary boundaries.
+      native_cycle_leave_mutator();
+      std::unique_lock<std::mutex> lock(native_cycle_gate_mutex);
+      native_cycle_gate_cv.notify_all();
+      native_cycle_gate_cv.wait(lock, []() {
+        return native_cycle_gate_state.load(std::memory_order_acquire) ==
+               native_cycle_gate_idle;
+      });
+      native_cycle_enter_mutator(true);
     }
-    bool collection_started = false;
-    try {
-      native_cycle_begin_collection();
-      collection_started = true;
-      native_collect_finished_cycles();
-    } catch (...) {
-      // Cycle collection is an optimization. Refcount anchors make abandoning
-      // a failed collection safe (at worst retained until a later collection).
-    }
-    native_cycle_collector_active.clear(std::memory_order_release);
-    if (collection_started) {
-      // Publish the idle election flag before releasing blocked mutators.
-      // Otherwise a fast returning callback can finish in the window between
-      // the gate notification and this clear, leaving its scope pending until
-      // some unrelated future callback happens to elect a collector.
-      native_cycle_end_collection();
+
+    if (outermost && acquired_lock_ && native_cycle_mutator_active) {
+      // Existing requests run to their natural outer request/task boundary.
+      // Stopping them at every nested method boundary turns rare cycle GC into
+      // a de-facto global interpreter barrier. Completed scopes are visible
+      // before the last active slot drains, so a waiting collector may safely
+      // snapshot immediately after this leave.
+      native_cycle_leave_mutator();
     }
   }
 
 private:
   bool enabled_ = false;
   bool acquired_lock_ = false;
-  std::uint64_t previous_scope_id_ = 0;
-  std::uint64_t scope_id_ = 0;
 };
 
 class NativeCycleSuspension {
 public:
-  NativeCycleSuspension() {
+  NativeCycleSuspension() { suspend(); }
+  void suspend() {
     if (native_cycle_scope_depth != 0 &&
         native_cycle_mutator_active) {
       native_cycle_leave_mutator();
@@ -7641,14 +8408,31 @@ public:
   }
   NativeCycleSuspension(const NativeCycleSuspension &) = delete;
   NativeCycleSuspension &operator=(const NativeCycleSuspension &) = delete;
-  ~NativeCycleSuspension() {
+  void resume() {
     if (suspended_ && !native_cycle_mutator_active) {
       native_cycle_enter_mutator(true);
+      suspended_ = false;
     }
   }
+  ~NativeCycleSuspension() { resume(); }
 
 private:
   bool suspended_ = false;
+};
+
+class NativeCycleApplicationLockScope {
+public:
+  NativeCycleApplicationLockScope() {
+    ++native_cycle_application_lock_depth;
+  }
+  NativeCycleApplicationLockScope(
+      const NativeCycleApplicationLockScope &) = delete;
+  NativeCycleApplicationLockScope &operator=(
+      const NativeCycleApplicationLockScope &) = delete;
+  ~NativeCycleApplicationLockScope() {
+    if (native_cycle_application_lock_depth == 0) std::terminate();
+    --native_cycle_application_lock_depth;
+  }
 };
 
 )AMBERCPP";
@@ -7822,66 +8606,236 @@ static void native_closure_capture(NativeClosure *closure, NativeCell *cell) {
 }
 
 )AMBERCPP";
-  out << R"AMBERCPP(struct NativeCycleNode {
+  out << R"AMBERCPP(class NativeFinishedCycleSnapshot {
+public:
+  NativeFinishedCycleSnapshot()
+      : head_(native_finished_cycle_scopes.exchange(
+            nullptr, std::memory_order_acq_rel)) {
+    (void)native_finished_cycle_scope_count.exchange(
+        0, std::memory_order_acq_rel);
+    for (NativeFinishedCycleScope *scope = head_; scope != nullptr;
+         scope = scope->next) {
+      ++count_;
+    }
+  }
+  NativeFinishedCycleSnapshot(const NativeFinishedCycleSnapshot &) = delete;
+  NativeFinishedCycleSnapshot &operator=(
+      const NativeFinishedCycleSnapshot &) = delete;
+  ~NativeFinishedCycleSnapshot() {
+    if (head_ == nullptr) return;
+    NativeFinishedCycleScope *tail = head_;
+    while (tail->next != nullptr) tail = tail->next;
+    NativeFinishedCycleScope *published =
+        native_finished_cycle_scopes.load(std::memory_order_relaxed);
+    do {
+      tail->next = published;
+    } while (!native_finished_cycle_scopes.compare_exchange_weak(
+        published, head_, std::memory_order_release,
+        std::memory_order_relaxed));
+    native_finished_cycle_scope_count.fetch_add(
+        count_, std::memory_order_release);
+  }
+  NativeFinishedCycleScope *head() const { return head_; }
+  bool empty() const { return head_ == nullptr; }
+  void commit() {
+    while (head_ != nullptr) {
+      NativeFinishedCycleScope *scope = head_;
+      head_ = scope->next;
+      native_recycle_finished_cycle_scope(scope);
+    }
+    count_ = 0;
+  }
+
+private:
+  NativeFinishedCycleScope *head_ = nullptr;
+  std::size_t count_ = 0;
+};
+
+struct NativeCycleNode {
   void *payload = nullptr;
   NativeTrackedAllocation allocation;
   std::int64_t external_refs = 0;
-  std::vector<std::size_t> edges;
+  std::size_t edge_begin = 0;
+  std::size_t edge_count = 0;
   bool marked = false;
+  bool tracked_root = false;
 };
 
-static void native_collect_finished_cycles() {
-  std::vector<std::uint64_t> finished_scopes;
-  std::vector<NativeCycleNode> nodes;
-  {
-    std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-    finished_scopes = native_finished_cycle_scopes;
-    if (finished_scopes.empty()) return;
-    for (const auto &[payload, allocation] : native_tracked_allocations) {
-      if (std::find(finished_scopes.begin(), finished_scopes.end(),
-                    allocation.scope_id) == finished_scopes.end()) {
-        continue;
+template <typename AddValue, typename AddCell>
+static bool native_visit_cycle_edges(
+    const NativeTrackedAllocation &allocation,
+    AddValue &&add_value, AddCell &&add_cell) {
+  if (allocation.cell) {
+    add_value(static_cast<NativeCell *>(allocation.payload)->value);
+    return true;
+  }
+  switch (allocation.tag) {
+    case NativeValue::Tag::List:
+      for (const NativeValue &value :
+           static_cast<NativeList *>(allocation.payload)->items) {
+        add_value(value);
       }
-      auto *header = static_cast<NativeRcHeader *>(payload);
-      const std::uint32_t refs =
-          header->rc.load(std::memory_order_acquire);
-      nodes.push_back(NativeCycleNode{
-          payload, allocation,
-          refs == 0
-              ? -1
-              : static_cast<std::int64_t>(refs) - 1,
-          {}, false});
+      break;
+    case NativeValue::Tag::Tuple:
+      for (const NativeValue &value :
+           static_cast<NativeTuple *>(allocation.payload)->items) {
+        add_value(value);
+      }
+      break;
+    case NativeValue::Tag::Set:
+      for (const NativeValue &value :
+           static_cast<NativeSet *>(allocation.payload)->items) {
+        add_value(value);
+      }
+      break;
+    case NativeValue::Tag::Map:
+      for (const auto &[key, value] :
+           static_cast<NativeMap *>(allocation.payload)->entries) {
+        add_value(key);
+        add_value(value);
+      }
+      break;
+    case NativeValue::Tag::ArgParser:
+      for (const NativeArgParser::Spec &spec :
+           static_cast<NativeArgParser *>(allocation.payload)->specs) {
+        if (spec.has_default) add_value(spec.default_value);
+        if (spec.has_choices) {
+          for (const NativeValue &choice : spec.choices) add_value(choice);
+        }
+      }
+      break;
+    case NativeValue::Tag::RegexpMatch:
+      add_value(
+          static_cast<NativeRegexpMatch *>(allocation.payload)->pattern);
+      break;
+    case NativeValue::Tag::Result:
+      add_value(static_cast<NativeResult *>(allocation.payload)->payload);
+      break;
+    case NativeValue::Tag::Atomic: {
+      auto *atomic = static_cast<NativeAtomic *>(allocation.payload);
+      std::unique_lock<std::mutex> guard(
+          atomic->mutex, std::try_to_lock);
+      // A suspended callback may own an Atomic while it waits outside the
+      // mutator set. Preserve the candidate roots and retry after it resumes.
+      if (!guard.owns_lock()) return false;
+      add_value(atomic->value);
+      break;
+    }
+    case NativeValue::Tag::ErrorInstance: {
+      auto *error =
+          static_cast<NativeErrorInstance *>(allocation.payload);
+      add_value(error->message);
+      for (const NativeValue &suppressed : error->suppressed) {
+        add_value(suppressed);
+      }
+      break;
+    }
+    case NativeValue::Tag::Instance:
+      for (const auto &[name, value] :
+           static_cast<NativeInstance *>(allocation.payload)->ivars) {
+        (void)name;
+        add_value(value);
+      }
+      break;
+    case NativeValue::Tag::Closure: {
+      auto *closure = static_cast<NativeClosure *>(allocation.payload);
+      add_value(closure->self);
+      add_value(closure->block);
+      for (NativeCell *cell : closure->captures) add_cell(cell);
+      break;
+    }
+    default:
+      break;
+  }
+  return true;
+}
+
+static void native_collect_finished_cycles() {
+  NativeFinishedCycleSnapshot finished_scopes;
+  std::vector<NativeCycleNode> nodes;
+  std::vector<std::size_t> edges;
+  if (finished_scopes.empty()) return;
+  std::size_t allocation_count = 0;
+  for (NativeFinishedCycleScope *scope = finished_scopes.head();
+       scope != nullptr; scope = scope->next) {
+    allocation_count += scope->allocations.size();
+  }
+  nodes.reserve(allocation_count);
+  std::unordered_map<void *, std::size_t> node_indices;
+  node_indices.reserve(allocation_count);
+  const auto ensure_node =
+      [&](const NativeTrackedAllocation &allocation,
+          bool tracked_root) -> std::size_t {
+        const auto found = node_indices.find(allocation.payload);
+        if (found != node_indices.end()) {
+          if (tracked_root) nodes[found->second].tracked_root = true;
+          return found->second;
+        }
+        const std::size_t index = nodes.size();
+        node_indices.emplace(allocation.payload, index);
+        nodes.push_back(NativeCycleNode{
+            allocation.payload, allocation, 0, 0, 0, false,
+            tracked_root});
+        return index;
+      };
+  for (NativeFinishedCycleScope *scope = finished_scopes.head();
+       scope != nullptr; scope = scope->next) {
+    for (const NativeTrackedAllocation &allocation : scope->allocations) {
+      (void)ensure_node(allocation, true);
     }
   }
-  const auto forget_finished_scopes = [&]() {
-    std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-    native_finished_cycle_scopes.erase(
-        std::remove_if(
-            native_finished_cycle_scopes.begin(),
-            native_finished_cycle_scopes.end(),
-            [&](std::uint64_t scope_id) {
-              return std::find(finished_scopes.begin(),
-                               finished_scopes.end(),
-                               scope_id) != finished_scopes.end();
-            }),
-        native_finished_cycle_scopes.end());
-  };
   if (nodes.empty()) {
-    forget_finished_scopes();
+    finished_scopes.commit();
     return;
   }
 
-  std::unordered_map<void *, std::size_t> node_indices;
-  node_indices.reserve(nodes.size());
+  // Candidate roots are the mutation owners only. Expand their reachable
+  // cycle-capable graph at the rare quiescent collection point, so a deep
+  // pre-existing A -> B -> C path is still visible when C -> A closes it.
   for (std::size_t index = 0; index < nodes.size(); ++index) {
-    node_indices.emplace(nodes[index].payload, index);
+    const NativeTrackedAllocation allocation = nodes[index].allocation;
+    const bool complete = native_visit_cycle_edges(
+        allocation,
+        [&](const NativeValue &value) {
+          if (value.heap_value == nullptr ||
+              !native_value_tag_may_participate_in_cycle(value.tag)) {
+            return;
+          }
+          (void)ensure_node(NativeTrackedAllocation{
+              value.heap_value, value.tag, false}, false);
+        },
+        [&](NativeCell *cell) {
+          if (cell == nullptr) return;
+          (void)ensure_node(NativeTrackedAllocation{
+              cell, NativeValue::Tag::Null, true}, false);
+        });
+    if (!complete) return;
   }
+
+  // Every node needs one collector anchor before garbage edges are broken.
+  // Candidate roots already own theirs; transitively discovered nodes acquire
+  // a temporary anchor only here, outside the allocation/request hot path.
+  for (NativeCycleNode &node : nodes) {
+    if (!node.tracked_root) {
+      static_cast<NativeRcHeader *>(node.payload)->rc.fetch_add(
+          1, std::memory_order_relaxed);
+    }
+    const std::uint32_t refs =
+        static_cast<NativeRcHeader *>(node.payload)->rc.load(
+            std::memory_order_acquire);
+    node.external_refs =
+        refs == 0 ? -1 : static_cast<std::int64_t>(refs) - 1;
+  }
+
+  // Most nodes have only a handful of outgoing references. A single flat
+  // adjacency buffer avoids one heap allocation per node.
+  edges.reserve(nodes.size());
   const auto add_payload_edge =
       [&](NativeCycleNode &node, void *payload) {
         if (payload == nullptr) return;
         const auto found = node_indices.find(payload);
         if (found == node_indices.end()) return;
-        node.edges.push_back(found->second);
+        edges.push_back(found->second);
         --nodes[found->second].external_refs;
       };
   const auto add_value_edge =
@@ -7891,94 +8845,30 @@ static void native_collect_finished_cycles() {
         }
       };
 
+  bool graph_complete = true;
   for (NativeCycleNode &node : nodes) {
-    if (node.allocation.cell) {
-      add_value_edge(node, static_cast<NativeCell *>(node.payload)->value);
-      continue;
+    node.edge_begin = edges.size();
+    graph_complete = native_visit_cycle_edges(
+        node.allocation,
+        [&](const NativeValue &value) { add_value_edge(node, value); },
+        [&](NativeCell *cell) { add_payload_edge(node, cell); });
+    node.edge_count = edges.size() - node.edge_begin;
+    if (!graph_complete) break;
+  }
+  if (!graph_complete) {
+    for (NativeCycleNode &node : nodes) {
+      if (node.tracked_root) continue;
+      if (node.allocation.cell) {
+        native_cell_release(static_cast<NativeCell *>(node.payload));
+        continue;
+      }
+      auto *header = static_cast<NativeRcHeader *>(node.payload);
+      if (header->rc.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+        native_value_delete_payload(
+            node.allocation.tag, node.allocation.payload);
+      }
     }
-    switch (node.allocation.tag) {
-      case NativeValue::Tag::List:
-        for (const NativeValue &value :
-             static_cast<NativeList *>(node.payload)->items) {
-          add_value_edge(node, value);
-        }
-        break;
-      case NativeValue::Tag::Tuple:
-        for (const NativeValue &value :
-             static_cast<NativeTuple *>(node.payload)->items) {
-          add_value_edge(node, value);
-        }
-        break;
-      case NativeValue::Tag::Set:
-        for (const NativeValue &value :
-             static_cast<NativeSet *>(node.payload)->items) {
-          add_value_edge(node, value);
-        }
-        break;
-      case NativeValue::Tag::Map:
-        for (const auto &[key, value] :
-             static_cast<NativeMap *>(node.payload)->entries) {
-          add_value_edge(node, key);
-          add_value_edge(node, value);
-        }
-        break;
-      case NativeValue::Tag::ArgParser:
-        for (const NativeArgParser::Spec &spec :
-             static_cast<NativeArgParser *>(node.payload)->specs) {
-          if (spec.has_default) add_value_edge(node, spec.default_value);
-          if (spec.has_choices) {
-            for (const NativeValue &choice : spec.choices) {
-              add_value_edge(node, choice);
-            }
-          }
-        }
-        break;
-      case NativeValue::Tag::RegexpMatch:
-        add_value_edge(
-            node, static_cast<NativeRegexpMatch *>(node.payload)->pattern);
-        break;
-      case NativeValue::Tag::Result:
-        add_value_edge(
-            node, static_cast<NativeResult *>(node.payload)->payload);
-        break;
-      case NativeValue::Tag::Atomic: {
-        auto *atomic = static_cast<NativeAtomic *>(node.payload);
-        std::unique_lock<std::mutex> guard(
-            atomic->mutex, std::try_to_lock);
-        // A suspended native callback may still own an Atomic lock while it
-        // waits in the runtime. Never wait while holding the collector gate:
-        // preserve the pending scopes and retry after that callback resumes.
-        if (!guard.owns_lock()) return;
-        add_value_edge(node, atomic->value);
-        break;
-      }
-      case NativeValue::Tag::ErrorInstance: {
-        auto *error = static_cast<NativeErrorInstance *>(node.payload);
-        add_value_edge(node, error->message);
-        for (const NativeValue &suppressed : error->suppressed) {
-          add_value_edge(node, suppressed);
-        }
-        break;
-      }
-      case NativeValue::Tag::Instance:
-        for (const auto &[name, value] :
-             static_cast<NativeInstance *>(node.payload)->ivars) {
-          (void)name;
-          add_value_edge(node, value);
-        }
-        break;
-      case NativeValue::Tag::Closure: {
-        auto *closure = static_cast<NativeClosure *>(node.payload);
-        add_value_edge(node, closure->self);
-        add_value_edge(node, closure->block);
-        for (NativeCell *cell : closure->captures) {
-          add_payload_edge(node, cell);
-        }
-        break;
-      }
-      default:
-        break;
-    }
+    return;
   }
 
   std::vector<std::size_t> pending;
@@ -7995,7 +8885,11 @@ static void native_collect_finished_cycles() {
   while (!pending.empty()) {
     const std::size_t index = pending.back();
     pending.pop_back();
-    for (const std::size_t target : nodes[index].edges) {
+    const std::size_t edge_end =
+        nodes[index].edge_begin + nodes[index].edge_count;
+    for (std::size_t edge_index = nodes[index].edge_begin;
+         edge_index < edge_end; ++edge_index) {
+      const std::size_t target = edges[edge_index];
       if (nodes[target].marked) continue;
       nodes[target].marked = true;
       pending.push_back(target);
@@ -8006,26 +8900,20 @@ static void native_collect_finished_cycles() {
   std::vector<std::size_t> survivors;
   garbage.reserve(nodes.size());
   survivors.reserve(nodes.size());
-  {
-    std::lock_guard<std::mutex> guard(native_tracked_allocations_mutex);
-    for (std::size_t index = 0; index < nodes.size(); ++index) {
-      if (nodes[index].marked) {
-        survivors.push_back(index);
-      } else {
-        garbage.push_back(index);
-      }
-      native_tracked_allocations.erase(nodes[index].payload);
+  for (std::size_t index = 0; index < nodes.size(); ++index) {
+    if (nodes[index].marked) {
+      survivors.push_back(index);
+    } else {
+      garbage.push_back(index);
     }
-    native_finished_cycle_scopes.erase(
-        std::remove_if(
-            native_finished_cycle_scopes.begin(),
-            native_finished_cycle_scopes.end(),
-            [&](std::uint64_t scope_id) {
-              return std::find(finished_scopes.begin(),
-                               finished_scopes.end(),
-                               scope_id) != finished_scopes.end();
-            }),
-        native_finished_cycle_scopes.end());
+  }
+  finished_scopes.commit();
+  native_tracked_allocation_count.fetch_sub(
+      allocation_count, std::memory_order_relaxed);
+  // Mutators are quiescent. Survivors may become suspects again after this
+  // collection, so clear only the flags backed by published candidate roots.
+  for (NativeCycleNode &node : nodes) {
+    if (node.tracked_root) native_clear_tracked_flag(node.allocation);
   }
 
   // Break every outgoing edge while all garbage shells are still alive.
@@ -8106,11 +8994,9 @@ static void native_collect_finished_cycles() {
       }
     }
   }
-  // Survivors leave cycle tracking after their creating invocation. Ordinary
-  // intrusive refcounts handle their future acyclic lifetime; cycles that did
-  // not escape the invocation were already selected above. This keeps the
-  // collector graph bounded by completed request/task scopes rather than by
-  // process lifetime.
+  // Survivors leave candidate tracking after this snapshot. Ordinary
+  // intrusive refcounts handle their future acyclic lifetime; any later write
+  // capable of closing a cycle registers a fresh candidate root.
   for (const std::size_t index : survivors) {
     NativeCycleNode &node = nodes[index];
     if (node.allocation.cell) {
@@ -8143,46 +9029,44 @@ static void native_collect_finished_cycles() {
   out << "}\n\n";
   out << "static const std::string &native_string_text("
          "const NativeValue &value);\n";
-  out << "static std::optional<std::int64_t> native_map_index_key_id("
-         "const NativeValue &key, bool strict) {\n";
-  out << "  if (strict) return std::nullopt;\n";
-  out << "  if (key.tag == NativeValue::Tag::String) return "
-         "key.scalar_value;\n";
-  out << "  if (key.tag == NativeValue::Tag::HeapString) return "
-         "native_intern_string(native_string_text(key));\n";
-  out << "  if (key.tag == NativeValue::Tag::Symbol) return "
-         "native_intern_string(native_symbol_text(key.scalar_value));\n";
-  out << "  return std::nullopt;\n";
+  out << "static bool native_map_key_is_nameable("
+         "const NativeValue &value) {\n";
+  out << "  return native_value_is_string(value) || "
+         "value.tag == NativeValue::Tag::Symbol;\n";
   out << "}\n";
-  // Read-side variant: never inserts. A nameable probe whose text is not in
-  // the intern table cannot match any stored nameable key, because stores
-  // intern every nameable key.
-  out << "static std::optional<std::int64_t> native_map_index_key_id_for_read("
+  out << "static const std::string &native_name_key_text("
+         "const NativeValue &value) {\n";
+  out << "  if (native_value_is_string(value)) return "
+         "native_string_text(value);\n";
+  out << "  if (value.tag == NativeValue::Tag::Symbol) return "
+         "native_symbol_text(value.scalar_value);\n";
+  out << "  throw NativeBailout();\n";
+  out << "}\n";
+  out << "static std::optional<std::size_t> native_map_index_key_hash("
          "const NativeValue &key, bool strict) {\n";
   out << "  if (strict) return std::nullopt;\n";
-  out << "  if (key.tag == NativeValue::Tag::String) return "
-         "key.scalar_value;\n";
-  out << "  if (key.tag == NativeValue::Tag::HeapString) return "
-         "native_intern_string_lookup(native_string_text(key));\n";
-  out << "  if (key.tag == NativeValue::Tag::Symbol) return "
-         "native_intern_string_lookup(native_symbol_text(key.scalar_value));\n";
+  out << "  if (native_map_key_is_nameable(key)) return "
+         "std::hash<std::string>{}(native_name_key_text(key));\n";
   out << "  return std::nullopt;\n";
   out << "}\n";
   out << "static std::optional<std::size_t> "
          "native_map_find_inline_name_index(const NativeMap &map, "
-         "std::int64_t key_id) {\n";
+         "const NativeValue &key, std::size_t key_hash) {\n";
+  out << "  const std::string &key_text = native_name_key_text(key);\n";
   out << "  for (std::size_t i = 0; i < map.inline_name_index_size; ++i) {\n";
   out << "    const auto &entry = map.inline_name_index[i];\n";
-  out << "    if (entry.first == key_id && entry.second < map.entries.size()) "
+  out << "    if (entry.first == key_hash && "
+         "entry.second < map.entries.size() && "
+         "native_name_key_text(map.entries[entry.second].first) == key_text) "
          "return entry.second;\n";
   out << "  }\n";
   out << "  return std::nullopt;\n";
   out << "}\n";
   out << "static void native_map_add_inline_name_index(NativeMap &map, "
-         "std::int64_t key_id, std::size_t index) {\n";
+         "std::size_t key_hash, std::size_t index) {\n";
   out << "  if (map.inline_name_index_size >= "
          "kNativeMapInlineNameIndexCapacity) return;\n";
-  out << "  map.inline_name_index[map.inline_name_index_size++] = {key_id, "
+  out << "  map.inline_name_index[map.inline_name_index_size++] = {key_hash, "
          "index};\n";
   out << "}\n";
   out << "static void native_map_rebuild_index(NativeMap &map) {\n";
@@ -8191,22 +9075,25 @@ static void native_collect_finished_cycles() {
   out << "  if (map.strict) return;\n";
   out << "  if (map.entries.size() <= kNativeMapInlineNameIndexCapacity) {\n";
   out << "    for (std::size_t i = 0; i < map.entries.size(); ++i) {\n";
-  out << "      const std::optional<std::int64_t> key_id = "
-         "native_map_index_key_id(map.entries[i].first, map.strict);\n";
-  out << "      if (key_id.has_value()) "
-         "native_map_add_inline_name_index(map, *key_id, i);\n";
+  out << "      const std::optional<std::size_t> key_hash = "
+         "native_map_index_key_hash(map.entries[i].first, map.strict);\n";
+  out << "      if (key_hash.has_value()) "
+         "native_map_add_inline_name_index(map, *key_hash, i);\n";
   out << "    }\n";
   out << "    return;\n";
   out << "  }\n";
   out << "  map.name_index.reserve(map.entries.size());\n";
   out << "  for (std::size_t i = 0; i < map.entries.size(); ++i) {\n";
-  out << "    const std::optional<std::int64_t> key_id = "
-         "native_map_index_key_id(map.entries[i].first, map.strict);\n";
-  out << "    if (key_id.has_value()) map.name_index.emplace(*key_id, i);\n";
+  out << "    const std::optional<std::size_t> key_hash = "
+         "native_map_index_key_hash(map.entries[i].first, map.strict);\n";
+  out << "    if (key_hash.has_value()) "
+         "map.name_index.emplace(*key_hash, i);\n";
   out << "  }\n";
   out << "}\n\n";
   out << "static NativeValue native_track_value(NativeValue value) {\n";
-  out << "  native_track_payload(value.tag, value.heap_value);\n";
+  out << "  // Allocation alone cannot close a reference cycle: the new shell "
+         "was not reachable before this constructor. Mutation/cell write "
+         "barriers register the first possible back edge lazily.\n";
   out << "  return value;\n";
   out << "}\n";
   out << "NativeValue NativeValue::heap_string(std::string text) {\n";
@@ -8265,7 +9152,7 @@ static void native_collect_finished_cycles() {
   out << "  converted.reserve(entries.size());\n";
   out << "  for (auto &entry : entries) {\n";
   out << "    converted.emplace_back("
-         "NativeValue::string_ref(native_intern_string(entry.first)), "
+         "NativeValue::heap_string(std::move(entry.first)), "
          "std::move(entry.second));\n";
   out << "  }\n";
   out << "  return NativeValue::map_entries(std::move(converted), false);\n";
@@ -8414,7 +9301,6 @@ static void native_collect_finished_cycles() {
   out << "  auto *cell = new NativeCell(); cell->value = std::move(value);\n";
   out << "  native_total_cells.fetch_add(1, std::memory_order_relaxed);\n";
   out << "  native_live_cells.fetch_add(1, std::memory_order_relaxed);\n";
-  out << "  native_track_cell(cell);\n";
   out << "  return cell;\n";
   out << "}\n\n";
   std::set<std::uint32_t> module_function_code_ids;
@@ -8500,42 +9386,42 @@ static void native_collect_finished_cycles() {
   out << "    default: return false;\n";
   out << "  }\n";
   out << "}\n";
-  out << "static std::recursive_mutex native_module_materialization_mutex;\n";
-  out << "static std::mutex native_module_functions_mutex;\n";
-  out << "static std::unordered_map<std::uint32_t, NativeValue> "
-         "native_module_functions;\n";
+  const std::uint32_t native_module_function_slot_count =
+      module_function_code_ids.empty()
+          ? 1U
+          : (*module_function_code_ids.rbegin() + 1U);
+  out << "static std::array<std::atomic<const NativeValue *>, "
+      << native_module_function_slot_count
+      << "U> native_module_functions{};\n";
+  out << "static thread_local std::unordered_map<std::uint32_t, NativeValue> "
+         "native_module_functions_in_progress;\n";
   out << "static void native_register_module_function("
          "std::uint32_t code_id, const NativeValue &closure) {\n";
   out << "  if (!native_is_module_function_code(code_id)) return;\n";
-  out << "  std::lock_guard<std::recursive_mutex> materialization_guard("
-         "native_module_materialization_mutex);\n";
-  out << "  std::lock_guard<std::mutex> guard("
-         "native_module_functions_mutex);\n";
-  out << "  native_module_functions[code_id] = closure;\n";
+  out << "  const NativeValue *published = new NativeValue(closure);\n";
+  out << "  (void)native_module_functions[code_id].exchange("
+         "published, std::memory_order_release);\n";
   out << "}\n";
   out << "static NativeValue native_module_function(std::uint32_t code_id) "
          "{\n";
-  out << "  std::lock_guard<std::recursive_mutex> materialization_guard("
-         "native_module_materialization_mutex);\n";
-  out << "  {\n";
-  out << "    std::lock_guard<std::mutex> guard("
-         "native_module_functions_mutex);\n";
-  out << "    const auto found = native_module_functions.find(code_id);\n";
-  out << "    if (found != native_module_functions.end()) return "
-         "found->second;\n";
-  out << "  }\n";
+  out << "  if (!native_is_module_function_code(code_id)) "
+         "throw NativeBailout();\n";
+  out << "  const NativeValue *published = "
+         "native_module_functions[code_id].load(std::memory_order_acquire);\n";
+  out << "  if (published != nullptr) return *published;\n";
+  out << "  const auto in_progress = "
+         "native_module_functions_in_progress.find(code_id);\n";
+  out << "  if (in_progress != native_module_functions_in_progress.end()) "
+         "return in_progress->second;\n";
+  out << "  published = native_module_functions[code_id].load("
+         "std::memory_order_acquire);\n";
+  out << "  if (published != nullptr) return *published;\n";
   out << "  if (!native_module_function_captureless(code_id)) "
          "throw NativeBailout();\n";
   out << "  NativeClosure *closure = make_native_closure();\n";
   out << "  closure->code_id = code_id;\n";
   out << "  NativeValue value = NativeValue::closure(closure);\n";
-  out << "  {\n";
-  out << "    std::lock_guard<std::mutex> guard("
-         "native_module_functions_mutex);\n";
-  out << "    const auto inserted = native_module_functions.emplace("
-         "code_id, value);\n";
-  out << "    if (!inserted.second) return inserted.first->second;\n";
-  out << "  }\n";
+  out << "  native_module_functions_in_progress.emplace(code_id, value);\n";
   out << "  switch (code_id) {\n";
   for (const auto &[code_id, dependencies] :
        captured_module_function_dependencies) {
@@ -8553,7 +9439,17 @@ static void native_collect_finished_cycles() {
   }
   out << "  default: break;\n";
   out << "  }\n";
-  out << "  return value;\n";
+  out << "  native_module_functions_in_progress.erase(code_id);\n";
+  out << "  const NativeValue *candidate = new NativeValue(value);\n";
+  out << "  published = nullptr;\n";
+  out << "  if (native_module_functions[code_id].compare_exchange_strong("
+         "published, candidate, std::memory_order_release, "
+         "std::memory_order_acquire)) {\n";
+  out << "    published = candidate;\n";
+  out << "  } else {\n";
+  out << "    delete candidate;\n";
+  out << "  }\n";
+  out << "  return *published;\n";
   out << "}\n\n";
   out << "struct NativeFrame {\n";
   out << "  NativeValue *regs = nullptr;\n";
@@ -8654,6 +9550,7 @@ static void native_collect_finished_cycles() {
   out << "}\n";
   out << "static NativeValue native_store_ivar(const NativeValue &receiver, "
          "const std::string &name, NativeValue value) {\n";
+  out << "  native_cycle_write_barrier(receiver, value);\n";
   out << "  as_native_instance(receiver)->ivars[name] = value;\n";
   out << "  return value;\n";
   out << "}\n";
@@ -8661,6 +9558,7 @@ static void native_collect_finished_cycles() {
          "const NativeValue &exception, const NativeValue &suppressed) {\n";
   out << "  if (exception.tag == NativeValue::Tag::ErrorInstance && "
          "exception.heap_value != nullptr) {\n";
+  out << "    native_cycle_write_barrier(exception, suppressed);\n";
   out << "    static_cast<NativeErrorInstance *>(exception.heap_value)"
          "->suppressed.push_back(suppressed);\n";
   out << "    return;\n";
@@ -8678,12 +9576,13 @@ static void native_collect_finished_cycles() {
          "found->second.heap_value)->items;\n";
   out << "  }\n";
   out << "  values.push_back(suppressed);\n";
+  out << "  native_cycle_write_barrier(exception, suppressed);\n";
   out << "  instance->ivars[\"suppressed_exceptions\"] = "
          "NativeValue::list(std::move(values));\n";
   out << "}\n";
   out << "static NativeValue native_user_send(const NativeValue &receiver, "
          "const std::string &selector, "
-         "const std::vector<NativeValue> &args, "
+         "const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block = NativeValue::nullv());\n\n";
   out << "static NativeValue native_atomic_send("
@@ -8694,7 +9593,7 @@ static void native_collect_finished_cycles() {
          "std::initializer_list<NativeValue> args, NativeValue block);\n\n";
   out << "static NativeValue native_error_send("
          "const NativeValue &receiver, const std::string &selector, "
-         "const std::vector<NativeValue> &args, NativeValue block);\n\n";
+         "const NativeArgsView &args, NativeValue block);\n\n";
   out << "static NativeValue native_named_error(const std::string &name, "
          "const std::string &message) {\n";
   out << "  std::optional<std::uint16_t> id = "
@@ -8705,10 +9604,12 @@ static void native_collect_finished_cycles() {
   out << "  return NativeValue::error_instance("
          "*id, NativeValue::heap_string(message));\n";
   out << "}\n";
-  out << "static std::mutex native_class_variables_mutex;\n";
-  out << "static std::vector<std::unordered_map<std::string, NativeValue>> "
-         "native_class_variables("
-      << module.classes.size() << "U);\n";
+  out << "struct NativeClassVariableStore {\n";
+  out << "  std::mutex mutex;\n";
+  out << "  std::unordered_map<std::string, NativeValue> values;\n";
+  out << "};\n";
+  out << "static std::array<NativeClassVariableStore, "
+      << module.classes.size() << "U> native_class_variables;\n";
   out << "static std::uint32_t native_class_owner_index("
          "const NativeValue &owner) {\n";
   out << "  std::uint32_t class_index = 0;\n";
@@ -8729,20 +9630,21 @@ static void native_collect_finished_cycles() {
          "const std::string &name) {\n";
   out << "  const std::uint32_t class_index = "
          "native_class_owner_index(owner);\n";
-  out << "  std::lock_guard<std::mutex> guard("
-         "native_class_variables_mutex);\n";
-  out << "  const auto found = native_class_variables[class_index].find(name);"
-         "\n";
-  out << "  return found == native_class_variables[class_index].end() "
+  out << "  NativeClassVariableStore &store = "
+         "native_class_variables[class_index];\n";
+  out << "  std::lock_guard<std::mutex> guard(store.mutex);\n";
+  out << "  const auto found = store.values.find(name);\n";
+  out << "  return found == store.values.end() "
          "? NativeValue::nullv() : found->second;\n";
   out << "}\n";
   out << "static void native_store_cvar(const NativeValue &owner, "
          "const std::string &name, NativeValue value) {\n";
   out << "  const std::uint32_t class_index = "
          "native_class_owner_index(owner);\n";
-  out << "  std::lock_guard<std::mutex> guard("
-         "native_class_variables_mutex);\n";
-  out << "  native_class_variables[class_index][name] = std::move(value);\n";
+  out << "  NativeClassVariableStore &store = "
+         "native_class_variables[class_index];\n";
+  out << "  std::lock_guard<std::mutex> guard(store.mutex);\n";
+  out << "  store.values[name] = std::move(value);\n";
   out << "}\n";
   out << "static void native_check_text_write("
          "const amber::runtime::RuntimeTextWriteResult &result) {\n";
@@ -8820,7 +9722,7 @@ static void native_collect_finished_cycles() {
   }
   out << "static NativeValue native_http_send("
          "const NativeValue &receiver, const std::string &selector, "
-         "const std::vector<NativeValue> &args, "
+         "const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block);\n\n";
   out << "static NativeValue native_task_send("
@@ -8846,8 +9748,11 @@ static void native_collect_finished_cycles() {
   out << "  if (slot >= frame.reg_count) throw NativeBailout();\n";
   out << "  frame.regs[slot] = value;\n";
   out << "  if (frame.local_cells != nullptr && "
-         "frame.local_cells[slot] != nullptr) "
-         "frame.local_cells[slot]->value = std::move(value);\n";
+         "frame.local_cells[slot] != nullptr) {\n";
+  out << "    native_cycle_cell_write_barrier("
+         "frame.local_cells[slot], value);\n";
+  out << "    frame.local_cells[slot]->value = std::move(value);\n";
+  out << "  }\n";
   out << "}\n";
   out << "static void native_seed_handler_frame("
          "NativeFrame &frame, const NativeHandlerSeed &seed) {\n";
@@ -8894,23 +9799,31 @@ static void native_collect_finished_cycles() {
          "std::uint32_t slot) { return capture_cell(frame, slot)->value; }\n";
   out << "static void write_capture(const NativeFrame &frame, std::uint32_t "
          "slot, "
-         "NativeValue value) { capture_cell(frame, slot)->value = "
-         "std::move(value); }\n\n";
+         "NativeValue value) {\n";
+  out << "  NativeCell *cell = capture_cell(frame, slot);\n";
+  out << "  native_cycle_cell_write_barrier(cell, value);\n";
+  out << "  cell->value = std::move(value);\n";
+  out << "}\n\n";
   out << "static AMBER_NATIVE_ALWAYS_INLINE std::int64_t "
          "as_int(const NativeValue &value) {\n";
   out << "  if (value.tag != NativeValue::Tag::Integer) { throw "
          "NativeBailout(); }\n";
   out << "  return value.scalar_value;\n";
   out << "}\n\n";
+  out << "static void native_materialize_list(NativeList &list);\n";
   out << "static const NativeList &as_list(const NativeValue &value) {\n";
   out << "  if (value.tag != NativeValue::Tag::List || "
          "value.heap_value == nullptr) throw NativeBailout();\n";
-  out << "  return *static_cast<NativeList *>(value.heap_value);\n";
+  out << "  auto &list = *static_cast<NativeList *>(value.heap_value);\n";
+  out << "  native_materialize_list(list);\n";
+  out << "  return list;\n";
   out << "}\n";
   out << "static NativeList &as_mutable_list(const NativeValue &value) {\n";
   out << "  if (value.tag != NativeValue::Tag::List || "
          "value.heap_value == nullptr) throw NativeBailout();\n";
-  out << "  return *static_cast<NativeList *>(value.heap_value);\n";
+  out << "  auto &list = *static_cast<NativeList *>(value.heap_value);\n";
+  out << "  native_materialize_list(list);\n";
+  out << "  return list;\n";
   out << "}\n";
   out << "static NativeAtomic &as_mutable_atomic(const NativeValue &value) {\n";
   out << "  if (value.tag != NativeValue::Tag::Atomic || "
@@ -9080,6 +9993,9 @@ static void native_collect_finished_cycles() {
   out << "static std::vector<NativeValue> native_range_items("
          "const NativeValue &value) {\n";
   out << "  const NativeRange &range = as_range(value);\n";
+  out << "  if (!range.has_start || !range.has_finish) throw NativeRaised{"
+         "native_named_error(\"InfiniteCollectionError\", "
+         "\"cannot convert an infinite collection to Array\")};\n";
   out << "  if (range.step == 0) throw NativeBailout();\n";
   out << "  const __int128 start = static_cast<__int128>(range.start);\n";
   out << "  const __int128 finish = static_cast<__int128>(range.finish);\n";
@@ -9229,6 +10145,7 @@ static void native_append_keyword_call_spread(
   out << "  const std::size_t index = "
          "native_sequence_index(as_int(index_value), "
          "items.size());\n";
+  out << "  native_cycle_write_barrier(value, next_value);\n";
   out << "  items[index] = next_value;\n";
   out << "  return next_value;\n";
   out << "}\n";
@@ -9320,6 +10237,7 @@ static void native_append_keyword_call_spread(
   out << "  case NativeValue::Tag::TaskModule: return \"task\";\n";
   out << "  case NativeValue::Tag::ResultOkFunction: return \"Ok\";\n";
   out << "  case NativeValue::Tag::ResultErrFunction: return \"Err\";\n";
+  out << "  case NativeValue::Tag::DescFunction: return \"desc\";\n";
   out << "  case NativeValue::Tag::SecureRandomModule: return "
          "\"SecureRandom\";\n";
   out << "  case NativeValue::Tag::UuidModule: return \"Uuid\";\n";
@@ -9586,13 +10504,12 @@ static void native_append_keyword_call_spread(
   out << "static double floor_mod_double_native(double lhs, double rhs) {\n";
   out << "  return lhs - std::floor(lhs / rhs) * rhs;\n";
   out << "}\n\n";
-  out << "static const std::string &native_string_text(const NativeValue "
-         "&value) {\n";
+  out << "static AMBER_NATIVE_ALWAYS_INLINE const std::string &"
+         "native_string_text(const NativeValue &value) {\n";
   out << "  if (value.tag == NativeValue::Tag::HeapString) {\n";
   out << "    return static_cast<const NativeHeapString *>("
          "value.heap_value)->text;\n";
   out << "  }\n";
-  out << "  std::lock_guard<std::mutex> guard(native_string_mutex());\n";
   out << "  const std::size_t index = "
          "static_cast<std::size_t>(value.scalar_value);\n";
   out << "  if (index >= native_strings().size()) throw NativeBailout();\n";
@@ -9754,8 +10671,15 @@ static void native_append_keyword_call_spread(
          "const NativeValue &needle) {\n";
   out << "  if (!native_value_is_string(value) || "
          "!native_value_is_string(needle)) throw NativeBailout();\n";
-  out << "  return NativeValue::boolean(native_string_text(value).find("
-         "native_string_text(needle)) != std::string::npos);\n";
+  out << "  const std::string &text = native_string_text(value);\n";
+  out << "  const std::string &needle_text = native_string_text(needle);\n";
+  out << "  if (needle_text.size() == 1U && "
+         "static_cast<unsigned char>(needle_text[0]) < 128U) {\n";
+  out << "    return NativeValue::boolean(text.find(needle_text[0]) != "
+         "std::string::npos);\n";
+  out << "  }\n";
+  out << "  return NativeValue::boolean(text.find(needle_text) != "
+         "std::string::npos);\n";
   out << "}\n\n";
   out << "static std::size_t native_utf8_next_cp(const std::string &text, "
          "std::size_t i) {\n";
@@ -9763,6 +10687,49 @@ static void native_append_keyword_call_spread(
   out << "  while (j < text.size() && "
          "(static_cast<unsigned char>(text[j]) & 0xC0U) == 0x80U) ++j;\n";
   out << "  return j;\n";
+  out << "}\n\n";
+  out << "static NativeValue native_utf8_char_value("
+         "const std::string &text, std::size_t i, std::size_t j) {\n";
+  out << "  const unsigned char first = "
+         "static_cast<unsigned char>(text[i]);\n";
+  out << "  if (j == i + 1U && first < 128U) {\n";
+  out << "    return NativeValue::string_ref(native_ascii_string_id(first));\n";
+  out << "  }\n";
+  out << "  return NativeValue::heap_string(text.substr(i, j - i));\n";
+  out << "}\n\n";
+  out << "static void native_materialize_list(NativeList &list) {\n";
+  out << "  if (!list.lazy_chars) return;\n";
+  out << "  const NativeValue source = list.lazy_char_source;\n";
+  out << "  const std::string &text = native_string_text(source);\n";
+  out << "  std::vector<NativeValue> items;\n";
+  out << "  items.reserve(text.size());\n";
+  out << "  for (std::size_t i = 0; i < text.size();) {\n";
+  out << "    const std::size_t j = native_utf8_next_cp(text, i);\n";
+  out << "    items.push_back(native_utf8_char_value(text, i, j));\n";
+  out << "    i = j;\n";
+  out << "  }\n";
+  out << "  list.items = std::move(items);\n";
+  out << "  list.lazy_chars = false;\n";
+  out << "  list.lazy_char_source = NativeValue::nullv();\n";
+  out << "}\n\n";
+  out << "template <typename Visitor>\n";
+  out << "static bool native_visit_lazy_chars("
+         "const NativeValue &value, Visitor &&visitor) {\n";
+  out << "  if (value.tag != NativeValue::Tag::List || "
+         "value.heap_value == nullptr) return false;\n";
+  out << "  const auto *list = static_cast<const NativeList *>("
+         "value.heap_value);\n";
+  out << "  if (!list->lazy_chars) return false;\n";
+  out << "  // Retain the source across callbacks: the callback may mutate "
+         "and thereby materialize the same list.\n";
+  out << "  const NativeValue source = list->lazy_char_source;\n";
+  out << "  const std::string &text = native_string_text(source);\n";
+  out << "  for (std::size_t i = 0; i < text.size();) {\n";
+  out << "    const std::size_t j = native_utf8_next_cp(text, i);\n";
+  out << "    if (!visitor(native_utf8_char_value(text, i, j))) break;\n";
+  out << "    i = j;\n";
+  out << "  }\n";
+  out << "  return true;\n";
   out << "}\n\n";
   out << "static NativeValue native_string_reverse(const NativeValue &value) "
          "{\n";
@@ -9782,27 +10749,51 @@ static void native_append_keyword_call_spread(
   out << "}\n\n";
   out << "static NativeValue native_string_chars(const NativeValue &value) {\n";
   out << "  if (!native_value_is_string(value)) throw NativeBailout();\n";
+  out << "  NativeValue chars = NativeValue::list({});\n";
+  out << "  auto *list = static_cast<NativeList *>(chars.heap_value);\n";
+  out << "  list->lazy_char_source = value;\n";
+  out << "  list->lazy_chars = true;\n";
+  out << "  return chars;\n";
+  out << "}\n\n";
+  out << "static bool native_string_has_case_distinction("
+         "const NativeValue &value) {\n";
+  out << "  if (!native_value_is_string(value)) throw NativeBailout();\n";
   out << "  const std::string &text = native_string_text(value);\n";
-  out << "  std::vector<NativeValue> cps;\n";
-  out << "  for (std::size_t i = 0; i < text.size();) {\n";
-  out << "    const std::size_t j = native_utf8_next_cp(text, i);\n";
-  out << "    cps.push_back(NativeValue::heap_string("
-         "text.substr(i, j - i)));\n";
-  out << "    i = j;\n";
+  out << "  for (unsigned char c : text) {\n";
+  out << "    if ((c >= 'A' && c <= 'Z') || "
+         "(c >= 'a' && c <= 'z')) return true;\n";
   out << "  }\n";
-  out << "  return NativeValue::list(std::move(cps));\n";
+  out << "  return false;\n";
   out << "}\n\n";
   out << "static NativeValue native_string_case(const NativeValue &value, "
          "bool up) {\n";
   out << "  if (!native_value_is_string(value)) throw "
          "NativeBailout();\n";
-  out << "  std::string text = native_string_text(value);\n";
+  out << "  const std::string &source = native_string_text(value);\n";
+  out << "  if (source.size() == 1U && "
+         "static_cast<unsigned char>(source[0]) < 128U) {\n";
+  out << "    unsigned char result = static_cast<unsigned char>(source[0]);\n";
+  out << "    if (up && result >= 'a' && result <= 'z') result -= 32U;\n";
+  out << "    else if (!up && result >= 'A' && result <= 'Z') result += 32U;\n";
+  out << "    if (result == static_cast<unsigned char>(source[0])) "
+         "return value;\n";
+  out << "    return NativeValue::string_ref(native_ascii_string_id(result));\n";
+  out << "  }\n";
+  out << "  std::string text = source;\n";
+  out << "  bool changed = false;\n";
   out << "  for (char &c : text) {\n";
   out << "    const unsigned char uc = static_cast<unsigned char>(c);\n";
-  out << "    if (up && uc >= 'a' && uc <= 'z') c = "
-         "static_cast<char>(uc - 32U);\n";
-  out << "    else if (!up && uc >= 'A' && uc <= 'Z') c = "
-         "static_cast<char>(uc + 32U);\n";
+  out << "    if (up && uc >= 'a' && uc <= 'z') {\n";
+  out << "      c = static_cast<char>(uc - 32U); changed = true;\n";
+  out << "    } else if (!up && uc >= 'A' && uc <= 'Z') {\n";
+  out << "      c = static_cast<char>(uc + 32U); changed = true;\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  if (!changed) return value;\n";
+  out << "  if (text.size() == 1U && "
+         "static_cast<unsigned char>(text[0]) < 128U) {\n";
+  out << "    return NativeValue::string_ref(native_ascii_string_id("
+         "static_cast<unsigned char>(text[0])));\n";
   out << "  }\n";
   out << "  return NativeValue::heap_string(text);\n";
   out << "}\n\n";
@@ -9904,7 +10895,7 @@ static void native_append_keyword_call_spread(
   out << "  return NativeValue::list(std::move(parts));\n";
   out << "}\n\n";
   out << R"AMBERCPP(static NativeValue amber_native_call_closure(
-    const NativeValue &value, const std::vector<NativeValue> &args);
+    const NativeValue &value, const NativeArgsView &args);
 
 static std::string native_regexp_pattern_to_string(
     const NativeRegexp &pattern) {
@@ -10455,7 +11446,10 @@ static bool native_value_equal(const NativeValue &lhs, const NativeValue &rhs) {
   case NativeValue::Tag::Range: {
     const NativeRange &left = as_range(lhs);
     const NativeRange &right = as_range(rhs);
-    return left.start == right.start && left.finish == right.finish &&
+    return left.has_start == right.has_start &&
+           left.has_finish == right.has_finish &&
+           (!left.has_start || left.start == right.start) &&
+           (!left.has_finish || left.finish == right.finish) &&
            left.step == right.step &&
            left.inclusive_end == right.inclusive_end;
   }
@@ -10502,19 +11496,6 @@ static bool native_value_equal(const NativeValue &lhs, const NativeValue &rhs) {
   }
 }
 
-static bool native_map_key_is_nameable(const NativeValue &value) {
-  return native_value_is_string(value) ||
-         value.tag == NativeValue::Tag::Symbol;
-}
-
-static const std::string &native_name_key_text(const NativeValue &value) {
-  if (native_value_is_string(value)) return native_string_text(value);
-  if (value.tag == NativeValue::Tag::Symbol) {
-    return native_symbol_text(value.scalar_value);
-  }
-  throw NativeBailout();
-}
-
 static NativeValue native_normalize_map_key(const NativeValue &key) {
   if (key.tag == NativeValue::Tag::Float && std::isnan(key.float_value)) {
     throw NativeBailout();
@@ -10558,22 +11539,26 @@ native_map_find_entry(const NativeValue &map_value, const NativeValue &key) {
   const NativeMap &map = as_map(map_value);
   const NativeValue normalized = native_normalize_map_key(key);
   const bool nameable = !map.strict && native_map_key_is_nameable(normalized);
-  const std::optional<std::int64_t> key_id =
-      native_map_index_key_id_for_read(normalized, map.strict);
-  if (nameable && !key_id.has_value()) return nullptr;
-  if (key_id.has_value()) {
+  const std::optional<std::size_t> key_hash =
+      native_map_index_key_hash(normalized, map.strict);
+  if (key_hash.has_value()) {
     if (!map.name_index.empty()) {
-      const auto found = map.name_index.find(*key_id);
-      if (found != map.name_index.end() && found->second < map.entries.size()) {
-        return &map.entries[found->second];
+      const auto candidates = map.name_index.equal_range(*key_hash);
+      for (auto found = candidates.first; found != candidates.second;
+           ++found) {
+        if (found->second < map.entries.size() &&
+            native_map_keys_equivalent(
+                map.entries[found->second].first, normalized, map.strict)) {
+          return &map.entries[found->second];
+        }
       }
-      if (native_map_key_is_nameable(normalized)) return nullptr;
+      if (nameable) return nullptr;
     }
     const std::optional<std::size_t> inline_index =
-        native_map_find_inline_name_index(map, *key_id);
+        native_map_find_inline_name_index(map, normalized, *key_hash);
     if (inline_index.has_value()) return &map.entries[*inline_index];
     if (map.entries.size() <= kNativeMapInlineNameIndexCapacity &&
-        native_map_key_is_nameable(normalized)) {
+        nameable) {
       return nullptr;
     }
   }
@@ -10617,24 +11602,29 @@ static void native_map_store(
 static void native_map_store(NativeMap &map, NativeValue key,
                              NativeValue value) {
   NativeValue normalized = native_normalize_map_key(key);
-  const std::optional<std::int64_t> key_id =
-      native_map_index_key_id(normalized, map.strict);
-  if (key_id.has_value() && !map.name_index.empty()) {
-    const auto found = map.name_index.find(*key_id);
-    if (found != map.name_index.end() && found->second < map.entries.size()) {
-      map.entries[found->second].second = std::move(value);
-      return;
+  const std::optional<std::size_t> key_hash =
+      native_map_index_key_hash(normalized, map.strict);
+  if (key_hash.has_value() && !map.name_index.empty()) {
+    const auto candidates = map.name_index.equal_range(*key_hash);
+    for (auto found = candidates.first; found != candidates.second;
+         ++found) {
+      if (found->second < map.entries.size() &&
+          native_map_keys_equivalent(
+              map.entries[found->second].first, normalized, map.strict)) {
+        map.entries[found->second].second = std::move(value);
+        return;
+      }
     }
     if (native_map_key_is_nameable(normalized)) {
       const std::size_t index = map.entries.size();
       map.entries.emplace_back(std::move(normalized), std::move(value));
-      map.name_index[*key_id] = index;
+      map.name_index.emplace(*key_hash, index);
       return;
     }
   }
-  if (key_id.has_value()) {
+  if (key_hash.has_value()) {
     const std::optional<std::size_t> inline_index =
-        native_map_find_inline_name_index(map, *key_id);
+        native_map_find_inline_name_index(map, normalized, *key_hash);
     if (inline_index.has_value()) {
       map.entries[*inline_index].second = std::move(value);
       return;
@@ -10644,21 +11634,21 @@ static void native_map_store(NativeMap &map, NativeValue key,
     if (native_map_keys_equivalent(map.entries[i].first, normalized,
                                    map.strict)) {
       map.entries[i].second = std::move(value);
-      if (key_id.has_value() && !map.name_index.empty()) {
-        map.name_index[*key_id] = i;
+      if (key_hash.has_value() && !map.name_index.empty()) {
+        map.name_index.emplace(*key_hash, i);
       }
       return;
     }
   }
   const std::size_t index = map.entries.size();
   map.entries.emplace_back(std::move(normalized), std::move(value));
-  if (key_id.has_value()) {
+  if (key_hash.has_value()) {
     if (!map.name_index.empty()) {
-      map.name_index[*key_id] = index;
+      map.name_index.emplace(*key_hash, index);
     } else if (map.entries.size() > kNativeMapInlineNameIndexCapacity) {
       native_map_rebuild_index(map);
     } else {
-      native_map_add_inline_name_index(map, *key_id, index);
+      native_map_add_inline_name_index(map, *key_hash, index);
     }
   }
 }
@@ -10771,11 +11761,30 @@ static NativeValue native_map_compact(const NativeValue &map_value) {
   return NativeValue::map_entries(std::move(result), map.strict);
 }
 
+static NativeValue native_map_merge_with_block(
+    const NativeValue &lhs, const NativeValue &rhs,
+    const NativeValue &block, bool has_block) {
+  std::vector<std::pair<NativeValue, NativeValue>> result = as_map(lhs).entries;
+  for (const auto &entry : as_map(rhs).entries) {
+    auto existing = std::find_if(
+        result.begin(), result.end(), [&](const auto &candidate) {
+          return native_map_keys_equivalent(candidate.first, entry.first,
+                                            false);
+        });
+    NativeValue value = entry.second;
+    if (existing != result.end() && has_block) {
+      value = amber_native_call_closure(
+          block, {existing->first, existing->second, entry.second});
+    }
+    if (existing == result.end()) result.push_back({entry.first, value});
+    else existing->second = value;
+  }
+  return NativeValue::map_entries(std::move(result), false);
+}
+
 static NativeValue native_map_merge(const NativeValue &lhs,
                                     const NativeValue &rhs) {
-  std::vector<std::pair<NativeValue, NativeValue>> result = as_map(lhs).entries;
-  native_map_append_entries(result, rhs, false);
-  return NativeValue::map_entries(std::move(result), false);
+  return native_map_merge_with_block(lhs, rhs, NativeValue::nullv(), false);
 }
 
 static bool native_sequence_contains_value(
@@ -10827,7 +11836,13 @@ static NativeValue native_copy_impl(const NativeValue &source, bool deep,
                         source.tag == NativeValue::Tag::Instance;
   if (deep && memoized && source.heap_value != nullptr) {
     const auto found = memo.find(source.heap_value);
-    if (found != memo.end()) return found->second;
+    if (found != memo.end()) {
+      // A memo hit is either a shared DAG edge or a cycle back edge. Register
+      // the copied shell conservatively; the collector will discard acyclic
+      // survivors after expanding the finished graph.
+      native_track_payload(found->second.tag, found->second.heap_value);
+      return found->second;
+    }
   }
 
   if (source.tag == NativeValue::Tag::List) {
@@ -11031,6 +12046,34 @@ static NativeValue native_set_operation(const NativeValue &receiver,
   throw NativeBailout();
 }
 
+static NativeValue native_collection_binary(const NativeValue &lhs,
+                                            const NativeValue &rhs,
+                                            const std::string &selector) {
+  if (lhs.tag == NativeValue::Tag::Integer &&
+      rhs.tag == NativeValue::Tag::Integer) {
+    if (selector == "&")
+      return NativeValue::integer(
+          bit_and_int64(lhs.scalar_value, rhs.scalar_value));
+    if (selector == "|")
+      return NativeValue::integer(
+          bit_or_int64(lhs.scalar_value, rhs.scalar_value));
+    if (selector == "^")
+      return NativeValue::integer(
+          bit_xor_int64(lhs.scalar_value, rhs.scalar_value));
+  }
+  if (selector == "|" && lhs.tag == NativeValue::Tag::Map &&
+      rhs.tag == NativeValue::Tag::Map) {
+    return native_map_merge(lhs, rhs);
+  }
+  if (native_is_sequence(lhs)) {
+    if (selector == "&") return native_set_operation(lhs, rhs, "intersection");
+    if (selector == "|") return native_set_operation(lhs, rhs, "union");
+    if (selector == "^")
+      return native_set_operation(lhs, rhs, "symmetric_difference");
+  }
+  throw NativeBailout();
+}
+
 static NativeValue native_sequence_added(const NativeValue &receiver,
                                          const NativeValue &value) {
   std::vector<NativeValue> result = native_sequence_items_copy(receiver);
@@ -11041,6 +12084,7 @@ static NativeValue native_sequence_added(const NativeValue &receiver,
 static NativeValue native_set_add_mut(const NativeValue &receiver,
                                       const NativeValue &value) {
   native_require_mutable_collection(receiver);
+  native_cycle_write_barrier(receiver, value);
   NativeSet &set = as_mutable_set(receiver);
   native_append_unique_value(set.items, native_normalize_set_element(value));
   return receiver;
@@ -11078,6 +12122,21 @@ static int native_compare_sequences_for_sort(
 
 static int native_compare_for_sort(const NativeValue &lhs,
                                    const NativeValue &rhs) {
+  const auto desc_value = [](const NativeValue &value) -> const NativeValue * {
+    if (value.tag != NativeValue::Tag::Tuple) return nullptr;
+    const std::vector<NativeValue> &items = as_tuple(value).items;
+    if (items.size() != 2U ||
+        items[0].tag != NativeValue::Tag::DescFunction) return nullptr;
+    return &items[1];
+  };
+  const NativeValue *left_desc = desc_value(lhs);
+  const NativeValue *right_desc = desc_value(rhs);
+  if (left_desc != nullptr || right_desc != nullptr) {
+    if (left_desc == nullptr || right_desc == nullptr) throw NativeRaised{
+        native_named_error("TypeError",
+                           "cannot compare a desc() key with a non-desc key")};
+    return -native_compare_for_sort(*left_desc, *right_desc);
+  }
   if (lhs.tag == NativeValue::Tag::Integer &&
       rhs.tag == NativeValue::Tag::Integer) {
     return compare_int64(lhs.scalar_value, rhs.scalar_value);
@@ -11224,6 +12283,7 @@ static NativeValue native_sequence_zip(
 static NativeValue native_list_push_mut(
     const NativeValue &value, std::initializer_list<NativeValue> additions) {
   native_require_mutable_collection(value);
+  native_cycle_write_barrier(value, additions);
   NativeList &list = as_mutable_list(value);
   list.items.insert(list.items.end(), additions.begin(), additions.end());
   return value;
@@ -11280,6 +12340,29 @@ static NativeValue native_sequence_take(const NativeValue &value,
                                         const NativeValue &count_value) {
   const std::int64_t raw_count = as_int(count_value);
   if (raw_count < 0) throw NativeBailout();
+  if (value.tag == NativeValue::Tag::Range) {
+    const NativeRange &range = as_range(value);
+    if (!range.has_finish) {
+      if (!range.has_start) throw NativeRaised{native_named_error(
+          "ArgumentError", "beginless Range has no first element")};
+      std::vector<NativeValue> taken;
+      taken.reserve(static_cast<std::size_t>(raw_count));
+      __int128 current = static_cast<__int128>(range.start);
+      for (std::int64_t index = 0; index < raw_count; ++index) {
+        if (current < static_cast<__int128>(
+                          std::numeric_limits<std::int64_t>::min()) ||
+            current > static_cast<__int128>(
+                          std::numeric_limits<std::int64_t>::max())) {
+          throw NativeRaised{native_named_error(
+              "ArgumentError", "open-ended Range take overflows Integer")};
+        }
+        taken.push_back(
+            NativeValue::integer(static_cast<std::int64_t>(current)));
+        current += static_cast<__int128>(range.step);
+      }
+      return NativeValue::list(std::move(taken));
+    }
+  }
   const std::vector<NativeValue> items = native_sequence_items_copy(value);
   const std::size_t count = std::min<std::size_t>(
       static_cast<std::size_t>(raw_count), items.size());
@@ -11367,7 +12450,292 @@ static NativeValue native_concat(const NativeValue &lhs,
 }
 
 )AMBERCPP";
-  out << R"AMBERCPP(static NativeValue amber_native_call_closure(const NativeValue &value, const std::vector<NativeValue> &args);
+  out << R"AMBERCPP(static NativeValue amber_native_call_closure(const NativeValue &value, const NativeArgsView &args);
+
+static NativeValue native_array_factory(
+    const NativeValue &receiver, const std::string &selector,
+    std::initializer_list<NativeValue> args, const NativeValue &block,
+    bool has_block) {
+  if (receiver.tag != NativeValue::Tag::ArrayType) throw NativeBailout();
+  const std::vector<NativeValue> values(args);
+  if (selector == "of" || selector == "build") {
+    if (values.size() != 1U || !has_block) throw NativeBailout();
+    if (values[0].tag != NativeValue::Tag::Integer) {
+      throw NativeRaised{
+          native_named_error("TypeError", "array length must be Int")};
+    }
+    const std::int64_t length = values[0].scalar_value;
+    if (length < 0) {
+      throw NativeRaised{native_named_error(
+          "ArgumentError", "array length must be non-negative")};
+    }
+    std::vector<NativeValue> items;
+    items.reserve(static_cast<std::size_t>(length));
+    for (std::int64_t index = 0; index < length; ++index) {
+      items.push_back(
+          amber_native_call_closure(block, {NativeValue::integer(index)}));
+    }
+    return NativeValue::list(std::move(items));
+  }
+  if (selector == "filled") {
+    if (values.size() != 2U || has_block) throw NativeBailout();
+    if (values[0].tag != NativeValue::Tag::Integer) {
+      throw NativeRaised{
+          native_named_error("TypeError", "array length must be Int")};
+    }
+    const std::int64_t length = values[0].scalar_value;
+    if (length < 0) {
+      throw NativeRaised{native_named_error(
+          "ArgumentError", "array length must be non-negative")};
+    }
+    return NativeValue::list(std::vector<NativeValue>(
+        static_cast<std::size_t>(length), values[1]));
+  }
+  throw NativeBailout();
+}
+
+enum class NativeJsonPathStepKind { Key, Index, Wildcard };
+
+struct NativeJsonPathStep {
+  NativeJsonPathStepKind kind = NativeJsonPathStepKind::Key;
+  std::string key;
+  std::int64_t index = 0;
+};
+
+struct NativeJsonStop {
+  NativeValue value = NativeValue::nullv();
+  bool has_value = false;
+};
+
+struct NativeJsonPathParser {
+  explicit NativeJsonPathParser(std::string path) : text(std::move(path)) {}
+
+  std::string text;
+  std::size_t pos = 0;
+
+  [[noreturn]] void fail(const std::string &message) const {
+    throw NativeRaised{native_named_error("JsonPathError", message)};
+  }
+
+  static bool identifier_start(char c) {
+    return std::isalpha(static_cast<unsigned char>(c)) != 0 || c == '_';
+  }
+
+  static bool identifier_continue(char c) {
+    return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_';
+  }
+
+  std::string quoted_key(char quote) {
+    ++pos;
+    std::string key;
+    while (pos < text.size()) {
+      const char c = text[pos++];
+      if (c == quote) return key;
+      if (c != '\\') {
+        key.push_back(c);
+        continue;
+      }
+      if (pos >= text.size()) fail("unterminated escape in quoted path key");
+      const char escaped = text[pos++];
+      switch (escaped) {
+      case '"': case '\'': case '\\': case '/': key.push_back(escaped); break;
+      case 'b': key.push_back('\b'); break;
+      case 'f': key.push_back('\f'); break;
+      case 'n': key.push_back('\n'); break;
+      case 'r': key.push_back('\r'); break;
+      case 't': key.push_back('\t'); break;
+      default: fail("unsupported escape in quoted path key");
+      }
+    }
+    fail("unterminated quoted path key");
+  }
+
+  std::vector<NativeJsonPathStep> parse() {
+    if (text.empty() || text[0] != '$') fail("path must start with `$`");
+    pos = 1U;
+    std::vector<NativeJsonPathStep> steps;
+    while (pos < text.size()) {
+      if (steps.size() >= 128U) fail("path has too many steps");
+      if (text[pos] == '.') {
+        ++pos;
+        if (pos >= text.size() || !identifier_start(text[pos])) {
+          fail("expected identifier after `.`");
+        }
+        const std::size_t begin = pos++;
+        while (pos < text.size() && identifier_continue(text[pos])) ++pos;
+        steps.push_back({NativeJsonPathStepKind::Key,
+                         text.substr(begin, pos - begin), 0});
+        continue;
+      }
+      if (text[pos] != '[') {
+        fail("expected `.key`, `[index]`, `[\"key\"]`, or `[*]`");
+      }
+      ++pos;
+      if (pos >= text.size()) fail("unterminated `[` in path");
+      if (text[pos] == '*') {
+        ++pos;
+        if (pos >= text.size() || text[pos] != ']') {
+          fail("expected `]` after `*`");
+        }
+        ++pos;
+        steps.push_back({NativeJsonPathStepKind::Wildcard, {}, 0});
+        continue;
+      }
+      if (text[pos] == '"' || text[pos] == '\'') {
+        const char quote = text[pos];
+        std::string key = quoted_key(quote);
+        if (pos >= text.size() || text[pos] != ']') {
+          fail("expected `]` after quoted path key");
+        }
+        ++pos;
+        steps.push_back(
+            {NativeJsonPathStepKind::Key, std::move(key), 0});
+        continue;
+      }
+      if (std::isdigit(static_cast<unsigned char>(text[pos])) == 0) {
+        fail("expected array index, quoted key, or `*` inside `[]`");
+      }
+      std::int64_t index = 0;
+      while (pos < text.size() &&
+             std::isdigit(static_cast<unsigned char>(text[pos])) != 0) {
+        const int digit = text[pos] - '0';
+        if (index > (std::numeric_limits<std::int64_t>::max() - digit) / 10) {
+          fail("array index is too large");
+        }
+        index = index * 10 + digit;
+        ++pos;
+      }
+      if (pos >= text.size() || text[pos] != ']') {
+        fail("expected `]` after array index");
+      }
+      ++pos;
+      steps.push_back({NativeJsonPathStepKind::Index, {}, index});
+    }
+    return steps;
+  }
+};
+
+using NativeJsonPathVisitor =
+    std::function<void(const NativeValue &, bool *)>;
+
+static void native_json_walk_path(
+    const NativeValue &value, const std::vector<NativeJsonPathStep> &steps,
+    std::size_t step_index, const NativeJsonPathVisitor &visitor,
+    bool *stopped) {
+  if (*stopped) return;
+  if (step_index == steps.size()) {
+    visitor(value, stopped);
+    return;
+  }
+  const NativeJsonPathStep &step = steps[step_index];
+  if (step.kind == NativeJsonPathStepKind::Key) {
+    if (value.tag != NativeValue::Tag::Map) return;
+    const auto *entry = native_map_find_entry(
+        value, NativeValue::heap_string(step.key));
+    if (entry != nullptr) {
+      native_json_walk_path(entry->second, steps, step_index + 1U, visitor,
+                            stopped);
+    }
+    return;
+  }
+  if (step.kind == NativeJsonPathStepKind::Index) {
+    if (value.tag != NativeValue::Tag::List || step.index < 0) return;
+    const std::vector<NativeValue> &items = as_list(value).items;
+    if (static_cast<std::uint64_t>(step.index) < items.size()) {
+      native_json_walk_path(items[static_cast<std::size_t>(step.index)], steps,
+                            step_index + 1U, visitor, stopped);
+    }
+    return;
+  }
+  if (value.tag == NativeValue::Tag::List) {
+    for (const NativeValue &item : as_list(value).items) {
+      native_json_walk_path(item, steps, step_index + 1U, visitor, stopped);
+      if (*stopped) return;
+    }
+  } else if (value.tag == NativeValue::Tag::Map) {
+    for (const auto &entry : as_map(value).entries) {
+      native_json_walk_path(entry.second, steps, step_index + 1U, visitor,
+                            stopped);
+      if (*stopped) return;
+    }
+  }
+}
+
+static NativeValue native_json_stop(
+    const NativeValue &receiver,
+    std::initializer_list<NativeValue> args) {
+  if (receiver.tag != NativeValue::Tag::JsonModule) throw NativeBailout();
+  if (args.size() > 1U) {
+    throw NativeRaised{native_named_error(
+        "TypeError", "Json.stop expects zero or one argument")};
+  }
+  if (args.size() == 0U) throw NativeJsonStop{};
+  throw NativeJsonStop{*args.begin(), true};
+}
+
+static NativeValue native_json_data_path(
+    const NativeValue &receiver, const std::string &selector,
+    std::initializer_list<NativeValue> args, const NativeValue &block,
+    bool has_block) {
+  const std::vector<NativeValue> values(args);
+  const bool module_receiver = receiver.tag == NativeValue::Tag::JsonModule;
+  if (!module_receiver && receiver.tag != NativeValue::Tag::List &&
+      receiver.tag != NativeValue::Tag::Map) {
+    throw NativeBailout();
+  }
+  const std::size_t prefix = module_receiver ? 1U : 0U;
+  const std::size_t no_block_arity = prefix + 1U;
+  const std::size_t block_arity = prefix + 2U;
+  if ((selector == "path" &&
+       (has_block || values.size() != no_block_arity)) ||
+      (selector == "paths" &&
+       values.size() != (has_block ? block_arity : no_block_arity))) {
+    throw NativeBailout();
+  }
+  const NativeValue &root = module_receiver ? values[0] : receiver;
+  const NativeValue &query = values[prefix];
+  if (!native_value_is_string(query)) {
+    throw NativeRaised{native_named_error(
+        "TypeError", "Json.path expects a path Str")};
+  }
+  NativeJsonPathParser parser(native_string_text(query));
+  const std::vector<NativeJsonPathStep> steps = parser.parse();
+  bool stopped = false;
+  if (selector == "path") {
+    NativeValue first = NativeValue::nullv();
+    native_json_walk_path(
+        root, steps, 0U,
+        [&](const NativeValue &value, bool *stop) {
+          first = value;
+          *stop = true;
+        },
+        &stopped);
+    return first;
+  }
+  if (!has_block) {
+    std::vector<NativeValue> matches;
+    native_json_walk_path(
+        root, steps, 0U,
+        [&](const NativeValue &value, bool *) { matches.push_back(value); },
+        &stopped);
+    return NativeValue::list(std::move(matches));
+  }
+  NativeValue accumulator = values[prefix + 1U];
+  native_json_walk_path(
+      root, steps, 0U,
+      [&](const NativeValue &value, bool *stop) {
+        try {
+          const NativeValue result =
+              amber_native_call_closure(block, {value, accumulator});
+          if (result.tag != NativeValue::Tag::Null) accumulator = result;
+        } catch (const NativeJsonStop &signal) {
+          if (signal.has_value) accumulator = signal.value;
+          *stop = true;
+        }
+      },
+      &stopped);
+  return accumulator;
+}
 
 static bool native_truthy(const NativeValue &value) {
   return value.tag != NativeValue::Tag::Null &&
@@ -11383,6 +12751,7 @@ static NativeValue native_map_set(const NativeValue &value,
                                   const NativeValue &next_value) {
   if (value.tag != NativeValue::Tag::Map) throw NativeBailout();
   native_require_mutable_collection(value);
+  native_cycle_write_barrier(value, {key, next_value});
   native_map_store(as_mutable_map(value), key, next_value);
   return next_value;
 }
@@ -11392,6 +12761,7 @@ static NativeValue native_map_store_bang(const NativeValue &value,
                                          const NativeValue &next_value) {
   if (value.tag != NativeValue::Tag::Map) throw NativeBailout();
   native_require_mutable_collection(value);
+  native_cycle_write_barrier(value, {key, next_value});
   native_map_store(as_mutable_map(value), key, next_value);
   return value;
 }
@@ -11434,6 +12804,12 @@ static NativeValue native_each(const NativeValue &value,
       (void)amber_native_call_closure(
           block_value, {entry.first, entry.second});
     }
+    return value;
+  }
+  if (native_visit_lazy_chars(value, [&](NativeValue item) {
+        (void)amber_native_call_closure(block_value, {std::move(item)});
+        return true;
+      })) {
     return value;
   }
   if (native_is_sequence(value)) {
@@ -11522,7 +12898,7 @@ static NativeValue native_sequence_higher_order(
           filtered.push_back(entry);
         }
       }
-      return NativeValue::map_entries(std::move(filtered), false);
+      return NativeValue::map_entries(std::move(filtered), map.strict);
     }
     if (selector == "transform_values") {
       std::vector<std::pair<NativeValue, NativeValue>> transformed;
@@ -11532,7 +12908,7 @@ static NativeValue native_sequence_higher_order(
             entry.first,
             amber_native_call_closure(block_value, {entry.second, entry.first}));
       }
-      return NativeValue::map_entries(std::move(transformed), false);
+      return NativeValue::map_entries(std::move(transformed), map.strict);
     }
     if (selector == "transform_keys") {
       std::vector<std::pair<NativeValue, NativeValue>> transformed;
@@ -11540,9 +12916,9 @@ static NativeValue native_sequence_higher_order(
       for (const auto &entry : map.entries) {
         NativeValue key =
             amber_native_call_closure(block_value, {entry.first, entry.second});
-        native_map_store(transformed, key, entry.second, false);
+        native_map_store(transformed, key, entry.second, map.strict);
       }
-      return NativeValue::map_entries(std::move(transformed), false);
+      return NativeValue::map_entries(std::move(transformed), map.strict);
     }
     throw NativeBailout();
   }
@@ -11582,10 +12958,31 @@ static NativeValue native_sequence_higher_order(
 static NativeValue native_sequence_predicate(
     const NativeValue &value, const NativeValue &block_value, bool has_block,
     const std::string &selector) {
-  const std::vector<NativeValue> items = native_sequence_items_copy(value);
   bool saw_any = false;
   bool all_match = true;
   bool any_match = false;
+  if (native_visit_lazy_chars(value, [&](NativeValue item) {
+        saw_any = true;
+        const NativeValue predicate =
+            has_block ? amber_native_call_closure(
+                            block_value, {std::move(item)})
+                      : std::move(item);
+        const bool truthy = native_truthy(predicate);
+        any_match = any_match || truthy;
+        all_match = all_match && truthy;
+        return !((selector == "any?" && any_match) ||
+                 (selector == "all?" && !all_match) ||
+                 (selector == "none?" && any_match));
+      })) {
+    if (selector == "any?") return NativeValue::boolean(any_match);
+    if (selector == "all?") return NativeValue::boolean(!saw_any || all_match);
+    if (selector == "none?") return NativeValue::boolean(!any_match);
+    throw NativeBailout();
+  }
+  const std::vector<NativeValue> items = native_sequence_items_copy(value);
+  saw_any = false;
+  all_match = true;
+  any_match = false;
   for (const NativeValue &item : items) {
     saw_any = true;
     const NativeValue predicate =
@@ -11619,6 +13016,687 @@ static NativeValue native_sequence_reduce(
         amber_native_call_closure(block_value, {accumulator, items[index]});
   }
   return accumulator;
+}
+
+static void native_flatten_items(const NativeValue &value, std::int64_t depth,
+                                 std::vector<NativeValue> *out) {
+  if (depth != 0 && (value.tag == NativeValue::Tag::List ||
+                     value.tag == NativeValue::Tag::Tuple)) {
+    const std::vector<NativeValue> items = native_sequence_items_copy(value);
+    const std::int64_t next = depth < 0 ? -1 : depth - 1;
+    for (const NativeValue &item : items) native_flatten_items(item, next, out);
+    return;
+  }
+  out->push_back(value);
+}
+
+)AMBERCPP";
+  out << R"AMBERCPP(static std::string native_collection_canonical_selector(std::string selector) {
+  if (selector == "collect") return "map";
+  if (selector == "collect_concat") return "flat_map";
+  if (selector == "filter" || selector == "find_all") return "select";
+  if (selector == "detect") return "find";
+  if (selector == "inject") return "reduce";
+  if (selector == "each_slice") return "each";
+  return selector;
+}
+
+static std::vector<NativeValue> native_collection_sorted_items(
+    const NativeValue &receiver, const NativeValue &block, bool has_block,
+    const std::vector<std::pair<std::string, NativeValue>> &keywords) {
+  std::vector<NativeValue> items = native_sequence_items_copy(receiver);
+  NativeValue comparator = NativeValue::nullv();
+  bool reverse = false;
+  for (const auto &keyword : keywords) {
+    if (keyword.first == "reverse") reverse = native_truthy(keyword.second);
+    else if (keyword.first == "using") comparator = keyword.second;
+    else throw NativeRaised{native_named_error(
+        "ArgumentError", "sorted accepts only `reverse:` and `using:` keywords")};
+  }
+  if (comparator.tag != NativeValue::Tag::Null && has_block) {
+    throw NativeRaised{native_named_error(
+        "ArgumentError", "sorted accepts a key block or `using:`, not both")};
+  }
+  if (has_block) {
+    std::vector<std::pair<NativeValue, NativeValue>> keyed;
+    keyed.reserve(items.size());
+    for (const NativeValue &item : items)
+      keyed.push_back({item, amber_native_call_closure(block, {item})});
+    std::stable_sort(keyed.begin(), keyed.end(), [&](const auto &left,
+                                                      const auto &right) {
+      return native_compare_for_sort(left.second, right.second) < 0;
+    });
+    items.clear();
+    items.reserve(keyed.size());
+    for (auto &entry : keyed) items.push_back(std::move(entry.first));
+  } else if (comparator.tag != NativeValue::Tag::Null) {
+    std::stable_sort(items.begin(), items.end(), [&](const NativeValue &left,
+                                                     const NativeValue &right) {
+      return as_int(amber_native_call_closure(comparator, {left, right})) < 0;
+    });
+  } else {
+    std::stable_sort(items.begin(), items.end(), [&](const NativeValue &left,
+                                                     const NativeValue &right) {
+      return native_compare_for_sort(left, right) < 0;
+    });
+  }
+  if (reverse) std::reverse(items.begin(), items.end());
+  return items;
+}
+
+static NativeValue native_collection_query(
+    const NativeValue &receiver, std::string selector,
+    std::initializer_list<NativeValue> raw_args,
+    const NativeValue &block, bool has_block,
+    std::initializer_list<std::pair<std::string, NativeValue>> raw_keywords) {
+  selector = native_collection_canonical_selector(std::move(selector));
+  const std::vector<NativeValue> args(raw_args);
+  const std::vector<std::pair<std::string, NativeValue>> keywords(raw_keywords);
+  if (selector == "map" || selector == "select" || selector == "find")
+    return native_sequence_higher_order(receiver, block, selector);
+  if (selector == "reduce")
+    return native_sequence_reduce(receiver,
+                                  args.empty() ? NativeValue::nullv() : args[0],
+                                  !args.empty(), block);
+  if (selector == "to_array") return native_to_array(receiver);
+  if (selector == "reversed") return native_sequence_reversed(receiver);
+  if (selector == "sorted") {
+    return NativeValue::list(native_collection_sorted_items(
+        receiver, block, has_block, keywords));
+  }
+  if (receiver.tag == NativeValue::Tag::Map) {
+    const NativeMap &map = as_map(receiver);
+    if (selector == "each_pair") {
+      if (has_block) {
+        for (const auto &entry : map.entries) {
+          (void)amber_native_call_closure(block,
+                                          {entry.first, entry.second});
+        }
+        return receiver;
+      }
+      return native_map_entries_array(receiver);
+    }
+    if (selector == "fetch") {
+      const auto *found = native_map_find_entry(receiver, args[0]);
+      if (found != nullptr) return found->second;
+      if (args.size() == 2U) return args[1];
+      if (has_block) return amber_native_call_closure(block, {args[0]});
+      throw NativeBailout();
+    }
+    if (selector == "deconstruct_keys") {
+      if (args[0].tag == NativeValue::Tag::Null) return receiver;
+      std::vector<std::pair<NativeValue, NativeValue>> selected;
+      for (const NativeValue &key : native_sequence_items_copy(args[0])) {
+        const auto *found = native_map_find_entry(receiver, key);
+        if (found != nullptr) selected.push_back(*found);
+      }
+      return NativeValue::map_entries(std::move(selected), map.strict);
+    }
+    if (selector == "dig") {
+      NativeValue current = receiver;
+      for (const NativeValue &key : args) {
+        if (current.tag == NativeValue::Tag::Map) {
+          const auto *found = native_map_find_entry(current, key);
+          if (found == nullptr) return NativeValue::nullv();
+          current = found->second;
+        } else if (native_is_sequence(current) &&
+                   key.tag == NativeValue::Tag::Integer) {
+          std::int64_t index = key.scalar_value;
+          const auto items = native_sequence_items_copy(current);
+          if (index < 0) index += static_cast<std::int64_t>(items.size());
+          if (index < 0 || static_cast<std::size_t>(index) >= items.size())
+            return NativeValue::nullv();
+          current = items[static_cast<std::size_t>(index)];
+        } else {
+          return NativeValue::nullv();
+        }
+      }
+      return current;
+    }
+    if (selector == "filter_map") {
+      std::vector<NativeValue> result;
+      for (const auto &entry : map.entries) {
+        NativeValue value = amber_native_call_closure(block,
+                                                       {entry.first, entry.second});
+        if (native_truthy(value)) result.push_back(std::move(value));
+      }
+      return NativeValue::list(std::move(result));
+    }
+    if (selector == "transform") {
+      std::vector<std::pair<NativeValue, NativeValue>> result;
+      for (const auto &entry : map.entries) {
+        NativeValue pair = amber_native_call_closure(block,
+                                                     {entry.first, entry.second});
+        const auto values = native_sequence_items_copy(pair);
+        if (values.size() != 2U) throw NativeBailout();
+        native_map_store(result, values[0], values[1], map.strict);
+      }
+      return NativeValue::map_entries(std::move(result), map.strict);
+    }
+  }
+  if (selector == "find_index" && receiver.tag == NativeValue::Tag::Range &&
+      !as_range(receiver).has_finish) {
+    const NativeRange &range = as_range(receiver);
+    if (!range.has_start) throw NativeRaised{native_named_error(
+        "ArgumentError", "beginless Range has no first element")};
+    __int128 current = static_cast<__int128>(range.start);
+    for (std::int64_t index = 0;; ++index) {
+      if (current < static_cast<__int128>(
+                        std::numeric_limits<std::int64_t>::min()) ||
+          current > static_cast<__int128>(
+                        std::numeric_limits<std::int64_t>::max())) {
+        throw NativeRaised{native_named_error(
+            "ArgumentError", "open-ended Range iteration overflows Integer")};
+      }
+      const NativeValue value =
+          NativeValue::integer(static_cast<std::int64_t>(current));
+      if (native_truthy(amber_native_call_closure(block, {value})))
+        return NativeValue::integer(index);
+      current += static_cast<__int128>(range.step);
+    }
+  }
+  const std::vector<NativeValue> items = native_sequence_items_copy(receiver);
+  if (selector == "min" || selector == "max" || selector == "minmax") {
+    if (items.empty()) return NativeValue::nullv();
+    std::vector<NativeValue> keys;
+    if (has_block) {
+      keys.reserve(items.size());
+      for (const NativeValue &item : items)
+        keys.push_back(amber_native_call_closure(block, {item}));
+    }
+    const auto key_at = [&](std::size_t index) -> const NativeValue & {
+      return has_block ? keys[index] : items[index];
+    };
+    std::size_t min_index = 0U;
+    std::size_t max_index = 0U;
+    for (std::size_t index = 1U; index < items.size(); ++index) {
+      if (native_compare_for_sort(key_at(index), key_at(min_index)) < 0)
+        min_index = index;
+      if (native_compare_for_sort(key_at(index), key_at(max_index)) > 0)
+        max_index = index;
+    }
+    if (selector == "min") return items[min_index];
+    if (selector == "max") return items[max_index];
+    return NativeValue::list({items[min_index], items[max_index]});
+  }
+  if (selector == "filter_map" || selector == "flat_map") {
+    std::vector<NativeValue> result;
+    for (const NativeValue &item : items) {
+      NativeValue value = amber_native_call_closure(block, {item});
+      if (selector == "filter_map") {
+        if (native_truthy(value)) result.push_back(std::move(value));
+      } else {
+        const auto nested = native_sequence_items_copy(value);
+        result.insert(result.end(), nested.begin(), nested.end());
+      }
+    }
+    return NativeValue::list(std::move(result));
+  }
+  if (selector == "group") {
+    std::vector<std::pair<NativeValue, NativeValue>> groups;
+    for (const NativeValue &item : items) {
+      NativeValue key = amber_native_call_closure(block, {item});
+      bool found = false;
+      for (auto &entry : groups) {
+        if (native_map_keys_equivalent(entry.first,
+                                       native_normalize_map_key(key), false)) {
+          as_mutable_list(entry.second).items.push_back(item);
+          found = true;
+          break;
+        }
+      }
+      if (!found) native_map_store(groups, key, NativeValue::list({item}), false);
+    }
+    return NativeValue::map_entries(std::move(groups), false);
+  }
+  if (selector == "find_index") {
+    for (std::size_t index = 0; index < items.size(); ++index)
+      if (native_truthy(amber_native_call_closure(block, {items[index]})))
+        return NativeValue::integer(static_cast<std::int64_t>(index));
+    return NativeValue::nullv();
+  }
+  if (selector == "take_while" || selector == "drop_while") {
+    std::size_t boundary = 0;
+    while (boundary < items.size() &&
+           native_truthy(amber_native_call_closure(block, {items[boundary]})))
+      ++boundary;
+    if (selector == "take_while")
+      return NativeValue::list(std::vector<NativeValue>(
+          items.begin(), items.begin() + boundary));
+    return NativeValue::list(std::vector<NativeValue>(
+        items.begin() + boundary, items.end()));
+  }
+  if (selector == "partition") {
+    std::vector<NativeValue> yes;
+    std::vector<NativeValue> no;
+    for (const NativeValue &item : items) {
+      (native_truthy(amber_native_call_closure(block, {item})) ? yes : no)
+          .push_back(item);
+    }
+    return NativeValue::list(
+        {NativeValue::list(std::move(yes)), NativeValue::list(std::move(no))});
+  }
+  if (selector == "count") {
+    if (args.empty() && !has_block)
+      return NativeValue::integer(static_cast<std::int64_t>(items.size()));
+    std::int64_t count = 0;
+    for (const NativeValue &item : items) {
+      const bool match = has_block
+          ? native_truthy(amber_native_call_closure(block, {item}))
+          : native_value_equal(item, args[0]);
+      if (match) ++count;
+    }
+    return NativeValue::integer(count);
+  }
+  if (selector == "uniq") {
+    std::vector<NativeValue> unique;
+    std::vector<NativeValue> keys;
+    for (const NativeValue &item : items) {
+      NativeValue key = has_block ? amber_native_call_closure(block, {item}) : item;
+      if (!native_sequence_contains_value(keys, key)) {
+        keys.push_back(key);
+        unique.push_back(item);
+      }
+    }
+    return receiver.tag == NativeValue::Tag::Set
+        ? native_set_from_items(std::move(unique))
+        : NativeValue::list(std::move(unique));
+  }
+  if (selector == "sum" || selector == "product") {
+    const bool product = selector == "product";
+    NativeValue accumulator = args.empty()
+        ? NativeValue::integer(product ? 1 : 0) : args[0];
+    for (const NativeValue &item : items) {
+      if (accumulator.tag == NativeValue::Tag::Integer &&
+          item.tag == NativeValue::Tag::Integer) {
+        accumulator = NativeValue::integer(product
+            ? profile_mul_int64(accumulator.scalar_value, item.scalar_value)
+            : profile_add_int64(accumulator.scalar_value, item.scalar_value));
+      } else {
+        const double left = as_double_numeric(accumulator);
+        const double right = as_double_numeric(item);
+        accumulator = NativeValue::floating(product ? left * right : left + right);
+      }
+    }
+    return accumulator;
+  }
+  if (selector == "flattened") {
+    std::vector<NativeValue> result;
+    const std::int64_t depth = args.empty() ? -1 : as_int(args[0]);
+    for (const NativeValue &item : items) native_flatten_items(item, depth, &result);
+    return NativeValue::list(std::move(result));
+  }
+  if (selector == "tally") {
+    std::vector<std::pair<NativeValue, NativeValue>> result;
+    for (const NativeValue &item : items) {
+      bool found = false;
+      for (auto &entry : result) {
+        if (native_map_keys_equivalent(entry.first,
+                                       native_normalize_map_key(item), false)) {
+          entry.second = NativeValue::integer(entry.second.scalar_value + 1);
+          found = true;
+          break;
+        }
+      }
+      if (!found) native_map_store(result, item, NativeValue::integer(1), false);
+    }
+    return NativeValue::map_entries(std::move(result), false);
+  }
+  if (selector == "last") {
+    if (args.empty()) return items.empty() ? NativeValue::nullv() : items.back();
+    const std::int64_t requested = as_int(args[0]);
+    if (requested < 0) throw NativeBailout();
+    const std::size_t count = std::min<std::size_t>(requested, items.size());
+    return NativeValue::list(std::vector<NativeValue>(items.end() - count,
+                                                       items.end()));
+  }
+  if (selector == "each" || selector == "each_pair" ||
+      selector == "each_cons") {
+    const std::int64_t raw_width = selector == "each_pair" ? 2
+        : as_int(args[0]);
+    if (raw_width <= 0) throw NativeRaised{native_named_error(
+        "ArgumentError", selector + " window size must be > 0")};
+    const std::size_t width = static_cast<std::size_t>(raw_width);
+    std::int64_t raw_step = selector == "each" ? raw_width : 1;
+    for (const auto &keyword : keywords) {
+      if (keyword.first != "step") throw NativeRaised{native_named_error(
+          "TypeError", "unknown keyword argument")};
+      raw_step = as_int(keyword.second);
+    }
+    if (raw_step <= 0) throw NativeRaised{native_named_error(
+        "ArgumentError", selector + " step must be > 0")};
+    const std::size_t step = static_cast<std::size_t>(raw_step);
+    std::vector<NativeValue> windows;
+    for (std::size_t index = 0; index + width <= items.size(); index += step) {
+      NativeValue window = NativeValue::list(std::vector<NativeValue>(
+          items.begin() + index, items.begin() + index + width));
+      if (has_block) (void)amber_native_call_closure(block, {window});
+      else windows.push_back(std::move(window));
+    }
+    return has_block ? receiver : NativeValue::list(std::move(windows));
+  }
+  if (selector == "combination" || selector == "permutation") {
+    const std::int64_t raw = args.empty()
+        ? static_cast<std::int64_t>(items.size()) : as_int(args[0]);
+    if (raw < 0) throw NativeBailout();
+    const std::size_t count = static_cast<std::size_t>(raw);
+    std::vector<NativeValue> rows;
+    std::vector<NativeValue> current;
+    std::vector<bool> used(items.size(), false);
+    std::function<void(std::size_t)> visit = [&](std::size_t start) {
+      if (current.size() == count) {
+        rows.push_back(NativeValue::list(current));
+        return;
+      }
+      for (std::size_t index = selector == "combination" ? start : 0U;
+           index < items.size(); ++index) {
+        if (selector == "permutation" && used[index]) continue;
+        used[index] = true;
+        current.push_back(items[index]);
+        visit(selector == "combination" ? index + 1U : 0U);
+        current.pop_back();
+        used[index] = false;
+      }
+    };
+    visit(0U);
+    return NativeValue::list(std::move(rows));
+  }
+  throw NativeBailout();
+}
+
+)AMBERCPP";
+  out << R"AMBERCPP(static NativeValue native_collection_mutate(
+    const NativeValue &receiver, const std::string &selector,
+    std::initializer_list<NativeValue> raw_args,
+    const NativeValue &block, bool has_block,
+    std::initializer_list<std::pair<std::string, NativeValue>> raw_keywords) {
+  const std::vector<NativeValue> args(raw_args);
+  const std::vector<std::pair<std::string, NativeValue>> keywords(raw_keywords);
+  native_require_mutable_collection(receiver);
+  if (receiver.tag == NativeValue::Tag::List) {
+    NativeList &list = as_mutable_list(receiver);
+    if (selector == "push!" || selector == "append!") {
+      native_cycle_write_barrier(receiver, args);
+      list.items.insert(list.items.end(), args.begin(), args.end());
+      return receiver;
+    }
+    if (selector == "unshift!" || selector == "prepend!") {
+      native_cycle_write_barrier(receiver, args);
+      list.items.insert(list.items.begin(), args.begin(), args.end());
+      return receiver;
+    }
+    if (selector == "insert!") {
+      std::int64_t index = as_int(args[0]);
+      const std::int64_t size = static_cast<std::int64_t>(list.items.size());
+      index = index < 0 ? size + index + 1 : index;
+      if (index < 0 || index > size) throw NativeBailout();
+      for (std::size_t arg = 1; arg < args.size(); ++arg)
+        native_cycle_write_barrier(receiver, args[arg]);
+      list.items.insert(list.items.begin() + index, args.begin() + 1,
+                        args.end());
+      return receiver;
+    }
+    if (selector == "pop!" || selector == "shift!") {
+      if (list.items.empty()) return NativeValue::nullv();
+      const std::size_t index = selector == "pop!" ? list.items.size() - 1U : 0U;
+      NativeValue removed = list.items[index];
+      list.items.erase(list.items.begin() + static_cast<std::ptrdiff_t>(index));
+      return removed;
+    }
+    if (selector == "delete_at!") {
+      std::int64_t index = as_int(args[0]);
+      if (index < 0) index += static_cast<std::int64_t>(list.items.size());
+      if (index < 0 || static_cast<std::size_t>(index) >= list.items.size())
+        return NativeValue::nullv();
+      NativeValue removed = list.items[static_cast<std::size_t>(index)];
+      list.items.erase(list.items.begin() + index);
+      return removed;
+    }
+    if (selector == "delete!") {
+      bool removed = false;
+      std::vector<NativeValue> kept;
+      kept.reserve(list.items.size());
+      for (const NativeValue &item : list.items) {
+        if (native_value_equal(item, args[0])) removed = true;
+        else kept.push_back(item);
+      }
+      list.items = std::move(kept);
+      return removed ? args[0] : NativeValue::nullv();
+    }
+    if (selector == "clear!") {
+      list.items.clear();
+      return receiver;
+    }
+    if (selector == "replace!") {
+      native_cycle_write_barrier(receiver, args[0]);
+      list.items = native_sequence_items_copy(args[0]);
+      return receiver;
+    }
+    if (selector == "reverse!") {
+      std::reverse(list.items.begin(), list.items.end());
+      return receiver;
+    }
+    if (selector == "sort!") {
+      list.items = native_collection_sorted_items(receiver, block, has_block,
+                                                  keywords);
+      return receiver;
+    }
+    if (selector == "uniq!") {
+      std::vector<NativeValue> unique;
+      std::vector<NativeValue> keys;
+      for (const NativeValue &item : list.items) {
+        NativeValue key = has_block
+            ? amber_native_call_closure(block, {item}) : item;
+        if (!native_sequence_contains_value(keys, key)) {
+          keys.push_back(std::move(key));
+          unique.push_back(item);
+        }
+      }
+      list.items = std::move(unique);
+      return receiver;
+    }
+    if (selector == "flatten!") {
+      std::vector<NativeValue> flattened;
+      const std::int64_t depth = args.empty() ? -1 : as_int(args[0]);
+      for (const NativeValue &item : list.items)
+        native_flatten_items(item, depth, &flattened);
+      list.items = std::move(flattened);
+      return receiver;
+    }
+    if (selector == "compact!") {
+      std::vector<NativeValue> kept;
+      for (const NativeValue &item : list.items)
+        if (item.tag != NativeValue::Tag::Null) kept.push_back(item);
+      list.items = std::move(kept);
+      return receiver;
+    }
+    if (selector == "map!" || selector == "filter_map!") {
+      if (!has_block) throw NativeBailout();
+      std::vector<NativeValue> mapped;
+      for (const NativeValue &item : list.items) {
+        NativeValue value = amber_native_call_closure(block, {item});
+        if (selector == "map!" || native_truthy(value))
+          mapped.push_back(std::move(value));
+      }
+      native_cycle_write_barrier(receiver, mapped);
+      list.items = std::move(mapped);
+      return receiver;
+    }
+    if (selector == "select!" || selector == "keep_if!" ||
+        selector == "reject!" || selector == "delete_if!") {
+      if (!has_block) throw NativeBailout();
+      const bool keep_truthy = selector == "select!" || selector == "keep_if!";
+      std::vector<NativeValue> kept;
+      for (const NativeValue &item : list.items) {
+        const bool truthy = native_truthy(amber_native_call_closure(block, {item}));
+        if (truthy == keep_truthy) kept.push_back(item);
+      }
+      list.items = std::move(kept);
+      return receiver;
+    }
+  }
+  if (receiver.tag == NativeValue::Tag::Map) {
+    NativeMap &map = as_mutable_map(receiver);
+    if (selector == "delete!") {
+      const NativeValue key = native_normalize_map_key(args[0]);
+      NativeValue removed = NativeValue::nullv();
+      std::vector<std::pair<NativeValue, NativeValue>> kept;
+      kept.reserve(map.entries.size());
+      for (const auto &entry : map.entries) {
+        if (native_map_keys_equivalent(entry.first, key, map.strict))
+          removed = entry.second;
+        else
+          kept.push_back(entry);
+      }
+      map.entries = std::move(kept);
+      native_map_rebuild_index(map);
+      return removed;
+    }
+    if (selector == "shift!") {
+      if (map.entries.empty()) return NativeValue::nullv();
+      const auto entry = map.entries.front();
+      map.entries.erase(map.entries.begin());
+      native_map_rebuild_index(map);
+      return NativeValue::tuple({entry.first, entry.second});
+    }
+    if (selector == "clear!") {
+      map.entries.clear();
+      native_map_rebuild_index(map);
+      return receiver;
+    }
+    if (selector == "replace!") {
+      const NativeMap &other = as_map(args[0]);
+      native_cycle_write_barrier(receiver, args[0]);
+      map.entries.clear();
+      for (const auto &entry : other.entries)
+        native_map_store(map.entries, entry.first, entry.second, map.strict);
+      native_map_rebuild_index(map);
+      return receiver;
+    }
+    if (selector == "compact!") {
+      std::vector<std::pair<NativeValue, NativeValue>> kept;
+      for (const auto &entry : map.entries)
+        if (entry.second.tag != NativeValue::Tag::Null) kept.push_back(entry);
+      map.entries = std::move(kept);
+      native_map_rebuild_index(map);
+      return receiver;
+    }
+    if (selector == "merge!" || selector == "update!") {
+      const NativeMap &other = as_map(args[0]);
+      for (const auto &entry : other.entries) {
+        const auto *old = native_map_find_entry(receiver, entry.first);
+        NativeValue value = entry.second;
+        if (old != nullptr && has_block)
+          value = amber_native_call_closure(block,
+              {entry.first, old->second, entry.second});
+        native_cycle_write_barrier(receiver, {entry.first, value});
+        native_map_store(map, entry.first, value);
+      }
+      return receiver;
+    }
+    if (selector == "select!" || selector == "keep_if!" ||
+        selector == "reject!" || selector == "delete_if!") {
+      if (!has_block) throw NativeBailout();
+      const bool keep_truthy = selector == "select!" || selector == "keep_if!";
+      std::vector<std::pair<NativeValue, NativeValue>> kept;
+      for (const auto &entry : map.entries) {
+        const bool truthy = native_truthy(
+            amber_native_call_closure(block, {entry.first, entry.second}));
+        if (truthy == keep_truthy) kept.push_back(entry);
+      }
+      map.entries = std::move(kept);
+      native_map_rebuild_index(map);
+      return receiver;
+    }
+    if (selector == "transform_values!") {
+      if (!has_block) throw NativeBailout();
+      for (auto &entry : map.entries) {
+        NativeValue value =
+            amber_native_call_closure(block, {entry.second, entry.first});
+        native_cycle_write_barrier(receiver, value);
+        entry.second = std::move(value);
+      }
+      return receiver;
+    }
+    if (selector == "transform_keys!") {
+      if (!has_block) throw NativeBailout();
+      std::vector<std::pair<NativeValue, NativeValue>> transformed;
+      for (const auto &entry : map.entries) {
+        NativeValue key = amber_native_call_closure(block,
+                                                     {entry.first, entry.second});
+        native_cycle_write_barrier(receiver, {key, entry.second});
+        native_map_store(transformed, key, entry.second, map.strict);
+      }
+      map.entries = std::move(transformed);
+      native_map_rebuild_index(map);
+      return receiver;
+    }
+  }
+  if (receiver.tag == NativeValue::Tag::Set) {
+    NativeSet &set = as_mutable_set(receiver);
+    if (selector == "add!") {
+      native_cycle_write_barrier(receiver, args[0]);
+      native_append_unique_value(set.items, native_normalize_set_element(args[0]));
+      return receiver;
+    }
+    if (selector == "delete!") {
+      std::vector<NativeValue> kept;
+      for (const NativeValue &item : set.items)
+        if (!native_value_equal(item, args[0])) kept.push_back(item);
+      set.items = std::move(kept);
+      return receiver;
+    }
+    if (selector == "merge!") {
+      native_cycle_write_barrier(receiver, args[0]);
+      for (const NativeValue &item : native_sequence_items_copy(args[0]))
+        native_append_unique_value(set.items, native_normalize_set_element(item));
+      return receiver;
+    }
+    if (selector == "subtract!") {
+      const std::vector<NativeValue> other = native_sequence_items_copy(args[0]);
+      std::vector<NativeValue> kept;
+      for (const NativeValue &item : set.items)
+        if (!native_sequence_contains_value(other, item)) kept.push_back(item);
+      set.items = std::move(kept);
+      return receiver;
+    }
+    if (selector == "clear!") {
+      set.items.clear();
+      return receiver;
+    }
+    if (selector == "replace!") {
+      native_cycle_write_barrier(receiver, args[0]);
+      set.items.clear();
+      for (const NativeValue &item : native_sequence_items_copy(args[0]))
+        native_append_unique_value(set.items, native_normalize_set_element(item));
+      return receiver;
+    }
+    if (selector == "filter_map!") {
+      if (!has_block) throw NativeBailout();
+      std::vector<NativeValue> mapped;
+      for (const NativeValue &item : set.items) {
+        NativeValue value = amber_native_call_closure(block, {item});
+        if (native_truthy(value))
+          native_append_unique_value(mapped, native_normalize_set_element(value));
+      }
+      native_cycle_write_barrier(receiver, mapped);
+      set.items = std::move(mapped);
+      return receiver;
+    }
+    if (selector == "select!" || selector == "keep_if!" ||
+        selector == "reject!" || selector == "delete_if!") {
+      if (!has_block) throw NativeBailout();
+      const bool keep_truthy = selector == "select!" || selector == "keep_if!";
+      std::vector<NativeValue> kept;
+      for (const NativeValue &item : set.items) {
+        const bool truthy = native_truthy(amber_native_call_closure(block, {item}));
+        if (truthy == keep_truthy) kept.push_back(item);
+      }
+      set.items = std::move(kept);
+      return receiver;
+    }
+  }
+  throw NativeBailout();
 }
 
 static NativeValue native_index(const NativeValue &value, const NativeValue &key) {
@@ -11843,13 +13921,17 @@ static NativeValue native_range_new(const NativeValue &module,
                                     const NativeValue &step_value,
                                     bool has_step) {
   if (module.tag != NativeValue::Tag::RangeModule ||
-      start_value.tag != NativeValue::Tag::Integer ||
-      finish_value.tag != NativeValue::Tag::Integer) {
+      (start_value.tag != NativeValue::Tag::Integer &&
+       start_value.tag != NativeValue::Tag::Null) ||
+      (finish_value.tag != NativeValue::Tag::Integer &&
+       finish_value.tag != NativeValue::Tag::Null)) {
     throw NativeBailout();
   }
   NativeRange range;
-  range.start = start_value.scalar_value;
-  range.finish = finish_value.scalar_value;
+  range.has_start = start_value.tag == NativeValue::Tag::Integer;
+  range.has_finish = finish_value.tag == NativeValue::Tag::Integer;
+  if (range.has_start) range.start = start_value.scalar_value;
+  if (range.has_finish) range.finish = finish_value.scalar_value;
   range.inclusive_end = true;
   if (has_inclusive) {
     if (inclusive_value.tag != NativeValue::Tag::Bool) throw NativeBailout();
@@ -14156,8 +16238,12 @@ static NativeValue native_argparser_option(
   spec.multiple = native_arg_bool_kw(kwargs, "multiple", false);
   spec.negatable = flag && native_arg_bool_kw(kwargs, "negatable", false);
   if (const NativeValue *default_value = native_arg_kw(kwargs, "default")) {
+    native_cycle_write_barrier(receiver, *default_value);
     spec.has_default = true;
     spec.default_value = *default_value;
+  }
+  if (const NativeValue *choices = native_arg_kw(kwargs, "choices")) {
+    native_cycle_write_barrier(receiver, *choices);
   }
   native_arg_apply_choices(&spec, kwargs);
   if (auto env = native_arg_optional_text(kwargs, "env")) spec.env = *env;
@@ -14180,8 +16266,12 @@ static NativeValue native_argparser_positional(
   spec.required = native_arg_bool_kw(kwargs, "required", !rest);
   spec.multiple = rest || native_arg_bool_kw(kwargs, "multiple", rest);
   if (const NativeValue *default_value = native_arg_kw(kwargs, "default")) {
+    native_cycle_write_barrier(receiver, *default_value);
     spec.has_default = true;
     spec.default_value = *default_value;
+  }
+  if (const NativeValue *choices = native_arg_kw(kwargs, "choices")) {
+    native_cycle_write_barrier(receiver, *choices);
   }
   native_arg_apply_choices(&spec, kwargs);
   if (auto env = native_arg_optional_text(kwargs, "env")) spec.env = *env;
@@ -15854,6 +17944,9 @@ static NativeValue native_benchmark_send(
          "as_double_numeric(rhs));\n";
   out << "  if (native_value_is_string(lhs)) return "
          "native_string_concat(lhs, rhs);\n";
+  out << "  if (lhs.tag == NativeValue::Tag::Map && "
+         "rhs.tag == NativeValue::Tag::Map) return "
+         "native_map_merge(lhs, rhs);\n";
   out << "  if (native_is_sequence(lhs)) return "
          "native_sequence_concat(lhs, rhs);\n";
   out << "  throw NativeBailout();\n";
@@ -15872,6 +17965,8 @@ static NativeValue native_benchmark_send(
   out << "  if (numeric_tag(lhs) && numeric_tag(rhs)) return "
          "NativeValue::floating(as_double_numeric(lhs) - "
          "as_double_numeric(rhs));\n";
+  out << "  if (native_is_sequence(lhs)) return "
+         "native_set_operation(lhs, rhs, \"difference\");\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue numeric_mul(const NativeValue &lhs, "
@@ -15960,6 +18055,8 @@ static NativeValue native_benchmark_send(
   out << "  if (numeric_tag(lhs) && numeric_tag(rhs)) return "
          "NativeValue::boolean(as_double_numeric(lhs) < "
          "as_double_numeric(rhs));\n";
+  out << "  if (native_is_sequence(lhs)) return "
+         "native_set_operation(lhs, rhs, \"proper_subset?\");\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue numeric_gt(const NativeValue &lhs, "
@@ -15976,6 +18073,8 @@ static NativeValue native_benchmark_send(
   out << "  if (numeric_tag(lhs) && numeric_tag(rhs)) return "
          "NativeValue::boolean(as_double_numeric(lhs) > "
          "as_double_numeric(rhs));\n";
+  out << "  if (native_is_sequence(lhs)) return "
+         "native_set_operation(lhs, rhs, \"proper_superset?\");\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue numeric_le(const NativeValue &lhs, "
@@ -15992,6 +18091,8 @@ static NativeValue native_benchmark_send(
   out << "  if (numeric_tag(lhs) && numeric_tag(rhs)) return "
          "NativeValue::boolean(as_double_numeric(lhs) <= "
          "as_double_numeric(rhs));\n";
+  out << "  if (native_is_sequence(lhs)) return "
+         "native_set_operation(lhs, rhs, \"subset?\");\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue numeric_ge(const NativeValue &lhs, "
@@ -16008,6 +18109,8 @@ static NativeValue native_benchmark_send(
   out << "  if (numeric_tag(lhs) && numeric_tag(rhs)) return "
          "NativeValue::boolean(as_double_numeric(lhs) >= "
          "as_double_numeric(rhs));\n";
+  out << "  if (native_is_sequence(lhs)) return "
+         "native_set_operation(lhs, rhs, \"superset?\");\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue numeric_eq(const NativeValue &lhs, "
@@ -16091,13 +18194,12 @@ static NativeValue native_benchmark_send(
   out << "  case NativeValue::Tag::String:\n";
   out << "  case NativeValue::Tag::HeapString: return value;\n";
   out << "  case NativeValue::Tag::Symbol: return "
-         "NativeValue::string_ref(native_intern_string("
-         "native_symbol_text(value.scalar_value)));\n";
+         "NativeValue::heap_string(native_symbol_text(value.scalar_value));\n";
   out << "  case NativeValue::Tag::Null: return "
-         "NativeValue::string_ref(native_intern_string(\"null\"));\n";
+         "NativeValue::heap_string(\"null\");\n";
   out << "  case NativeValue::Tag::Bool: return "
-         "NativeValue::string_ref(native_intern_string("
-         "value.scalar_value != 0 ? \"true\" : \"false\"));\n";
+         "NativeValue::heap_string(value.scalar_value != 0 "
+         "? \"true\" : \"false\");\n";
   out << "  case NativeValue::Tag::Integer: return "
          "NativeValue::heap_string("
          "std::to_string(value.scalar_value));\n";
@@ -16165,8 +18267,8 @@ static NativeValue native_benchmark_send(
   out << "  case NativeValue::Tag::RangeModule:\n";
   out << "  case NativeValue::Tag::TimeModule:\n";
   out << "  case NativeValue::Tag::TimePeriodModule:\n";
-  out << "    return NativeValue::string_ref(native_intern_string("
-         "std::string(\"<type \") + native_type_tag_name(value) + \">\"));\n";
+  out << "    return NativeValue::heap_string("
+         "std::string(\"<type \") + native_type_tag_name(value) + \">\");\n";
   out << "  case NativeValue::Tag::Uuid:\n";
   out << "    return native_uuid_nullary(value, \"to_str\");\n";
   out << "  case NativeValue::Tag::Time:\n";
@@ -16628,23 +18730,23 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
 )AMBERCPP";
   for (std::uint32_t code_id : plan.native_code_ids) {
     out << "static NativeValue " << native_cpp_function_name(code_id)
-        << "(const std::vector<NativeValue> &args, "
+        << "(const NativeArgsView &args, "
            "NativeClosure *current_closure, "
            "NativeHandlerSeed *handler_seed);\n";
   }
   if (!plan.vm_callable_code_ids.empty()) {
     out << "static NativeValue amber_vm_fallback_call(std::uint32_t code_id, "
-           "const std::vector<NativeValue> &args, "
+           "const NativeArgsView &args, "
            "const NativeValue &self);\n";
   }
   if (!plan.native_extension_code_ids.empty()) {
     out << "static NativeValue amber_native_extension_call("
            "std::uint32_t code_id, "
-           "const std::vector<NativeValue> &args, "
+           "const NativeArgsView &args, "
            "const NativeValue &self);\n";
   }
   out << "\nstatic NativeValue amber_native_call_code("
-         "std::uint32_t code_id, const std::vector<NativeValue> &args, "
+         "std::uint32_t code_id, const NativeArgsView &args, "
          "NativeClosure *current_closure, "
          "NativeHandlerSeed *handler_seed = nullptr, "
          "bool cycle_boundary = true) {\n";
@@ -16751,6 +18853,15 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  std::size_t param_offset = 0;\n";
   out << "  std::size_t param_count = 0;\n";
   out << "};\n";
+  std::size_t max_native_method_param_count = 1U;
+  for (const EmittedNativeMethod &emitted : emitted_methods) {
+    max_native_method_param_count =
+        std::max(max_native_method_param_count,
+                 emitted.method->params.size());
+  }
+  out << "static constexpr std::size_t "
+         "kNativeMaxMethodParamCount = "
+      << max_native_method_param_count << "U;\n";
   out << "static const NativeMethodParamDescriptor "
          "kNativeMethodParams[] = {\n";
   out << "  {0U, 0U, 0U},\n";
@@ -16788,6 +18899,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
                               (amber::bytecode::kMethodParamFlagRest |
                                amber::bytecode::kMethodParamFlagKwRest |
                                amber::bytecode::kMethodParamFlagKeyword |
+                               amber::bytecode::kMethodParamFlagBlock |
                                amber::bytecode::kMethodParamFlagHasDefault)) !=
                              0U;
                     });
@@ -16801,7 +18913,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "}\n";
   out << R"AMBERCPP(static std::vector<NativeValue> native_shape_method_args(
     std::uint32_t code_id,
-    const std::vector<NativeValue> &positional,
+    const NativeArgsView &positional,
     const std::vector<NativeCallKeyword> &keywords,
     const NativeValue &block, NativeClosure *invocation) {
   const std::optional<NativeMethodDescriptor> descriptor =
@@ -16811,7 +18923,23 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
       kNativeMethodParams + descriptor->param_offset;
   std::vector<NativeValue> shaped(descriptor->param_count,
                                   NativeValue::nullv());
-  std::vector<bool> present(descriptor->param_count, false);
+  std::uint64_t present_bits = 0;
+  std::vector<bool> present_overflow;
+  if (descriptor->param_count > 64U) {
+    present_overflow.assign(descriptor->param_count, false);
+  }
+  const auto mark_present = [&](std::size_t slot) {
+    if (descriptor->param_count <= 64U) {
+      present_bits |= std::uint64_t{1} << slot;
+    } else {
+      present_overflow[slot] = true;
+    }
+  };
+  const auto is_present = [&](std::size_t slot) {
+    return descriptor->param_count <= 64U
+               ? (present_bits & (std::uint64_t{1} << slot)) != 0
+               : present_overflow[slot];
+  };
 
   for (std::size_t i = 0; i < keywords.size(); ++i) {
     for (std::size_t j = i + 1U; j < keywords.size(); ++j) {
@@ -16822,7 +18950,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     }
   }
 
-  std::vector<std::size_t> positional_slots;
+  std::array<std::size_t, kNativeMaxMethodParamCount> positional_slots;
+  std::size_t positional_slot_count = 0;
   std::optional<std::size_t> rest_ordinal;
   for (std::size_t slot = 0; slot < descriptor->param_count; ++slot) {
     const std::uint32_t flags = params[slot].flags;
@@ -16832,25 +18961,25 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
       continue;
     }
     if ((flags & amber::bytecode::kMethodParamFlagRest) != 0U) {
-      rest_ordinal = positional_slots.size();
+      rest_ordinal = positional_slot_count;
     }
-    positional_slots.push_back(slot);
+    positional_slots[positional_slot_count++] = slot;
   }
 
   if (!rest_ordinal.has_value()) {
     const std::size_t count =
-        std::min(positional.size(), positional_slots.size());
+        std::min(positional.size(), positional_slot_count);
     for (std::size_t index = 0; index < count; ++index) {
       shaped[positional_slots[index]] = positional[index];
-      present[positional_slots[index]] = true;
+      mark_present(positional_slots[index]);
     }
-    if (positional.size() > positional_slots.size()) {
+    if (positional.size() > positional_slot_count) {
       throw NativeRaised{native_named_error(
           "TypeError", "too many positional arguments")};
     }
   } else {
     const std::size_t before = *rest_ordinal;
-    const std::size_t after = positional_slots.size() - before - 1U;
+    const std::size_t after = positional_slot_count - before - 1U;
     if (positional.size() < before + after) {
       throw NativeRaised{native_named_error(
           "TypeError", "too few positional arguments")};
@@ -16858,7 +18987,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     const std::size_t rest_count = positional.size() - before - after;
     for (std::size_t index = 0; index < before; ++index) {
       shaped[positional_slots[index]] = positional[index];
-      present[positional_slots[index]] = true;
+      mark_present(positional_slots[index]);
     }
     std::vector<NativeValue> rest_items(
         positional.begin() + static_cast<std::ptrdiff_t>(before),
@@ -16866,15 +18995,32 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
             static_cast<std::ptrdiff_t>(before + rest_count));
     shaped[positional_slots[before]] =
         NativeValue::tuple(std::move(rest_items));
-    present[positional_slots[before]] = true;
+    mark_present(positional_slots[before]);
     for (std::size_t index = 0; index < after; ++index) {
       const std::size_t slot = positional_slots[before + 1U + index];
       shaped[slot] = positional[before + rest_count + index];
-      present[slot] = true;
+      mark_present(slot);
     }
   }
 
-  std::vector<bool> keyword_consumed(keywords.size(), false);
+  std::uint64_t keyword_consumed_bits = 0;
+  std::vector<bool> keyword_consumed_overflow;
+  if (keywords.size() > 64U) {
+    keyword_consumed_overflow.assign(keywords.size(), false);
+  }
+  const auto mark_keyword_consumed = [&](std::size_t index) {
+    if (keywords.size() <= 64U) {
+      keyword_consumed_bits |= std::uint64_t{1} << index;
+    } else {
+      keyword_consumed_overflow[index] = true;
+    }
+  };
+  const auto keyword_was_consumed = [&](std::size_t index) {
+    return keywords.size() <= 64U
+               ? (keyword_consumed_bits &
+                  (std::uint64_t{1} << index)) != 0
+               : keyword_consumed_overflow[index];
+  };
   for (std::size_t slot = 0; slot < descriptor->param_count; ++slot) {
     if ((params[slot].flags & amber::bytecode::kMethodParamFlagKeyword) == 0U) {
       continue;
@@ -16884,8 +19030,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
       if (keywords[keyword_index].name ==
           native_symbol_text(params[slot].keyword_symbol_id)) {
         shaped[slot] = keywords[keyword_index].value;
-        present[slot] = true;
-        keyword_consumed[keyword_index] = true;
+        mark_present(slot);
+        mark_keyword_consumed(keyword_index);
         break;
       }
     }
@@ -16901,7 +19047,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   if (keyword_rest_slot.has_value()) {
     std::vector<std::pair<NativeValue, NativeValue>> entries;
     for (std::size_t index = 0; index < keywords.size(); ++index) {
-      if (!keyword_consumed[index]) {
+      if (!keyword_was_consumed(index)) {
         NativeValue key = keywords[index].symbol_id < kModuleSymbolCount
                               ? NativeValue::symbol_ref(
                                     keywords[index].symbol_id)
@@ -16912,10 +19058,10 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     }
     shaped[*keyword_rest_slot] =
         NativeValue::map_entries(std::move(entries), false);
-    present[*keyword_rest_slot] = true;
+    mark_present(*keyword_rest_slot);
   } else {
-    for (bool consumed : keyword_consumed) {
-      if (!consumed) {
+    for (std::size_t index = 0; index < keywords.size(); ++index) {
+      if (!keyword_was_consumed(index)) {
         throw NativeRaised{native_named_error(
             "TypeError", "unknown keyword argument")};
       }
@@ -16925,9 +19071,9 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   for (std::size_t slot = 0; slot < descriptor->param_count; ++slot) {
     if ((params[slot].flags & amber::bytecode::kMethodParamFlagBlock) != 0U) {
       shaped[slot] = block;
-      present[slot] = true;
+      mark_present(slot);
     }
-    if (!present[slot] &&
+    if (!is_present(slot) &&
         (params[slot].flags & amber::bytecode::kMethodParamFlagHasDefault) ==
             0U) {
       throw NativeRaised{native_named_error(
@@ -16936,7 +19082,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   }
 
   for (std::size_t slot = 0; slot < descriptor->param_count; ++slot) {
-    if (present[slot] ||
+    if (is_present(slot) ||
         (params[slot].flags & amber::bytecode::kMethodParamFlagHasDefault) ==
             0U) {
       continue;
@@ -16946,14 +19092,14 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     thunk.code_id = params[slot].default_thunk_id;
     shaped[slot] = amber_native_call_code(
         params[slot].default_thunk_id, shaped, &thunk);
-    present[slot] = true;
+    mark_present(slot);
   }
   return shaped;
 }
 
 )AMBERCPP";
   out << "static NativeValue amber_native_call_shaped_method("
-         "std::uint32_t code_id, const std::vector<NativeValue> &args, "
+         "std::uint32_t code_id, const NativeArgsView &args, "
          "NativeClosure *invocation) {\n";
   out << "  if (invocation == nullptr) throw NativeBailout();\n";
   out << "  switch (code_id) {\n";
@@ -17055,7 +19201,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  return std::nullopt;\n";
   out << "}\n\n";
   out << "static NativeValue amber_native_call_closure_with_keywords("
-         "const NativeValue &value, const std::vector<NativeValue> &args, "
+         "const NativeValue &value, const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block) {\n";
   out << "  NativeClosure *closure = as_closure(value);\n";
@@ -17076,13 +19222,13 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "invocation.code_id, args, &invocation);\n";
   out << "}\n\n";
   out << "static NativeValue amber_native_call_closure("
-         "const NativeValue &value, const std::vector<NativeValue> &args) "
+         "const NativeValue &value, const NativeArgsView &args) "
          "{\n";
   out << "  return amber_native_call_closure_with_keywords("
          "value, args, {}, NativeValue::nullv());\n";
   out << "}\n\n";
   out << "static NativeValue amber_native_call_value("
-         "const NativeValue &value, const std::vector<NativeValue> &args, "
+         "const NativeValue &value, const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block) {\n";
   out << "  try {\n";
@@ -17093,6 +19239,11 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "throw NativeBailout();\n";
   out << "    return NativeValue::result("
          "value.tag == NativeValue::Tag::ResultOkFunction, *args.begin());\n";
+  out << "  }\n";
+  out << "  if (value.tag == NativeValue::Tag::DescFunction) {\n";
+  out << "    if (args.size() != 1U || kwargs.size() != 0U || "
+         "block.tag != NativeValue::Tag::Null) throw NativeBailout();\n";
+  out << "    return NativeValue::tuple({value, *args.begin()});\n";
   out << "  }\n";
   out << "  if (value.tag == NativeValue::Tag::ErrorClass) {\n";
   out << "    if (kwargs.size() != 0U) throw NativeRaised{native_named_error("
@@ -17138,6 +19289,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  NativeValue value = eager "
          "? eager_value "
          ": amber_native_call_value(block, {}, {}, NativeValue::nullv());\n";
+  out << "  native_cycle_write_barrier(map_value, {key, value});\n";
   out << "  native_map_store(as_mutable_map(map_value), key, value);\n";
   out << "  return value;\n";
   out << "}\n\n";
@@ -17249,7 +19401,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   }
   out << "static NativeValue native_http_send("
          "const NativeValue &receiver, const std::string &selector, "
-         "const std::vector<NativeValue> &args, "
+         "const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block) {\n";
   if (plan.uses_native_stdlib_bridge) {
@@ -17287,7 +19439,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "    NativeCycleSuspension suspension;\n";
     out << "    return amber_native_bridge_world().invoke_native_stdlib_send("
            "std::move(runtime_receiver), selector, runtime_args, "
-           "runtime_kwargs, std::move(runtime_block));\n";
+           "runtime_kwargs, std::move(runtime_block), false);\n";
     out << "  }();\n";
     out << "  NativeValue result = amber_native_bridge_execution_result("
            "runtime_result);\n";
@@ -17585,16 +19737,26 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "    return NativeValue::atomic(*args.begin());\n";
   out << "  }\n";
   out << "  NativeAtomic &atomic = as_mutable_atomic(receiver);\n";
-  out << "  std::lock_guard<std::mutex> guard(atomic.mutex);\n";
+  out << "  NativeCycleApplicationLockScope application_lock_scope;\n";
+  out << "  NativeCycleSuspension suspension;\n";
+  // Waiting for an application lock is not Amber execution. Stay outside the
+  // cycle mutator set while the OS blocks this thread, then resume only after
+  // the resource is owned. This avoids both collector/app-lock inversion and
+  // the former try_lock/yield loop's CPU and gate traffic under contention.
+  out << "  std::unique_lock<std::mutex> guard(atomic.mutex);\n";
+  out << "  suspension.resume();\n";
   out << "  if (selector == \"get\" && args.size() == 0U && "
          "block.tag == NativeValue::Tag::Null) return atomic.value;\n";
   out << "  if (selector == \"set\" && args.size() == 1U && "
-         "block.tag == NativeValue::Tag::Null) { atomic.value = *args.begin(); "
-         "return atomic.value; }\n";
+         "block.tag == NativeValue::Tag::Null) {\n";
+  out << "    native_cycle_write_barrier(receiver, *args.begin());\n";
+  out << "    atomic.value = *args.begin(); return atomic.value;\n";
+  out << "  }\n";
   out << "  if (selector != \"update\" || args.size() != 0U || "
          "block.tag == NativeValue::Tag::Null) throw NativeBailout();\n";
   out << "  NativeValue next = "
          "amber_native_call_closure(block, {atomic.value});\n";
+  out << "  native_cycle_write_barrier(receiver, next);\n";
   out << "  atomic.value = next;\n";
   out << "  return next;\n";
   out << "}\n\n";
@@ -17609,12 +19771,15 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  NativeMutex &mutex = as_mutable_mutex(receiver);\n";
   out << "  if (selector != \"synchronize\" || args.size() != 0U || "
          "block.tag == NativeValue::Tag::Null) throw NativeBailout();\n";
-  out << "  std::lock_guard<std::mutex> guard(mutex.mutex);\n";
+  out << "  NativeCycleApplicationLockScope application_lock_scope;\n";
+  out << "  NativeCycleSuspension suspension;\n";
+  out << "  std::unique_lock<std::mutex> guard(mutex.mutex);\n";
+  out << "  suspension.resume();\n";
   out << "  return amber_native_call_closure(block, {});\n";
   out << "}\n\n";
   out << "static NativeValue native_error_send("
          "const NativeValue &receiver, const std::string &selector, "
-         "const std::vector<NativeValue> &args, NativeValue block) {\n";
+         "const NativeArgsView &args, NativeValue block) {\n";
   out << "  if (block.tag != NativeValue::Tag::Null) "
          "throw NativeBailout();\n";
   out << "  if (receiver.tag == NativeValue::Tag::ErrorNamespace) {\n";
@@ -17777,14 +19942,25 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "static std::optional<NativeUserMethod> native_lookup_user_method("
          "std::uint32_t class_index, const std::string &selector, "
          "bool class_side) {\n";
+  out << "  if (class_index >= " << module.classes.size()
+      << "U) throw NativeBailout();\n";
+  out << "  static thread_local std::array<std::unordered_map<std::string, "
+         "std::optional<NativeUserMethod>>, "
+      << module.classes.size() * 2U << "U> cache;\n";
+  out << "  auto &class_cache = cache[class_index * 2U + "
+         "(class_side ? 1U : 0U)];\n";
+  out << "  const auto cached = class_cache.find(selector);\n";
+  out << "  if (cached != class_cache.end()) return cached->second;\n";
   out << "  std::vector<bool> active(" << module.classes.size()
       << "U, false);\n";
-  out << "  return native_lookup_user_method_impl(class_index, selector, "
-         "class_side, active);\n";
+  out << "  const auto resolved = native_lookup_user_method_impl("
+         "class_index, selector, class_side, active);\n";
+  out << "  class_cache.emplace(selector, resolved);\n";
+  out << "  return resolved;\n";
   out << "}\n";
   out << "static void native_apply_auto_assigns(std::uint32_t code_id, "
          "const NativeValue &receiver, "
-         "const std::vector<NativeValue> &args) {\n";
+         "const NativeArgsView &args) {\n";
   out << "  switch (code_id) {\n";
   std::set<std::uint32_t> emitted_auto_assign_codes;
   for (const amber::bytecode::BcMethod &method : module.methods) {
@@ -17844,7 +20020,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "}\n";
   out << "static NativeValue native_user_send(const NativeValue &receiver, "
          "const std::string &selector, "
-         "const std::vector<NativeValue> &args, "
+         "const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
          "NativeValue block) {\n";
   out << "  const bool class_side = receiver.tag == NativeValue::Tag::Class;\n";
@@ -17857,6 +20033,21 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "const NativeValue &self) -> NativeValue {\n";
   out << "    NativeClosure invocation; invocation.code_id = method.code_id; "
          "invocation.self = self; invocation.block = block;\n";
+  out << "    if (kwargs.empty() && "
+         "!native_method_needs_param_shaping(method.code_id)) {\n";
+  out << "      const auto descriptor = "
+         "native_method_descriptor(method.code_id);\n";
+  out << "      if (!descriptor.has_value()) throw NativeBailout();\n";
+  out << "      if (args.size() > descriptor->param_count) "
+         "throw NativeRaised{native_named_error("
+         "\"TypeError\", \"too many positional arguments\")};\n";
+  out << "      if (args.size() < descriptor->param_count) "
+         "throw NativeRaised{native_named_error("
+         "\"TypeError\", \"missing required parameter\")};\n";
+  out << "      native_apply_auto_assigns(method.code_id, self, args);\n";
+  out << "      return amber_native_call_shaped_method("
+         "method.code_id, args, &invocation);\n";
+  out << "    }\n";
   out << "    std::vector<NativeValue> shaped = native_shape_method_args("
          "method.code_id, args, kwargs, block, &invocation);\n";
   out << "    native_apply_auto_assigns(method.code_id, self, shaped);\n";
@@ -18138,8 +20329,19 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     // representations. A lazily-created host world owns the runtime values and
     // registered native package state needed at that boundary. Direct extension
     // calls do not execute bytecode; a separately classified VM fallback may.
+    out << "static const std::shared_ptr<const amber::bytecode::BcModule> &"
+           "amber_native_bridge_module() {\n";
+    out << "  static auto *module = [] {\n";
+    out << "    auto decoded = amber::bytecode::deserialize_module("
+           "embedded_bytecode());\n";
+    out << "    if (!decoded.ok()) throw NativeBailout();\n";
+    out << "    return new std::shared_ptr<const amber::bytecode::BcModule>("
+           "std::make_shared<const amber::bytecode::BcModule>("
+           "std::move(decoded.module)));\n";
+    out << "  }();\n";
+    out << "  return *module;\n";
+    out << "}\n\n";
     out << "struct AmberNativeBridgeState {\n";
-    out << "  amber::bytecode::DecodeResult decoded;\n";
     out << "  std::unique_ptr<amber::runtime::RuntimeWorld> world;\n";
     out << "  std::vector<std::string> runtime_strings;\n";
     out << "  std::vector<std::string> runtime_symbols;\n";
@@ -18148,32 +20350,69 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "static std::unique_ptr<AmberNativeBridgeState> "
            "amber_native_bridge_make_state() {\n";
     out << "  auto out_state = std::make_unique<AmberNativeBridgeState>();\n";
-    out << "    out_state->decoded = "
-           "amber::bytecode::deserialize_module(embedded_bytecode());\n";
-    out << "    if (!out_state->decoded.ok()) throw NativeBailout();\n";
-    out << "    out_state->runtime_strings = "
-           "out_state->decoded.module.strings;\n";
-    out << "    out_state->runtime_symbols = "
-           "out_state->decoded.module.symbols;\n";
+    out << "    const auto &module = amber_native_bridge_module();\n";
+    out << "    out_state->runtime_strings = module->strings;\n";
+    out << "    out_state->runtime_symbols = module->symbols;\n";
     out << "    out_state->world = "
            "[&] { amber::runtime::RuntimeWorldOptions options; "
            "options.capability_grants = embedded_capability_grants(); "
            "return std::make_unique<amber::runtime::RuntimeWorld>("
-           "out_state->decoded.module, std::move(options)); }();\n";
+           "module, std::move(options)); }();\n";
     out << "  return out_state;\n";
     out << "}\n\n";
-    // Scheduler workers can still unwind request scopes while process-global
-    // destructors are running. Keep the tiny bridge-state pool alive until the
-    // OS tears down the process instead of racing its vector/mutex destructors.
-    out << "static std::mutex &amber_native_bridge_state_pool_mutex() {\n";
-    out << "  static auto *mutex = new std::mutex();\n";
-    out << "  return *mutex;\n";
-    out << "}\n";
-    out << "static std::vector<std::unique_ptr<AmberNativeBridgeState>> &"
+    // A fixed lock-free exchange avoids both a process-global pool mutex and a
+    // heavyweight RuntimeWorld retained by every scheduler thread. At most the
+    // number of concurrently active bridge states is normally populated.
+    out << "static constexpr std::size_t "
+           "kAmberNativeBridgeStatePoolSlots = 64;\n";
+    out << "static std::array<std::atomic<AmberNativeBridgeState *>, "
+           "kAmberNativeBridgeStatePoolSlots> &"
            "amber_native_bridge_state_pool() {\n";
-    out << "  static auto *pool = new std::vector<std::unique_ptr<"
-           "AmberNativeBridgeState>>();\n";
+    out << "  static auto *pool = [] {\n";
+    out << "    auto *slots = new std::array<std::atomic<"
+           "AmberNativeBridgeState *>, "
+           "kAmberNativeBridgeStatePoolSlots>();\n";
+    out << "    for (auto &slot : *slots) "
+           "slot.store(nullptr, std::memory_order_relaxed);\n";
+    out << "    return slots;\n";
+    out << "  }();\n";
     out << "  return *pool;\n";
+    out << "}\n";
+    out << "static std::size_t amber_native_bridge_state_pool_start() {\n";
+    out << "  static thread_local const std::size_t start = "
+           "std::hash<std::thread::id>{}(std::this_thread::get_id()) % "
+           "kAmberNativeBridgeStatePoolSlots;\n";
+    out << "  return start;\n";
+    out << "}\n";
+    out << "static std::unique_ptr<AmberNativeBridgeState> "
+           "amber_native_bridge_state_pool_take() {\n";
+    out << "  auto &pool = amber_native_bridge_state_pool();\n";
+    out << "  const std::size_t start = "
+           "amber_native_bridge_state_pool_start();\n";
+    out << "  for (std::size_t offset = 0; "
+           "offset < kAmberNativeBridgeStatePoolSlots; ++offset) {\n";
+    out << "    AmberNativeBridgeState *state = "
+           "pool[(start + offset) % kAmberNativeBridgeStatePoolSlots]"
+           ".exchange(nullptr, std::memory_order_acq_rel);\n";
+    out << "    if (state != nullptr) "
+           "return std::unique_ptr<AmberNativeBridgeState>(state);\n";
+    out << "  }\n";
+    out << "  return nullptr;\n";
+    out << "}\n";
+    out << "static bool amber_native_bridge_state_pool_put("
+           "AmberNativeBridgeState *state) {\n";
+    out << "  auto &pool = amber_native_bridge_state_pool();\n";
+    out << "  const std::size_t start = "
+           "amber_native_bridge_state_pool_start();\n";
+    out << "  for (std::size_t offset = 0; "
+           "offset < kAmberNativeBridgeStatePoolSlots; ++offset) {\n";
+    out << "    AmberNativeBridgeState *empty = nullptr;\n";
+    out << "    if (pool[(start + offset) % "
+           "kAmberNativeBridgeStatePoolSlots].compare_exchange_strong("
+           "empty, state, std::memory_order_release, "
+           "std::memory_order_relaxed)) return true;\n";
+    out << "  }\n";
+    out << "  return false;\n";
     out << "}\n";
     out << "static thread_local AmberNativeBridgeState "
            "*amber_native_bridge_request_state = nullptr;\n";
@@ -18192,15 +20431,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     state_ = previous_;
     return;
   }
-  std::unique_ptr<AmberNativeBridgeState> acquired;
-  {
-    std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex());
-    auto &pool = amber_native_bridge_state_pool();
-    if (!pool.empty()) {
-      acquired = std::move(pool.back());
-      pool.pop_back();
-    }
-  }
+  std::unique_ptr<AmberNativeBridgeState> acquired =
+      amber_native_bridge_state_pool_take();
   if (acquired == nullptr) acquired = amber_native_bridge_make_state();
   state_ = acquired.release();
   ++state_->pooled_request_uses;
@@ -18216,15 +20448,14 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
   if (state_->pooled_request_uses >= kBridgeWorldRequestLimit) {
     delete state_;
 #if defined(__APPLE__)
-    // A bridge world owns a decoded module, runtime string tables, and a VM
-    // session. Once those large allocations are gone, ask Darwin's system
-    // allocator to return unused pages instead of retaining an RSS high-water.
+    // The immutable decoded module stays shared. Once a bridge world's mutable
+    // runtime tables and VM session are gone, return their unused pages instead
+    // of retaining an RSS high-water.
     (void)malloc_zone_pressure_relief(nullptr, 0);
 #endif
     return;
   }
-  std::lock_guard<std::mutex> guard(amber_native_bridge_state_pool_mutex());
-  amber_native_bridge_state_pool().emplace_back(state_);
+  if (!amber_native_bridge_state_pool_put(state_)) delete state_;
 }
 
 )AMBERCPP";
@@ -18245,11 +20476,11 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
 )AMBERCPP";
     out << "static const std::vector<std::string> &"
            "amber_native_bridge_module_strings() {\n";
-    out << "  return amber_native_bridge_state().decoded.module.strings;\n";
+    out << "  return amber_native_bridge_module()->strings;\n";
     out << "}\n\n";
     out << "static const std::vector<std::string> &"
            "amber_native_bridge_module_symbols() {\n";
-    out << "  return amber_native_bridge_state().decoded.module.symbols;\n";
+    out << "  return amber_native_bridge_module()->symbols;\n";
     out << "}\n\n";
     out << "static NativeValue amber_native_bridge_result("
            "const amber::runtime::Value &value, "
@@ -18392,13 +20623,25 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
     out << "  return amber_native_bridge_result(value, state.runtime_strings, "
            "state.runtime_symbols);\n";
     out << "}\n\n";
+    out << "static void amber_native_bridge_apply_runtime_names("
+           "std::vector<std::string> &target, "
+           "const std::vector<std::string> &delta, "
+           "std::size_t offset) {\n";
+    out << "  if (delta.empty()) return;\n";
+    out << "  if (offset > target.size()) throw NativeBailout("
+           "\"native bridge name delta is out of sequence\");\n";
+    out << "  target.resize(offset);\n";
+    out << "  target.insert(target.end(), delta.begin(), delta.end());\n";
+    out << "}\n\n";
     out << "static NativeValue amber_native_bridge_execution_result("
            "const amber::runtime::ExecutionResult &result) {\n";
     out << "  AmberNativeBridgeState &state = amber_native_bridge_state();\n";
-    out << "  if (!result.runtime_strings.empty()) "
-           "state.runtime_strings = result.runtime_strings;\n";
-    out << "  if (!result.runtime_symbols.empty()) "
-           "state.runtime_symbols = result.runtime_symbols;\n";
+    out << "  amber_native_bridge_apply_runtime_names("
+           "state.runtime_strings, result.runtime_strings, "
+           "result.runtime_string_offset);\n";
+    out << "  amber_native_bridge_apply_runtime_names("
+           "state.runtime_symbols, result.runtime_symbols, "
+           "result.runtime_symbol_offset);\n";
     out << "  if (!result.ok()) {\n";
     out << "    if (!result.fault.has_value()) throw NativeBailout();\n";
     out << "    throw NativeRaised{native_named_error("
@@ -18496,7 +20739,7 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
     if (!plan.vm_callable_code_ids.empty()) {
       out << "static NativeValue amber_vm_fallback_call("
              "std::uint32_t code_id, "
-             "const std::vector<NativeValue> &args, "
+             "const NativeArgsView &args, "
              "const NativeValue &self) {\n";
       out << "  AmberNativeBridgeGcScope bridge_gc("
              "amber_native_bridge_world());\n";
@@ -18511,10 +20754,12 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
              "vm_self);\n";
       out << "  AmberNativeBridgeState &bridge_state = "
              "amber_native_bridge_state();\n";
-      out << "  if (!result.runtime_strings.empty()) "
-             "bridge_state.runtime_strings = result.runtime_strings;\n";
-      out << "  if (!result.runtime_symbols.empty()) "
-             "bridge_state.runtime_symbols = result.runtime_symbols;\n";
+      out << "  amber_native_bridge_apply_runtime_names("
+             "bridge_state.runtime_strings, result.runtime_strings, "
+             "result.runtime_string_offset);\n";
+      out << "  amber_native_bridge_apply_runtime_names("
+             "bridge_state.runtime_symbols, result.runtime_symbols, "
+             "result.runtime_symbol_offset);\n";
       out << "  if (!result.ok()) {\n";
       out << "    if (!result.fault.has_value()) throw NativeBailout();\n";
       out << "    throw NativeRaised{native_named_error("
@@ -18532,7 +20777,7 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
     if (!plan.native_extension_code_ids.empty()) {
       out << "static NativeValue amber_native_extension_call("
              "std::uint32_t code_id, "
-             "const std::vector<NativeValue> &args, "
+             "const NativeArgsView &args, "
              "const NativeValue &self) {\n";
       out << "  AmberNativeBridgeGcScope bridge_gc("
              "amber_native_bridge_world());\n";
@@ -18545,25 +20790,22 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
              "amber_native_bridge_argument(self);\n";
       out << "  const amber::runtime::ExecutionResult result = "
              "amber_native_bridge_world().invoke_native_extension("
-             "code_id, extension_args, extension_self);\n";
+             "code_id, extension_args, extension_self, false);\n";
       out << "  AmberNativeBridgeState &bridge_state = "
              "amber_native_bridge_state();\n";
-      out << "  if (!result.runtime_strings.empty()) "
-             "bridge_state.runtime_strings = result.runtime_strings;\n";
-      out << "  if (!result.runtime_symbols.empty()) "
-             "bridge_state.runtime_symbols = result.runtime_symbols;\n";
+      out << "  amber_native_bridge_apply_runtime_names("
+             "bridge_state.runtime_strings, result.runtime_strings, "
+             "result.runtime_string_offset);\n";
+      out << "  amber_native_bridge_apply_runtime_names("
+             "bridge_state.runtime_symbols, result.runtime_symbols, "
+             "result.runtime_symbol_offset);\n";
       out << "  if (!result.ok()) {\n";
       out << "    if (!result.fault.has_value()) throw NativeBailout();\n";
       out << "    throw NativeRaised{native_named_error("
              "result.fault->error_name, result.fault->message)};\n";
       out << "  }\n";
       out << "  return amber_native_bridge_result(result.value, "
-             "result.runtime_strings.empty() "
-             "? amber_native_bridge_module_strings() "
-             ": result.runtime_strings, "
-             "result.runtime_symbols.empty() "
-             "? amber_native_bridge_module_symbols() "
-             ": result.runtime_symbols);\n";
+             "bridge_state.runtime_strings, bridge_state.runtime_symbols);\n";
       out << "}\n\n";
     }
   }
@@ -18622,6 +20864,7 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
   out << "  case NativeValue::Tag::TaskModule: return \"task\";\n";
   out << "  case NativeValue::Tag::ResultOkFunction: return \"Ok\";\n";
   out << "  case NativeValue::Tag::ResultErrFunction: return \"Err\";\n";
+  out << "  case NativeValue::Tag::DescFunction: return \"desc\";\n";
   out << "  case NativeValue::Tag::SecureRandomModule: return "
          "\"SecureRandom\";\n";
   out << "  case NativeValue::Tag::UuidModule: return \"Uuid\";\n";
@@ -18892,7 +21135,6 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
   out << "  struct NativeTaskRuntimeShutdown {\n";
   out << "    ~NativeTaskRuntimeShutdown() {\n";
   out << "      native_task_runtime().scheduler().shutdown();\n";
-  out << "      amber::runtime::runtime_drain_completed_task_functions();\n";
   out << "    }\n";
   out << "  } native_task_runtime_shutdown;\n";
   out << "  try {\n";

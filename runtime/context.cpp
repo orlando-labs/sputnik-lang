@@ -1,6 +1,6 @@
 #include "runtime/context.h"
 
-#include <mutex>
+#include <memory>
 #include <utility>
 
 namespace amber::runtime {
@@ -34,18 +34,22 @@ std::atomic<std::uint64_t> g_runtime_native_thread_ids{1};
 std::atomic<std::uint64_t> g_runtime_io_wait_ids{1};
 
 namespace {
-std::mutex g_runtime_process_arguments_mutex;
-std::vector<std::string> g_runtime_process_arguments;
+std::shared_ptr<const std::vector<std::string>> g_runtime_process_arguments =
+    std::make_shared<const std::vector<std::string>>();
 } // namespace
 
 void set_runtime_process_arguments(std::vector<std::string> arguments) {
-  std::lock_guard<std::mutex> lock(g_runtime_process_arguments_mutex);
-  g_runtime_process_arguments = std::move(arguments);
+  std::atomic_store_explicit(
+      &g_runtime_process_arguments,
+      std::make_shared<const std::vector<std::string>>(std::move(arguments)),
+      std::memory_order_release);
 }
 
 std::vector<std::string> current_runtime_process_arguments() {
-  std::lock_guard<std::mutex> lock(g_runtime_process_arguments_mutex);
-  return g_runtime_process_arguments;
+  const std::shared_ptr<const std::vector<std::string>> snapshot =
+      std::atomic_load_explicit(&g_runtime_process_arguments,
+                                std::memory_order_acquire);
+  return *snapshot;
 }
 
 RuntimeTextSourceLocationScope::RuntimeTextSourceLocationScope(

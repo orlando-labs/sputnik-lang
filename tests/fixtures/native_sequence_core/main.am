@@ -60,4 +60,55 @@ def main():
     total = total + index
   if total == 6:
     score = score + 1
+
+  generated = Array.of(4): _1 + 1
+  rebuilt = Array.build(3): _1 * 2
+  filled = Array.filled(2, false)
+  if generated == [1, 2, 3, 4] and rebuilt == [0, 2, 4] and filled == [false, false]:
+    score = score + 1
+
+  mutable = [3, 1, 2, 2]
+  alias_of_mutable = mutable
+  mutable.unshift!(0)
+  mutable.insert!(2, 9)
+  removed = mutable.delete!(2)
+  first_removed = mutable.shift!()
+  last_removed = mutable.pop!()
+  mutable.push!(4)
+  mutable.sort!()
+  mutable.reverse!()
+  mutable.uniq!()
+  if removed == 2 and first_removed == 0 and last_removed == 1 and alias_of_mutable == [9, 4, 3]:
+    score = score + 1
+
+  transformed = [1, 2, 3, 4]
+  transformed.select!: _1 > 1
+  transformed.map!: _1 * 10
+  transformed.delete_if!: _1 == 30
+  transformed.keep_if!: _1 <= 40
+  transformed.append!(50)
+  deleted_at = transformed.delete_at!(0)
+  transformed.replace!([7, null, [8, [9]]])
+  transformed.compact!()
+  transformed.flatten!()
+  transformed.clear!()
+  if deleted_at == 20 and transformed.empty?():
+    score = score + 1
+
+  union_operator = [1, 2] | [2, 3]
+  intersection_operator = [1, 2, 3] & [2, 4]
+  difference_operator = [1, 2, 3] - [2]
+  symmetric_operator = [1, 2] ^ [2, 3]
+  if union_operator == [1, 2, 3] and intersection_operator == [2] and difference_operator == [1, 3] and symmetric_operator == [1, 3] and [1, 2] < [1, 2, 3] and [1, 2] <= [2, 1]:
+    score = score + 1
+
+  windows = [1, 2, 3, 4].each(2, step: 1)
+  slices = [1, 2, 3, 4].each_slice(2)
+  descending_sorted = [1, 3, 2].sorted(reverse: true)
+  mutable_sorted = [1, 4, 2, 3]
+  mutable_sorted.sort!(reverse: true)
+  mutable_unique = [1, 3, 2, 4]
+  mutable_unique.uniq!: _1 % 2
+  if windows == [[1, 2], [2, 3], [3, 4]] and slices == [[1, 2], [3, 4]] and descending_sorted == [3, 2, 1] and mutable_sorted == [4, 3, 2, 1] and mutable_unique == [1, 2]:
+    score = score + 1
   score

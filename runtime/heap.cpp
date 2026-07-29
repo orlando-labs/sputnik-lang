@@ -3,6 +3,7 @@
 #include "runtime/context.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <deque>
 #include <iterator>
@@ -17,22 +18,15 @@ namespace amber::runtime {
 
 namespace {
 
-void increment_kind_allocation(RuntimeHeapStats &stats, HeapObjectKind kind) {
-  switch (kind) {
-  case HeapObjectKind::Instance:
-    ++stats.instance_allocations;
-    return;
-  case HeapObjectKind::List:
-  case HeapObjectKind::Tuple:
-  case HeapObjectKind::Set:
-    ++stats.array_allocations;
-    return;
-  case HeapObjectKind::Map:
-    ++stats.map_allocations;
-    return;
-  case HeapObjectKind::Closure:
-    ++stats.closure_allocations;
-    return;
+void atomic_saturating_sub(std::atomic<std::uint64_t> &value,
+                           std::uint64_t count) {
+  std::uint64_t current = value.load(std::memory_order_relaxed);
+  while (current != 0) {
+    const std::uint64_t next = current >= count ? current - count : 0;
+    if (value.compare_exchange_weak(current, next, std::memory_order_relaxed,
+                                    std::memory_order_relaxed)) {
+      return;
+    }
   }
 }
 
@@ -55,8 +49,9 @@ public:
   };
 
   struct ArenaState {
-    std::uint64_t allocations = 0;
-    std::uint64_t live_objects = 0;
+    std::atomic<std::uint64_t> allocations{0};
+    std::atomic<std::uint64_t> live_objects{0};
+    mutable std::mutex remote_free_mutex;
     std::deque<RemoteFree> remote_frees;
   };
 
@@ -67,6 +62,11 @@ public:
     std::uint64_t allocation_id = 0;
     std::size_t allocation_size = 0;
     bool logical_live = true;
+  };
+
+  struct ObjectShard {
+    mutable std::mutex mutex;
+    std::unordered_map<std::uint64_t, ObjectRecord> objects;
   };
 
   struct PinRecord {
@@ -108,7 +108,8 @@ public:
     auto *raw = new T();
     const std::uint64_t worker_id = current_runtime_worker_id();
     const std::size_t allocation_size = sizeof(T);
-    const std::uint64_t allocation_id = reserve_allocation_id();
+    const std::uint64_t allocation_id =
+        next_allocation_id_.fetch_add(1, std::memory_order_relaxed);
     raw->header.kind = kind;
     raw->header.owner.strand_id = current_runtime_owner_strand_id();
     raw->header.allocation_id = allocation_id;
@@ -161,27 +162,38 @@ public:
     if (remote_free_pending_.load(std::memory_order_acquire) == 0) {
       return 0;
     }
+    const std::shared_ptr<ArenaState> arena = arena_for_worker(worker_id);
     std::deque<RemoteFree> pending;
     {
-      std::lock_guard<std::mutex> lock(mutex_);
-      ArenaState &arena = arena_for_worker(worker_id);
-      pending.swap(arena.remote_frees);
-      const std::uint64_t count = static_cast<std::uint64_t>(pending.size());
-      if (count == 0) {
-        return 0;
-      }
-      remote_free_pending_.fetch_sub(count, std::memory_order_acq_rel);
-      stats_.remote_queue_depth -= count;
-      stats_.remote_frees_drained += count;
-      for (const RemoteFree &entry : pending) {
-        const auto record = objects_.find(entry.allocation_id);
-        if (record == objects_.end() || record->second.logical_live) {
-          decrement_live_locked(arena, 1);
+      std::lock_guard<std::mutex> lock(arena->remote_free_mutex);
+      pending.swap(arena->remote_frees);
+    }
+    const std::uint64_t count = static_cast<std::uint64_t>(pending.size());
+    if (count == 0) {
+      return 0;
+    }
+    remote_free_pending_.fetch_sub(count, std::memory_order_acq_rel);
+    atomic_saturating_sub(remote_queue_depth_, count);
+    remote_frees_drained_.fetch_add(count, std::memory_order_relaxed);
+    std::uint64_t live_removed = 0;
+    for (const RemoteFree &entry : pending) {
+      ObjectShard &shard = object_shard(entry.allocation_id);
+      {
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        const auto record = shard.objects.find(entry.allocation_id);
+        if (record == shard.objects.end() || record->second.logical_live) {
+          ++live_removed;
         }
-        objects_.erase(entry.allocation_id);
+        if (record != shard.objects.end()) {
+          shard.objects.erase(record);
+        }
+      }
+      if (remembered_set_nonempty_.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(mutex_);
         remove_remembered_edges_for_locked(entry.allocation_id);
       }
     }
+    decrement_live(arena, live_removed);
 
     RuntimeWorkerScope owner_scope(worker_id);
     for (const RemoteFree &entry : pending) {
@@ -199,13 +211,13 @@ public:
       return out;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    ++stats_.write_barriers;
+    write_barriers_.fetch_add(1, std::memory_order_relaxed);
 
     const std::optional<std::string> owner_error =
         lifecycle_access_error_name(*owner_header);
     if (owner_error.has_value()) {
-      ++stats_.write_barrier_rejected_lifetime;
+      write_barrier_rejected_lifetime_.fetch_add(1,
+                                                 std::memory_order_relaxed);
       out.ok = false;
       out.error_name = *owner_error;
       out.message = lifecycle_access_error_message(*owner_error);
@@ -218,7 +230,8 @@ public:
     const std::optional<std::string> value_error =
         lifecycle_access_error_name(*value_header);
     if (value_error.has_value()) {
-      ++stats_.write_barrier_rejected_lifetime;
+      write_barrier_rejected_lifetime_.fetch_add(1,
+                                                 std::memory_order_relaxed);
       out.ok = false;
       out.error_name = *value_error;
       out.message = lifecycle_access_error_message(*value_error);
@@ -233,7 +246,8 @@ public:
         value_header->owner.kind == OwnerTokenKind::Confined &&
         value_header->generation != ObjectGeneration::Shared;
     if (owner_is_shared && value_is_confined) {
-      ++stats_.write_barrier_rejected_isolation;
+      write_barrier_rejected_isolation_.fetch_add(1,
+                                                  std::memory_order_relaxed);
       out.ok = false;
       out.error_name = "IsolationError";
       out.message = "shared object cannot reference confined object";
@@ -243,9 +257,13 @@ public:
     if (owner_header->generation == ObjectGeneration::Mature &&
         value_header->generation == ObjectGeneration::Young &&
         owner_header->allocation_id != 0 && value_header->allocation_id != 0) {
-      remembered_set_[owner_header->allocation_id].insert(
-          value_header->allocation_id);
-      ++stats_.write_barrier_remembered;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        remembered_set_[owner_header->allocation_id].insert(
+            value_header->allocation_id);
+        remembered_set_nonempty_.store(true, std::memory_order_release);
+      }
+      write_barrier_remembered_.fetch_add(1, std::memory_order_relaxed);
       out.remembered = true;
     }
     return out;
@@ -259,6 +277,8 @@ public:
     std::vector<Value> deferred_payload_release;
 
     std::lock_guard<std::mutex> lock(mutex_);
+    const std::vector<std::unique_lock<std::mutex>> object_locks =
+        lock_all_object_shards();
     pending_gc_cycle_.reset();
     gc_request_pending_.store(false, std::memory_order_release);
     ++stats_.gc_cycles;
@@ -286,9 +306,8 @@ public:
       if (allocation_id == 0) {
         return;
       }
-      const auto found = objects_.find(allocation_id);
-      if (found == objects_.end() || !found->second.logical_live ||
-          found->second.ptr == nullptr) {
+      const ObjectRecord *found = find_object_locked(allocation_id);
+      if (found == nullptr || !found->logical_live || found->ptr == nullptr) {
         return;
       }
       if (visited.insert(allocation_id).second) {
@@ -328,12 +347,11 @@ public:
     while (!stack.empty()) {
       const std::uint64_t allocation_id = stack.back();
       stack.pop_back();
-      auto found = objects_.find(allocation_id);
-      if (found == objects_.end() || !found->second.logical_live ||
-          found->second.ptr == nullptr) {
+      ObjectRecord *found = find_object_locked(allocation_id);
+      if (found == nullptr || !found->logical_live || found->ptr == nullptr) {
         continue;
       }
-      ObjectRecord &record = found->second;
+      ObjectRecord &record = *found;
       ObjHeader *header = header_for_record(record);
       if (header == nullptr) {
         continue;
@@ -351,49 +369,54 @@ public:
     }
 
     std::vector<std::uint64_t> reclaim_ids;
-    for (const auto &[allocation_id, record] : objects_) {
-      if (!record.logical_live) {
-        continue;
-      }
-      const ObjHeader *header = header_for_record(record);
-      if (header == nullptr) {
-        continue;
-      }
-      if (!cycle_collects_header(cycle, *header)) {
-        continue;
-      }
-      if (active_pin_counts_.find(allocation_id) != active_pin_counts_.end()) {
-        continue;
-      }
-      if (visited.find(allocation_id) == visited.end()) {
-        reclaim_ids.push_back(allocation_id);
+    for (const ObjectShard &shard : object_shards_) {
+      for (const auto &[allocation_id, record] : shard.objects) {
+        if (!record.logical_live) {
+          continue;
+        }
+        const ObjHeader *header = header_for_record(record);
+        if (header == nullptr) {
+          continue;
+        }
+        if (!cycle_collects_header(cycle, *header)) {
+          continue;
+        }
+        if (active_pin_counts_.find(allocation_id) !=
+            active_pin_counts_.end()) {
+          continue;
+        }
+        if (visited.find(allocation_id) == visited.end()) {
+          reclaim_ids.push_back(allocation_id);
+        }
       }
     }
 
     for (std::uint64_t allocation_id : reclaim_ids) {
-      auto found = objects_.find(allocation_id);
-      if (found == objects_.end() || !found->second.logical_live) {
+      ObjectRecord *found = find_object_locked(allocation_id);
+      if (found == nullptr || !found->logical_live) {
         continue;
       }
-      reclaim_record_locked(found->second, &deferred_payload_release);
+      reclaim_record_locked(*found, &deferred_payload_release);
       ++result.reclaimed;
     }
 
-    for (auto &[allocation_id, record] : objects_) {
-      (void)allocation_id;
-      if (!record.logical_live ||
-          visited.find(record.allocation_id) == visited.end()) {
-        continue;
-      }
-      ObjHeader *header = header_for_record(record);
-      if (header == nullptr || header_is_deallocated(*header)) {
-        continue;
-      }
-      if (header->generation == ObjectGeneration::Young &&
-          cycle != RuntimeGcCycle::Shared) {
-        ++header->gc_age;
-        header->generation = ObjectGeneration::Mature;
-        ++result.promoted;
+    for (ObjectShard &shard : object_shards_) {
+      for (auto &[allocation_id, record] : shard.objects) {
+        (void)allocation_id;
+        if (!record.logical_live ||
+            visited.find(record.allocation_id) == visited.end()) {
+          continue;
+        }
+        ObjHeader *header = header_for_record(record);
+        if (header == nullptr || header_is_deallocated(*header)) {
+          continue;
+        }
+        if (header->generation == ObjectGeneration::Young &&
+            cycle != RuntimeGcCycle::Shared) {
+          ++header->gc_age;
+          header->generation = ObjectGeneration::Mature;
+          ++result.promoted;
+        }
       }
     }
 
@@ -440,9 +463,11 @@ public:
       out.message = lifecycle_access_error_message(*lifecycle_error);
       return out;
     }
-    const auto object = objects_.find(header->allocation_id);
-    if (header->allocation_id == 0 || object == objects_.end() ||
-        !object->second.logical_live) {
+    const ObjectShard &shard = object_shard(header->allocation_id);
+    std::lock_guard<std::mutex> object_lock(shard.mutex);
+    const ObjectRecord *object = find_object_locked(header->allocation_id);
+    if (header->allocation_id == 0 || object == nullptr ||
+        !object->logical_live) {
       out.ok = false;
       out.error_name = "LifetimeError";
       out.message = "pin expects a live heap-owned object";
@@ -808,45 +833,79 @@ public:
 
   RuntimeHeapStats stats() const {
     std::lock_guard<std::mutex> lock(mutex_);
+    const std::vector<std::unique_lock<std::mutex>> object_locks =
+        lock_all_object_shards();
     RuntimeHeapStats out = stats_;
+    out.allocations = allocations_.load(std::memory_order_relaxed);
+    out.live_objects = live_objects_.load(std::memory_order_relaxed);
+    out.local_frees = local_frees_.load(std::memory_order_relaxed);
+    out.remote_frees_queued =
+        remote_frees_queued_.load(std::memory_order_relaxed);
+    out.remote_frees_drained =
+        remote_frees_drained_.load(std::memory_order_relaxed);
+    out.remote_queue_depth =
+        remote_queue_depth_.load(std::memory_order_relaxed);
+    out.instance_allocations =
+        instance_allocations_.load(std::memory_order_relaxed);
+    out.array_allocations =
+        array_allocations_.load(std::memory_order_relaxed);
+    out.map_allocations = map_allocations_.load(std::memory_order_relaxed);
+    out.closure_allocations =
+        closure_allocations_.load(std::memory_order_relaxed);
+    out.write_barriers = write_barriers_.load(std::memory_order_relaxed);
+    out.write_barrier_remembered =
+        write_barrier_remembered_.load(std::memory_order_relaxed);
+    out.write_barrier_rejected_lifetime =
+        write_barrier_rejected_lifetime_.load(std::memory_order_relaxed);
+    out.write_barrier_rejected_isolation =
+        write_barrier_rejected_isolation_.load(std::memory_order_relaxed);
     out.arenas.clear();
-    out.worker_count = static_cast<std::uint64_t>(arenas_.size());
     out.young_objects = 0;
     out.mature_objects = 0;
     out.shared_objects = 0;
     out.live_object_bytes = 0;
     out.tracked_object_bytes = 0;
-    for (const auto &[allocation_id, record] : objects_) {
-      (void)allocation_id;
-      out.tracked_object_bytes += record.allocation_size;
-      if (!record.logical_live) {
-        continue;
-      }
-      out.live_object_bytes += record.allocation_size;
-      const ObjHeader *header = header_for_record(record);
-      if (header == nullptr) {
-        continue;
-      }
-      switch (header->generation) {
-      case ObjectGeneration::Young:
-        ++out.young_objects;
-        break;
-      case ObjectGeneration::Mature:
-        ++out.mature_objects;
-        break;
-      case ObjectGeneration::Shared:
-        ++out.shared_objects;
-        break;
+    for (const ObjectShard &shard : object_shards_) {
+      for (const auto &[allocation_id, record] : shard.objects) {
+        (void)allocation_id;
+        out.tracked_object_bytes += record.allocation_size;
+        if (!record.logical_live) {
+          continue;
+        }
+        out.live_object_bytes += record.allocation_size;
+        const ObjHeader *header = header_for_record(record);
+        if (header == nullptr) {
+          continue;
+        }
+        switch (header->generation) {
+        case ObjectGeneration::Young:
+          ++out.young_objects;
+          break;
+        case ObjectGeneration::Mature:
+          ++out.mature_objects;
+          break;
+        case ObjectGeneration::Shared:
+          ++out.shared_objects;
+          break;
+        }
       }
     }
     out.remembered_set_objects =
         static_cast<std::uint64_t>(remembered_set_.size());
     out.remembered_set_entries = remembered_entry_count_locked();
     out.pinned_objects = static_cast<std::uint64_t>(active_pin_counts_.size());
-    for (const auto &[worker_id, arena] : arenas_) {
+    std::vector<std::pair<std::uint64_t, std::shared_ptr<ArenaState>>> arenas;
+    {
+      std::lock_guard<std::mutex> arenas_lock(arenas_mutex_);
+      arenas.assign(arenas_.begin(), arenas_.end());
+    }
+    out.worker_count = static_cast<std::uint64_t>(arenas.size());
+    for (const auto &[worker_id, arena] : arenas) {
+      std::lock_guard<std::mutex> remote_lock(arena->remote_free_mutex);
       out.arenas.push_back(RuntimeArenaStats{
-          worker_id, arena.allocations, arena.live_objects,
-          static_cast<std::uint64_t>(arena.remote_frees.size())});
+          worker_id, arena->allocations.load(std::memory_order_relaxed),
+          arena->live_objects.load(std::memory_order_relaxed),
+          static_cast<std::uint64_t>(arena->remote_frees.size())});
     }
     return out;
   }
@@ -893,27 +952,104 @@ private:
     return nullptr;
   }
 
-  ArenaState &arena_for_worker(std::uint64_t worker_id) {
-    return arenas_[worker_id];
+  static constexpr std::size_t kObjectShardCount = 64U;
+
+  static std::size_t object_shard_index(std::uint64_t allocation_id) {
+    return static_cast<std::size_t>(allocation_id % kObjectShardCount);
   }
 
-  std::uint64_t reserve_allocation_id() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return next_allocation_id_++;
+  ObjectShard &object_shard(std::uint64_t allocation_id) {
+    return object_shards_[object_shard_index(allocation_id)];
+  }
+
+  const ObjectShard &object_shard(std::uint64_t allocation_id) const {
+    return object_shards_[object_shard_index(allocation_id)];
+  }
+
+  ObjectRecord *find_object_locked(std::uint64_t allocation_id) {
+    ObjectShard &shard = object_shard(allocation_id);
+    const auto found = shard.objects.find(allocation_id);
+    return found == shard.objects.end() ? nullptr : &found->second;
+  }
+
+  const ObjectRecord *
+  find_object_locked(std::uint64_t allocation_id) const {
+    const ObjectShard &shard = object_shard(allocation_id);
+    const auto found = shard.objects.find(allocation_id);
+    return found == shard.objects.end() ? nullptr : &found->second;
+  }
+
+  std::vector<std::unique_lock<std::mutex>> lock_all_object_shards() const {
+    std::vector<std::unique_lock<std::mutex>> locks;
+    locks.reserve(kObjectShardCount);
+    for (const ObjectShard &shard : object_shards_) {
+      locks.emplace_back(shard.mutex);
+    }
+    return locks;
+  }
+
+  std::shared_ptr<ArenaState>
+  arena_for_worker(std::uint64_t worker_id) {
+    struct ThreadArenaCache {
+      const Impl *owner = nullptr;
+      std::weak_ptr<Impl> heap;
+      std::uint64_t worker_id = 0;
+      std::shared_ptr<ArenaState> arena;
+    };
+    static thread_local ThreadArenaCache cache;
+    if (cache.owner == this && cache.worker_id == worker_id &&
+        cache.arena != nullptr && !cache.heap.expired()) {
+      return cache.arena;
+    }
+
+    std::shared_ptr<ArenaState> arena;
+    {
+      std::lock_guard<std::mutex> lock(arenas_mutex_);
+      std::shared_ptr<ArenaState> &slot = arenas_[worker_id];
+      if (slot == nullptr) {
+        slot = std::make_shared<ArenaState>();
+      }
+      arena = slot;
+    }
+    if (const std::shared_ptr<Impl> self = weak_from_this().lock()) {
+      cache.owner = this;
+      cache.heap = self;
+      cache.worker_id = worker_id;
+      cache.arena = arena;
+    }
+    return arena;
   }
 
   void record_allocation(std::uint64_t worker_id, HeapObjectKind kind,
                          std::size_t allocation_size,
                          std::uint64_t allocation_id, void *ptr) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    ArenaState &arena = arena_for_worker(worker_id);
-    ++arena.allocations;
-    ++arena.live_objects;
-    ++stats_.allocations;
-    ++stats_.live_objects;
-    increment_kind_allocation(stats_, kind);
-    objects_[allocation_id] = ObjectRecord{
-        ptr, kind, worker_id, allocation_id, allocation_size, true};
+    const std::shared_ptr<ArenaState> arena = arena_for_worker(worker_id);
+    {
+      ObjectShard &shard = object_shard(allocation_id);
+      std::lock_guard<std::mutex> lock(shard.mutex);
+      shard.objects[allocation_id] = ObjectRecord{
+          ptr, kind, worker_id, allocation_id, allocation_size, true};
+    }
+    arena->allocations.fetch_add(1, std::memory_order_relaxed);
+    arena->live_objects.fetch_add(1, std::memory_order_relaxed);
+    allocations_.fetch_add(1, std::memory_order_relaxed);
+    live_objects_.fetch_add(1, std::memory_order_relaxed);
+    switch (kind) {
+    case HeapObjectKind::Instance:
+      instance_allocations_.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case HeapObjectKind::List:
+    case HeapObjectKind::Tuple:
+    case HeapObjectKind::Set:
+      array_allocations_.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case HeapObjectKind::Map:
+      map_allocations_.fetch_add(1, std::memory_order_relaxed);
+      break;
+    case HeapObjectKind::Closure:
+      closure_allocations_.fetch_add(1, std::memory_order_relaxed);
+      break;
+    }
   }
 
   void release(RemoteFree entry) {
@@ -922,27 +1058,37 @@ private:
     }
 
     if (current_runtime_worker_id() == entry.owner_worker_id) {
+      bool was_logically_live = true;
       {
-        std::lock_guard<std::mutex> lock(mutex_);
-        ArenaState &arena = arena_for_worker(entry.owner_worker_id);
-        ++stats_.local_frees;
-        const auto record = objects_.find(entry.allocation_id);
-        if (record == objects_.end() || record->second.logical_live) {
-          decrement_live_locked(arena, 1);
+        ObjectShard &shard = object_shard(entry.allocation_id);
+        std::lock_guard<std::mutex> lock(shard.mutex);
+        const auto record = shard.objects.find(entry.allocation_id);
+        if (record != shard.objects.end()) {
+          was_logically_live = record->second.logical_live;
+          shard.objects.erase(record);
         }
-        objects_.erase(entry.allocation_id);
+      }
+      if (was_logically_live) {
+        decrement_live(arena_for_worker(entry.owner_worker_id), 1);
+      }
+      local_frees_.fetch_add(1, std::memory_order_relaxed);
+      if (remembered_set_nonempty_.load(std::memory_order_acquire)) {
+        std::lock_guard<std::mutex> lock(mutex_);
         remove_remembered_edges_for_locked(entry.allocation_id);
       }
       entry.destroy(entry.ptr);
       return;
     }
 
-    std::lock_guard<std::mutex> lock(mutex_);
-    ArenaState &arena = arena_for_worker(entry.owner_worker_id);
-    arena.remote_frees.push_back(entry);
+    const std::shared_ptr<ArenaState> arena =
+        arena_for_worker(entry.owner_worker_id);
+    {
+      std::lock_guard<std::mutex> lock(arena->remote_free_mutex);
+      arena->remote_frees.push_back(entry);
+    }
     remote_free_pending_.fetch_add(1, std::memory_order_release);
-    ++stats_.remote_frees_queued;
-    ++stats_.remote_queue_depth;
+    remote_frees_queued_.fetch_add(1, std::memory_order_relaxed);
+    remote_queue_depth_.fetch_add(1, std::memory_order_relaxed);
   }
 
   bool cycle_collects_header(RuntimeGcCycle cycle,
@@ -1094,8 +1240,7 @@ private:
       header->lifetime_state = ObjectLifetimeState::Deallocated;
     }
     if (record.logical_live) {
-      ArenaState &arena = arena_for_worker(record.owner_worker_id);
-      decrement_live_locked(arena, 1);
+      decrement_live(arena_for_worker(record.owner_worker_id), 1);
     }
     record.logical_live = false;
     remove_remembered_edges_for_locked(record.allocation_id);
@@ -1111,29 +1256,30 @@ private:
         ++it;
       }
     }
+    if (remembered_set_.empty()) {
+      remembered_set_nonempty_.store(false, std::memory_order_release);
+    }
   }
 
   void cleanup_remembered_set_locked() {
     for (auto it = remembered_set_.begin(); it != remembered_set_.end();) {
-      const auto owner = objects_.find(it->first);
-      if (owner == objects_.end() || !owner->second.logical_live) {
+      const ObjectRecord *owner = find_object_locked(it->first);
+      if (owner == nullptr || !owner->logical_live) {
         it = remembered_set_.erase(it);
         continue;
       }
-      const ObjHeader *owner_header = header_for_record(owner->second);
+      const ObjHeader *owner_header = header_for_record(*owner);
       if (owner_header == nullptr ||
           owner_header->generation != ObjectGeneration::Mature) {
         it = remembered_set_.erase(it);
         continue;
       }
       for (auto child = it->second.begin(); child != it->second.end();) {
-        const auto child_record = objects_.find(*child);
+        const ObjectRecord *child_record = find_object_locked(*child);
         const ObjHeader *child_header =
-            child_record == objects_.end()
-                ? nullptr
-                : header_for_record(child_record->second);
-        if (child_record == objects_.end() ||
-            !child_record->second.logical_live || child_header == nullptr ||
+            child_record == nullptr ? nullptr : header_for_record(*child_record);
+        if (child_record == nullptr || !child_record->logical_live ||
+            child_header == nullptr ||
             child_header->generation != ObjectGeneration::Young) {
           child = it->second.erase(child);
         } else {
@@ -1146,6 +1292,8 @@ private:
         ++it;
       }
     }
+    remembered_set_nonempty_.store(!remembered_set_.empty(),
+                                   std::memory_order_release);
   }
 
   std::uint64_t remembered_entry_count_locked() const {
@@ -1157,45 +1305,54 @@ private:
     return count;
   }
 
-  void decrement_live_locked(ArenaState &arena, std::uint64_t count) {
-    if (arena.live_objects >= count) {
-      arena.live_objects -= count;
-    } else {
-      arena.live_objects = 0;
-    }
-    if (stats_.live_objects >= count) {
-      stats_.live_objects -= count;
-    } else {
-      stats_.live_objects = 0;
-    }
+  void decrement_live(const std::shared_ptr<ArenaState> &arena,
+                      std::uint64_t count) {
+    atomic_saturating_sub(arena->live_objects, count);
+    atomic_saturating_sub(live_objects_, count);
   }
 
   void drain_all_remote_frees() {
     while (true) {
       std::vector<std::pair<std::uint64_t, std::deque<RemoteFree>>> batches;
+      std::vector<std::pair<std::uint64_t, std::shared_ptr<ArenaState>>> arenas;
       {
-        std::lock_guard<std::mutex> lock(mutex_);
-        for (auto &[worker_id, arena] : arenas_) {
-          if (arena.remote_frees.empty()) {
+        std::lock_guard<std::mutex> lock(arenas_mutex_);
+        arenas.assign(arenas_.begin(), arenas_.end());
+      }
+      for (const auto &[worker_id, arena] : arenas) {
+        std::deque<RemoteFree> pending;
+        {
+          std::lock_guard<std::mutex> lock(arena->remote_free_mutex);
+          if (arena->remote_frees.empty()) {
             continue;
           }
-          std::deque<RemoteFree> pending;
-          pending.swap(arena.remote_frees);
-          const std::uint64_t count =
-              static_cast<std::uint64_t>(pending.size());
-          remote_free_pending_.fetch_sub(count, std::memory_order_acq_rel);
-          stats_.remote_queue_depth -= count;
-          stats_.remote_frees_drained += count;
-          for (const RemoteFree &entry : pending) {
-            const auto record = objects_.find(entry.allocation_id);
-            if (record == objects_.end() || record->second.logical_live) {
-              decrement_live_locked(arena, 1);
+          pending.swap(arena->remote_frees);
+        }
+        const std::uint64_t count =
+            static_cast<std::uint64_t>(pending.size());
+        remote_free_pending_.fetch_sub(count, std::memory_order_acq_rel);
+        atomic_saturating_sub(remote_queue_depth_, count);
+        remote_frees_drained_.fetch_add(count, std::memory_order_relaxed);
+        std::uint64_t live_removed = 0;
+        for (const RemoteFree &entry : pending) {
+          ObjectShard &shard = object_shard(entry.allocation_id);
+          {
+            std::lock_guard<std::mutex> lock(shard.mutex);
+            const auto record = shard.objects.find(entry.allocation_id);
+            if (record == shard.objects.end() || record->second.logical_live) {
+              ++live_removed;
             }
-            objects_.erase(entry.allocation_id);
+            if (record != shard.objects.end()) {
+              shard.objects.erase(record);
+            }
+          }
+          if (remembered_set_nonempty_.load(std::memory_order_acquire)) {
+            std::lock_guard<std::mutex> lock(mutex_);
             remove_remembered_edges_for_locked(entry.allocation_id);
           }
-          batches.push_back({worker_id, std::move(pending)});
         }
+        decrement_live(arena, live_removed);
+        batches.push_back({worker_id, std::move(pending)});
       }
       if (batches.empty()) {
         return;
@@ -1209,16 +1366,35 @@ private:
     }
   }
 
+  // GC/pin/remembered-set metadata is cold or safepoint-only. Ordinary
+  // allocation and release never take this control lock: the object registry
+  // is striped, arena counters are atomic, and remote-free queues are
+  // per-arena. This is the heap side of the VM's no-GIL contract.
   mutable std::mutex mutex_;
-  std::uint64_t next_allocation_id_ = 1;
+  mutable std::mutex arenas_mutex_;
+  std::atomic<std::uint64_t> next_allocation_id_{1};
   std::uint64_t gc_epoch_ = 0;
   std::uint64_t next_pin_id_ = 1;
   std::uint64_t next_pin_epoch_ = 1;
   std::uint64_t next_opaque_handle_id_ = 1;
   std::uint64_t next_native_wait_id_ = 1;
   RuntimeHeapStats stats_;
-  std::map<std::uint64_t, ArenaState> arenas_;
-  std::unordered_map<std::uint64_t, ObjectRecord> objects_;
+  std::map<std::uint64_t, std::shared_ptr<ArenaState>> arenas_;
+  std::array<ObjectShard, kObjectShardCount> object_shards_;
+  std::atomic<std::uint64_t> allocations_{0};
+  std::atomic<std::uint64_t> live_objects_{0};
+  std::atomic<std::uint64_t> local_frees_{0};
+  std::atomic<std::uint64_t> remote_frees_queued_{0};
+  std::atomic<std::uint64_t> remote_frees_drained_{0};
+  std::atomic<std::uint64_t> remote_queue_depth_{0};
+  std::atomic<std::uint64_t> instance_allocations_{0};
+  std::atomic<std::uint64_t> array_allocations_{0};
+  std::atomic<std::uint64_t> map_allocations_{0};
+  std::atomic<std::uint64_t> closure_allocations_{0};
+  std::atomic<std::uint64_t> write_barriers_{0};
+  std::atomic<std::uint64_t> write_barrier_remembered_{0};
+  std::atomic<std::uint64_t> write_barrier_rejected_lifetime_{0};
+  std::atomic<std::uint64_t> write_barrier_rejected_isolation_{0};
   std::unordered_map<std::uint64_t, std::unordered_set<std::uint64_t>>
       remembered_set_;
   std::unordered_map<std::uint64_t, PinRecord> pins_;
@@ -1233,6 +1409,7 @@ private:
   // safepoints skip the heap mutex when there is nothing to do.
   std::atomic<std::uint64_t> remote_free_pending_{0};
   std::atomic<bool> gc_request_pending_{false};
+  std::atomic<bool> remembered_set_nonempty_{false};
 };
 
 RuntimeHeap::RuntimeHeap() : impl_(std::make_shared<Impl>()) {}

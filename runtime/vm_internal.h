@@ -7,11 +7,15 @@
 #include "runtime/world.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -318,8 +322,20 @@ struct ClassRuntimeState {
 };
 
 struct RuntimeState {
+  static constexpr std::size_t kClassStateShardCount = 64;
+  static constexpr std::size_t kShapeTransitionShardCount = 64;
+
+  struct ShapeTransitionShard {
+    mutable std::shared_mutex mutex;
+    std::unordered_map<std::string, std::shared_ptr<ShapeDescriptor>>
+        transitions;
+  };
+
   RuntimeHeap heap;
   std::vector<ClassRuntimeState> classes;
+  std::shared_ptr<std::array<std::shared_mutex, kClassStateShardCount>>
+      class_state_mutexes = std::make_shared<
+          std::array<std::shared_mutex, kClassStateShardCount>>();
   bool owners_initialized = false;
   // Compile-time step budget (macro expander sandbox, DESIGN-macro-system §10):
   // when enabled, every interpreter step decrements the counter and exhausting
@@ -337,14 +353,20 @@ struct RuntimeState {
   std::unordered_map<std::uint32_t, std::uint32_t> rest_param_index_by_code;
   std::unordered_map<std::uint32_t, std::uint32_t> kw_rest_param_index_by_code;
   // Method bodies whose parameter list needs the param-aware shaping path on
-  // closure/direct-entry calls: any rest/keyword-rest pack, and any keyword or
-  // defaulted parameter (the raw positional register copy binds neither
-  // keywords nor defaults). Built once in initialize_for_module;
+  // closure/direct-entry calls: any rest/keyword-rest pack, and any keyword,
+  // block, or defaulted parameter (the raw positional register copy does not
+  // bind these channels). Built once in initialize_for_module;
   // `has_any_shaped_params` keeps the common case to a single bool check.
   bool has_any_shaped_params = false;
   std::unordered_set<std::uint32_t> codes_needing_param_shaping;
   bool world_frozen = false;
   std::uint64_t world_epoch = 1;
+  // Notebook/watch bookkeeping is shared by task-local Vm instances. It is
+  // outside the ordinary dispatch path, but its ids, event log, and dependency
+  // capture must still be race-free when reactive work runs on several
+  // strands.
+  std::shared_ptr<std::mutex> reactive_state_mutex =
+      std::make_shared<std::mutex>();
   std::uint64_t watch_epoch = 0;
   std::uint64_t next_watch_cell_id = 1;
   std::uint64_t next_watch_handle_id = 1;
@@ -359,11 +381,55 @@ struct RuntimeState {
   std::unordered_map<std::uint64_t, IvarCacheEntry> ivar_caches;
   bool module_init_completed = false;
   std::unordered_map<std::string, Value> module_bindings;
-  std::uint64_t next_shape_id = 1;
+  std::shared_ptr<std::atomic<std::uint64_t>> next_shape_id =
+      std::make_shared<std::atomic<std::uint64_t>>(1);
   std::vector<std::shared_ptr<ShapeDescriptor>> root_shapes;
-  std::unordered_map<std::string, std::shared_ptr<ShapeDescriptor>>
-      shape_transitions;
+  std::shared_ptr<
+      std::array<ShapeTransitionShard, kShapeTransitionShardCount>>
+      shape_transition_shards = std::make_shared<
+          std::array<ShapeTransitionShard, kShapeTransitionShardCount>>();
+  std::shared_ptr<std::mutex> shape_structure_mutex =
+      std::make_shared<std::mutex>();
   std::shared_ptr<ShapeDescriptor> dead_shape;
+
+  std::shared_mutex &class_state_mutex(std::uint32_t class_index) const {
+    return (*class_state_mutexes)[static_cast<std::size_t>(class_index) %
+                                  kClassStateShardCount];
+  }
+
+  Value load_cvar(std::uint32_t class_index, const std::string &name) const {
+    if (class_index >= classes.size()) {
+      return Value::null();
+    }
+    std::shared_lock<std::shared_mutex> lock(class_state_mutex(class_index));
+    const auto found = classes[class_index].cvars.find(name);
+    return found == classes[class_index].cvars.end() ? Value::null()
+                                                     : found->second;
+  }
+
+  void store_cvar(std::uint32_t class_index, const std::string &name,
+                  Value value) {
+    if (class_index >= classes.size()) {
+      return;
+    }
+    std::unique_lock<std::shared_mutex> lock(class_state_mutex(class_index));
+    classes[class_index].cvars[name] = std::move(value);
+  }
+
+  std::vector<Value> cvar_roots_snapshot() const {
+    std::vector<Value> roots;
+    for (std::uint32_t class_index = 0; class_index < classes.size();
+         ++class_index) {
+      std::shared_lock<std::shared_mutex> lock(
+          class_state_mutex(class_index));
+      roots.reserve(roots.size() + classes[class_index].cvars.size());
+      for (const auto &[name, value] : classes[class_index].cvars) {
+        (void)name;
+        roots.push_back(value);
+      }
+    }
+    return roots;
+  }
 
   static std::string shape_transition_key(std::uint64_t parent_id,
                                           const std::string &name) {
@@ -372,6 +438,7 @@ struct RuntimeState {
 
   std::shared_ptr<RuntimeWatchCell> make_watch_cell(Value value,
                                                     std::string target_name) {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     return std::make_shared<RuntimeWatchCell>(
         std::move(value), next_watch_cell_id++, std::move(target_name));
   }
@@ -379,6 +446,7 @@ struct RuntimeState {
   std::shared_ptr<RuntimeWatchHandle>
   make_watch_handle(std::shared_ptr<RuntimeWatchCell> cell,
                     std::string target_name) {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     return std::make_shared<RuntimeWatchHandle>(
         std::move(cell), next_watch_handle_id++, std::move(target_name));
   }
@@ -386,15 +454,44 @@ struct RuntimeState {
   std::shared_ptr<RuntimeWatchHandle>
   make_watch_handle(std::shared_ptr<RuntimeWatchObjectState> object_state,
                     std::string target_name, std::string field_name) {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     return std::make_shared<RuntimeWatchHandle>(
         std::move(object_state), next_watch_handle_id++, std::move(target_name),
         std::move(field_name));
   }
 
   RuntimeWatchEvent record_watch_event(RuntimeWatchEvent event) {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     event.watch_epoch = ++watch_epoch;
     watch_events.push_back(event);
     return event;
+  }
+
+  std::size_t watch_event_count() const {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
+    return watch_events.size();
+  }
+
+  std::pair<std::vector<RuntimeWatchEvent>, std::uint64_t>
+  watch_events_since(std::size_t start) const {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
+    std::vector<RuntimeWatchEvent> events;
+    if (start <= watch_events.size()) {
+      events.assign(
+          watch_events.begin() + static_cast<std::ptrdiff_t>(start),
+          watch_events.end());
+    }
+    return {std::move(events), watch_epoch};
+  }
+
+  std::uint64_t watch_epoch_snapshot() const {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
+    return watch_epoch;
+  }
+
+  std::vector<RuntimeWatchEvent> watch_events_snapshot() const {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
+    return watch_events;
   }
 
   static std::string dependency_key(const RuntimeDependency &dependency) {
@@ -411,6 +508,7 @@ struct RuntimeState {
   }
 
   void begin_dependency_capture(std::uint64_t notebook_cell_id) {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     dependency_capture_active = true;
     dependency_capture = RuntimeDependencySet{};
     dependency_capture.notebook_cell_id = notebook_cell_id;
@@ -418,6 +516,7 @@ struct RuntimeState {
   }
 
   RuntimeDependencySet end_dependency_capture() {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     RuntimeDependencySet result = dependency_capture;
     dependency_capture_active = false;
     dependency_capture = RuntimeDependencySet{};
@@ -426,11 +525,13 @@ struct RuntimeState {
   }
 
   RuntimeDependencySet dependency_capture_snapshot() const {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     return dependency_capture_active ? dependency_capture
                                      : RuntimeDependencySet{};
   }
 
   void record_dependency(RuntimeDependency dependency) {
+    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     if (!dependency_capture_active) {
       return;
     }
@@ -477,6 +578,7 @@ struct RuntimeState {
         if ((flags & (bytecode::kMethodParamFlagRest |
                       bytecode::kMethodParamFlagKwRest |
                       bytecode::kMethodParamFlagKeyword |
+                      bytecode::kMethodParamFlagBlock |
                       bytecode::kMethodParamFlagHasDefault)) != 0U) {
           codes_needing_param_shaping.insert(method.entry_code_id);
           has_any_shaped_params = true;
@@ -523,11 +625,23 @@ struct RuntimeState {
   std::shared_ptr<const ShapeDescriptor>
   root_shape_for_class(std::uint32_t class_index) {
     if (root_shapes.size() <= class_index) {
-      root_shapes.resize(static_cast<std::size_t>(class_index) + 1U);
+      std::lock_guard<std::mutex> structure_lock(*shape_structure_mutex);
+      if (root_shapes.size() <= class_index) {
+        root_shapes.resize(static_cast<std::size_t>(class_index) + 1U);
+      }
     }
+    std::shared_mutex &mutex = class_state_mutex(class_index);
+    {
+      std::shared_lock<std::shared_mutex> lock(mutex);
+      if (root_shapes[class_index] != nullptr) {
+        return root_shapes[class_index];
+      }
+    }
+    std::unique_lock<std::shared_mutex> lock(mutex);
     if (root_shapes[class_index] == nullptr) {
       auto shape = std::make_shared<ShapeDescriptor>();
-      shape->shape_id = next_shape_id++;
+      shape->shape_id =
+          next_shape_id->fetch_add(1U, std::memory_order_relaxed);
       shape->shape_version = shape->shape_id;
       root_shapes[class_index] = shape;
     }
@@ -544,12 +658,24 @@ struct RuntimeState {
       return parent;
     }
     const std::string key = shape_transition_key(parent->shape_id, name);
-    const auto found = shape_transitions.find(key);
-    if (found != shape_transitions.end()) {
+    ShapeTransitionShard &shard =
+        (*shape_transition_shards)[parent->shape_id %
+                                   kShapeTransitionShardCount];
+    {
+      std::shared_lock<std::shared_mutex> lock(shard.mutex);
+      const auto found = shard.transitions.find(key);
+      if (found != shard.transitions.end()) {
+        return found->second;
+      }
+    }
+    std::unique_lock<std::shared_mutex> lock(shard.mutex);
+    const auto found = shard.transitions.find(key);
+    if (found != shard.transitions.end()) {
       return found->second;
     }
     auto next = std::make_shared<ShapeDescriptor>();
-    next->shape_id = next_shape_id++;
+    next->shape_id =
+        next_shape_id->fetch_add(1U, std::memory_order_relaxed);
     next->shape_version = next->shape_id;
     next->ivar_slots = parent->ivar_slots;
     next->slot_names = parent->slot_names;
@@ -557,7 +683,7 @@ struct RuntimeState {
     next->ivar_slots[name] =
         static_cast<std::uint32_t>(next->slot_names.size());
     next->slot_names.push_back(name);
-    shape_transitions[key] = next;
+    shard.transitions[key] = next;
     return next;
   }
 
@@ -650,6 +776,9 @@ class RuntimeNativeBridgeSession {
 public:
   RuntimeNativeBridgeSession(const bytecode::BcModule &module,
                              RuntimeVmExecutionContext context);
+  RuntimeNativeBridgeSession(
+      std::shared_ptr<const bytecode::BcModule> module,
+      RuntimeVmExecutionContext context);
   ~RuntimeNativeBridgeSession();
   RuntimeNativeBridgeSession(const RuntimeNativeBridgeSession &) = delete;
   RuntimeNativeBridgeSession &
@@ -675,6 +804,13 @@ ExecutionResult execute_runtime_vm(const bytecode::BcModule &module,
                                    std::uint32_t code_id,
                                    const std::vector<Value> &args, Value self,
                                    Value block);
+
+ExecutionResult execute_runtime_vm(
+    std::shared_ptr<const bytecode::BcModule> module,
+    const std::vector<std::string> &runtime_strings,
+    const std::vector<std::string> &runtime_symbols,
+    RuntimeVmExecutionContext context, std::uint32_t code_id,
+    const std::vector<Value> &args, Value self, Value block);
 
 ExecutionResult invoke_runtime_native_extension(
     const bytecode::BcModule &module, RuntimeVmExecutionContext context,

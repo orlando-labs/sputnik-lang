@@ -4453,12 +4453,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       operand_u32_value(instruction, 0, &dst);
       operand_u32_value(instruction, 1, &receiver);
       operand_u32_value(instruction, 2, &symbol_id);
-      const std::string name = symbol_id < module.symbols.size()
-                                   ? module.symbols[symbol_id]
-                                   : std::string{};
       write_reg_stmt(dst, "native_load_ivar(" + read_reg_expr(receiver) +
-                              ", native_hex_to_string(\"" +
-                              string_to_hex_text(name) + "\"))");
+                              ", " + std::to_string(symbol_id) + "U)");
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -4469,12 +4465,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       operand_u32_value(instruction, 0, &receiver);
       operand_u32_value(instruction, 1, &symbol_id);
       operand_u32_value(instruction, 2, &src);
-      const std::string name = symbol_id < module.symbols.size()
-                                   ? module.symbols[symbol_id]
-                                   : std::string{};
       out << "  (void)native_store_ivar(" << read_reg_expr(receiver)
-          << ", native_hex_to_string(\"" << string_to_hex_text(name) << "\"), "
-          << read_reg_expr(src) << ");\n";
+          << ", " << symbol_id << "U, " << read_reg_expr(src) << ");\n";
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -7942,9 +7934,18 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "struct NativeRuntimeHandle : NativeRcHeader {\n";
   out << "  amber::runtime::Value value = amber::runtime::Value::null();\n";
   out << "};\n";
+  out << "static constexpr std::size_t kNativeInlineIvarCapacity = 4U;\n";
+  out << "static constexpr std::uint32_t kNativeSuppressedExceptionsIvar = "
+         "std::numeric_limits<std::uint32_t>::max();\n";
   out << "struct NativeInstance : NativeRcHeader {\n";
   out << "  std::uint32_t class_index = 0;\n";
-  out << "  std::unordered_map<std::string, NativeValue> ivars;\n";
+  out << "  std::array<std::uint32_t, kNativeInlineIvarCapacity> "
+         "inline_ivar_ids{};\n";
+  out << "  std::array<NativeValue, kNativeInlineIvarCapacity> "
+         "inline_ivars{};\n";
+  out << "  std::uint8_t inline_ivar_size = 0;\n";
+  out << "  std::unique_ptr<std::unordered_map<std::uint32_t, NativeValue>> "
+         "overflow_ivars;\n";
   out << "  AMBER_NATIVE_POOL_NEW\n";
   out << "};\n";
   out << "struct NativeCell : NativeRcHeader { NativeValue value; };\n";
@@ -8901,13 +8902,21 @@ static bool native_visit_cycle_edges(
       }
       break;
     }
-    case NativeValue::Tag::Instance:
-      for (const auto &[name, value] :
-           static_cast<NativeInstance *>(allocation.payload)->ivars) {
-        (void)name;
-        add_value(value);
+    case NativeValue::Tag::Instance: {
+      auto *instance =
+          static_cast<NativeInstance *>(allocation.payload);
+      for (std::size_t index = 0U; index < instance->inline_ivar_size;
+           ++index) {
+        add_value(instance->inline_ivars[index]);
+      }
+      if (instance->overflow_ivars) {
+        for (const auto &[id, value] : *instance->overflow_ivars) {
+          (void)id;
+          add_value(value);
+        }
       }
       break;
+    }
     case NativeValue::Tag::Closure: {
       auto *closure = static_cast<NativeClosure *>(allocation.payload);
       add_value(closure->self);
@@ -9136,9 +9145,16 @@ static void native_collect_finished_cycles() {
         error->suppressed.clear();
         break;
       }
-      case NativeValue::Tag::Instance:
-        static_cast<NativeInstance *>(node.payload)->ivars.clear();
+      case NativeValue::Tag::Instance: {
+        auto *instance = static_cast<NativeInstance *>(node.payload);
+        for (std::size_t index = 0U;
+             index < instance->inline_ivar_size; ++index) {
+          instance->inline_ivars[index] = NativeValue::nullv();
+        }
+        instance->inline_ivar_size = 0U;
+        instance->overflow_ivars.reset();
         break;
+      }
       case NativeValue::Tag::Closure: {
         auto *closure = static_cast<NativeClosure *>(node.payload);
         closure->self = NativeValue::nullv();
@@ -9713,16 +9729,40 @@ static void native_collect_finished_cycles() {
   out << "  return static_cast<NativeRuntimeHandle *>(value.heap_value);\n";
   out << "}\n";
   out << "static NativeValue native_load_ivar(const NativeValue &receiver, "
-         "const std::string &name) {\n";
+         "std::uint32_t id) {\n";
   out << "  NativeInstance *instance = as_native_instance(receiver);\n";
-  out << "  const auto found = instance->ivars.find(name);\n";
-  out << "  return found == instance->ivars.end() ? NativeValue::nullv() : "
-         "found->second;\n";
+  out << "  for (std::size_t index = 0U; "
+         "index < instance->inline_ivar_size; ++index) {\n";
+  out << "    if (instance->inline_ivar_ids[index] == id) "
+         "return instance->inline_ivars[index];\n";
+  out << "  }\n";
+  out << "  if (!instance->overflow_ivars) return NativeValue::nullv();\n";
+  out << "  const auto found = instance->overflow_ivars->find(id);\n";
+  out << "  return found == instance->overflow_ivars->end() "
+         "? NativeValue::nullv() : found->second;\n";
   out << "}\n";
   out << "static NativeValue native_store_ivar(const NativeValue &receiver, "
-         "const std::string &name, NativeValue value) {\n";
+         "std::uint32_t id, NativeValue value) {\n";
   out << "  native_cycle_write_barrier(receiver, value);\n";
-  out << "  as_native_instance(receiver)->ivars[name] = value;\n";
+  out << "  NativeInstance *instance = as_native_instance(receiver);\n";
+  out << "  for (std::size_t index = 0U; "
+         "index < instance->inline_ivar_size; ++index) {\n";
+  out << "    if (instance->inline_ivar_ids[index] == id) {\n";
+  out << "      instance->inline_ivars[index] = value;\n";
+  out << "      return value;\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  if (instance->inline_ivar_size < kNativeInlineIvarCapacity) {\n";
+  out << "    const std::size_t index = instance->inline_ivar_size++;\n";
+  out << "    instance->inline_ivar_ids[index] = id;\n";
+  out << "    instance->inline_ivars[index] = value;\n";
+  out << "    return value;\n";
+  out << "  }\n";
+  out << "  if (!instance->overflow_ivars) {\n";
+  out << "    instance->overflow_ivars = std::make_unique<"
+         "std::unordered_map<std::uint32_t, NativeValue>>();\n";
+  out << "  }\n";
+  out << "  (*instance->overflow_ivars)[id] = value;\n";
   out << "  return value;\n";
   out << "}\n";
   out << "static void native_append_suppressed_exception("
@@ -9736,20 +9776,18 @@ static void native_collect_finished_cycles() {
   out << "  }\n";
   out << "  if (exception.tag != NativeValue::Tag::Instance || "
          "exception.heap_value == nullptr) return;\n";
-  out << "  NativeInstance *instance = as_native_instance(exception);\n";
   out << "  std::vector<NativeValue> values;\n";
-  out << "  const auto found = "
-         "instance->ivars.find(\"suppressed_exceptions\");\n";
-  out << "  if (found != instance->ivars.end() && "
-         "found->second.tag == NativeValue::Tag::List && "
-         "found->second.heap_value != nullptr) {\n";
+  out << "  const NativeValue found = native_load_ivar("
+         "exception, kNativeSuppressedExceptionsIvar);\n";
+  out << "  if (found.tag == NativeValue::Tag::List && "
+         "found.heap_value != nullptr) {\n";
   out << "    values = static_cast<NativeList *>("
-         "found->second.heap_value)->items;\n";
+         "found.heap_value)->items;\n";
   out << "  }\n";
   out << "  values.push_back(suppressed);\n";
-  out << "  native_cycle_write_barrier(exception, suppressed);\n";
-  out << "  instance->ivars[\"suppressed_exceptions\"] = "
-         "NativeValue::list(std::move(values));\n";
+  out << "  (void)native_store_ivar("
+         "exception, kNativeSuppressedExceptionsIvar, "
+         "NativeValue::list(std::move(values)));\n";
   out << "}\n";
   out << "struct NativeUserCallSiteCache {\n";
   out << "  std::atomic<std::uint64_t> packed{0};\n";
@@ -12089,11 +12127,23 @@ static NativeValue native_copy_impl(const NativeValue &source, bool deep,
   if (source.tag == NativeValue::Tag::Instance) {
     NativeInstance *source_instance = as_native_instance(source);
     NativeValue copied = NativeValue::instance(source_instance->class_index);
-    NativeInstance *target = as_native_instance(copied);
     if (deep) memo[source.heap_value] = copied;
-    for (const auto &entry : source_instance->ivars) {
-      target->ivars[entry.first] =
-          deep ? native_copy_impl(entry.second, true, memo) : entry.second;
+    for (std::size_t index = 0U;
+         index < source_instance->inline_ivar_size; ++index) {
+      const NativeValue value =
+          deep ? native_copy_impl(
+                     source_instance->inline_ivars[index], true, memo)
+               : source_instance->inline_ivars[index];
+      (void)native_store_ivar(
+          copied, source_instance->inline_ivar_ids[index], value);
+    }
+    if (source_instance->overflow_ivars) {
+      for (const auto &[id, source_value] :
+           *source_instance->overflow_ivars) {
+        const NativeValue value =
+            deep ? native_copy_impl(source_value, true, memo) : source_value;
+        (void)native_store_ivar(copied, id, value);
+      }
     }
     native_user_init_copy_if_defined(copied, source);
     return copied;
@@ -20176,11 +20226,19 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
         out << "    throw NativeBailout();\n";
         continue;
       }
+      const std::string ivar_name = target_name.substr(1U);
+      const auto symbol =
+          std::find(module.symbols.begin(), module.symbols.end(), ivar_name);
+      const std::uint32_t ivar_id =
+          symbol == module.symbols.end()
+              ? static_cast<std::uint32_t>(
+                    module.symbols.size() + assign.target_name_str_id)
+              : static_cast<std::uint32_t>(
+                    std::distance(module.symbols.begin(), symbol));
       out << "    if (args.size() <= " << *param_index
           << "U) throw NativeBailout();\n";
-      out << "    (void)native_store_ivar(receiver, native_hex_to_string(\""
-          << string_to_hex_text(target_name.substr(1U))
-          << "\"), *(args.begin() + " << *param_index << "U));\n";
+      out << "    (void)native_store_ivar(receiver, " << ivar_id
+          << "U, *(args.begin() + " << *param_index << "U));\n";
     }
     out << "    return;\n";
   }

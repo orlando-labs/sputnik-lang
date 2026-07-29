@@ -3,6 +3,11 @@ from sync import Mutex, Atomic
 class NativeCounter:
   def init(@count):
     @copied = false
+    @one = 1
+    @two = 2
+    @three = 3
+    @four = 4
+    @five = 5
 
   def init_copy(source):
     @copied = true
@@ -15,6 +20,9 @@ class NativeCounter:
 
   def copied?():
     @copied
+
+  def field_sum():
+    @one + @two + @three + @four + @five
 
   def apply(&work):
     work()
@@ -36,7 +44,7 @@ def main():
   guarded_value = mutex.synchronize:
     1
   mark = Time.monotonic
-  if mark.total_nanoseconds >= 0 and null.absent? and deep[0].copied? and shallow.length == 2:
+  if mark.total_nanoseconds >= 0 and null.absent? and deep[0].copied? and shallow.length == 2 and counter.field_sum == 15 and deep[0].field_sum == 15:
     if "amber".present?:
       counter.value + deep[0].value + block_value + atomic_value + guarded_value
     else:

@@ -1722,6 +1722,9 @@ bool decode_opcode(std::uint8_t raw, Opcode &opcode) {
   case 0x37:
     opcode = Opcode::Throw;
     return true;
+  case 0x38:
+    opcode = Opcode::ReturnNonlocal;
+    return true;
   case 0x40:
     opcode = Opcode::PPrepSeq;
     return true;
@@ -3440,7 +3443,8 @@ InstructionFlow verify_instruction_flow(
     }
     break;
   }
-  case Opcode::Return: {
+  case Opcode::Return:
+  case Opcode::ReturnNonlocal: {
     if (operand_count_is(instruction, 1, errors)) {
       add_register_read(code, instruction, 0, flow, errors);
     }
@@ -5358,6 +5362,8 @@ std::string opcode_name(Opcode opcode) {
     return "JUMP_IF_NULL";
   case Opcode::Return:
     return "RETURN";
+  case Opcode::ReturnNonlocal:
+    return "RETURN_NONLOCAL";
   case Opcode::Raise:
     return "RAISE";
   case Opcode::RequireBlock:

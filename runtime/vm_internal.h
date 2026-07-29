@@ -212,6 +212,13 @@ struct PendingThrow {
   bool value_present = true;
 };
 
+using NonlocalReturnTarget = ClosureValue::NonlocalReturnTarget;
+
+struct PendingNonlocalReturn {
+  std::shared_ptr<NonlocalReturnTarget> target;
+  Value value = Value::null();
+};
+
 // Register-keyed per-frame map for pattern state. These hold at most a
 // handful of entries at a time, so a flat vector beats unordered_map: finds
 // are short linear scans and clear() keeps capacity, so pooled frames stop
@@ -294,6 +301,9 @@ struct Frame {
   bool merge_registers_to_caller = false;
   std::optional<Value> pending_exception_on_return;
   std::optional<PendingThrow> pending_throw_on_return;
+  std::optional<PendingNonlocalReturn> pending_nonlocal_return_on_return;
+  std::shared_ptr<NonlocalReturnTarget> nonlocal_return_target;
+  bool owns_nonlocal_return_target = false;
   std::vector<PreservedRegister> preserved_registers_on_return;
   // Dynamic runtime scope cleanup (currently TaskLocal.with). The cleanup is
   // kept on the resumable frame so it survives cooperative park/migration.

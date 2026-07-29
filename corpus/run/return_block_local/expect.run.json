@@ -1,6 +1,0 @@
-{
-  "schema": "amber.run.v1",
-  "entry": "probe",
-  "status": "ok",
-  "value": "\"zero:nonzero\""
-}

@@ -779,7 +779,7 @@ first_big = catch(:found):
 
 ### 7.5. `return`
 
-`return` завершает ближайший enclosing callable: тело `def` / `class_method def`, lambda или block. Это **локальный** return: внутри lambda/block он завершает сам lambda/block, а не внешний метод.
+`return` завершает enclosing callable activation. В теле `def` / `class_method def` и самостоятельной lambda это локальный возврат. В call-site block (`items.each |item|: ...`) `return` нелокально завершает конкретную активацию метода или lambda, которая создала блок; при раскрутке выполняются `ensure`. Вызов такого блока после завершения его владельца поднимает `LocalJumpError`. `next` остаётся локальным ранним завершением одной итерации блока.
 
 Формы:
 

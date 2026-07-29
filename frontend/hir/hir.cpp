@@ -147,6 +147,37 @@ bool bool_value(const ast::Expr &expr, const std::string &name) {
   return false;
 }
 
+bool contains_nonlocal_return_for_block(const ast::Expr &expr,
+                                        bool root = true) {
+  if (!root && expr.kind == "AstBlock" &&
+      bool_value(expr, "lambda_literal")) {
+    return false;
+  }
+  if (!root && (expr.kind == "AstDefStmt" ||
+                expr.kind == "AstClassMethodDef" ||
+                expr.kind == "AstClauseDef")) {
+    return false;
+  }
+  if (expr.kind == "AstReturn") {
+    return true;
+  }
+  for (const ast::NodeField &field : expr.node_fields) {
+    if (field.value != nullptr &&
+        contains_nonlocal_return_for_block(*field.value, false)) {
+      return true;
+    }
+  }
+  for (const ast::ListField &field : expr.list_fields) {
+    for (const std::unique_ptr<ast::Expr> &value : field.values) {
+      if (value != nullptr &&
+          contains_nonlocal_return_for_block(*value, false)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 const ast::Expr *node_field(const ast::Expr &expr, const std::string &name) {
   for (const ast::NodeField &field : expr.node_fields) {
     if (field.name == name) {
@@ -1409,12 +1440,14 @@ private:
       const std::vector<CapturePlan> &capture_plans = {},
       const ast::Expr *signature_override = nullptr,
       const ast::Expr *ast_signature = nullptr,
-      const ast::Expr *handler_owner = nullptr) {
+      const ast::Expr *handler_owner = nullptr,
+      bool nonlocal_return_block = false) {
     Procedure procedure;
     procedure.id = "p" + std::to_string(procedures_.size());
     procedure.name = name;
     procedure.kind = kind;
     procedure.owner = owner;
+    procedure.nonlocal_return_block = nonlocal_return_block;
     procedure.span = span;
     procedure.signature = signature_override != nullptr
                               ? clone_node(*signature_override)
@@ -2061,7 +2094,11 @@ private:
       return node;
     }
     if (expr.kind == "AstReturn") {
-      auto node = make_node("HReturn", expr.span);
+      const bool nonlocal =
+          current_proc_ != nullptr &&
+          procedures_[current_proc_->procedure_index].nonlocal_return_block;
+      auto node = make_node(nonlocal ? "HNonlocalReturn" : "HReturn",
+                            expr.span);
       if (const ast::Expr *value = node_field(expr, "value")) {
         node->node_field("value", lower_expr(*value));
       } else {
@@ -2851,10 +2888,14 @@ private:
       }
       const std::string procedure_id = lower_procedure(
           scope_index, "__block__", "closure", "__block__", signature,
-          body_items, expr.span, capture_plans, signature_node.get());
+          body_items, expr.span, capture_plans, signature_node.get(), nullptr,
+          nullptr, !bool_value(expr, "lambda_literal"));
       node->string_field("procedure", procedure_id);
       for (Procedure &procedure : procedures_) {
         if (procedure.id == procedure_id) {
+          procedure.needs_nonlocal_return_target =
+              procedure.nonlocal_return_block &&
+              contains_nonlocal_return_for_block(expr);
           procedure.param_patterns = clone_node_list(param_patterns);
           break;
         }
@@ -3243,7 +3284,12 @@ std::string program_to_json(const Program &program,
     out << "    {\"id\":\"" << json_escape(procedure.id) << "\",\"name\":\""
         << json_escape(procedure.name) << "\",\"kind\":\""
         << json_escape(procedure.kind) << "\",\"owner\":\""
-        << json_escape(procedure.owner) << "\",\"span\":";
+        << json_escape(procedure.owner)
+        << "\",\"nonlocal_return_block\":"
+        << (procedure.nonlocal_return_block ? "true" : "false")
+        << ",\"needs_nonlocal_return_target\":"
+        << (procedure.needs_nonlocal_return_target ? "true" : "false")
+        << ",\"span\":";
     append_span_json(out, procedure.span);
     out << ",\"signature\":";
     append_node_json(out, *procedure.signature);

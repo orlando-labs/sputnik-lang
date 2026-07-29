@@ -1931,6 +1931,7 @@ public:
       if (try_dispatch_native_extension_code(frames_.back(), code_id, args,
                                              frames_.back().self, &native_out,
                                              &native_faulted)) {
+        run_frame_scope_exit(frames_.back());
         frames_.pop_back();
         state_->heap.drain_remote_frees();
         if (native_faulted) {
@@ -1975,6 +1976,7 @@ public:
     fault_.reset();
     escaped_exception_.reset();
     escaped_throw_.reset();
+    escaped_nonlocal_return_.reset();
     if (current_runtime_task_context() == nullptr &&
         root_task_context_ == nullptr) {
       root_task_context_ = RuntimeTaskContext::create();
@@ -2016,6 +2018,7 @@ public:
     fault_.reset();
     escaped_exception_.reset();
     escaped_throw_.reset();
+    escaped_nonlocal_return_.reset();
     if (current_runtime_task_context() == nullptr &&
         root_task_context_ == nullptr) {
       root_task_context_ = RuntimeTaskContext::create();
@@ -2839,7 +2842,8 @@ private:
     Vm &nested = *lease.vm;
     nested.push_frame_from_args(*code, args.data(), args.size(),
                                 closure->captures, closure->self, Value::null(),
-                                std::nullopt);
+                                std::nullopt,
+                                closure->nonlocal_return_target);
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
       nested.step();
     }
@@ -2851,6 +2855,12 @@ private:
     if (nested.escaped_throw_.has_value()) {
       const PendingThrow escaped = *nested.escaped_throw_;
       throw_value(frame, escaped.tag, escaped.value);
+      return std::nullopt;
+    }
+    if (nested.escaped_nonlocal_return_.has_value()) {
+      const PendingNonlocalReturn escaped =
+          *nested.escaped_nonlocal_return_;
+      nonlocal_return_value(frame, escaped.target, escaped.value);
       return std::nullopt;
     }
     if (nested.escaped_exception_.has_value()) {
@@ -2904,7 +2914,8 @@ private:
     Vm &nested = *lease.vm;
     nested.push_frame_from_args(*code, args.data(), args.size(),
                                 closure->captures, closure->self, Value::null(),
-                                std::nullopt);
+                                std::nullopt,
+                                closure->nonlocal_return_target);
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
       nested.step();
     }
@@ -2912,6 +2923,12 @@ private:
     if (nested.escaped_throw_.has_value()) {
       const PendingThrow escaped = *nested.escaped_throw_;
       throw_value(frame, escaped.tag, escaped.value, escaped.value_present);
+      return result;
+    }
+    if (nested.escaped_nonlocal_return_.has_value()) {
+      const PendingNonlocalReturn escaped =
+          *nested.escaped_nonlocal_return_;
+      nonlocal_return_value(frame, escaped.target, escaped.value);
       return result;
     }
     if (nested.escaped_exception_.has_value()) {
@@ -2934,7 +2951,8 @@ private:
                                                   const Value &arg,
                                                   StdlibBlockResult *result) {
     if (code.kind != CodeKind::Block || !code.handler_table.empty() ||
-        code.reg_count == 0U) {
+        code.reg_count == 0U ||
+        (code.flags & bytecode::kCodeFlagNonlocalReturnBlock) != 0U) {
       return FastCallStatus::NotHandled;
     }
 
@@ -3313,7 +3331,8 @@ private:
     BlockVmLease lease = acquire_block_vm();
     Vm &nested = *lease.vm;
     nested.push_frame_from_args(*code, &value, 1, closure->captures,
-                                closure->self, Value::null(), std::nullopt);
+                                closure->self, Value::null(), std::nullopt,
+                                closure->nonlocal_return_target);
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
       nested.step();
     }
@@ -3327,6 +3346,12 @@ private:
         return result;
       }
       throw_value(frame, escaped.tag, escaped.value);
+      return result;
+    }
+    if (nested.escaped_nonlocal_return_.has_value()) {
+      const PendingNonlocalReturn escaped =
+          *nested.escaped_nonlocal_return_;
+      nonlocal_return_value(frame, escaped.target, escaped.value);
       return result;
     }
     if (nested.escaped_exception_.has_value()) {
@@ -3373,7 +3398,8 @@ private:
     Vm &nested = *lease.vm;
     nested.push_frame_from_args(*code, args.data(), args.size(),
                                 closure->captures, closure->self, Value::null(),
-                                std::nullopt);
+                                std::nullopt,
+                                closure->nonlocal_return_target);
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
       nested.step();
     }
@@ -3387,6 +3413,12 @@ private:
         return result;
       }
       throw_value(frame, escaped.tag, escaped.value);
+      return result;
+    }
+    if (nested.escaped_nonlocal_return_.has_value()) {
+      const PendingNonlocalReturn escaped =
+          *nested.escaped_nonlocal_return_;
+      nonlocal_return_value(frame, escaped.target, escaped.value);
       return result;
     }
     if (nested.escaped_exception_.has_value()) {
@@ -3429,6 +3461,7 @@ private:
       vm->fault_ = std::nullopt;
       vm->escaped_exception_ = std::nullopt;
       vm->escaped_throw_ = std::nullopt;
+      vm->escaped_nonlocal_return_ = std::nullopt;
       vm->final_value_ = Value::null();
       owner->block_vm_pool_.push_back(std::move(vm));
     }
@@ -3544,6 +3577,10 @@ private:
     if (frame.pending_throw_on_return.has_value()) {
       append_value_root(roots, frame.pending_throw_on_return->tag);
       append_value_root(roots, frame.pending_throw_on_return->value);
+    }
+    if (frame.pending_nonlocal_return_on_return.has_value()) {
+      append_value_root(roots,
+                        frame.pending_nonlocal_return_on_return->value);
     }
     for (const PreservedRegister &preserved :
          frame.preserved_registers_on_return) {
@@ -3825,6 +3862,7 @@ private:
     case Opcode::SetLast:
     case Opcode::Raise:
     case Opcode::Return:
+    case Opcode::ReturnNonlocal:
     case Opcode::TypeCheck:
       return quick_operand_reg_equals(insn, 0, reg);
     case Opcode::Throw:
@@ -4157,6 +4195,7 @@ private:
     case Opcode::JumpIfFalse:
     case Opcode::JumpIfNull:
     case Opcode::Return:
+    case Opcode::ReturnNonlocal:
     case Opcode::Raise:
     case Opcode::Throw:
     case Opcode::RequireBlock:
@@ -4229,6 +4268,7 @@ private:
       }
       return quick_add_target_successor(code, insn, 2, out);
     case Opcode::Return:
+    case Opcode::ReturnNonlocal:
     case Opcode::Raise:
     case Opcode::Throw:
       return true;
@@ -4931,6 +4971,9 @@ private:
       std::uint32_t arg_count, const std::vector<Value> &captures,
       Value *value_out, std::int64_t *int_out, bool *int_result) {
     *int_result = false;
+    if ((code.flags & bytecode::kCodeFlagNonlocalReturnBlock) != 0U) {
+      return FastCallStatus::NotHandled;
+    }
     const DirectClosureKind kind = direct_closure_kind_for(code);
     if (kind == DirectClosureKind::None) {
       return FastCallStatus::NotHandled;
@@ -5292,8 +5335,12 @@ private:
                             std::size_t arg_count,
                             const std::vector<Value> &captures, Value self,
                             Value block,
-                            std::optional<std::uint32_t> caller_result_reg) {
+                            std::optional<std::uint32_t> caller_result_reg,
+                            std::shared_ptr<NonlocalReturnTarget>
+                                inherited_return_target = nullptr) {
     Frame frame = acquire_frame(code);
+    initialize_nonlocal_return_target(frame, code,
+                                      std::move(inherited_return_target));
     const std::optional<std::uint32_t> rest_index =
         rest_param_index_for_code(code.code_id);
     const std::size_t fixed_count =
@@ -5328,8 +5375,12 @@ private:
   void push_frame_from_fast_args(
       const BcCode &code, const FastCallArg *args, std::size_t arg_count,
       const std::vector<Value> &captures, Value self, Value block,
-      std::optional<std::uint32_t> caller_result_reg) {
+      std::optional<std::uint32_t> caller_result_reg,
+      std::shared_ptr<NonlocalReturnTarget> inherited_return_target =
+          nullptr) {
     Frame frame = acquire_frame(code);
+    initialize_nonlocal_return_target(frame, code,
+                                      std::move(inherited_return_target));
     const std::optional<std::uint32_t> rest_index =
         rest_param_index_for_code(code.code_id);
     const std::size_t fixed_count =
@@ -5375,9 +5426,36 @@ private:
 
   void push_frame(const BcCode &code, const std::vector<Value> &args,
                   std::vector<Value> captures, Value self, Value block,
-                  std::optional<std::uint32_t> caller_result_reg) {
+                  std::optional<std::uint32_t> caller_result_reg,
+                  std::shared_ptr<NonlocalReturnTarget>
+                      inherited_return_target = nullptr) {
     push_frame_from_args(code, args.data(), args.size(), captures,
-                         std::move(self), std::move(block), caller_result_reg);
+                         std::move(self), std::move(block), caller_result_reg,
+                         std::move(inherited_return_target));
+  }
+
+  void initialize_nonlocal_return_target(
+      Frame &frame, const BcCode &code,
+      std::shared_ptr<NonlocalReturnTarget> inherited) {
+    const bool nonlocal_block =
+        code.kind == CodeKind::Block &&
+        (code.flags & bytecode::kCodeFlagNonlocalReturnBlock) != 0U;
+    const bool helper_frame =
+        code.kind == CodeKind::Ensure || code.kind == CodeKind::Rescue ||
+        code.kind == CodeKind::DefaultThunk;
+    if (nonlocal_block || helper_frame) {
+      if (inherited == nullptr && helper_frame && !frames_.empty()) {
+        inherited = frames_.back().nonlocal_return_target;
+      }
+      frame.nonlocal_return_target = std::move(inherited);
+      frame.owns_nonlocal_return_target = false;
+      return;
+    }
+    // Most activations never create a call-site block. Keep their common path
+    // allocation-free; MakeClosure materializes the token lazily when it sees
+    // a block code object carrying kCodeFlagNonlocalReturnBlock.
+    frame.nonlocal_return_target.reset();
+    frame.owns_nonlocal_return_target = false;
   }
 
   // Pushes the entry frame for a method body invoked directly through
@@ -5397,6 +5475,7 @@ private:
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
       std::vector<Value> captures, Value self, Value block) {
     Frame frame = acquire_frame(entry);
+    initialize_nonlocal_return_target(frame, entry, nullptr);
     frame.captures = std::move(captures);
     frame.self = std::move(self);
     frame.block = std::move(block);
@@ -5444,6 +5523,9 @@ private:
     frame.merge_registers_to_caller = false;
     frame.pending_exception_on_return.reset();
     frame.pending_throw_on_return.reset();
+    frame.pending_nonlocal_return_on_return.reset();
+    frame.nonlocal_return_target.reset();
+    frame.owns_nonlocal_return_target = false;
     frame.preserved_registers_on_return.clear();
     frame.scope_exit = {};
     frame.prepared_seq_regs.clear();
@@ -5473,6 +5555,9 @@ private:
     frame.merge_registers_to_caller = false;
     frame.pending_exception_on_return.reset();
     frame.pending_throw_on_return.reset();
+    frame.pending_nonlocal_return_on_return.reset();
+    frame.nonlocal_return_target.reset();
+    frame.owns_nonlocal_return_target = false;
     frame.preserved_registers_on_return.clear();
     frame.scope_exit = {};
     frame.prepared_seq_regs.clear();
@@ -5771,7 +5856,8 @@ private:
     ++frame.pc;
     frame.active_call_pc = call_pc;
     push_frame_from_fast_args(*code, args, pos_count, closure->captures,
-                              closure->self, Value::null(), dst);
+                              closure->self, Value::null(), dst,
+                              closure->nonlocal_return_target);
     return FastCallStatus::Matched;
   }
 
@@ -12117,7 +12203,8 @@ private:
         const std::uint32_t call_pc = static_cast<std::uint32_t>(frame.pc);
         ++frame.pc;
         frame.active_call_pc = call_pc;
-        push_frame(*code, {}, closure->captures, closure->self, block, dst);
+        push_frame(*code, {}, closure->captures, closure->self, block, dst,
+                   closure->nonlocal_return_target);
         Frame &callee_frame = frames_.back();
         if (!materialize_defaults(callee_frame, *shaped_method, params,
                                   slots)) {
@@ -12131,7 +12218,8 @@ private:
       const std::uint32_t call_pc = static_cast<std::uint32_t>(frame.pc);
       ++frame.pc;
       frame.active_call_pc = call_pc;
-      push_frame(*code, pos_args, closure->captures, closure->self, block, dst);
+      push_frame(*code, pos_args, closure->captures, closure->self, block, dst,
+                 closure->nonlocal_return_target);
       return true;
     }
 
@@ -12664,7 +12752,7 @@ private:
                          block, dst);
   }
 
-  enum class UnwindReason { Exception, Throw };
+  enum class UnwindReason { Exception, Throw, NonlocalReturn };
 
   static std::uint32_t handler_entry_kind(const bytecode::HandlerEntry &entry) {
     return entry.flags == 0U ? kHandlerKindLegacyRescue
@@ -12677,6 +12765,9 @@ private:
     if (reason == UnwindReason::Exception) {
       return kind == kHandlerKindLegacyRescue || kind == kHandlerKindRescue ||
              kind == kHandlerKindEnsure;
+    }
+    if (reason == UnwindReason::NonlocalReturn) {
+      return kind == kHandlerKindEnsure;
     }
     return kind == kHandlerKindCatch || kind == kHandlerKindEnsure;
   }
@@ -12825,6 +12916,11 @@ private:
   }
 
   void run_frame_scope_exit(Frame &frame) {
+    if (frame.owns_nonlocal_return_target &&
+        frame.nonlocal_return_target != nullptr) {
+      frame.nonlocal_return_target->active.store(false,
+                                                  std::memory_order_release);
+    }
     if (!frame.scope_exit) {
       return;
     }
@@ -12869,6 +12965,8 @@ private:
       bool merge_registers_to_caller,
       std::optional<Value> pending_exception_on_return,
       std::optional<PendingThrow> pending_throw_on_return = std::nullopt,
+      std::optional<PendingNonlocalReturn>
+          pending_nonlocal_return_on_return = std::nullopt,
       std::vector<PreservedRegister> preserved_registers_on_return = {}) {
     materialize_integer_regs(target);
     Frame handler = acquire_frame(handler_code);
@@ -12894,6 +12992,10 @@ private:
     handler.merge_registers_to_caller = merge_registers_to_caller;
     handler.pending_exception_on_return = pending_exception_on_return;
     handler.pending_throw_on_return = pending_throw_on_return;
+    handler.pending_nonlocal_return_on_return =
+        std::move(pending_nonlocal_return_on_return);
+    handler.nonlocal_return_target = target.nonlocal_return_target;
+    handler.owns_nonlocal_return_target = false;
     handler.preserved_registers_on_return =
         std::move(preserved_registers_on_return);
     if (!write_reg(handler, exception_slot, exception)) {
@@ -12929,6 +13031,8 @@ private:
         frame.pending_exception_on_return;
     const std::optional<PendingThrow> pending_throw =
         frame.pending_throw_on_return;
+    const std::optional<PendingNonlocalReturn> pending_nonlocal_return =
+        frame.pending_nonlocal_return_on_return;
     run_frame_scope_exit(frame);
     Frame completed_frame = std::move(frames_.back());
     frames_.pop_back();
@@ -12954,6 +13058,10 @@ private:
                            value_to_debug_string(
                                pending_throw->tag, &module_, &runtime_strings_,
                                &runtime_symbols_));
+      } else if (pending_nonlocal_return.has_value()) {
+        escaped_nonlocal_return_ = *pending_nonlocal_return;
+        fault_ = make_fault(completed_frame, "LocalJumpError",
+                            "non-local return target is outside this VM");
       } else {
         final_value_ = value;
       }
@@ -12979,11 +13087,96 @@ private:
       throw_value(caller, pending.tag, pending.value, pending.value_present);
       return;
     }
+    if (pending_nonlocal_return.has_value()) {
+      PendingNonlocalReturn pending = *pending_nonlocal_return;
+      recycle_frame(std::move(completed_frame));
+      nonlocal_return_value(caller, pending.target, pending.value);
+      return;
+    }
     if (!caller_reg.has_value() || !write_reg(caller, *caller_reg, value)) {
       recycle_frame(std::move(completed_frame));
       return;
     }
     recycle_frame(std::move(completed_frame));
+  }
+
+  bool nonlocal_return_value(
+      const Frame &returning_frame,
+      const std::shared_ptr<NonlocalReturnTarget> &target, Value value) {
+    if (target == nullptr ||
+        !target->active.load(std::memory_order_acquire)) {
+      raise_runtime_error(returning_frame, "LocalJumpError",
+                          "unexpected return from an expired block");
+      return false;
+    }
+
+    std::optional<std::size_t> owner_index;
+    for (std::size_t index = frames_.size(); index > 0; --index) {
+      const Frame &candidate = frames_[index - 1U];
+      if (candidate.owns_nonlocal_return_target &&
+          candidate.nonlocal_return_target == target) {
+        owner_index = index - 1U;
+        break;
+      }
+    }
+
+    std::optional<std::size_t> handler_frame_index;
+    const bytecode::HandlerEntry *handler = nullptr;
+    const std::size_t lower_bound = owner_index.value_or(0U);
+    for (std::size_t index = frames_.size(); index > lower_bound; --index) {
+      const std::size_t candidate_index = index - 1U;
+      const Frame &candidate = frames_[candidate_index];
+      const std::uint32_t pc = candidate.active_call_pc.value_or(
+          static_cast<std::uint32_t>(candidate.pc));
+      const bytecode::HandlerEntry *entry = find_handler_for_pc(
+          candidate, pc, UnwindReason::NonlocalReturn);
+      if (entry != nullptr) {
+        handler_frame_index = candidate_index;
+        handler = entry;
+        break;
+      }
+    }
+
+    if (handler_frame_index.has_value()) {
+      const BcCode *handler_code =
+          find_code(module_, handler->handler_code_id);
+      if (handler_code == nullptr) {
+        set_fault(returning_frame, "VMError", "handler code id is unknown");
+        return false;
+      }
+      if (!pop_frames_above_unwind_target(*handler_frame_index, nullptr)) {
+        return false;
+      }
+      Frame &handler_target = frames_[*handler_frame_index];
+      if (handler_target.code == nullptr ||
+          handler->handler_pc >= handler_target.code->instructions.size()) {
+        set_fault(handler_target, "VMError", "handler pc is out of range");
+        return false;
+      }
+      clear_pattern_state(handler_target);
+      handler_target.pending_pattern_bindings.clear();
+      handler_target.active_call_pc.reset();
+      handler_target.pc = handler->handler_pc;
+      return push_handler_frame_from_target(
+          handler_target, *handler_code, Value::null(),
+          handler_exception_slot(handler->flags), std::nullopt, true,
+          std::nullopt, std::nullopt,
+          PendingNonlocalReturn{target, std::move(value)});
+    }
+
+    if (!owner_index.has_value()) {
+      escaped_nonlocal_return_ = PendingNonlocalReturn{target,
+                                                       std::move(value)};
+      fault_ = make_fault(returning_frame, "LocalJumpError",
+                          "non-local return target is outside this VM");
+      return false;
+    }
+
+    if (!pop_frames_above_unwind_target(*owner_index, nullptr)) {
+      return false;
+    }
+    finish_return(frames_.back(), std::move(value));
+    return true;
   }
 
   bool raise_value(const Frame &raising_frame, const Value &exception) {
@@ -13044,7 +13237,7 @@ private:
           handler_result_slot(handler->flags), true, std::nullopt);
     }
     push_frame(*handler_code, {active_exception}, target.captures, target.self,
-               target.block, 0U);
+               target.block, 0U, target.nonlocal_return_target);
     return true;
   }
 
@@ -13111,7 +13304,8 @@ private:
         return push_handler_frame_from_target(
             target, *handler_code, Value::null(),
             handler_exception_slot(handler->flags), std::nullopt, true,
-            std::nullopt, active_throw, std::move(preserved_catch_tags));
+            std::nullopt, active_throw, std::nullopt,
+            std::move(preserved_catch_tags));
       }
 
       if (kind == kHandlerKindCatch) {
@@ -30799,6 +30993,20 @@ private:
       auto closure = make_closure_value();
       closure->code_id = code_id;
       closure->self = frame.self;
+      const BcCode *closure_code = find_code(module_, code_id);
+      if (closure_code == nullptr) {
+        set_fault(frame, "VMError", "closure code id is unknown");
+        return;
+      }
+      if (closure_code->kind == CodeKind::Block &&
+          (closure_code->flags &
+           bytecode::kCodeFlagNonlocalReturnBlock) != 0U &&
+          frame.nonlocal_return_target == nullptr) {
+        frame.nonlocal_return_target =
+            std::make_shared<NonlocalReturnTarget>();
+        frame.owns_nonlocal_return_target = true;
+      }
+      closure->nonlocal_return_target = frame.nonlocal_return_target;
       closure->captures.reserve(capture_count);
       const Value closure_value = Value::closure(closure);
       for (std::uint32_t i = 0; i < capture_count; ++i) {
@@ -30928,7 +31136,7 @@ private:
           ++frame.pc;
           frame.active_call_pc = call_pc;
           push_frame(*code, {}, closure->captures, closure->self, packet.block,
-                     packet.dst);
+                     packet.dst, closure->nonlocal_return_target);
           Frame &callee_frame = frames_.back();
           if (!materialize_defaults(callee_frame, *shaped_method, params,
                                     slots) ||
@@ -30959,7 +31167,8 @@ private:
         ++frame.pc;
         frame.active_call_pc = call_pc;
         push_frame(*code, packet.pos_args, closure->captures, closure->self,
-                   packet.block, packet.dst);
+                   packet.block, packet.dst,
+                   closure->nonlocal_return_target);
         return;
       }
 
@@ -31679,6 +31888,19 @@ private:
       finish_return(frame, value);
       return;
     }
+    case Opcode::ReturnNonlocal: {
+      std::uint32_t src = 0;
+      if (!operand_u32(frame, insn, 0, &src)) {
+        return;
+      }
+      Value value = read_reg(frame, src);
+      if (fault_.has_value()) {
+        return;
+      }
+      nonlocal_return_value(frame, frame.nonlocal_return_target,
+                            std::move(value));
+      return;
+    }
     case Opcode::Raise: {
       std::uint32_t src = 0;
       if (!operand_u32(frame, insn, 0, &src)) {
@@ -31788,6 +32010,7 @@ private:
   // terminal fault. Cleared at each block-Vm lease boundary.
   std::optional<Value> escaped_exception_;
   std::optional<PendingThrow> escaped_throw_;
+  std::optional<PendingNonlocalReturn> escaped_nonlocal_return_;
   std::vector<Value> last_completed_regs_;
   std::vector<std::uint8_t> last_completed_initialized_;
   Value final_value_ = Value::null();

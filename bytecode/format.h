@@ -153,6 +153,9 @@ enum class Opcode : std::uint8_t {
   Raise = 0x35,
   Safepoint = 0x36,
   Throw = 0x37,
+  // Return from the concrete callable activation which created this
+  // call-site block. Unlike RETURN, this unwinds enclosing ensure handlers.
+  ReturnNonlocal = 0x38,
   PPrepSeq = 0x40,
   PPrepMap = 0x41,
   PCheckEq = 0x42,
@@ -314,6 +317,7 @@ inline constexpr std::uint32_t kMethodParamFlagKwRest = 0x10U;
 // rest index is a local/register index; bit zero distinguishes index zero from
 // a code object without a rest parameter.
 inline constexpr std::uint32_t kCodeFlagRestParam = 0x1U;
+inline constexpr std::uint32_t kCodeFlagNonlocalReturnBlock = 0x2U;
 inline constexpr std::uint32_t kCodeRestParamIndexShift = 8U;
 
 // Sequence-pattern `PGetIndex`: when this bit is set on the index operand, the

@@ -11,6 +11,8 @@ errors:
     parent: Exception
   - name: UncaughtThrowError
     parent: Exception
+  - name: LocalJumpError
+    parent: Exception
   - name: TypeError
     parent: Exception
   - name: ValueError

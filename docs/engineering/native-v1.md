@@ -65,6 +65,12 @@ use the VM fallback. Capture-bearing code is native when invoked through a
 native closure; a direct entry that needs captures is reported as non-native
 until the backend can materialize that entry closure.
 
+Generated call-site closures capture a shared activation token.
+`RETURN_NONLOCAL` carries that token while unwinding generated C++ frames,
+runs matching `ensure` handlers, and is accepted only by the exact owning
+activation. This preserves recursion safety and raises `LocalJumpError` for an
+escaped block whose owner has completed; it does not introduce VM fallback.
+
 ## Runtime Bridge
 
 `runtime/native_bridge` binds a native module to a `RuntimeWorldMirror`, copying

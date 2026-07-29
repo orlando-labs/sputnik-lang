@@ -145,6 +145,12 @@ struct ClosureValue {
   std::uint32_t code_id = 0;
   std::vector<Value> captures;
   Value self = Value::null();
+  // Dynamic return target captured by call-site blocks. The shared identity,
+  // rather than a lexical code id, makes non-local return recursion-safe.
+  struct NonlocalReturnTarget {
+    std::atomic<bool> active{true};
+  };
+  std::shared_ptr<NonlocalReturnTarget> nonlocal_return_target;
 };
 
 struct CollectionKeyError {

@@ -429,12 +429,13 @@ private:
       }
       return emit_value("undef", {}, {}, expr.span);
     }
-    if (expr.kind == "HReturn") {
+    if (expr.kind == "HReturn" || expr.kind == "HNonlocalReturn") {
       const ast::Expr *value = node_field(expr, "value");
       const std::string compiled = value == nullptr
                                        ? emit_value("undef", {}, {}, expr.span)
                                        : compile_expr(*value);
-      terminate("return", {value_operand(compiled)}, {}, expr.span);
+      terminate(expr.kind == "HReturn" ? "return" : "return.nonlocal",
+                {value_operand(compiled)}, {}, expr.span);
       return emit_value("undef", {}, {}, expr.span);
     }
     if (expr.kind == "HIsNull") {

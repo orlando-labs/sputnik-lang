@@ -31,6 +31,10 @@ struct Procedure {
   std::string name;
   std::string kind;
   std::string owner;
+  // A call-site block returns through the concrete activation which created
+  // it. Standalone lambdas keep ordinary local-return semantics.
+  bool nonlocal_return_block = false;
+  bool needs_nonlocal_return_target = false;
   lexer::Span span;
   std::unique_ptr<ast::Expr> signature;
   std::vector<std::unique_ptr<ast::Expr>> param_patterns;

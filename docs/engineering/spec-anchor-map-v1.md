@@ -46,9 +46,9 @@ Check with `make spec-sync-check`.
 | --- | ---: | --- |
 | `spec/registries/bytecode_sections.yaml` | 88 | `a1ece16c9bc4bb08c156aa91646f89ad9f8398add5191f4f6a17d5cabc487907` |
 | `spec/registries/diagnostics.yaml` | 107 | `a40682f71981fca82e08d9b58ede7c00fcf97bf212e742995d566db88b26d687` |
-| `spec/registries/opcodes.yaml` | 192 | `c74537900d7c6df3b704c19a258ac8c79c8b867ac1c00cb7466634f863101d27` |
+| `spec/registries/opcodes.yaml` | 194 | `0546d31b062a926190382cf1b9711ee80ad6ad8d312e9f6426a8a69769664e67` |
 | `spec/registries/prelude.yaml` | 469 | `7637c3af5f5b9090b90bfd89d9e289bc1cf623201b60a9b6d8b7e0878a1d9602` |
-| `spec/registries/runtime_errors.yaml` | 261 | `1411fba162b1f629078e3b377b8b59b83bc222c13f6c988c27d41d3695716ceb` |
+| `spec/registries/runtime_errors.yaml` | 263 | `2412fd039deca14565f9f9d545190dd3a03769973e99050d790a14a737bfa1f6` |
 | `spec/registries/tokens.yaml` | 127 | `8f625d0ae80376759b848e935282dca05065e1d7b742c69b6371d611f1a42fab` |
 
 ## Anchor Map
@@ -140,12 +140,12 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 1 | 1 | [`amberbcv1`](../../docs/engineering/bc-v1.md#amberbcv1) | amber.bc.v1 |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 22 | 2 | [`container`](../../docs/engineering/bc-v1.md#container) | Container |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 55 | 2 | [`record-encoding`](../../docs/engineering/bc-v1.md#record-encoding) | Record Encoding |
-| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 132 | 2 | [`verifier-skeleton`](../../docs/engineering/bc-v1.md#verifier-skeleton) | Verifier Skeleton |
+| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 138 | 2 | [`verifier-skeleton`](../../docs/engineering/bc-v1.md#verifier-skeleton) | Verifier Skeleton |
 | [`docs/engineering/bind-v1.md`](../../docs/engineering/bind-v1.md) | 1 | 1 | [`amberbindv1`](../../docs/engineering/bind-v1.md#amberbindv1) | amber.bind.v1 |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 1 | 1 | [`amberbuildv1`](../../docs/engineering/build-v1.md#amberbuildv1) | amber.build.v1 |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 19 | 2 | [`manifest-shape`](../../docs/engineering/build-v1.md#manifest-shape) | Manifest Shape |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 47 | 2 | [`cli`](../../docs/engineering/build-v1.md#cli) | CLI |
-| [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 69 | 2 | [`conformance`](../../docs/engineering/build-v1.md#conformance) | Conformance |
+| [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 78 | 2 | [`conformance`](../../docs/engineering/build-v1.md#conformance) | Conformance |
 | [`docs/engineering/capabilities-v1.md`](../../docs/engineering/capabilities-v1.md) | 1 | 1 | [`ambercapabilitiesv1`](../../docs/engineering/capabilities-v1.md#ambercapabilitiesv1) | amber.capabilities.v1 |
 | [`docs/engineering/conformance-v1.md`](../../docs/engineering/conformance-v1.md) | 1 | 1 | [`amberconformancev1`](../../docs/engineering/conformance-v1.md#amberconformancev1) | amber.conformance.v1 |
 | [`docs/engineering/data-schema-v1.md`](../../docs/engineering/data-schema-v1.md) | 1 | 1 | [`amberdataschemav1`](../../docs/engineering/data-schema-v1.md#amberdataschemav1) | amber.data/schema.v1 |
@@ -206,15 +206,15 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/modern-profiles-v1.md`](../../docs/engineering/modern-profiles-v1.md) | 1 | 1 | [`ambermodern-profilesv1`](../../docs/engineering/modern-profiles-v1.md#ambermodern-profilesv1) | amber.modern-profiles.v1 |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 1 | 1 | [`ambernative-backend-equivalencev1`](../../docs/engineering/native-backend-equivalence-v1.md#ambernative-backend-equivalencev1) | amber.native-backend-equivalence.v1 |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 6 | 2 | [`what-it-checks`](../../docs/engineering/native-backend-equivalence-v1.md#what-it-checks) | What it checks |
-| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 23 | 2 | [`the-bailoutrestart-soundness-invariant`](../../docs/engineering/native-backend-equivalence-v1.md#the-bailoutrestart-soundness-invariant) | The bailout/restart soundness invariant |
-| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 69 | 2 | [`direct-native-extension-leaves`](../../docs/engineering/native-backend-equivalence-v1.md#direct-native-extension-leaves) | Direct native-extension leaves |
-| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 90 | 2 | [`direct-native-stdlib-sends`](../../docs/engineering/native-backend-equivalence-v1.md#direct-native-stdlib-sends) | Direct native stdlib sends |
-| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 110 | 2 | [`per-function-vm-fallback-step-2-scalar-bridge`](../../docs/engineering/native-backend-equivalence-v1.md#per-function-vm-fallback-step-2-scalar-bridge) | Per-function VM fallback (step 2, scalar bridge) |
+| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 25 | 2 | [`the-bailoutrestart-soundness-invariant`](../../docs/engineering/native-backend-equivalence-v1.md#the-bailoutrestart-soundness-invariant) | The bailout/restart soundness invariant |
+| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 71 | 2 | [`direct-native-extension-leaves`](../../docs/engineering/native-backend-equivalence-v1.md#direct-native-extension-leaves) | Direct native-extension leaves |
+| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 92 | 2 | [`direct-native-stdlib-sends`](../../docs/engineering/native-backend-equivalence-v1.md#direct-native-stdlib-sends) | Direct native stdlib sends |
+| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 112 | 2 | [`per-function-vm-fallback-step-2-scalar-bridge`](../../docs/engineering/native-backend-equivalence-v1.md#per-function-vm-fallback-step-2-scalar-bridge) | Per-function VM fallback (step 2, scalar bridge) |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 1 | 1 | [`ambernativev1`](../../docs/engineering/native-v1.md#ambernativev1) | amber.native.v1 |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 30 | 2 | [`code-objects`](../../docs/engineering/native-v1.md#code-objects) | Code Objects |
-| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 68 | 2 | [`runtime-bridge`](../../docs/engineering/native-v1.md#runtime-bridge) | Runtime Bridge |
-| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 84 | 2 | [`validation`](../../docs/engineering/native-v1.md#validation) | Validation |
-| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 104 | 2 | [`w15-closure`](../../docs/engineering/native-v1.md#w15-closure) | W15 Closure |
+| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 74 | 2 | [`runtime-bridge`](../../docs/engineering/native-v1.md#runtime-bridge) | Runtime Bridge |
+| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 90 | 2 | [`validation`](../../docs/engineering/native-v1.md#validation) | Validation |
+| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 110 | 2 | [`w15-closure`](../../docs/engineering/native-v1.md#w15-closure) | W15 Closure |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 1 | 1 | [`ambernumeric-profilev1`](../../docs/engineering/numeric-profile-v1.md#ambernumeric-profilev1) | amber.numeric-profile.v1 |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 18 | 2 | [`source-preamble`](../../docs/engineering/numeric-profile-v1.md#source-preamble) | Source Preamble |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 56 | 2 | [`manifest-mirror`](../../docs/engineering/numeric-profile-v1.md#manifest-mirror) | Manifest Mirror |

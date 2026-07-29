@@ -1658,6 +1658,9 @@ CodeEmitter::CodeEmitter(Emitter *owner, const hir::Procedure *procedure,
   }
 
   if (code_.kind == CodeKind::Block && procedure_->signature != nullptr) {
+    if (procedure_->needs_nonlocal_return_target) {
+      code_.flags |= kCodeFlagNonlocalReturnBlock;
+    }
     if (const ast::ListField *params =
             list_field(*procedure_->signature, "params")) {
       for (std::uint32_t index = 0; index < params->values.size(); ++index) {
@@ -4771,6 +4774,19 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     emit_value_to_reg(*return_value_reg_, value_reg, expr.span);
     return_jump_indices_.push_back(
         emit_instruction(Opcode::Jump, {{-1, true}}, expr.span));
+    return alloc_temp();
+  }
+  if (expr.kind == "HNonlocalReturn") {
+    std::uint32_t value_reg = 0;
+    if (const ast::Expr *value = node_field(expr, "value")) {
+      value_reg = compile_expr(*value);
+    } else {
+      value_reg = alloc_temp();
+      emit_instruction(Opcode::LoadNull, {{value_reg, false}}, expr.span);
+    }
+    // The runtime performs dynamic unwinding so every intervening ensure runs
+    // before the owning activation receives the value.
+    emit_instruction(Opcode::ReturnNonlocal, {{value_reg, false}}, expr.span);
     return alloc_temp();
   }
   if (expr.kind == "HIsNull") {

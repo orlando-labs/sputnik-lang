@@ -63,6 +63,12 @@ Current `CODE` encoding stores:
 - call-site / ivar-site tables
 - safepoint table
 
+`BcCode::flags` bit `0x2` marks a call-site block whose lexical subtree needs
+the concrete activation return target. Such a body emits (or contains a nested
+block which emits)
+`RETURN_NONLOCAL value_reg`; ordinary method and standalone-lambda returns
+continue to emit `RETURN value_reg`.
+
 `SPAN` is stored as a separate section and is reattached to owning `BcCode` by `code_id` during decode.
 
 `PATS` currently stores deterministic pattern-program descriptors only:

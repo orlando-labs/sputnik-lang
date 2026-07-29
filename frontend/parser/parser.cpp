@@ -3565,7 +3565,9 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
     // unambiguous. Reuses the block parser; lowers to a closure (HClosure)
     // exactly like a call-site block, producing a first-class callable value.
     --current_;
-    return parse_block_suffix(stop_mode);
+    std::unique_ptr<ast::Expr> lambda = parse_block_suffix(stop_mode);
+    lambda->bool_field("lambda_literal", true);
+    return lambda;
   }
   if (token.kind == lexer::TokenKind::KeywordIf) {
     --current_;
@@ -3883,6 +3885,9 @@ Parser::parse_callable_reference(const lexer::Token &ampersand) {
   body.push_back(std::move(call_stmt));
 
   auto closure = ast::make_expr("AstBlock", span);
+  // Callable references are first-class lambda values, not call-site blocks:
+  // an explicit return completes the reference invocation itself.
+  closure->bool_field("lambda_literal", true);
   std::vector<std::unique_ptr<ast::Expr>> params;
   if (unbound) {
     params.push_back(make_pattern_param(receiver_name));

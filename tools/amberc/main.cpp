@@ -2098,6 +2098,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
     case Opcode::JumpIfFalse:
     case Opcode::JumpIfNull:
     case Opcode::Return:
+    case Opcode::ReturnNonlocal:
     case Opcode::Safepoint:
     case Opcode::CloseUpvalues:
     case Opcode::TypeCheck:
@@ -3720,7 +3721,8 @@ native_cpp_scalar_registers(const amber::bytecode::BcModule &module,
           instruction.operands[0].value == 0) {
         enqueue(pc + 1U, next);
       }
-    } else if (instruction.opcode != Opcode::Return) {
+    } else if (instruction.opcode != Opcode::Return &&
+               instruction.opcode != Opcode::ReturnNonlocal) {
       enqueue(pc + 1U, next);
     }
   }
@@ -3787,7 +3789,8 @@ native_cpp_live_registers_at_pc(const amber::bytecode::BcCode &code) {
             instruction.operands[0].value == 0) {
           merge_successor(pc + 1U);
         }
-      } else if (instruction.opcode != Opcode::Return) {
+      } else if (instruction.opcode != Opcode::Return &&
+                 instruction.opcode != Opcode::ReturnNonlocal) {
         merge_successor(pc + 1U);
       }
 
@@ -4052,6 +4055,7 @@ native_cpp_live_registers_at_pc(const amber::bytecode::BcCode &code) {
       case Opcode::JumpIfFalse:
       case Opcode::JumpIfNull:
       case Opcode::Return:
+      case Opcode::ReturnNonlocal:
       case Opcode::Raise:
         use_operand(0);
         break;
@@ -4255,6 +4259,14 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
   } else {
     out << "  NativeFrame frame(regs.data(), nullptr, regs.size(), "
            "current_closure);\n";
+  }
+  if ((code.kind == amber::bytecode::CodeKind::Block &&
+       (code.flags & amber::bytecode::kCodeFlagNonlocalReturnBlock) != 0U) ||
+      code.kind == amber::bytecode::CodeKind::Ensure ||
+      code.kind == amber::bytecode::CodeKind::Rescue ||
+      code.kind == amber::bytecode::CodeKind::DefaultThunk) {
+    out << "  frame.nonlocal_return_target = current_closure == nullptr "
+           "? nullptr : current_closure->nonlocal_return_target;\n";
   }
   if ((code.flags & amber::bytecode::kCodeFlagRestParam) != 0U) {
     const std::uint32_t rest_index =
@@ -4944,6 +4956,13 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       operand_u32_value(instruction, 0, &dst);
       operand_u32_value(instruction, 1, &code_id);
       operand_u32_value(instruction, 2, &capture_count);
+      const amber::bytecode::BcCode *created_code =
+          native_code_by_id(module, code_id);
+      const bool creates_nonlocal_block =
+          created_code != nullptr &&
+          created_code->kind == amber::bytecode::CodeKind::Block &&
+          (created_code->flags &
+           amber::bytecode::kCodeFlagNonlocalReturnBlock) != 0U;
       bool self_capture = false;
       std::size_t operand_index = 3U;
       for (std::uint32_t capture_i = 0; capture_i < capture_count;
@@ -4958,6 +4977,15 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       out << "    NativeClosure *next_closure = make_native_closure();\n";
       out << "    next_closure->code_id = " << code_id << ";\n";
       out << "    next_closure->self = frame.self;\n";
+      if (creates_nonlocal_block) {
+        out << "    if (frame.nonlocal_return_target == nullptr) {\n";
+        out << "      frame.nonlocal_return_target = "
+               "std::make_shared<NativeNonlocalReturnTarget>();\n";
+        out << "      frame.owns_nonlocal_return_target = true;\n";
+        out << "    }\n";
+      }
+      out << "    next_closure->nonlocal_return_target = "
+             "frame.nonlocal_return_target;\n";
       out << "    next_closure->captures.reserve(" << capture_count << ");\n";
       out << "    NativeValue closure_value = "
              "NativeValue::closure(next_closure);\n";
@@ -6768,6 +6796,20 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       out << "  return return_value_" << pc << ";\n";
       break;
     }
+    case Opcode::ReturnNonlocal: {
+      std::uint32_t src = 0;
+      operand_u32_value(instruction, 0, &src);
+      out << "  if (frame.nonlocal_return_target == nullptr || "
+             "!frame.nonlocal_return_target->active.load("
+             "std::memory_order_acquire)) "
+             "throw NativeRaised{native_named_error("
+             "\"LocalJumpError\", \"unexpected return from an expired "
+             "block\")};\n";
+      out << "  throw NativeNonlocalReturn{"
+             "frame.nonlocal_return_target, "
+          << read_reg_expr(src) << "};\n";
+      break;
+    }
     case Opcode::Raise: {
       std::uint32_t src = 0;
       operand_u32_value(instruction, 0, &src);
@@ -6819,10 +6861,37 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     }
     out << "      throw;\n";
     out << "    }\n";
+    out << "    catch (const NativeNonlocalReturn &) {\n";
+    for (const amber::bytecode::HandlerEntry &handler : handlers) {
+      const std::uint32_t kind =
+          handler.flags == 0U
+              ? amber::bytecode::kHandlerKindLegacyRescue
+              : amber::bytecode::handler_kind(handler.flags);
+      if (kind != amber::bytecode::kHandlerKindEnsure) {
+        continue;
+      }
+      const std::uint32_t exception_slot =
+          amber::bytecode::handler_exception_slot(handler.flags);
+      out << "      if (frame.pc >= " << handler.protected_from
+          << "U && frame.pc < " << handler.protected_to << "U) {\n";
+      out << "        amber_native_run_nonlocal_ensure_handler(frame, "
+          << handler.handler_code_id << "U, " << exception_slot << "U);\n";
+      out << "        throw;\n";
+      out << "      }\n";
+    }
+    out << "      throw;\n";
+    out << "    }\n";
     out << "  }\n";
   } else {
     out << "  throw NativeBailout();\n";
   }
+  out << "  } catch (NativeNonlocalReturn &signal) {\n";
+  out << "    if (handler_seed != nullptr) "
+         "native_merge_handler_frame(*handler_seed, frame);\n";
+  out << "    if (frame.owns_nonlocal_return_target && "
+         "frame.nonlocal_return_target == signal.target) "
+         "return std::move(signal.value);\n";
+  out << "    throw;\n";
   out << "  } catch (const NativeBailout &bailout) {\n";
   out << "    if (handler_seed != nullptr) "
          "native_merge_handler_frame(*handler_seed, frame);\n";
@@ -7582,6 +7651,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "using NativeUuid = amber::runtime::RuntimeUuidValue;\n";
   out << "struct NativeClosure;\n";
   out << "struct NativeCell;\n\n";
+  out << "struct NativeNonlocalReturnTarget;\n\n";
   out << "struct NativeValue {\n";
   out << "  enum class Tag { Null, Bool, Integer, Float, String, Symbol, "
          "StrType, IntType, BigIntType, FloatType, BoolType, SymbolType, "
@@ -7790,7 +7860,12 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  std::string name;\n";
   out << "  NativeValue value = NativeValue::nullv();\n";
   out << "};\n\n";
-  out << "struct NativeRaised { NativeValue exception; };\n\n";
+  out << "struct NativeRaised { NativeValue exception; };\n";
+  out << "struct NativeNonlocalReturnTarget { "
+         "std::atomic<bool> active{true}; };\n";
+  out << "struct NativeNonlocalReturn { "
+         "std::shared_ptr<NativeNonlocalReturnTarget> target; "
+         "NativeValue value; };\n\n";
   // Every refcounted payload starts with its rc so retain/release can use a
   // uniform header instead of a per-type switch on the hot path.
   out << "struct NativeRcHeader {\n";
@@ -8067,6 +8142,8 @@ private:
   out << "  NativeCaptureList captures;\n";
   out << "  NativeValue self = NativeValue::nullv();\n";
   out << "  NativeValue block = NativeValue::nullv();\n";
+  out << "  std::shared_ptr<NativeNonlocalReturnTarget> "
+         "nonlocal_return_target;\n";
   out << "  NativeClosure() = default;\n";
   out << "  NativeClosure(const NativeClosure &other);\n";
   out << "  NativeClosure(NativeClosure &&other) noexcept;\n";
@@ -8768,13 +8845,15 @@ static void native_cell_release(NativeCell *cell) {
 }
 NativeClosure::NativeClosure(const NativeClosure &other)
     : NativeRcHeader(other), code_id(other.code_id), captures(other.captures),
-      self(other.self), block(other.block) {
+      self(other.self), block(other.block),
+      nonlocal_return_target(other.nonlocal_return_target) {
   for (NativeCell *cell : captures) native_cell_retain(cell);
 }
 NativeClosure::NativeClosure(NativeClosure &&other) noexcept
     : NativeRcHeader(), code_id(other.code_id),
       captures(std::move(other.captures)), self(std::move(other.self)),
-      block(std::move(other.block)) {
+      block(std::move(other.block)),
+      nonlocal_return_target(std::move(other.nonlocal_return_target)) {
   other.captures.clear();
 }
 NativeClosure &NativeClosure::operator=(const NativeClosure &other) {
@@ -8790,6 +8869,7 @@ NativeClosure &NativeClosure::operator=(NativeClosure &&other) noexcept {
   captures = std::move(other.captures);
   self = std::move(other.self);
   block = std::move(other.block);
+  nonlocal_return_target = std::move(other.nonlocal_return_target);
   other.captures.clear();
   return *this;
 }
@@ -9184,6 +9264,7 @@ static void native_collect_finished_cycles() {
         auto *closure = static_cast<NativeClosure *>(node.payload);
         closure->self = NativeValue::nullv();
         closure->block = NativeValue::nullv();
+        closure->nonlocal_return_target.reset();
         for (NativeCell *cell : closure->captures) {
           native_cell_release(cell);
         }
@@ -9671,6 +9752,9 @@ static void native_collect_finished_cycles() {
   out << "  NativeValue self = NativeValue::nullv();\n";
   out << "  NativeValue block = NativeValue::nullv();\n";
   out << "  NativeValue last = NativeValue::nullv();\n";
+  out << "  std::shared_ptr<NativeNonlocalReturnTarget> "
+         "nonlocal_return_target;\n";
+  out << "  bool owns_nonlocal_return_target = false;\n";
   out << "  std::uint32_t pc = 0;\n";
   out << "  NativeFrame(NativeValue *frame_regs, NativeCell **frame_cells, "
          "std::size_t frame_reg_count, NativeClosure *current)\n";
@@ -9682,6 +9766,10 @@ static void native_collect_finished_cycles() {
   out << "    }\n";
   out << "  }\n";
   out << "  ~NativeFrame() {\n";
+  out << "    if (owns_nonlocal_return_target && "
+         "nonlocal_return_target != nullptr) "
+         "nonlocal_return_target->active.store(false, "
+         "std::memory_order_release);\n";
   out << "    if (local_cells == nullptr) return;\n";
   out << "    for (std::size_t index = 0; index < reg_count; ++index) {\n";
   out << "      native_cell_release(local_cells[index]);\n";
@@ -19415,6 +19503,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  invocation.code_id = handler_code_id;\n";
   out << "  invocation.self = frame.self;\n";
   out << "  invocation.block = frame.block;\n";
+  out << "  invocation.nonlocal_return_target = "
+         "frame.nonlocal_return_target;\n";
   out << "  if (frame.closure != nullptr) {\n";
   out << "    invocation.captures.reserve("
          "frame.closure->captures.size());\n";
@@ -19457,6 +19547,26 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  }\n";
   out << "  write_reg(frame, result_slot, std::move(result));\n";
   out << "  return std::nullopt;\n";
+  out << "}\n\n";
+  out << "static void amber_native_run_nonlocal_ensure_handler("
+         "NativeFrame &frame, std::uint32_t handler_code_id, "
+         "std::uint32_t exception_slot) {\n";
+  out << "  NativeClosure invocation;\n";
+  out << "  invocation.code_id = handler_code_id;\n";
+  out << "  invocation.self = frame.self;\n";
+  out << "  invocation.block = frame.block;\n";
+  out << "  invocation.nonlocal_return_target = "
+         "frame.nonlocal_return_target;\n";
+  out << "  if (frame.closure != nullptr) {\n";
+  out << "    invocation.captures.reserve("
+         "frame.closure->captures.size());\n";
+  out << "    for (NativeCell *cell : frame.closure->captures) "
+         "native_closure_capture(&invocation, cell);\n";
+  out << "  }\n";
+  out << "  NativeHandlerSeed seed{&frame, exception_slot, "
+         "NativeValue::nullv()};\n";
+  out << "  (void)amber_native_call_code(handler_code_id, {}, &invocation, "
+         "&seed);\n";
   out << "}\n\n";
   out << "static NativeValue amber_native_call_closure_with_keywords("
          "const NativeValue &value, const NativeArgsView &args, "

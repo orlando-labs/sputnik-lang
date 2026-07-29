@@ -24,7 +24,11 @@ Current root form:
 
 Current procedure entries contain:
 
-- `id`, `name`, `kind`, `owner`, and source `span`;
+- `id`, `name`, `kind`, `owner`, source `span`, and
+  `nonlocal_return_block` and `needs_nonlocal_return_target`; the former
+  distinguishes call-site blocks from standalone lambdas, while the latter
+  keeps token allocation off blocks whose lexical subtree has no non-local
+  return;
 - `signature` as `HSignature(params[])`;
 - `locals` with stable slot ids `l0..lN`: binder declaration order first, then
   lowering-generated synthetic temps in source order;
@@ -65,6 +69,8 @@ Currently lowered node families:
 - `if` / `unless` block forms and inline `if ... then ... else ...` as `HIf`;
 - `while` / `until` / `loop` / `do while` as `HLoop(kind, ...)`;
 - `break` as `HBreak`;
+- `return` as `HReturn` in methods/standalone lambdas and
+  `HNonlocalReturn` in call-site blocks;
 - `case` / `case!` as `HMatchDispatch` with `HMatchArm`;
 - `HCompiledPattern(pattern_ir)` bridge nodes attached to clause and case
   matching entries;

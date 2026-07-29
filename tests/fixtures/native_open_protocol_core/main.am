@@ -6,9 +6,17 @@ class ProtocolProvider:
   def request():
     true
 
+class AlternateProvider:
+  def request():
+    false
+
 class MissingProtocol:
   def marker():
     true
+
+class ProtocolDispatcher:
+  def request(provider):
+    provider.request()
 
 def main():
   result = "unexpected-open-protocol-result"
@@ -18,9 +26,13 @@ def main():
     if error.message == "selector `around_controller` is not implemented in current runtime baseline":
       result = "open-protocol-ok"
   if result == "open-protocol-ok":
-    result = "unexpected-user-protocol-result"
-    try:
-      MissingProtocol().request()
-    rescue NoMethodError:
-      result = "native-open-protocol-ok"
+    dispatcher = ProtocolDispatcher()
+    if dispatcher.request(ProtocolProvider()) and dispatcher.request(AlternateProvider()) == false:
+      result = "unexpected-user-protocol-result"
+      try:
+        MissingProtocol().request()
+      rescue NoMethodError:
+        result = "native-open-protocol-ok"
+    else:
+      result = "unexpected-polymorphic-cache-result"
   result

@@ -3268,6 +3268,114 @@ bool native_cpp_code_uses_local_capture_cells(
   return false;
 }
 
+std::optional<std::uint32_t> native_cpp_direct_chars_each_block_at_pc(
+    const amber::bytecode::BcModule &module,
+    const amber::bytecode::BcCode &owner,
+    std::size_t pc,
+    const std::set<std::uint32_t> &eligible_block_code_ids) {
+  using amber::bytecode::Opcode;
+  if (pc < 2U || pc >= owner.instructions.size()) {
+    return std::nullopt;
+  }
+
+  const amber::bytecode::Instruction &each = owner.instructions[pc];
+  std::uint32_t each_receiver = 0;
+  std::uint32_t each_symbol = 0;
+  std::uint32_t each_pos_count = 0;
+  if (each.opcode != Opcode::Send ||
+      !operand_u32_value(each, 1U, &each_receiver) ||
+      !operand_u32_value(each, 2U, &each_symbol) ||
+      !operand_u32_value(each, 3U, &each_pos_count) ||
+      each_symbol >= module.symbols.size() ||
+      module.symbols[each_symbol] != "each" || each_pos_count != 0U) {
+    return std::nullopt;
+  }
+  const std::size_t each_kw_index = 4U;
+  std::uint32_t each_kw_count = 0;
+  if (!operand_u32_value(each, each_kw_index, &each_kw_count) ||
+      each_kw_count != 0U) {
+    return std::nullopt;
+  }
+  const std::size_t each_block_index = each_kw_index + 1U;
+  std::uint32_t each_block_reg = 0;
+  if (each_block_index >= each.operands.size() ||
+      operand_is_no_block(each, each_block_index) ||
+      !operand_u32_value(each, each_block_index, &each_block_reg)) {
+    return std::nullopt;
+  }
+
+  const amber::bytecode::Instruction &make_block =
+      owner.instructions[pc - 1U];
+  std::uint32_t made_block_reg = 0;
+  std::uint32_t block_code_id = 0;
+  if (make_block.opcode != Opcode::MakeClosure ||
+      !operand_u32_value(make_block, 0U, &made_block_reg) ||
+      !operand_u32_value(make_block, 1U, &block_code_id) ||
+      made_block_reg != each_block_reg ||
+      eligible_block_code_ids.find(block_code_id) ==
+          eligible_block_code_ids.end()) {
+    return std::nullopt;
+  }
+
+  const amber::bytecode::Instruction &chars = owner.instructions[pc - 2U];
+  std::uint32_t chars_dst = 0;
+  std::uint32_t chars_symbol = 0;
+  std::uint32_t chars_pos_count = 0;
+  if (chars.opcode != Opcode::Send ||
+      !operand_u32_value(chars, 0U, &chars_dst) ||
+      !operand_u32_value(chars, 2U, &chars_symbol) ||
+      !operand_u32_value(chars, 3U, &chars_pos_count) ||
+      chars_dst != each_receiver || chars_symbol >= module.symbols.size() ||
+      module.symbols[chars_symbol] != "chars" || chars_pos_count != 0U) {
+    return std::nullopt;
+  }
+  const std::size_t chars_kw_index = 4U;
+  std::uint32_t chars_kw_count = 0;
+  if (!operand_u32_value(chars, chars_kw_index, &chars_kw_count) ||
+      chars_kw_count != 0U) {
+    return std::nullopt;
+  }
+  const std::size_t chars_block_index = chars_kw_index + 1U;
+  if (chars_block_index < chars.operands.size() &&
+      !operand_is_no_block(chars, chars_block_index)) {
+    return std::nullopt;
+  }
+  return block_code_id;
+}
+
+std::set<std::uint32_t> native_cpp_direct_chars_each_block_code_ids(
+    const amber::bytecode::BcModule &module,
+    const std::set<std::uint32_t> &native_code_ids) {
+  constexpr std::size_t kMaxInlineCharsEachBlockInstructions = 48U;
+  std::set<std::uint32_t> candidates;
+  for (const amber::bytecode::BcCode &code : module.code_objects) {
+    if (native_code_ids.find(code.code_id) == native_code_ids.end() ||
+        code.kind != amber::bytecode::CodeKind::Block ||
+        !code.handler_table.empty() ||
+        (code.flags & amber::bytecode::kCodeFlagRestParam) != 0U ||
+        code.instructions.size() > kMaxInlineCharsEachBlockInstructions) {
+      continue;
+    }
+    candidates.insert(code.code_id);
+  }
+
+  std::set<std::uint32_t> selected;
+  for (const amber::bytecode::BcCode &owner : module.code_objects) {
+    if (native_code_ids.find(owner.code_id) == native_code_ids.end()) {
+      continue;
+    }
+    for (std::size_t pc = 0; pc < owner.instructions.size(); ++pc) {
+      const std::optional<std::uint32_t> block_code_id =
+          native_cpp_direct_chars_each_block_at_pc(module, owner, pc,
+                                                   candidates);
+      if (block_code_id.has_value()) {
+        selected.insert(*block_code_id);
+      }
+    }
+  }
+  return selected;
+}
+
 enum class NativeScalarKind { Unknown, Integer, Float, Bool };
 
 struct NativeScalarFlow {
@@ -3957,7 +4065,9 @@ native_cpp_live_registers_at_pc(const amber::bytecode::BcCode &code) {
 
 std::string
 emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
-                              const amber::bytecode::BcCode &code) {
+                              const amber::bytecode::BcCode &code,
+                              const std::set<std::uint32_t>
+                                  &direct_chars_each_block_code_ids) {
   std::ostringstream out;
   const std::string fn = native_cpp_function_name(code.code_id);
   const bool uses_local_capture_cells =
@@ -3974,6 +4084,14 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       });
   const bool uses_scalar_lanes =
       !uses_local_capture_cells && !owns_handlers && !is_handler_code;
+  std::map<std::size_t, std::size_t> user_send_call_site_index;
+  for (std::size_t pc = 0; pc < code.instructions.size(); ++pc) {
+    const amber::bytecode::Opcode opcode = code.instructions[pc].opcode;
+    if (opcode == amber::bytecode::Opcode::Send ||
+        opcode == amber::bytecode::Opcode::SendSpread) {
+      user_send_call_site_index.emplace(pc, user_send_call_site_index.size());
+    }
+  }
   const NativeScalarFlow scalar_flow =
       uses_scalar_lanes ? native_cpp_scalar_registers(module, code)
                         : NativeScalarFlow{};
@@ -4104,9 +4222,18 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     }
     return "truthy(" + boxed_reg_expr(reg, state) + ")";
   };
-  out << "static NativeValue " << fn
+  out << "static ";
+  if (direct_chars_each_block_code_ids.find(code.code_id) !=
+      direct_chars_each_block_code_ids.end()) {
+    out << "AMBER_NATIVE_ALWAYS_INLINE ";
+  }
+  out << "NativeValue " << fn
       << "(const NativeArgsView &args, "
          "NativeClosure *current_closure, NativeHandlerSeed *handler_seed) {\n";
+  if (!user_send_call_site_index.empty()) {
+    out << "  static std::array<NativeUserCallSiteCache, "
+        << user_send_call_site_index.size() << "> user_call_sites{};\n";
+  }
   out << "  std::array<NativeValue, " << code.reg_count << "> regs{};\n";
   if (uses_local_capture_cells) {
     out << "  std::array<NativeCell *, " << code.reg_count
@@ -5050,7 +5177,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                               ", native_hex_to_string(\"" +
                               string_to_hex_text(selector) +
                               "\"), spread_positional, spread_keywords, " +
-                              block_expr + ")");
+                              block_expr + ", &user_call_sites[" +
+                              std::to_string(
+                                  user_send_call_site_index.at(pc)) +
+                              "])");
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -5099,6 +5229,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       }
       const bool has_block = !no_block;
       const std::string selector = module.symbols[symbol_id];
+      const std::optional<std::uint32_t> direct_chars_each_block_code_id =
+          native_cpp_direct_chars_each_block_at_pc(
+              module, code, pc, direct_chars_each_block_code_ids);
       const auto simple_send_shape =
           [&](const amber::bytecode::Instruction &candidate,
               std::uint32_t expected_pos_count, std::uint32_t *candidate_dst,
@@ -5262,7 +5395,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                    ? read_reg_expr(static_cast<std::uint32_t>(
                                          block_reg))
                                    : "NativeValue::nullv()") +
-                              ")");
+                              ", &user_call_sites[" +
+                              std::to_string(
+                                  user_send_call_site_index.at(pc)) +
+                              "])");
       out << "  } else if (native_value_is_error_receiver("
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
@@ -5618,6 +5754,29 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       } else if (selector == "each") {
         if (!has_block) {
           out << "  throw NativeBailout();\n";
+        } else if (direct_chars_each_block_code_id.has_value()) {
+          out << "  {\n";
+          out << "    NativeClosure invocation = *as_closure("
+              << read_reg_expr(static_cast<std::uint32_t>(block_reg))
+              << ");\n";
+          out << "    std::size_t direct_each_iterations = 0;\n";
+          out << "    if (native_visit_lazy_chars(" << read_reg_expr(recv)
+              << ", [&](NativeValue item) {\n";
+          out << "          (void)"
+              << native_cpp_function_name(*direct_chars_each_block_code_id)
+              << "({std::move(item)}, &invocation, nullptr);\n";
+          out << "          if ((++direct_each_iterations & 255U) == 0U) "
+                 "native_cycle_checkpoint_if_due();\n";
+          out << "          return true;\n";
+          out << "        })) {\n";
+          write_reg_stmt(dst, read_reg_expr(recv));
+          out << "    } else {\n";
+          write_reg_stmt(
+              dst, "native_each(" + read_reg_expr(recv) + ", " +
+                       read_reg_expr(static_cast<std::uint32_t>(block_reg)) +
+                       ")");
+          out << "    }\n";
+          out << "  }\n";
         } else {
           write_reg_stmt(
               dst, "native_each(" + read_reg_expr(recv) + ", " +
@@ -8396,6 +8555,18 @@ private:
   bool acquired_lock_ = false;
 };
 
+static AMBER_NATIVE_ALWAYS_INLINE void native_cycle_checkpoint_if_due() {
+  if (native_cycle_scope_depth == 0 ||
+      native_cycle_checkpoint_start >
+          native_active_cycle_allocations.size() ||
+      native_active_cycle_allocations.size() -
+              native_cycle_checkpoint_start <
+          native_cycle_checkpoint_allocation_batch) {
+    return;
+  }
+  NativeCycleScope checkpoint_scope;
+}
+
 class NativeCycleSuspension {
 public:
   NativeCycleSuspension() { suspend(); }
@@ -9580,11 +9751,15 @@ static void native_collect_finished_cycles() {
   out << "  instance->ivars[\"suppressed_exceptions\"] = "
          "NativeValue::list(std::move(values));\n";
   out << "}\n";
+  out << "struct NativeUserCallSiteCache {\n";
+  out << "  std::atomic<std::uint64_t> packed{0};\n";
+  out << "};\n";
   out << "static NativeValue native_user_send(const NativeValue &receiver, "
          "const std::string &selector, "
          "const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
-         "NativeValue block = NativeValue::nullv());\n\n";
+         "NativeValue block = NativeValue::nullv(), "
+         "NativeUserCallSiteCache *call_site = nullptr);\n\n";
   out << "static NativeValue native_atomic_send("
          "const NativeValue &receiver, const std::string &selector, "
          "std::initializer_list<NativeValue> args, NativeValue block);\n\n";
@@ -18728,8 +18903,16 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
 }
 
 )AMBERCPP";
+  const std::set<std::uint32_t> direct_chars_each_block_code_ids =
+      native_cpp_direct_chars_each_block_code_ids(module,
+                                                  plan.native_code_ids);
   for (std::uint32_t code_id : plan.native_code_ids) {
-    out << "static NativeValue " << native_cpp_function_name(code_id)
+    out << "static ";
+    if (direct_chars_each_block_code_ids.find(code_id) !=
+        direct_chars_each_block_code_ids.end()) {
+      out << "AMBER_NATIVE_ALWAYS_INLINE ";
+    }
+    out << "NativeValue " << native_cpp_function_name(code_id)
         << "(const NativeArgsView &args, "
            "NativeClosure *current_closure, "
            "NativeHandlerSeed *handler_seed);\n";
@@ -20022,7 +20205,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "const std::string &selector, "
          "const NativeArgsView &args, "
          "const std::vector<NativeCallKeyword> &kwargs, "
-         "NativeValue block) {\n";
+         "NativeValue block, NativeUserCallSiteCache *call_site) {\n";
   out << "  const bool class_side = receiver.tag == NativeValue::Tag::Class;\n";
   out << "  const std::uint32_t class_index = class_side\n";
   out << "      ? static_cast<std::uint32_t>(receiver.scalar_value)\n";
@@ -20073,8 +20256,35 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "return initialized;\n";
   out << "    return instance;\n";
   out << "  }\n";
-  out << "  const auto method = native_lookup_user_method(class_index, "
-         "selector, class_side);\n";
+  out << "  std::optional<NativeUserMethod> method;\n";
+  out << "  const std::uint64_t call_site_key = "
+         "(static_cast<std::uint64_t>(class_index) << 1U) | "
+         "(class_side ? 1U : 0U);\n";
+  out << "  const bool cacheable_call_site_key = "
+         "call_site_key < UINT32_MAX;\n";
+  out << "  if (call_site != nullptr && cacheable_call_site_key) {\n";
+  out << "    const std::uint64_t packed = "
+         "call_site->packed.load(std::memory_order_relaxed);\n";
+  out << "    const std::uint64_t cached_key = packed >> 32U;\n";
+  out << "    const std::uint32_t cached_code = "
+         "static_cast<std::uint32_t>(packed);\n";
+  out << "    if (cached_key == call_site_key + 1U && "
+         "cached_code != 0U) {\n";
+  out << "      method = NativeUserMethod{cached_code - 1U};\n";
+  out << "    }\n";
+  out << "  }\n";
+  out << "  if (!method.has_value()) {\n";
+  out << "    method = native_lookup_user_method(class_index, selector, "
+         "class_side);\n";
+  out << "    if (call_site != nullptr && cacheable_call_site_key && "
+         "method.has_value() && method->code_id < UINT32_MAX) {\n";
+  out << "      const std::uint64_t packed = "
+         "((call_site_key + 1U) << 32U) | "
+         "(static_cast<std::uint64_t>(method->code_id) + 1U);\n";
+  out << "      call_site->packed.store(packed, "
+         "std::memory_order_relaxed);\n";
+  out << "    }\n";
+  out << "  }\n";
   out << "  if (!method.has_value()) {\n";
   out << "    if (selector == \"present?\" || selector == \"absent?\") {\n";
   out << "      if (!args.empty() || !kwargs.empty() || "
@@ -20226,7 +20436,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "}\n\n";
   for (const amber::bytecode::BcCode &code : module.code_objects) {
     if (plan.native_code_ids.find(code.code_id) != plan.native_code_ids.end()) {
-      out << emit_native_cpp_code_function(module, code);
+      out << emit_native_cpp_code_function(
+          module, code, direct_chars_each_block_code_ids);
     }
   }
   out << "static std::vector<std::uint8_t> embedded_bytecode() {\n";

@@ -9,6 +9,10 @@ class CaseProbe:
   def upcase():
     "different"
 
+class CharsProbe:
+  def chars():
+    ["x", "y"]
+
 def main():
   score = 0
   text = "  Héllo  "
@@ -37,6 +41,11 @@ def main():
   "Aé!".chars().each |char|:
     iterated = iterated + char
   if iterated == "Aé!":
+    score = score + 1
+  custom_iterated = ""
+  CharsProbe().chars().each |char|:
+    custom_iterated = custom_iterated + char
+  if custom_iterated == "xy":
     score = score + 1
   mutable_chars = "ab".chars()
   visited = ""

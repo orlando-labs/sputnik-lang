@@ -90,7 +90,11 @@ struct BuildSummary {
   std::uint64_t native_graph_native_code_count = 0;
   std::uint64_t native_graph_vm_fallback_code_count = 0;
   std::uint64_t native_graph_fallback_code_count = 0;
+  std::uint64_t native_binary_size_bytes = 0;
+  bool native_graph_body_coverage_full = false;
   bool native_graph_full_coverage = false;
+  bool native_graph_runtime_bridge = false;
+  bool native_graph_vm_independent = false;
   std::vector<amber::pkg::PackageNativeExtensionMetadata> native_extensions;
   BuildProfileSet profiles;
   std::vector<BuildArtifactRecord> artifacts;

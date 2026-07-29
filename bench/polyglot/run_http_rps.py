@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the Ember soak HTTP contract against polyglot in-memory servers."""
+"""Run the Ember soak HTTP contract against raw or framework HTTP servers."""
 
 from __future__ import annotations
 
@@ -23,7 +23,10 @@ WORKSPACE = ROOT.parent
 EMBER = WORKSPACE / "ember"
 BUILD = ROOT / "bench" / "polyglot" / "build" / "http-rps"
 RESULTS = ROOT / "bench" / "polyglot" / "results"
-AMBER_SERVER_NAME = "amber.bench.polyglot.http_rps_server"
+AMBER_SERVER_NAMES = {
+    "raw": "amber.bench.polyglot.raw_http_rps_server",
+    "ember": "amber.bench.polyglot.http_rps_server",
+}
 AMBER_CLIENT_NAME = "ember.example.soak.client"
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -49,8 +52,8 @@ def captured(args: Sequence[str], cwd: Path = ROOT) -> str:
     return result.stdout.strip().splitlines()[0]
 
 
-def build_all(compiler: Path) -> Dict[str, Path]:
-    amber_out = BUILD / "amber-server"
+def build_all(compiler: Path, stack: str) -> Dict[str, Path]:
+    amber_out = BUILD / f"amber-{stack}-server"
     client_out = BUILD / "amber-client"
     go_out = BUILD / "go-server"
     rust_out = BUILD / "rust-server"
@@ -61,14 +64,16 @@ def build_all(compiler: Path) -> Dict[str, Path]:
         [
             str(compiler),
             "build",
-            "bench/polyglot/amber/http_rps_server.build.yaml",
+            f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+            if stack == "raw"
+            else "bench/polyglot/amber/http_rps_server.build.yaml",
             "--target",
             "native",
             "--out-dir",
             str(amber_out),
             "--cache-dir",
             str(amber_out / "cache"),
-            "--require-full-native",
+            "--require-native-body-coverage",
             "--grant",
             "net.listen",
             "--grant",
@@ -86,7 +91,7 @@ def build_all(compiler: Path) -> Dict[str, Path]:
             str(client_out),
             "--cache-dir",
             str(client_out / "cache"),
-            "--require-full-native",
+            "--require-native-body-coverage",
             "--grant",
             "net.connect",
         ],
@@ -115,7 +120,7 @@ def build_all(compiler: Path) -> Dict[str, Path]:
         ]
     )
     return {
-        "amber": amber_out / AMBER_SERVER_NAME,
+        "amber": amber_out / AMBER_SERVER_NAMES[stack],
         "client": client_out / AMBER_CLIENT_NAME,
         "go": go_out / "http-rps-server",
         "rust": rust_out / "http-rps-server",
@@ -123,9 +128,9 @@ def build_all(compiler: Path) -> Dict[str, Path]:
     }
 
 
-def built_paths() -> Dict[str, Path]:
+def built_paths(stack: str) -> Dict[str, Path]:
     return {
-        "amber": BUILD / "amber-server" / AMBER_SERVER_NAME,
+        "amber": BUILD / f"amber-{stack}-server" / AMBER_SERVER_NAMES[stack],
         "client": BUILD / "amber-client" / AMBER_CLIENT_NAME,
         "go": BUILD / "go-server" / "http-rps-server",
         "rust": BUILD / "rust-server" / "http-rps-server",
@@ -229,6 +234,7 @@ def run_one(
     duration: int,
     clients: int,
     port: int,
+    stack: str,
 ) -> Dict[str, Any]:
     if name == "amber":
         server_args = [
@@ -318,6 +324,7 @@ def run_one(
             invalid_requests = sum(int(result["invalid_requests"]) for result in client_results)
             result = {
                 "server": name,
+                "stack": stack if name == "amber" else "raw",
                 "duration_seconds": duration,
                 "client_count": clients,
                 "requests": requests,
@@ -347,23 +354,33 @@ def runtime_versions() -> Dict[str, str]:
 
 def markdown_report(payload: Dict[str, Any]) -> str:
     rows = payload["results"]
+    stack = payload["stack"]
     amber_rps = next(row["requests_per_second"] for row in rows if row["server"] == "amber")
     relative = {
         row["server"]: row["requests_per_second"] / amber_rps
         for row in rows
     }
     labels = {
-        "amber": "Amber + Ember (full native)",
+        "amber": (
+            "Amber `net.http` (full native)"
+            if stack == "raw"
+            else "Amber + Ember (full native)"
+        ),
         "go": "Go `net/http`",
         "rust": "Rust `std::net`",
         "python": "Python `ThreadingHTTPServer`",
     }
     lines = [
-        "# Polyglot Ember soak-client HTTP RPS benchmark",
+        (
+            "# Polyglot raw HTTP RPS benchmark"
+            if stack == "raw"
+            else "# Ember request-flow HTTP RPS benchmark"
+        ),
         "",
         f"Date: `{payload['timestamp']}`  ",
         f"Host: `{payload['host']}`  ",
         f"Client: the unchanged full-native Amber client from `ember/examples/soak/client.am`  ",
+        f"Stack: `{stack}`  ",
         f"Load: `{payload['client_count']}` concurrent clients, `{payload['duration_seconds']}` seconds per server, `mixed`, negative suite every 25 iterations.",
         "",
         "| Server | RPS | Requests | Valid | Invalid | Peak server RSS | vs Amber |",
@@ -389,7 +406,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         if name in relative
     ]
     comparison = (
-        ", ".join(competitors) + " the Amber/Ember throughput"
+        ", ".join(competitors) + f" the Amber {stack} throughput"
         if competitors
         else "This run contains only the Amber/Ember baseline"
     )
@@ -397,7 +414,11 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         "## Reading",
         "",
-        f"On this workload, {comparison}. Because the timed Amber server is already in-memory, SQLite cannot account for any throughput gap; the limiting work is in the Amber/Ember request path (HTTP I/O, routing, parameter handling, JSON, validation, telemetry, or native/runtime dispatch).",
+        (
+            f"On this workload, {comparison}. The raw lane bypasses Ember and isolates language/runtime, HTTP, JSON, validation, and in-memory-store costs."
+            if stack == "raw"
+            else f"On this workload, {comparison}. This lane intentionally measures the complete Ember request flow; compare it with similarly featured framework servers, not the manual raw servers."
+        ),
         "",
         "## Method",
         "",
@@ -417,7 +438,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "## Reproduce",
         "",
         "```sh",
-        "python3 bench/polyglot/run_http_rps.py --duration 60 --clients 4",
+        f"python3 bench/polyglot/run_http_rps.py --stack {stack} --duration 60 --clients 4",
         "```",
         "",
         f"Machine-readable result: `{payload['json_result']}`.",
@@ -432,6 +453,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--clients", type=int, default=4)
     parser.add_argument("--port", type=int, default=3340)
     parser.add_argument("--languages", default="amber,go,rust,python")
+    parser.add_argument("--stack", choices=("raw", "ember"), default="raw")
     parser.add_argument("--compiler", type=Path, default=ROOT / "build/amberc")
     parser.add_argument("--skip-build", action="store_true")
     parser.add_argument("--output", type=Path)
@@ -448,20 +470,36 @@ def main() -> None:
         raise RuntimeError("unknown languages: " + ", ".join(unknown))
     if "amber" not in languages:
         raise RuntimeError("the Amber baseline must be included")
+    if args.stack == "ember" and languages != ["amber"]:
+        raise RuntimeError(
+            "the ember stack currently has only an Amber/Ember server; use "
+            "--languages amber until comparable framework servers are added"
+        )
     compiler = args.compiler.resolve()
-    paths = built_paths() if args.skip_build else build_all(compiler)
+    paths = built_paths(args.stack) if args.skip_build else build_all(compiler, args.stack)
     ensure_paths(paths, languages)
     results = [
-        run_one(name, paths, args.duration, args.clients, args.port + index)
+        run_one(
+            name,
+            paths,
+            args.duration,
+            args.clients,
+            args.port + index,
+            args.stack,
+        )
         for index, name in enumerate(languages)
     ]
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
-    json_path = RESULTS / f"http-rps-{stamp}.json"
-    markdown_path = args.output.resolve() if args.output else RESULTS / f"http-rps-{stamp}.md"
+    result_stem = f"{args.stack}-http-rps-{stamp}"
+    json_path = RESULTS / f"{result_stem}.json"
+    markdown_path = (
+        args.output.resolve() if args.output else RESULTS / f"{result_stem}.md"
+    )
     payload = {
-        "schema": "amber.polyglot.http-rps.v1",
+        "schema": "amber.polyglot.http-rps.v2",
+        "stack": args.stack,
         "timestamp": dt.datetime.now().astimezone().isoformat(),
         "host": f"{platform.system()} {platform.release()} / {platform.machine()} / {platform.processor()}",
         "duration_seconds": args.duration,

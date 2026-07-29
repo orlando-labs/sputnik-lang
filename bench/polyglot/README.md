@@ -40,21 +40,35 @@ python3 bench/polyglot/run_benchmark.py --workload map-words --repeats 3
 ```
 
 The HTTP RPS benchmark is a separate server-side comparison. It compiles the
-unchanged full-native Amber client from the sibling Ember checkout and uses
-that same executable, with the soak workload's default four clients, against
-Amber/Ember, Go, Rust, and Python servers. Every server first has to pass the full
-76-request mixed contract iteration (CRUD plus the schema/model-validation and
-protocol negative suite); each accepted row is then measured for 60 seconds:
+unchanged Amber client from the sibling Ember checkout with complete generated
+native-body coverage and uses that same executable, with the soak workload's
+default four clients, against raw Amber `net.http`, Go, Rust, and Python
+servers. This is deliberately not called full native execution: current
+`net.http` calls use the reported `vm-stdlib-send-v1` runtime bridge even when
+there is no bytecode-body fallback. Every server first has to
+pass the full 76-request mixed contract iteration (CRUD plus the schema/model-
+validation and protocol negative suite); each accepted row is then measured
+for 60 seconds:
 
 ```sh
-python3 bench/polyglot/run_http_rps.py --duration 60 --clients 4
+python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4
 ```
 
-The three servers use mutex-protected in-memory stores so the timed table
-compares HTTP/framework execution instead of unrelated database drivers. The
-production Ember 72-hour qualification soak remains SQLite-backed. The HTTP
-runner writes both machine-readable JSON and a Markdown comparison table to
-`bench/polyglot/results/`.
+The raw lane is deliberately framework-free in every language and is the VM /
+HTTP-runtime optimization target. The complete Ember request pipeline remains
+a separate lane:
+
+```sh
+python3 bench/polyglot/run_http_rps.py --stack ember --languages amber \
+  --duration 60 --clients 4
+```
+
+Framework rows are only compared with similarly featured stacks; the runner
+rejects mixing the current Ember-only lane with manual raw servers. All servers
+use mutex-protected in-memory stores so the timed tables do not measure
+unrelated database drivers. The production Ember 72-hour qualification soak
+remains SQLite-backed. The HTTP runner writes machine-readable JSON and a
+Markdown comparison table to `bench/polyglot/results/`.
 
 The script prints mean/best wall-clock time and peak RSS reported by a small
 Python measurement helper via `resource.getrusage(RUSAGE_CHILDREN)`. It also

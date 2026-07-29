@@ -1330,7 +1330,7 @@ std::string manifest_to_json(const BuildManifest &manifest) {
 std::string summary_to_json(const BuildSummary &summary) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.build.result.v1\",\n";
+  out << "  \"schema\": \"amber.build.result.v2\",\n";
   out << "  \"status\": \"" << (summary.ok ? "ok" : "error") << "\",\n";
   out << "  \"name\": \"" << json_escape(summary.name) << "\",\n";
   out << "  \"root\": \"" << json_escape(summary.root_module) << "\",\n";
@@ -1357,8 +1357,20 @@ std::string summary_to_json(const BuildSummary &summary) {
       << summary.native_graph_vm_fallback_code_count << ",\n";
   out << "  \"native_graph_fallback_code_count\": "
       << summary.native_graph_fallback_code_count << ",\n";
+  out << "  \"native_binary_size_bytes\": "
+      << summary.native_binary_size_bytes << ",\n";
+  out << "  \"native_graph_body_coverage_full\": "
+      << (summary.native_graph_body_coverage_full ? "true" : "false")
+      << ",\n";
   out << "  \"native_graph_full_coverage\": "
       << (summary.native_graph_full_coverage ? "true" : "false") << ",\n";
+  out << "  \"native_graph_runtime_bridge\": "
+      << (summary.native_graph_runtime_bridge ? "true" : "false") << ",\n";
+  out << "  \"native_graph_runtime_bridge_kind\": \""
+      << (summary.native_graph_runtime_bridge ? "vm-stdlib-send-v1" : "")
+      << "\",\n";
+  out << "  \"native_graph_vm_independent\": "
+      << (summary.native_graph_vm_independent ? "true" : "false") << ",\n";
   out << "  \"native_extensions\": [";
   for (std::size_t i = 0; i < summary.native_extensions.size(); ++i) {
     if (i != 0U) {

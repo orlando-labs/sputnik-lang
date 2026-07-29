@@ -72,7 +72,8 @@ void usage(std::ostream &out) {
   out << "  amberc <file.am>\n";
   out << "  amberc build <file.am> [-o <path>] [--out-dir <dir>] "
          "[--target native|native-debug|bytecode-wrapper] "
-         "[--entry auto|init|main|main-only] [--grant <cap[=target]>...]\n";
+         "[--entry auto|init|main|main-only] [--grant <cap[=target]>...] "
+         "[--require-native-body-coverage|--require-full-native]\n";
   out << "  amberc lex <file>\n";
   out << "  amberc parse <file>\n";
   out << "  amberc parse-expr <file>\n";
@@ -90,7 +91,8 @@ void usage(std::ostream &out) {
   out << "  amberc bc-disasm <file>\n";
   out << "  amberc build <amber.build.yaml|amber.build.json> [--out-dir <dir>] "
          "[--cache-dir <dir>] [--target both|native|bytecode] [--no-cache] "
-         "[--grant <cap[=target]>...]\n";
+         "[--grant <cap[=target]>...] "
+         "[--require-native-body-coverage|--require-full-native]\n";
   out << "  amberc metadata <file.amberbc> --json\n";
   out << "  amberc verify <file.amberbc> --json\n";
   out << "  amberc amberbc-dump <file>\n";
@@ -1209,9 +1211,13 @@ struct NativeExecutableBuildResult {
   std::size_t vm_callable_code_count = 0;
   std::size_t fallback_code_count = 0;
   std::size_t total_code_count = 0;
+  std::uint64_t binary_size_bytes = 0;
   bool entry_native = false;
+  bool body_coverage_full = false;
   bool full_native_coverage = false;
   bool uses_bytecode_fallback = true;
+  bool uses_native_stdlib_bridge = false;
+  bool vm_independent = false;
   std::string fallback_reason;
   std::vector<NativeCoverageRecord> coverage;
 };
@@ -2760,7 +2766,10 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
                   selector == "client_error?" ||
                   selector == "server_error?" || selector == "closed?" ||
                   selector == "close!" || selector == "headers" ||
-                  selector == "body" || selector == "host" ||
+                  selector == "body" || selector == "method" ||
+                  selector == "target" || selector == "path" ||
+                  selector == "query" || selector == "body_stream" ||
+                  selector == "remote_endpoint" || selector == "host" ||
                   selector == "family" || selector == "port" ||
                   selector == "local_endpoint" || selector == "workers" ||
                   selector == "max_concurrent_per_worker" ||
@@ -4389,6 +4398,16 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     const auto read_reg_expr = [&](std::uint32_t reg) {
       return boxed_reg_expr(reg, pc_scalar_state);
     };
+    const auto consume_unique_reg_expr = [&](std::uint32_t reg) {
+      if (uses_scalar_lanes &&
+          scalar_kind(reg, pc_scalar_state) == NativeScalarKind::Unknown &&
+          pc + 1U < live_registers_at_pc.size() &&
+          reg < live_registers_at_pc[pc + 1U].size() &&
+          !live_registers_at_pc[pc + 1U][reg]) {
+        return "std::move(frame.regs[" + std::to_string(reg) + "])";
+      }
+      return read_reg_expr(reg);
+    };
     if (owns_handlers) {
       out << "      case " << pc << "U: {\n";
     } else {
@@ -4469,7 +4488,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       operand_u32_value(instruction, 1, &symbol_id);
       operand_u32_value(instruction, 2, &src);
       out << "  (void)native_store_ivar(" << read_reg_expr(receiver)
-          << ", " << symbol_id << "U, " << read_reg_expr(src) << ");\n";
+          << ", " << symbol_id << "U, "
+          << (receiver == src ? read_reg_expr(src)
+                              : consume_unique_reg_expr(src))
+          << ");\n";
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -4501,7 +4523,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                    : std::string{};
       out << "  native_store_cvar(" << read_reg_expr(owner)
           << ", native_hex_to_string(\"" << string_to_hex_text(name) << "\"), "
-          << read_reg_expr(src) << ");\n";
+          << (owner == src ? read_reg_expr(src)
+                           : consume_unique_reg_expr(src))
+          << ");\n";
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -4518,7 +4542,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       } else if (src_kind == NativeScalarKind::Bool && uses_scalar_lanes) {
         write_bool_reg_stmt(dst, bool_lane_expr(src));
       } else {
-        write_reg_stmt(dst, read_reg_expr(src));
+        write_reg_stmt(dst, dst == src ? read_reg_expr(src)
+                                       : consume_unique_reg_expr(src));
       }
       emit_next(pc, next_scalar_state);
       break;
@@ -4536,7 +4561,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         if (index != 0U) {
           expr << ", ";
         }
-        expr << read_reg_expr(first_reg + index);
+        expr << consume_unique_reg_expr(first_reg + index);
       }
       expr << "})";
       write_reg_stmt(dst, expr.str());
@@ -4556,7 +4581,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         if (index != 0U) {
           expr << ", ";
         }
-        expr << read_reg_expr(first_reg + index);
+        expr << consume_unique_reg_expr(first_reg + index);
       }
       expr << "})";
       write_reg_stmt(dst, expr.str());
@@ -4576,7 +4601,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         if (index != 0U) {
           expr << ", ";
         }
-        expr << read_reg_expr(first_reg + index);
+        expr << consume_unique_reg_expr(first_reg + index);
       }
       expr << "})";
       write_reg_stmt(dst, expr.str());
@@ -4889,7 +4914,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     case Opcode::SetLast: {
       std::uint32_t src = 0;
       operand_u32_value(instruction, 0, &src);
-      out << "  frame.last = " << read_reg_expr(src) << ";\n";
+      out << "  frame.last = " << consume_unique_reg_expr(src) << ";\n";
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -5128,9 +5153,6 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               << read_reg_expr(value_reg) << "});\n";
         }
       }
-      const std::string selector = selector_id < module.symbols.size()
-                                       ? module.symbols[selector_id]
-                                       : std::string{};
       const std::string block_expr =
           operand_index >= instruction.operands.size() ||
                   operand_is_no_block(instruction, operand_index)
@@ -5140,9 +5162,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       out << "  if (!native_value_is_user_receiver("
           << read_reg_expr(receiver) << ")) throw NativeBailout();\n";
       write_reg_stmt(dst, "native_user_send(" + read_reg_expr(receiver) +
-                              ", native_hex_to_string(\"" +
-                              string_to_hex_text(selector) +
-                              "\"), spread_positional, spread_keywords, " +
+                              ", native_symbol_text(" +
+                              std::to_string(selector_id) +
+                              "U), spread_positional, spread_keywords, " +
                               block_expr + ", &user_call_sites[" +
                               std::to_string(
                                   user_send_call_site_index.at(pc)) +
@@ -5195,6 +5217,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       }
       const bool has_block = !no_block;
       const std::string selector = module.symbols[symbol_id];
+      const std::string selector_expr =
+          "native_symbol_text(" + std::to_string(symbol_id) + "U)";
       const std::optional<std::uint32_t> direct_chars_each_block_code_id =
           native_cpp_direct_chars_each_block_at_pc(
               module, code, pc, direct_chars_each_block_code_ids);
@@ -5350,11 +5374,39 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         emit_next(pc, next_scalar_state);
         break;
       }
+      // VM equality is value equality for every receiver except ordinary
+      // user instances/classes, which may override ==/!=.  Keep that rule
+      // ahead of native stdlib receiver routing: a runtime-backed HTTP/IO
+      // handle compared with null must not receive an operator-shaped
+      // stdlib SEND.
+      if (selector == "==" || selector == "!=") {
+        out << "  if (native_value_is_user_receiver(" << read_reg_expr(recv)
+            << ")) {\n";
+        write_reg_stmt(dst, "native_user_send(" + read_reg_expr(recv) +
+                                ", " + selector_expr + ", " +
+                                pos_args_expr(0U) + ", " +
+                                call_kw_args_expr() + ", " +
+                                (has_block
+                                     ? read_reg_expr(static_cast<std::uint32_t>(
+                                           block_reg))
+                                     : "NativeValue::nullv()") +
+                                ", &user_call_sites[" +
+                                std::to_string(
+                                    user_send_call_site_index.at(pc)) +
+                                "])");
+        out << "  } else {\n";
+        write_reg_stmt(dst, "native_numeric_fast_eq(" + read_reg_expr(recv) +
+                                ", " + read_reg_expr(arg) + ", " +
+                                (selector == "!=" ? "true" : "false") +
+                                ")");
+        out << "  }\n";
+        emit_next(pc, next_scalar_state);
+        break;
+      }
       out << "  if (native_value_is_user_receiver(" << read_reg_expr(recv)
           << ")) {\n";
       write_reg_stmt(dst, "native_user_send(" + read_reg_expr(recv) +
-                              ", native_hex_to_string(\"" +
-                              string_to_hex_text(selector) + "\"), " +
+                              ", " + selector_expr + ", " +
                               pos_args_expr(0U) + ", " + call_kw_args_expr() +
                               ", " +
                               (has_block
@@ -5369,8 +5421,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_error_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5381,8 +5432,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_http_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " + call_kw_args_expr() + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5393,8 +5443,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_io_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5405,8 +5454,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_task_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " + call_kw_args_expr() + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5417,8 +5465,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_result_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5429,8 +5476,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_mutex_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5441,8 +5487,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           << read_reg_expr(recv) << ")) {\n";
       write_reg_stmt(
           dst, "native_atomic_send(" + read_reg_expr(recv) +
-                   ", native_hex_to_string(\"" +
-                   string_to_hex_text(selector) + "\"), " +
+                   ", " + selector_expr + ", " +
                    pos_args_expr(0U) + ", " +
                    (has_block
                         ? read_reg_expr(
@@ -5473,8 +5518,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             << read_reg_expr(recv) << ")) {\n";
         write_reg_stmt(
             dst, "native_benchmark_send(" + read_reg_expr(recv) +
-                     ", native_hex_to_string(\"" +
-                     string_to_hex_text(selector) + "\"), " +
+                     ", " + selector_expr + ", " +
                      pos_args_expr(0U) + ", " + kw_args_expr() + ", " +
                      (has_block
                           ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
@@ -6710,8 +6754,15 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     case Opcode::Return: {
       std::uint32_t src = 0;
       operand_u32_value(instruction, 0, &src);
-      out << "  NativeValue return_value_" << pc << " = "
-          << read_reg_expr(src) << ";\n";
+      if (uses_scalar_lanes &&
+          scalar_kind(src, pc_scalar_state) == NativeScalarKind::Unknown) {
+        out << "  NativeValue return_value_" << pc
+            << " = handler_seed == nullptr ? std::move(frame.regs[" << src
+            << "]) : frame.regs[" << src << "];\n";
+      } else {
+        out << "  NativeValue return_value_" << pc << " = "
+            << read_reg_expr(src) << ";\n";
+      }
       out << "  if (handler_seed != nullptr) "
              "native_merge_handler_frame(*handler_seed, frame);\n";
       out << "  return return_value_" << pc << ";\n";
@@ -21454,6 +21505,15 @@ std::string native_cpp_coverage_to_dump(const NativeCppBuildPlan &plan) {
       << " direct=" << direct << " native_extension=" << extension
       << " vm_bridge=" << bridge
       << " fallback=" << fallback << " total=" << total << "\n";
+  out << "  body_coverage_full="
+      << (plan.entry_native && direct + extension == total ? "true" : "false")
+      << " runtime_bridge="
+      << (plan.uses_native_stdlib_bridge ? "vm-stdlib-send-v1" : "none")
+      << " vm_independent="
+      << (!plan.uses_bytecode_fallback && !plan.uses_native_stdlib_bridge
+              ? "true"
+              : "false")
+      << "\n";
   if (!plan.fallback_reason.empty()) {
     out << "  fallback_reason=" << plan.fallback_reason << "\n";
   }
@@ -21596,6 +21656,8 @@ const std::vector<std::string> &native_runtime_compile_flags() {
       "-std=c++17",
       "-O2",
       "-DNDEBUG",
+      "-ffunction-sections",
+      "-fdata-sections",
 #ifdef AMBER_VALUE_REPR_TAGGED
       // Propagate the host amberc's Value representation (PLAN Phase 4
       // prototype) so the native runtime archive and the generated C++ share
@@ -21917,6 +21979,17 @@ NativeExecutableBuildResult build_native_executable(
     command.insert(command.end(), runtime_sources.begin(),
                    runtime_sources.end());
   }
+#if defined(__APPLE__)
+  // Native executables used to retain the entire force-loaded runtime archive,
+  // including compiler/build/package code.  Darwin's atom-level dead stripping
+  // preserves registrar initializers while discarding the unreachable bulk;
+  // -x removes local linker symbols from the release artifact.
+  command.push_back("-Wl,-dead_strip");
+  command.push_back("-Wl,-x");
+#elif defined(__linux__)
+  command.push_back("-Wl,--gc-sections");
+  command.push_back("-Wl,--strip-debug");
+#endif
   for (const std::string &library : link_libraries) {
     command.push_back("-l" + library);
   }
@@ -21979,10 +22052,16 @@ NativeExecutableBuildResult build_native_executable(
                                result.vm_callable_code_count;
   result.total_code_count = artifact.module.code_objects.size();
   result.entry_native = plan.entry_native;
-  result.full_native_coverage =
+  result.body_coverage_full =
       plan.entry_native &&
       result.native_code_count == artifact.module.code_objects.size();
   result.uses_bytecode_fallback = plan.uses_bytecode_fallback;
+  result.uses_native_stdlib_bridge = plan.uses_native_stdlib_bridge;
+  result.vm_independent = !result.uses_bytecode_fallback &&
+                          !result.uses_native_stdlib_bridge;
+  result.full_native_coverage =
+      result.body_coverage_full && result.vm_independent;
+  result.binary_size_bytes = std::filesystem::file_size(output_path);
   result.fallback_reason = plan.fallback_reason;
   result.coverage = plan.coverage;
   return result;
@@ -22069,6 +22148,7 @@ struct SourceBuildCliOptions {
   std::string target = "native";
   std::string entry = "auto";
   std::vector<amber::capability::CapabilityRequest> capability_grants;
+  bool require_native_body_coverage = false;
   bool require_full_native = false;
 };
 
@@ -22102,6 +22182,8 @@ SourceBuildCliOptions parse_source_build_options(int argc, char **argv,
         throw std::runtime_error(diagnostic.message);
       }
       options.capability_grants.push_back(std::move(grant));
+    } else if (arg == "--require-native-body-coverage") {
+      options.require_native_body_coverage = true;
     } else if (arg == "--require-full-native") {
       options.require_full_native = true;
     } else {
@@ -22129,13 +22211,14 @@ default_executable_path_for(const std::string &source_path,
 }
 
 std::string
-full_native_requirement_diagnostic(const NativeExecutableBuildResult &native) {
-  if (native.full_native_coverage) {
+native_body_coverage_requirement_diagnostic(
+    const NativeExecutableBuildResult &native) {
+  if (native.body_coverage_full) {
     return {};
   }
   std::ostringstream out;
-  out << "full native coverage required, got " << native.native_code_count
-      << "/" << native.total_code_count << " native code objects";
+  out << "native body coverage required, got " << native.native_code_count
+      << "/" << native.total_code_count << " generated native code bodies";
   if (native.native_extension_code_count != 0U) {
     out << " (" << native.native_extension_code_count
         << " direct extension thunks)";
@@ -22155,6 +22238,29 @@ full_native_requirement_diagnostic(const NativeExecutableBuildResult &native) {
   return out.str();
 }
 
+std::string
+full_native_requirement_diagnostic(const NativeExecutableBuildResult &native) {
+  if (native.full_native_coverage) {
+    return {};
+  }
+  const std::string body_diagnostic =
+      native_body_coverage_requirement_diagnostic(native);
+  if (!body_diagnostic.empty()) {
+    return "VM-independent full native execution required; " +
+           body_diagnostic;
+  }
+  if (native.uses_native_stdlib_bridge) {
+    return "VM-independent full native execution required; all code bodies "
+           "are generated, but execution uses the VM-shaped stdlib SEND "
+           "bridge";
+  }
+  if (native.uses_bytecode_fallback) {
+    return "VM-independent full native execution required; bytecode/VM "
+           "fallback remains enabled";
+  }
+  return "VM-independent full native execution required";
+}
+
 std::string executable_build_result_to_json(
     bool ok, const std::string &source_path, const std::string &output_path,
     const std::string &module_name, EntryExecutionMode entry_mode,
@@ -22162,7 +22268,7 @@ std::string executable_build_result_to_json(
     const std::string &diagnostic = {}) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.executable.build.v1\",\n";
+  out << "  \"schema\": \"amber.executable.build.v2\",\n";
   out << "  \"status\": \"" << (ok ? "ok" : "error") << "\",\n";
   out << "  \"source\": \"" << json_escape(source_path) << "\",\n";
   out << "  \"output\": \"" << json_escape(output_path) << "\",\n";
@@ -22183,6 +22289,23 @@ std::string executable_build_result_to_json(
   out << "  \"native_full_coverage\": "
       << (native != nullptr && native->full_native_coverage ? "true" : "false")
       << ",\n";
+  out << "  \"native_body_coverage_full\": "
+      << (native != nullptr && native->body_coverage_full ? "true" : "false")
+      << ",\n";
+  out << "  \"native_vm_independent\": "
+      << (native != nullptr && native->vm_independent ? "true" : "false")
+      << ",\n";
+  out << "  \"native_runtime_bridge\": "
+      << (native != nullptr && native->uses_native_stdlib_bridge ? "true"
+                                                                 : "false")
+      << ",\n";
+  out << "  \"native_runtime_bridge_kind\": \""
+      << (native != nullptr && native->uses_native_stdlib_bridge
+              ? "vm-stdlib-send-v1"
+              : "")
+      << "\",\n";
+  out << "  \"native_binary_size_bytes\": "
+      << (native == nullptr ? 0U : native->binary_size_bytes) << ",\n";
   out << "  \"native_code_count\": "
       << (native == nullptr ? 0U : native->native_code_count) << ",\n";
   out << "  \"native_extension_code_count\": "
@@ -22238,9 +22361,12 @@ int run_source_build_command(int argc, char **argv) {
       throw std::runtime_error(
           "source build --grant is not supported with bytecode-wrapper target");
     }
-    if (options.target == "bytecode-wrapper" && options.require_full_native) {
+    if (options.target == "bytecode-wrapper" &&
+        (options.require_native_body_coverage ||
+         options.require_full_native)) {
       throw std::runtime_error(
-          "--require-full-native requires --target native or native-debug");
+          "native coverage requirements need --target native or "
+          "native-debug");
     }
     const std::optional<EntryExecutionMode> forced_entry =
         options.entry == "auto"
@@ -22274,6 +22400,16 @@ int run_source_build_command(int argc, char **argv) {
       native_result = build_native_executable(argv[0], artifact, output_path,
                                               native_source_path);
       native_json = &native_result;
+      if (options.require_native_body_coverage) {
+        const std::string diagnostic =
+            native_body_coverage_requirement_diagnostic(native_result);
+        if (!diagnostic.empty()) {
+          std::cout << executable_build_result_to_json(
+              false, source_path, output_path.string(), artifact.module_name,
+              artifact.entry_mode, options.target, native_json, diagnostic);
+          return 1;
+        }
+      }
       if (options.require_full_native) {
         const std::string diagnostic =
             full_native_requirement_diagnostic(native_result);
@@ -22438,6 +22574,7 @@ struct BuildCliOptions {
   std::string target = "both";
   std::vector<amber::capability::CapabilityRequest> capability_grants;
   bool cache_enabled = true;
+  bool require_native_body_coverage = false;
   bool require_full_native = false;
 };
 
@@ -22465,15 +22602,18 @@ BuildCliOptions parse_build_options(int argc, char **argv, int start_index) {
         throw std::runtime_error(diagnostic.message);
       }
       options.capability_grants.push_back(std::move(grant));
+    } else if (arg == "--require-native-body-coverage") {
+      options.require_native_body_coverage = true;
     } else if (arg == "--require-full-native") {
       options.require_full_native = true;
     } else {
       throw std::runtime_error("unknown build option: " + arg);
     }
   }
-  if (options.require_full_native && options.target == "bytecode") {
+  if ((options.require_native_body_coverage || options.require_full_native) &&
+      options.target == "bytecode") {
     throw std::runtime_error(
-        "--require-full-native requires --target native or both");
+        "native coverage requirements need --target native or both");
   }
   return options;
 }
@@ -24098,7 +24238,13 @@ int run_build_command(int argc, char **argv) {
           native_result.vm_callable_code_count;
       summary.native_graph_fallback_code_count =
           native_result.fallback_code_count;
+      summary.native_binary_size_bytes = native_result.binary_size_bytes;
+      summary.native_graph_body_coverage_full =
+          native_result.body_coverage_full;
       summary.native_graph_full_coverage = native_result.full_native_coverage;
+      summary.native_graph_runtime_bridge =
+          native_result.uses_native_stdlib_bridge;
+      summary.native_graph_vm_independent = native_result.vm_independent;
       summary.native_extensions = amber::pkg::native_extension_metadata(
           native_extensions, native_blobs, native_target_triple());
       root_record->native_output_path = native_result.output_path;
@@ -24108,6 +24254,17 @@ int run_build_command(int argc, char **argv) {
       root_record->native_fallback_reason = native_result.fallback_reason;
       root_record->native_byte_size =
           std::filesystem::file_size(native_output_path);
+      if (options.require_native_body_coverage) {
+        const std::string diagnostic =
+            native_body_coverage_requirement_diagnostic(native_result);
+        if (!diagnostic.empty()) {
+          summary.ok = false;
+          summary.diagnostics.push_back(
+              {"NativeCoverageError", diagnostic, manifest_path});
+          std::cout << amber::build::summary_to_json(summary);
+          return 1;
+        }
+      }
       if (options.require_full_native) {
         const std::string diagnostic =
             full_native_requirement_diagnostic(native_result);

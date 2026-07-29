@@ -11,8 +11,10 @@ Every `corpus/run` fixture is compiled into two executables with
 - `--target bytecode-wrapper`: the VM lane (the semantic oracle);
 - `--target native`: the `cpp-bytecode-direct-v1` lane, which runs generated
   C++ for eligible code objects. Coverage-incomplete builds may fall back to
-  the VM through the whole-program `NativeBailout` restart; full-coverage
-  builds emit no VM entry or bailout restart path.
+  the VM through the whole-program `NativeBailout` restart. Complete native
+  body coverage emits no VM entry or bailout restart path, but is reported
+  separately from VM-independent execution: runtime-backed stdlib sends may
+  still cross the explicitly reported `vm-stdlib-send-v1` bridge.
 
 Both executables must produce byte-identical stdout, stderr, and exit codes.
 Fixtures whose `meta.json` entry is a callable are driven by appending an

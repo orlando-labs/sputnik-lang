@@ -1,0 +1,12 @@
+schema: amber.build.v1
+name: amber.bench.polyglot.raw_http_rps_server
+root: amber.bench.polyglot.raw_http_rps_server
+
+profiles:
+  required: [core.v1, ffi.v1, macro.v1]
+  optional: []
+  forbidden: []
+
+modules:
+  - name: amber.bench.polyglot.raw_http_rps_server
+    path: raw_http_rps_server.am

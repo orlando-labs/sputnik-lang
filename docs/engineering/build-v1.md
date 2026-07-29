@@ -51,20 +51,29 @@ amberc build amber.build.json --out-dir build/amber --cache-dir build/amber/.cac
 amberc build src/main.am -o build/main
 ```
 
-Manifest builds emit `amber.build.result.v1` JSON with per-module source
+Manifest builds emit `amber.build.result.v2` JSON with per-module source
 hashes, cache keys, artifact hashes, ABI hashes, output paths, native sidecar
 metadata, and cache-hit state. The default target is `both`: `.amberbc`
 artifacts remain deterministic cacheable sidecars, and the root module also
 gets a host native executable at `<out-dir>/<root-module>`. Use
 `--target bytecode` for bytecode-only builds.
 
-Single-file builds emit `amber.executable.build.v1` JSON and create an
+Single-file builds emit `amber.executable.build.v2` JSON and create an
 executable at `-o <path>`, `--out-dir <dir>/<source-stem>`, or the source path
 without the `.am` extension. The default target is `native`: eligible bytecode
 is lowered to generated C++ and compiled with `AMBER_NATIVE_CXX`, `CXX`, or
 `clang++`; unsupported bytecode remains correct through an embedded verified VM
 fallback. Use `--target bytecode-wrapper` for the legacy shell wrapper that
 re-enters `amberc run-embedded`.
+
+Native build metadata separates generated body coverage from execution-model
+independence. `native_body_coverage_full` (or the manifest graph equivalent)
+only means every Amber code object has a generated C++ body. The stricter
+`native_full_coverage` additionally requires `native_vm_independent: true`, so
+a `vm-stdlib-send-v1` bridge can no longer be reported as fully native. Use
+`--require-native-body-coverage` for the former contract and
+`--require-full-native` for the latter. Both result schemas also report the
+final native binary size in bytes.
 
 ## Conformance
 

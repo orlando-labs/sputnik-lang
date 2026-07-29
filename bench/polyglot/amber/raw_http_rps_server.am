@@ -1,0 +1,332 @@
+package amber.bench.polyglot.raw_http_rps_server
+
+from net.http import Server, ServerResponse
+from sync import Mutex
+
+export main
+
+def bounded_text?(value, minimum, maximum):
+  Str === value and value.length >= minimum and value.length <= maximum
+
+def upper_ascii?(value):
+  return false unless Str === value
+  value.chars.all? |char|: "ABCDEFGHIJKLMNOPQRSTUVWXYZ".contains?(char)
+
+def valid_sku?(value):
+  return false unless bounded_text?(value, 3, 64)
+  value.chars.all? |char|:
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_".contains?(char)
+
+def catalog_category?(value):
+  Str === value and ["hardware", "software", "service", "accessory"].include?(value)
+
+def catalog_status?(value):
+  Str === value and ["draft", "active", "paused", "retired"].include?(value)
+
+def integer_between?(value, minimum, maximum):
+  Int === value and value >= minimum and value <= maximum
+
+def valid_barcode?(value):
+  return false unless bounded_text?(value, 8, 32)
+  value.chars.all? |char|: "0123456789".contains?(char)
+
+def valid_tags?(tags):
+  Array === tags and tags.count <= 16
+    and tags.all? |tag|: bounded_text?(tag, 1, 32)
+
+def valid_metadata?(metadata):
+  Map === metadata and metadata.count == 3
+    and bounded_text?(metadata[:source], 1, 64)
+    and bounded_text?(metadata[:batch], 1, 64)
+    and Bool === metadata[:fragile]
+
+def invalid_item_field(attrs):
+  return ["sku", "invalid_format"] unless valid_sku?(attrs[:sku])
+  return ["name", "invalid_length"] unless bounded_text?(attrs[:name], 1, 160)
+  return ["description", "invalid_length"] unless bounded_text?(attrs[:description], 1, 2000)
+  return ["category", "unsupported"] unless catalog_category?(attrs[:category])
+  return ["status", "unsupported"] unless catalog_status?(attrs[:status])
+  return ["price_cents", "out_of_range"] unless integer_between?(attrs[:price_cents], 0, 1000000000)
+  return ["currency", "invalid_format"] unless Str === attrs[:currency] and attrs[:currency].length == 3 and upper_ascii?(attrs[:currency])
+  return ["stock_count", "out_of_range"] unless integer_between?(attrs[:stock_count], 0, 1000000)
+  return ["weight_grams", "out_of_range"] unless integer_between?(attrs[:weight_grams], 1, 10000000)
+  return ["active", "invalid"] unless Bool === attrs[:active]
+  return ["manufacturer", "invalid_length"] unless bounded_text?(attrs[:manufacturer], 1, 120)
+  return ["country_code", "invalid_format"] unless Str === attrs[:country_code] and attrs[:country_code].length == 2 and upper_ascii?(attrs[:country_code])
+  return ["barcode", "invalid_format"] unless valid_barcode?(attrs[:barcode])
+  return ["color", "invalid_length"] unless bounded_text?(attrs[:color], 1, 40)
+  return ["size", "invalid_length"] unless bounded_text?(attrs[:size], 1, 40)
+  return ["rating_milli", "out_of_range"] unless integer_between?(attrs[:rating_milli], 0, 5000)
+  return ["tags", "invalid"] unless valid_tags?(attrs[:tags])
+  return ["metadata", "invalid"] unless valid_metadata?(attrs[:metadata])
+  null
+
+def map_without(values, omitted):
+  result = {}
+  values.each |key, value|:
+    result[key] = value unless key == omitted
+  result
+
+class MemoryStore:
+  def init():
+    @mutex = Mutex.new()
+    @next_id = 1
+    @items = {}
+    @sku_ids = {}
+
+  def create(attrs):
+    @mutex.synchronize:
+      if @sku_ids[?attrs[:sku]]:
+        {kind: "conflict"}
+      else:
+        now = Time.now.iso8601
+        item = attrs.copy
+        item[:id] = @next_id
+        item[:version] = 1
+        item[:created_at] = now
+        item[:updated_at] = now
+        @next_id += 1
+        @items[item[:id]] = item
+        @sku_ids[item[:sku]] = item[:id]
+        {kind: "ok", item: item.copy}
+
+  def find(id):
+    @mutex.synchronize:
+      item = @items[?id]
+      if item then item.copy else null
+
+  def list(status):
+    @mutex.synchronize:
+      result = []
+      @items.each |id, item|:
+        if status == null or item[:status] == status:
+          result.push!(item.copy)
+      result
+
+  def update(id, attrs, version):
+    @mutex.synchronize:
+      item = @items[?id]
+      if item == null:
+        {kind: "not_found"}
+      else if item[:version] != version:
+        {kind: "version_conflict"}
+      else:
+        candidate = item.copy
+        attrs.each |name, value|:
+          candidate[name] = value
+        issue = invalid_item_field(candidate)
+        if issue:
+          {kind: "invalid", issue: issue}
+        else if candidate[:sku] != item[:sku] and @sku_ids[?candidate[:sku]]:
+          {kind: "conflict"}
+        else:
+          if candidate[:sku] != item[:sku]:
+            @sku_ids = map_without(@sku_ids, item[:sku])
+            @sku_ids[candidate[:sku]] = id
+          candidate[:version] = item[:version] + 1
+          candidate[:updated_at] = Time.now.iso8601
+          @items[id] = candidate
+          {kind: "ok", item: candidate.copy}
+
+  def delete(id, version):
+    @mutex.synchronize:
+      item = @items[?id]
+      if item == null:
+        {kind: "not_found"}
+      else if item[:version] != version:
+        {kind: "version_conflict"}
+      else:
+        @items = map_without(@items, id)
+        @sku_ids = map_without(@sku_ids, item[:sku])
+        {kind: "ok"}
+
+def raw_response(status, document: null, headers: {}):
+  response_headers = headers.copy
+  body = ""
+  if document != null:
+    body = Json.generate(document)
+    response_headers["content-type"] = "application/json"
+  ServerResponse(status: status, headers: response_headers, body: body)
+
+def raw_problem(status, code, field: null):
+  details = if field then [{field: field, code: "invalid"}] else []
+  raw_response(status, document: {
+    error: {code: code, message: code, details: details}
+  })
+
+def raw_schema_error?(value, patch):
+  return true unless Map === value or StrictMap === value
+  fields = [
+    "sku", "name", "description", "category", "status", "price_cents",
+    "currency", "stock_count", "weight_grams", "active", "manufacturer",
+    "country_code", "barcode", "color", "size", "rating_milli", "tags", "metadata"
+  ]
+  return true if value.keys.any? |name|: not fields.include?(name.to_str)
+  return true if not patch and fields.any? |name|: not value.has_key?(name)
+  text_fields = [:sku, :name, :description, :category, :status, :currency,
+    :manufacturer, :country_code, :barcode, :color, :size]
+  return true if text_fields.any? |name|:
+    value.has_key?(name) and not Str === value[name]
+  integer_fields = [:price_cents, :stock_count, :weight_grams, :rating_milli]
+  return true if integer_fields.any? |name|:
+    value.has_key?(name) and not Int === value[name]
+  return true if value.has_key?(:active) and not Bool === value[:active]
+  if value.has_key?(:tags):
+    tags = value[:tags]
+    return true unless Array === tags and tags.all? |tag|: Str === tag
+  if value.has_key?(:metadata):
+    metadata = value[:metadata]
+    return true unless Map === metadata or StrictMap === metadata
+    return true unless metadata.count == 3
+    return true unless metadata.has_key?(:source) and Str === metadata[:source]
+    return true unless metadata.has_key?(:batch) and Str === metadata[:batch]
+    return true unless metadata.has_key?(:fragile) and Bool === metadata[:fragile]
+  false
+
+def raw_read_item(request, patch):
+  content_type = request.headers.first("content-type")
+  unless content_type and content_type.downcase.starts_with?("application/json"):
+    return {ok: false, response: raw_problem(415, "request_error")}
+  document = try:
+    Json.parse(request.body_text)
+  rescue Exception:
+    null
+  unless Map === document or StrictMap === document:
+    return {ok: false, response: raw_problem(400, "request_error")}
+  value = document[?"item"]
+  if raw_schema_error?(value, patch):
+    return {ok: false, response: raw_problem(400, "request_error")}
+  {ok: true, value: value}
+
+def raw_item_validation(attrs):
+  issue = invalid_item_field(attrs)
+  if issue then raw_problem(422, "validation_failed", field: issue[0]) else null
+
+def raw_member_id(path):
+  prefix = "/v1/items/"
+  return null unless path.starts_with?(prefix)
+  text = path.slice(prefix.length...path.length)
+  return null if text.empty? or text.chars.any? |char|: not "0123456789".contains?(char)
+  text.to_int
+
+def raw_requested_version(request):
+  raw = request.headers.first("if-match")
+  return {ok: false, response: raw_problem(428, "request_error")} unless raw
+  text = raw.trim
+  valid = text.present? and text.length <= 18
+  valid = valid and text.chars.all? |char|: "0123456789".contains?(char)
+  unless valid:
+    return {ok: false, response: raw_problem(400, "request_error")}
+  value = text.to_int
+  unless value > 0:
+    return {ok: false, response: raw_problem(400, "request_error")}
+  {ok: true, value: value}
+
+def raw_store_problem(result):
+  return raw_problem(404, "request_error") if result[:kind] == "not_found"
+  return raw_problem(409, "request_error") if result[:kind] == "version_conflict"
+  return raw_problem(409, "request_error") if result[:kind] == "conflict"
+  return raw_problem(422, "validation_failed", field: result[:issue][0]) if result[:kind] == "invalid"
+  null
+
+def raw_list(request, store):
+  status = null
+  if request.query:
+    query = Url.parse_query(request.query)
+    return raw_problem(400, "request_error") if query.keys.any? |name|: name.to_str != "status"
+    if query.has_key?("status"):
+      value = query["status"]
+      status = if Array === value then value[?0] else value
+  if status != null and not catalog_status?(status):
+    return raw_problem(422, "validation_failed", field: "status")
+  raw_response(200, document: {data: store.list(status)})
+
+def raw_create(request, store):
+  parsed = raw_read_item(request, false)
+  return parsed[:response] unless parsed[:ok]
+  validation = raw_item_validation(parsed[:value])
+  return validation if validation
+  result = store.create(parsed[:value])
+  error = raw_store_problem(result)
+  return error if error
+  raw_response(201, document: result[:item])
+
+def raw_show(id, store):
+  item = store.find(id)
+  return raw_problem(404, "request_error") unless item
+  raw_response(200, document: item)
+
+def raw_mutate(request, id, store, patch):
+  return raw_problem(404, "request_error") unless store.find(id)
+  version = raw_requested_version(request)
+  return version[:response] unless version[:ok]
+  parsed = raw_read_item(request, patch)
+  return parsed[:response] unless parsed[:ok]
+  attrs = parsed[:value]
+  if patch and attrs.empty?:
+    return raw_problem(422, "validation_failed", field: "item")
+  validation = null
+  validation = raw_item_validation(attrs) unless patch
+  return validation if validation
+  result = store.update(id, attrs, version[:value])
+  error = raw_store_problem(result)
+  return error if error
+  raw_response(200, document: result[:item])
+
+def raw_delete(request, id, store):
+  return raw_problem(404, "request_error") unless store.find(id)
+  version = raw_requested_version(request)
+  return version[:response] unless version[:ok]
+  result = store.delete(id, version[:value])
+  error = raw_store_problem(result)
+  return error if error
+  raw_response(204)
+
+def raw_authorized?(request):
+  host = request.headers.first("host") or ""
+  host.starts_with?("127.0.0.1") or host.starts_with?("localhost") or host.starts_with?("[::1]")
+
+def raw_handle(request, store):
+  return raw_problem(403, "request_error") unless raw_authorized?(request)
+  method = request.method
+  path = request.path
+  if method == "GET" and (path == "/health/ready" or path == "/health/live"):
+    return raw_response(200, document: {status: "ready"})
+  if path == "/v1/items":
+    return raw_list(request, store) if method == "GET"
+    return raw_create(request, store) if method == "POST"
+    return raw_problem(405, "request_error")
+  if path.starts_with?("/v1/items/"):
+    id = raw_member_id(path)
+    return raw_problem(400, "request_error") unless id
+    return raw_show(id, store) if method == "GET"
+    return raw_mutate(request, id, store, false) if method == "PUT"
+    return raw_mutate(request, id, store, true) if method == "PATCH"
+    return raw_delete(request, id, store) if method == "DELETE"
+    return raw_problem(405, "request_error")
+  raw_problem(404, "request_error")
+
+def arguments():
+  parser = ArgParser()
+  parser.name("amber-polyglot-raw-http-rps-server")
+  parser.arg("--host", default: "127.0.0.1")
+  parser.arg("--port", type: Int, default: 3340)
+  parser.arg("--workers", type: Int, default: 4)
+  parser.parse_or_raise()
+
+def main():
+  args = arguments()
+  store = MemoryStore()
+  Server(
+    host: args["host"],
+    port: args["port"],
+    workers: args["workers"],
+    max_concurrent_per_worker: 32,
+    backlog: 128,
+    max_header_bytes: 32768,
+    max_body_bytes: 65536,
+    read_timeout: 15.0,
+    write_timeout: 15.0,
+    idle_timeout: 10.0,
+    max_requests_per_connection: 500).serve() |request|:
+      raw_handle(request, store)

@@ -114,8 +114,9 @@ def main() -> int:
         "  internal_port = internal_server.port()\n"
         "  runner = task.spawn:\n"
         "    internal_server.serve(max_requests: 1) |request|:\n"
+        "      request_ok = request.method() == \"GET\" and request.target() == \"/stream\" and request.path() == \"/stream\" and request.query() == null and request.headers().first(\"host\") != null and request.body_stream() != null and request.local_endpoint().port() == internal_port and request.remote_endpoint().port() > 0\n"
         "      ServerResponse.stream(\n"
-        "        headers: {\"x-native-one\": \"one\", \"x-native-two\": \"two\"},\n"
+        "        headers: {\"x-native-one\": \"one\", \"x-native-two\": if request_ok then \"two\" else \"bad-request\"},\n"
         "        trailers: [\"x-native-done\"]) |writer|:\n"
         "          writer.write(\"native-stream-response\")\n"
         "          writer.close()\n"
@@ -159,7 +160,7 @@ def main() -> int:
             "native",
             "--entry",
             "main-only",
-            "--require-full-native",
+            "--require-native-body-coverage",
             "--grant",
             "net.connect",
             "--grant",
@@ -184,12 +185,15 @@ def main() -> int:
     if bytecode_fallback is not False:
         listener.close()
         fail(f"build retained bytecode fallback: {result}")
-    full_coverage = result.get(
-        "native_full_coverage", result.get("native_graph_full_coverage")
-    )
-    if full_coverage is not True:
+    if result.get("native_body_coverage_full") is not True:
         listener.close()
-        fail(f"build did not report full native coverage: {result}")
+        fail(f"build did not report complete native body coverage: {result}")
+    if result.get("native_full_coverage") is not False:
+        listener.close()
+        fail(f"HTTP bridge was mislabeled VM-independent native: {result}")
+    if result.get("native_runtime_bridge_kind") != "vm-stdlib-send-v1":
+        listener.close()
+        fail(f"HTTP bridge kind was not reported honestly: {result}")
 
     run = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=15, cwd=root

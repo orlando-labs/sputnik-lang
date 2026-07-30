@@ -109,7 +109,7 @@ BUILD_SRCS := buildsys/build.cpp
 BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp
 IO_SRCS := runtime/io.cpp runtime/reactor.cpp
 DIGEST_SRCS := runtime/digest.cpp
-HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_transport.cpp
+HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_server.cpp runtime/net_http_transport.cpp
 STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
 RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/vm.cpp $(STDLIB_SRCS) runtime/amber_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
 FROZEN_RUNTIME_SRCS := runtime/frozen_image.cpp
@@ -493,8 +493,9 @@ test: build
 	grep -q '^42$$' $(BUILD_DIR)/w14-main-exe.out
 	$(BUILD_DIR)/amberc build tests/fixtures/native_scalar_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-scalar-core-build.json
+	awk '/compact native frame:/ { if ($$5 > $$8) reduced = 1 } END { exit reduced ? 0 : 1 }' $(BUILD_DIR)/native-scalar-core.native.cpp
 	$(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core.out
-	grep -q '^11$$' $(BUILD_DIR)/native-scalar-core.out
+	grep -q '^12$$' $(BUILD_DIR)/native-scalar-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_scalar_core/main.am > $(BUILD_DIR)/native-scalar-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-scalar-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-scalar-core.dump
@@ -587,6 +588,14 @@ test: build
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-capability-modules-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-capability-modules-core.dump
 	python3 tests/native_http_query_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/native-http-query
+	$(BUILD_DIR)/amberc build tests/fixtures/native_http_server_core/amber.build.yaml --target native --out-dir $(BUILD_DIR)/native-http-server-core --cache-dir $(BUILD_DIR)/native-http-server-core/cache --grant net.listen --require-full-native > $(BUILD_DIR)/native-http-server-core-build.json
+	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native-http-server-core-build.json
+	grep -q '"native_graph_vm_independent": true' $(BUILD_DIR)/native-http-server-core-build.json
+	! grep -q 'invoke_native_stdlib_send' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
+	! grep -q 'NativeCycleScope cycle_scope(cycle_boundary)' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
+	grep -q 'runtime_http_server_read_body_chunk' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
+	$(BUILD_DIR)/native-http-server-core/native.http_server_core > $(BUILD_DIR)/native-http-server-core.out
+	grep -q '^7$$' $(BUILD_DIR)/native-http-server-core.out
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/native-cycle-lifetime
 	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_path_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-fs-path-core-build.json

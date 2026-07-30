@@ -14,6 +14,8 @@
 namespace amber::runtime {
 
 struct Value;
+class RuntimeHttpServerRequest;
+class RuntimeHttpServerResponse;
 
 class RuntimeIoValue {
 public:
@@ -31,6 +33,18 @@ public:
   const char *type_name() const override { return "runtime.NativeBlock"; }
   bool shareable() const override { return true; }
   virtual Value invoke(const std::vector<Value> &args) = 0;
+
+  // Native HTTP servers use this typed entry so a generated handler can
+  // convert request/response values without constructing a RuntimeWorld or
+  // entering the VM stdlib dispatcher. Other native-block users retain the
+  // general Value-level entry above.
+  virtual bool
+  invoke_http_server(const std::shared_ptr<RuntimeHttpServerRequest> &request,
+                     RuntimeHttpServerResponse *response) {
+    (void)request;
+    (void)response;
+    return false;
+  }
 };
 
 struct RuntimeIoStatus {

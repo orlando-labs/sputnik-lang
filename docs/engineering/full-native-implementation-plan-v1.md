@@ -33,6 +33,30 @@ Status: active implementation record for the host-native execution path.
 > ORM selftest returns `29`. The standalone sqlite3 selftest is likewise
 > 477/477 native with no VM path and returns `35`.
 
+> 2026-07-30 progress: `net.http.Server` state, transport open, request
+> snapshotting, buffered and chunked body decoding, Headers, buffered and
+> streaming responses, and the accept/request/keep-alive loop now live behind
+> a VM-independent typed runtime ABI in `runtime/net_http_server.{h,cpp}`.
+> Generated server handlers no longer enter
+> `RuntimeWorld::invoke_native_stdlib_send`, and `Server#serve` no longer holds
+> the world's recursive execution mutex while worker handlers run. A minimal
+> server fixture passes `--require-full-native` at 7/7 bodies and 649,096
+> bytes. The full three-module Ember benchmark passes at 858/858 bodies,
+> `native_graph_vm_independent=true`, and 6,734,008 bytes, down from
+> 17,212,120 bytes. Graphs containing HTTP client or other non-server `net`
+> types still report `vm-stdlib-send-v1`; server coverage does not relabel
+> those graphs.
+
+> 2026-07-30 request-path progress: generated dispatch no longer constructs a
+> nested `NativeCycleScope` for every Amber method/block call. HTTP, task, and
+> runtime callback adapters establish one mutator/cycle scope at the external
+> boundary, and all nested Amber calls share it. Ordinary code objects without
+> handlers or captured local cells also use liveness-colored physical
+> `NativeValue` slots instead of allocating `BcCode::reg_count` distinct
+> values. Parameter slots stay pinned, and handler/capture layouts stay
+> identity-mapped; focused scalar, closure, exception, pattern, call-shaping,
+> and no-GIL fixtures gate the optimization.
+
 This plan assumes the current repository state:
 
 - the bytecode VM is the semantic oracle;
@@ -84,7 +108,9 @@ can reuse the same MIR, eligibility, ABI, runtime helper, and metadata contracts
 - Bytecode remains the source-of-truth verifier until native verification is
   equally complete.
 - Native code must never own runtime semantics that the VM cannot reproduce.
-- Every native call boundary is a GC safepoint unless explicitly proven safe.
+- Every external native request/task/callback boundary establishes a GC
+  mutator scope. Nested Amber calls share that scope and use explicit
+  checkpoints; they are not independent collector boundaries.
 - Every native frame must have enough metadata for roots, source spans, and
   exception unwinding.
 - Native eligibility must be conservative. Incorrect native execution is worse

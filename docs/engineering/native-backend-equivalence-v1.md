@@ -111,6 +111,49 @@ also asserts that the remaining `vm-stdlib-send-v1` bridge is reported rather
 than mislabeled VM-independent full native. It verifies the QUERY request line,
 Content-Type, body, status, and response body against a loopback server.
 
+The server side has a typed ABI in
+`runtime/net_http_server.{h,cpp}`. Server construction, lifecycle accessors,
+the accept/request/keep-alive/response loop, request snapshots, whole/chunked
+body reads, Headers operations, and buffered/streaming `ServerResponse`
+construction do not instantiate `RuntimeWorld`, construct a `Frame`, or enter
+VM stdlib-send dispatch. Generated handlers receive a `ServerRequest` runtime
+handle and return a typed `RuntimeHttpServerResponse` directly. This is also a
+no-GIL invariant: `Server#serve` must never hold
+`RuntimeWorld::execution_mutex` across the accept loop.
+
+Native closures do not yet persist a resumable program counter. Request-body
+and streaming-writer operations therefore use deadline-bounded blocking calls
+in the typed server lane. Parking and restarting the closure is forbidden
+because it could replay application effects that occurred before the IO call.
+The accept loop and request-head parser remain cooperatively parked in the
+runtime, where their state is explicitly persistent.
+
+This typed server path does **not** make every `net.http` graph VM-independent.
+HTTP client operations and other non-server `net` types still require
+`vm-stdlib-send-v1`, so build metadata continues reporting
+`native_vm_independent: false` for such a graph. A server-only graph sets full
+native coverage only when all code bodies are generated and the VM bridge is
+absent. `tests/fixtures/native_http_server_core` verifies request chunks,
+Headers, streaming responses, generated-source bridge absence, and
+`--require-full-native`; body coverage alone is not used as a substitute.
+
+Generated request dispatch has one cycle-GC mutator boundary per external
+HTTP/task/runtime callback. `amber_native_call_code` does not open another
+`NativeCycleScope` for nested method and block calls; doing so would turn an
+Amber call into a repeated VM-shaped runtime boundary even when no VM bridge
+exists. Nested allocation tracking remains in the callback's active scope and
+uses its explicit checkpoint path.
+
+For code objects without exception handlers, handler entry semantics, or
+captured local cells, the backend colors virtual-register live ranges onto a
+smaller physical `NativeValue` frame. Positional/keyword-shaped parameter
+registers remain pinned to their ABI indices. Handler and captured-local code
+keeps the bytecode identity layout used by `NativeHandlerSeed`, `read_reg`, and
+`local_cell`. Allocation is disabled when an opcode is outside the liveness
+model's explicit allowlist. The generated source records logical and physical
+slot counts, and the native scalar fixture requires at least one actual
+reduction.
+
 ## Per-function VM fallback (step 2, scalar bridge)
 
 Code objects that fail the native allowlist but pass

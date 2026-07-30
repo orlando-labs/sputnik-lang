@@ -59,16 +59,19 @@ HTTP-runtime optimization target. The complete Ember request pipeline remains
 a separate lane:
 
 ```sh
-python3 bench/polyglot/run_http_rps.py --stack ember --languages amber \
-  --duration 60 --clients 4
+python3 bench/polyglot/run_http_rps.py --stack ember --duration 60 --clients 4
 ```
 
-Framework rows are only compared with similarly featured stacks; the runner
-rejects mixing the current Ember-only lane with manual raw servers. All servers
-use mutex-protected in-memory stores so the timed tables do not measure
-unrelated database drivers. The production Ember 72-hour qualification soak
-remains SQLite-backed. The HTTP runner writes machine-readable JSON and a
-Markdown comparison table to `bench/polyglot/results/`.
+This framework lane compares the complete Ember pipeline with Rails API 8 on
+Puma. It rejects manual raw servers; conversely, the raw lane rejects Rails.
+Both framework servers use mutex-protected in-memory stores so the timed table
+does not measure unrelated database drivers. Set `AMBER_BENCH_RUBY` when Rails
+and Puma are installed under a Ruby that is not discoverable through RVM or
+`PATH`. The production Ember 72-hour qualification soak remains SQLite-backed.
+The HTTP runner writes machine-readable JSON and a Markdown comparison table
+to `bench/polyglot/results/`. Amber server builds require VM-independent full
+native coverage; the Amber load-generator client remains a separately reported
+native-body-covered HTTP-client bridge.
 
 The script prints mean/best wall-clock time and peak RSS reported by a small
 Python measurement helper via `resource.getrusage(RUSAGE_CHILDREN)`. It also

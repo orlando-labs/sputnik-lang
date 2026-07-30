@@ -98,35 +98,11 @@ struct RuntimeArgParserValue {
   std::vector<Spec> specs;
 };
 
-// Native executables keep stdlib objects as RuntimeHandle values.  These
-// request/response adapters expose the data-only part of the HTTP ABI without
-// constructing a VM frame for every accessor.  Operations that can suspend or
-// invoke an Amber block intentionally remain on the ordinary stdlib path.
-struct RuntimeNativeHttpServerRequestSnapshot {
-  std::string method;
-  std::string target;
-  std::string path;
-  std::optional<std::string> query;
-  std::vector<std::pair<std::string, std::string>> header_pairs;
-  Value headers = Value::null();
-  Value body_stream = Value::null();
-  Value local_endpoint = Value::null();
-  Value remote_endpoint = Value::null();
-};
-
-std::optional<RuntimeNativeHttpServerRequestSnapshot>
-runtime_native_http_server_request_snapshot(const Value &value);
-
 // Returns a result only for native IO type kinds.  An empty optional asks the
 // caller to use the general matcher path.
 std::optional<bool>
 runtime_native_io_type_matches(const Value &value,
                                RuntimeNativeTypeKind kind);
-
-ExecutionResult runtime_native_http_construct_server_response(
-    int status, std::optional<std::string> reason,
-    const std::vector<std::pair<std::string, std::string>> &headers,
-    std::string body);
 
 ExecutionResult execute_code(const bytecode::BcModule &module,
                              std::uint32_t code_id,

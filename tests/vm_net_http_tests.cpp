@@ -10,6 +10,7 @@
 #include "frontend/lexer/lexer.h"
 #include "frontend/parser/parser.h"
 #include "runtime/io.h"
+#include "runtime/net_http_server.h"
 #include "runtime/vm.h"
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -67,6 +69,96 @@ amber::runtime::ExecutionResult execute_source(const std::string &source) {
   amber::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "module should have init code");
   return amber::runtime::execute_code(module, module.init.entry_code_id);
+}
+
+void test_http_server_runtime_state_is_vm_independent() {
+  amber::runtime::RuntimeHttpServerOptions invalid;
+  invalid.workers = 0;
+  const amber::runtime::RuntimeHttpServerOpenResult rejected =
+      amber::runtime::runtime_http_server_open(std::move(invalid));
+  expect(!rejected.ok && rejected.error_name == "ArgumentError" &&
+             rejected.server == nullptr,
+         "standalone server core validates limits before transport setup");
+
+  auto server = std::make_shared<amber::runtime::RuntimeHttpServer>();
+  server->workers = 3;
+  server->max_concurrent_per_worker = 7;
+  expect(server->capacity() == 21,
+         "standalone server state computes connection capacity");
+  server->begin_request(true);
+  amber::runtime::RuntimeHttpServerStats active = server->stats();
+  expect(active.requests == 1 && active.active_requests == 1 &&
+             active.keepalive_requests == 1 && active.capacity == 21,
+         "standalone server state records request counters");
+  server->end_request();
+  expect(server->stats().active_requests == 0,
+         "standalone server state closes request accounting");
+
+  auto fixed =
+      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+  fixed->framing =
+      amber::runtime::RuntimeHttpServerRequestFraming::ContentLength;
+  fixed->content_remaining = 5;
+  fixed->max_body_bytes = 32;
+  fixed->buffered = "amber";
+  const amber::runtime::RuntimeHttpServerBodyReadResult fixed_read =
+      amber::runtime::runtime_http_server_read_body_all(fixed);
+  expect(fixed_read.ok && fixed_read.body == "amber" && fixed->closed,
+         "standalone server core reads a buffered fixed-length body");
+
+  auto chunked =
+      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+  chunked->framing =
+      amber::runtime::RuntimeHttpServerRequestFraming::Chunked;
+  chunked->max_body_bytes = 32;
+  chunked->max_header_bytes = 128;
+  chunked->buffered = "5\r\namber\r\n0\r\nx-check: yes\r\n\r\n";
+  const amber::runtime::RuntimeHttpServerBodyReadResult chunked_read =
+      amber::runtime::runtime_http_server_read_body_all(chunked);
+  expect(chunked_read.ok && chunked_read.body == "amber" &&
+             chunked->closed &&
+             chunked->trailers.first("x-check").value_or("") == "yes",
+         "standalone server core decodes chunked bodies and trailers");
+
+  auto fixed_chunks =
+      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+  fixed_chunks->framing =
+      amber::runtime::RuntimeHttpServerRequestFraming::ContentLength;
+  fixed_chunks->content_remaining = 5;
+  fixed_chunks->max_body_bytes = 32;
+  fixed_chunks->buffered = "amber";
+  const amber::runtime::RuntimeHttpServerBodyChunkReadResult fixed_first =
+      amber::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 2);
+  const amber::runtime::RuntimeHttpServerBodyChunkReadResult fixed_second =
+      amber::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 8);
+  expect(fixed_first.ok && fixed_first.chunk != nullptr &&
+             fixed_first.chunk->data == "am" && fixed_second.ok &&
+             fixed_second.chunk != nullptr &&
+             fixed_second.chunk->data == "ber" && fixed_chunks->closed,
+         "standalone server core preserves fixed-body chunk boundaries");
+
+  auto wire_chunks =
+      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+  wire_chunks->framing =
+      amber::runtime::RuntimeHttpServerRequestFraming::Chunked;
+  wire_chunks->max_body_bytes = 32;
+  wire_chunks->max_header_bytes = 128;
+  wire_chunks->buffered =
+      "5;kind=test\r\namber\r\n0\r\nx-check: yes\r\n\r\n";
+  const amber::runtime::RuntimeHttpServerBodyChunkReadResult wire_first =
+      amber::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
+  const amber::runtime::RuntimeHttpServerBodyChunkReadResult wire_eof =
+      amber::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
+  expect(wire_first.ok && wire_first.chunk != nullptr &&
+             wire_first.chunk->data == "amber" &&
+             wire_first.chunk->extensions.size() == 1 &&
+             wire_first.chunk->extensions.front().name == "kind" &&
+             wire_first.chunk->extensions.front().value.value_or("") ==
+                 "test" &&
+             wire_eof.ok && wire_eof.chunk == nullptr &&
+             wire_chunks->closed &&
+             wire_chunks->trailers.first("x-check").value_or("") == "yes",
+         "standalone server core exposes wire chunks and extensions");
 }
 
 std::string with_port(const std::string &templ, std::uint16_t port) {
@@ -1736,7 +1828,13 @@ void test_http_server_control_flow_failure_is_not_a_500_response() {
 
 } // namespace
 
-int main() {
+int main(int argc, char **argv) {
+  test_http_server_runtime_state_is_vm_independent();
+  if (argc == 2 && std::string(argv[1]) == "--runtime-core-only") {
+    std::cout << "vm net.http runtime core tests passed (" << g_checks
+              << " checks)\n";
+    return 0;
+  }
   test_from_import_client();
   test_from_import_request_send();
   test_http_server_serves_request_hook();

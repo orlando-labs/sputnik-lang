@@ -52,7 +52,11 @@ def captured(args: Sequence[str], cwd: Path = ROOT) -> str:
     return result.stdout.strip().splitlines()[0]
 
 
-def build_all(compiler: Path, stack: str) -> Dict[str, Path]:
+def build_all(
+    compiler: Path,
+    stack: str,
+    languages: Sequence[str],
+) -> Dict[str, Path]:
     amber_out = BUILD / f"amber-{stack}-server"
     client_out = BUILD / "amber-client"
     go_out = BUILD / "go-server"
@@ -60,26 +64,27 @@ def build_all(compiler: Path, stack: str) -> Dict[str, Path]:
     for directory in (amber_out, client_out, go_out, rust_out):
         directory.mkdir(parents=True, exist_ok=True)
 
-    command(
-        [
-            str(compiler),
-            "build",
-            f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
-            if stack == "raw"
-            else "bench/polyglot/amber/http_rps_server.build.yaml",
-            "--target",
-            "native",
-            "--out-dir",
-            str(amber_out),
-            "--cache-dir",
-            str(amber_out / "cache"),
-            "--require-native-body-coverage",
-            "--grant",
-            "net.listen",
-            "--grant",
-            "random.secure",
-        ]
-    )
+    if "amber" in languages:
+        command(
+            [
+                str(compiler),
+                "build",
+                f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+                if stack == "raw"
+                else "bench/polyglot/amber/http_rps_server.build.yaml",
+                "--target",
+                "native",
+                "--out-dir",
+                str(amber_out),
+                "--cache-dir",
+                str(amber_out / "cache"),
+                "--require-full-native",
+                "--grant",
+                "net.listen",
+                "--grant",
+                "random.secure",
+            ]
+        )
     command(
         [
             str(compiler),
@@ -97,34 +102,37 @@ def build_all(compiler: Path, stack: str) -> Dict[str, Path]:
         ],
         cwd=EMBER,
     )
-    go_env = os.environ.copy()
-    go_env["GOCACHE"] = str(BUILD / "go-cache")
-    command(
-        [
-            "go",
-            "build",
-            "-o",
-            str(go_out / "http-rps-server"),
-            "bench/polyglot/go/http_rps_server.go",
-        ],
-        env=go_env,
-    )
-    command(
-        [
-            "rustc",
-            "--edition=2021",
-            "-O",
-            "-o",
-            str(rust_out / "http-rps-server"),
-            "bench/polyglot/rust/http_rps_server.rs",
-        ]
-    )
+    if "go" in languages:
+        go_env = os.environ.copy()
+        go_env["GOCACHE"] = str(BUILD / "go-cache")
+        command(
+            [
+                "go",
+                "build",
+                "-o",
+                str(go_out / "http-rps-server"),
+                "bench/polyglot/go/http_rps_server.go",
+            ],
+            env=go_env,
+        )
+    if "rust" in languages:
+        command(
+            [
+                "rustc",
+                "--edition=2021",
+                "-O",
+                "-o",
+                str(rust_out / "http-rps-server"),
+                "bench/polyglot/rust/http_rps_server.rs",
+            ]
+        )
     return {
         "amber": amber_out / AMBER_SERVER_NAMES[stack],
         "client": client_out / AMBER_CLIENT_NAME,
         "go": go_out / "http-rps-server",
         "rust": rust_out / "http-rps-server",
         "python": ROOT / "bench/polyglot/python/http_rps_server.py",
+        "rails": ROOT / "bench/polyglot/rails/config.ru",
     }
 
 
@@ -135,7 +143,39 @@ def built_paths(stack: str) -> Dict[str, Path]:
         "go": BUILD / "go-server" / "http-rps-server",
         "rust": BUILD / "rust-server" / "http-rps-server",
         "python": ROOT / "bench/polyglot/python/http_rps_server.py",
+        "rails": ROOT / "bench/polyglot/rails/config.ru",
     }
+
+
+def rails_ruby() -> Path:
+    override = os.environ.get("AMBER_BENCH_RUBY")
+    candidates = [Path(override).expanduser()] if override else []
+    candidates += sorted(
+        (Path.home() / ".rvm" / "rubies").glob("ruby-*/bin/ruby"),
+        reverse=True,
+    )
+    system = shutil.which("ruby")
+    if system:
+        candidates.append(Path(system))
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        probe = subprocess.run(
+            [
+                str(candidate),
+                "-e",
+                'require "rails"; require "puma"; abort unless Rails.version.start_with?("8.")',
+            ],
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if probe.returncode == 0:
+            return candidate
+    raise RuntimeError(
+        "Rails 8 and Puma are required for the Ember framework lane; "
+        "set AMBER_BENCH_RUBY to a suitable Ruby executable"
+    )
 
 
 def ensure_paths(paths: Dict[str, Path], languages: Sequence[str]) -> None:
@@ -250,6 +290,19 @@ def run_one(
         server_args = [str(paths[name]), "--host", "127.0.0.1", "--port", str(port)]
     elif name == "python":
         server_args = [sys.executable, str(paths[name]), "--host", "127.0.0.1", "--port", str(port)]
+    elif name == "rails":
+        server_args = [
+            str(rails_ruby()),
+            "-S",
+            "puma",
+            "--environment",
+            "production",
+            "--bind",
+            f"tcp://127.0.0.1:{port}",
+            "--threads",
+            "4:4",
+            str(paths[name]),
+        ]
     else:
         raise RuntimeError(f"unknown server {name}")
 
@@ -324,7 +377,7 @@ def run_one(
             invalid_requests = sum(int(result["invalid_requests"]) for result in client_results)
             result = {
                 "server": name,
-                "stack": stack if name == "amber" else "raw",
+                "stack": stack if name in {"amber", "rails"} else "raw",
                 "duration_seconds": duration,
                 "client_count": clients,
                 "requests": requests,
@@ -343,13 +396,24 @@ def run_one(
             terminate(server)
 
 
-def runtime_versions() -> Dict[str, str]:
-    return {
-        "amber": captured([str(ROOT / "build/amberc"), "--version"]),
-        "go": captured(["go", "version"]),
-        "rust": captured(["rustc", "--version"]),
-        "python": platform.python_version(),
-    }
+def runtime_versions(languages: Sequence[str]) -> Dict[str, str]:
+    versions = {"amber": captured([str(ROOT / "build/amberc"), "--version"])}
+    if "go" in languages:
+        versions["go"] = captured(["go", "version"])
+    if "rust" in languages:
+        versions["rust"] = captured(["rustc", "--version"])
+    if "python" in languages:
+        versions["python"] = platform.python_version()
+    if "rails" in languages:
+        versions["rails"] = captured(
+            [
+                str(rails_ruby()),
+                "-e",
+                'require "rails"; require "puma"; '
+                'puts "Ruby #{RUBY_VERSION}; Rails #{Rails.version}; Puma #{Puma::Const::PUMA_VERSION}"',
+            ]
+        )
+    return versions
 
 
 def markdown_report(payload: Dict[str, Any]) -> str:
@@ -362,13 +426,14 @@ def markdown_report(payload: Dict[str, Any]) -> str:
     }
     labels = {
         "amber": (
-            "Amber `net.http` (native bodies; VM stdlib bridge)"
+            "Amber `net.http` (full native; VM-independent server)"
             if stack == "raw"
-            else "Amber + Ember (native bodies; VM stdlib bridge)"
+            else "Amber + Ember (full native; VM-independent server)"
         ),
         "go": "Go `net/http`",
         "rust": "Rust `std::net`",
         "python": "Python `ThreadingHTTPServer`",
+        "rails": "Rails API 8 + Puma",
     }
     lines = [
         (
@@ -377,10 +442,11 @@ def markdown_report(payload: Dict[str, Any]) -> str:
             else "# Ember request-flow HTTP RPS benchmark"
         ),
         "",
-        f"Date: `{payload['timestamp']}`  ",
-        f"Host: `{payload['host']}`  ",
-        f"Client: the unchanged native-body-covered Amber client from `ember/examples/soak/client.am`  ",
-        f"Stack: `{stack}`  ",
+        f"Date: `{payload['timestamp']}`<br>",
+        f"Host: `{payload['host']}`<br>",
+        "Client: the unchanged native-body-covered Amber client from "
+        "`ember/examples/soak/client.am` (`vm-stdlib-send-v1` client bridge)<br>",
+        f"Stack: `{stack}`<br>",
         f"Load: `{payload['client_count']}` concurrent clients, `{payload['duration_seconds']}` seconds per server, `mixed`, negative suite every 25 iterations.",
         "",
         "| Server | RPS | Requests | Valid | Invalid | Peak server RSS | vs Amber |",
@@ -402,7 +468,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         )
     competitors = [
         f"{labels[name]} is {relative[name]:.2f}x"
-        for name in ("go", "rust", "python")
+        for name in (("go", "rust", "python") if stack == "raw" else ("rails",))
         if name in relative
     ]
     comparison = (
@@ -452,7 +518,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--clients", type=int, default=4)
     parser.add_argument("--port", type=int, default=3340)
-    parser.add_argument("--languages", default="amber,go,rust,python")
+    parser.add_argument(
+        "--languages",
+        help="comma-separated servers (default: raw=amber,go,rust,python; ember=amber,rails)",
+    )
     parser.add_argument("--stack", choices=("raw", "ember"), default="raw")
     parser.add_argument("--compiler", type=Path, default=ROOT / "build/amberc")
     parser.add_argument("--skip-build", action="store_true")
@@ -464,19 +533,26 @@ def main() -> None:
     args = parse_args()
     if args.duration <= 0 or args.clients <= 0:
         raise RuntimeError("duration and clients must be positive")
-    languages = [name.strip() for name in args.languages.split(",") if name.strip()]
-    unknown = sorted(set(languages) - {"amber", "go", "rust", "python"})
+    language_text = args.languages or (
+        "amber,go,rust,python" if args.stack == "raw" else "amber,rails"
+    )
+    languages = [name.strip() for name in language_text.split(",") if name.strip()]
+    supported = (
+        {"amber", "go", "rust", "python"}
+        if args.stack == "raw"
+        else {"amber", "rails"}
+    )
+    unknown = sorted(set(languages) - supported)
     if unknown:
         raise RuntimeError("unknown languages: " + ", ".join(unknown))
     if "amber" not in languages:
         raise RuntimeError("the Amber baseline must be included")
-    if args.stack == "ember" and languages != ["amber"]:
-        raise RuntimeError(
-            "the ember stack currently has only an Amber/Ember server; use "
-            "--languages amber until comparable framework servers are added"
-        )
     compiler = args.compiler.resolve()
-    paths = built_paths(args.stack) if args.skip_build else build_all(compiler, args.stack)
+    paths = (
+        built_paths(args.stack)
+        if args.skip_build
+        else build_all(compiler, args.stack, languages)
+    )
     ensure_paths(paths, languages)
     results = [
         run_one(
@@ -498,14 +574,14 @@ def main() -> None:
         args.output.resolve() if args.output else RESULTS / f"{result_stem}.md"
     )
     payload = {
-        "schema": "amber.polyglot.http-rps.v2",
+        "schema": "amber.polyglot.http-rps.v3",
         "stack": args.stack,
         "timestamp": dt.datetime.now().astimezone().isoformat(),
         "host": f"{platform.system()} {platform.release()} / {platform.machine()} / {platform.processor()}",
         "duration_seconds": args.duration,
         "client_count": args.clients,
         "languages": languages,
-        "versions": runtime_versions(),
+        "versions": runtime_versions(languages),
         "results": results,
         "json_result": str(json_path.relative_to(ROOT)),
     }

@@ -1,0 +1,743 @@
+{
+  "schema": "amber.polyglot.http-rps.v3",
+  "stack": "raw",
+  "timestamp": "2026-07-30T11:56:10.376757+03:00",
+  "host": "Darwin 25.5.0 / arm64 / arm",
+  "duration_seconds": 60,
+  "client_count": 4,
+  "languages": [
+    "amber",
+    "go",
+    "rust",
+    "python"
+  ],
+  "versions": {
+    "amber": "amberc 0.1.0-dev",
+    "go": "go version go1.26.4 darwin/arm64",
+    "rust": "rustc 1.96.0 (ac68faa20 2026-05-25) (Homebrew)",
+    "python": "3.9.6"
+  },
+  "results": [
+    {
+      "server": "amber",
+      "stack": "raw",
+      "duration_seconds": 60,
+      "client_count": 4,
+      "requests": 1350476,
+      "valid_requests": 841208,
+      "invalid_requests": 509268,
+      "client_max_elapsed_seconds": 60.008488875,
+      "wall_seconds": 60.027855917,
+      "requests_per_second": 22504.749333266725,
+      "server_peak_rss_bytes": 21479424,
+      "contract_smoke_requests": 76,
+      "client_results": [
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 0,
+          "mode": "mixed",
+          "iterations": 34551,
+          "requests": 337284,
+          "valid_requests": 210072,
+          "invalid_requests": 127212,
+          "statuses": {
+            "201": 35934,
+            "200": 138204,
+            "204": 35934,
+            "404": 38700,
+            "415": 2766,
+            "400": 20745,
+            "422": 55320,
+            "413": 1383,
+            "409": 2766,
+            "428": 2766,
+            "405": 1383,
+            "403": 1383
+          },
+          "valid_statuses": {
+            "201": 35934,
+            "200": 138204,
+            "204": 35934
+          },
+          "invalid_statuses": {
+            "404": 38700,
+            "415": 2766,
+            "400": 20745,
+            "422": 55320,
+            "413": 1383,
+            "409": 2766,
+            "428": 2766,
+            "405": 1383,
+            "403": 1383
+          },
+          "elapsed_seconds": 60.008488875,
+          "requests_per_second": 5620.604789808582
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 1,
+          "mode": "mixed",
+          "iterations": 34448,
+          "requests": 336218,
+          "valid_requests": 209444,
+          "invalid_requests": 126774,
+          "statuses": {
+            "201": 35826,
+            "200": 137792,
+            "204": 35826,
+            "404": 38582,
+            "415": 2756,
+            "400": 20670,
+            "422": 55120,
+            "413": 1378,
+            "409": 2756,
+            "428": 2756,
+            "405": 1378,
+            "403": 1378
+          },
+          "valid_statuses": {
+            "201": 35826,
+            "200": 137792,
+            "204": 35826
+          },
+          "invalid_statuses": {
+            "404": 38582,
+            "415": 2756,
+            "400": 20670,
+            "422": 55120,
+            "413": 1378,
+            "409": 2756,
+            "428": 2756,
+            "405": 1378,
+            "403": 1378
+          },
+          "elapsed_seconds": 60.003893458,
+          "requests_per_second": 5603.269731743946
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 2,
+          "mode": "mixed",
+          "iterations": 34562,
+          "requests": 337361,
+          "valid_requests": 210138,
+          "invalid_requests": 127223,
+          "statuses": {
+            "201": 35945,
+            "200": 138248,
+            "204": 35945,
+            "404": 38711,
+            "415": 2766,
+            "400": 20745,
+            "422": 55320,
+            "413": 1383,
+            "409": 2766,
+            "428": 2766,
+            "405": 1383,
+            "403": 1383
+          },
+          "valid_statuses": {
+            "201": 35945,
+            "200": 138248,
+            "204": 35945
+          },
+          "invalid_statuses": {
+            "404": 38711,
+            "415": 2766,
+            "400": 20745,
+            "422": 55320,
+            "413": 1383,
+            "409": 2766,
+            "428": 2766,
+            "405": 1383,
+            "403": 1383
+          },
+          "elapsed_seconds": 60.002524959,
+          "requests_per_second": 5622.446725875625
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 3,
+          "mode": "mixed",
+          "iterations": 34795,
+          "requests": 339613,
+          "valid_requests": 211554,
+          "invalid_requests": 128059,
+          "statuses": {
+            "201": 36187,
+            "200": 139180,
+            "204": 36187,
+            "404": 38971,
+            "415": 2784,
+            "400": 20880,
+            "422": 55680,
+            "413": 1392,
+            "409": 2784,
+            "428": 2784,
+            "405": 1392,
+            "403": 1392
+          },
+          "valid_statuses": {
+            "201": 36187,
+            "200": 139180,
+            "204": 36187
+          },
+          "invalid_statuses": {
+            "404": 38971,
+            "415": 2784,
+            "400": 20880,
+            "422": 55680,
+            "413": 1392,
+            "409": 2784,
+            "428": 2784,
+            "405": 1392,
+            "403": 1392
+          },
+          "elapsed_seconds": 60.001636833,
+          "requests_per_second": 5660.0622570552605
+        }
+      ]
+    },
+    {
+      "server": "go",
+      "stack": "raw",
+      "duration_seconds": 60,
+      "client_count": 4,
+      "requests": 1398362,
+      "valid_requests": 870996,
+      "invalid_requests": 527366,
+      "client_max_elapsed_seconds": 60.004025541,
+      "wall_seconds": 60.06227266699999,
+      "requests_per_second": 23304.469781690175,
+      "server_peak_rss_bytes": 22069248,
+      "contract_smoke_requests": 76,
+      "client_results": [
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 0,
+          "mode": "mixed",
+          "iterations": 36101,
+          "requests": 352412,
+          "valid_requests": 219496,
+          "invalid_requests": 132916,
+          "statuses": {
+            "201": 37546,
+            "200": 144404,
+            "204": 37546,
+            "404": 40436,
+            "415": 2890,
+            "400": 21675,
+            "422": 57800,
+            "413": 1445,
+            "409": 2890,
+            "428": 2890,
+            "405": 1445,
+            "403": 1445
+          },
+          "valid_statuses": {
+            "201": 37546,
+            "200": 144404,
+            "204": 37546
+          },
+          "invalid_statuses": {
+            "404": 40436,
+            "415": 2890,
+            "400": 21675,
+            "422": 57800,
+            "413": 1445,
+            "409": 2890,
+            "428": 2890,
+            "405": 1445,
+            "403": 1445
+          },
+          "elapsed_seconds": 60.004025541,
+          "requests_per_second": 5873.139290616449
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 1,
+          "mode": "mixed",
+          "iterations": 35614,
+          "requests": 347623,
+          "valid_requests": 216534,
+          "invalid_requests": 131089,
+          "statuses": {
+            "201": 37039,
+            "200": 142456,
+            "204": 37039,
+            "404": 39889,
+            "415": 2850,
+            "400": 21375,
+            "422": 57000,
+            "413": 1425,
+            "409": 2850,
+            "428": 2850,
+            "405": 1425,
+            "403": 1425
+          },
+          "valid_statuses": {
+            "201": 37039,
+            "200": 142456,
+            "204": 37039
+          },
+          "invalid_statuses": {
+            "404": 39889,
+            "415": 2850,
+            "400": 21375,
+            "422": 57000,
+            "413": 1425,
+            "409": 2850,
+            "428": 2850,
+            "405": 1425,
+            "403": 1425
+          },
+          "elapsed_seconds": 60.000476917,
+          "requests_per_second": 5793.670614999855
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 2,
+          "mode": "mixed",
+          "iterations": 35851,
+          "requests": 349972,
+          "valid_requests": 217976,
+          "invalid_requests": 131996,
+          "statuses": {
+            "201": 37286,
+            "200": 143404,
+            "204": 37286,
+            "404": 40156,
+            "415": 2870,
+            "400": 21525,
+            "422": 57400,
+            "413": 1435,
+            "409": 2870,
+            "428": 2870,
+            "405": 1435,
+            "403": 1435
+          },
+          "valid_statuses": {
+            "201": 37286,
+            "200": 143404,
+            "204": 37286
+          },
+          "invalid_statuses": {
+            "404": 40156,
+            "415": 2870,
+            "400": 21525,
+            "422": 57400,
+            "413": 1435,
+            "409": 2870,
+            "428": 2870,
+            "405": 1435,
+            "403": 1435
+          },
+          "elapsed_seconds": 60.001394833,
+          "requests_per_second": 5832.73107190368
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 3,
+          "mode": "mixed",
+          "iterations": 35689,
+          "requests": 348355,
+          "valid_requests": 216990,
+          "invalid_requests": 131365,
+          "statuses": {
+            "201": 37117,
+            "200": 142756,
+            "204": 37117,
+            "404": 39973,
+            "415": 2856,
+            "400": 21420,
+            "422": 57120,
+            "413": 1428,
+            "409": 2856,
+            "428": 2856,
+            "405": 1428,
+            "403": 1428
+          },
+          "valid_statuses": {
+            "201": 37117,
+            "200": 142756,
+            "204": 37117
+          },
+          "invalid_statuses": {
+            "404": 39973,
+            "415": 2856,
+            "400": 21420,
+            "422": 57120,
+            "413": 1428,
+            "409": 2856,
+            "428": 2856,
+            "405": 1428,
+            "403": 1428
+          },
+          "elapsed_seconds": 60.000663083,
+          "requests_per_second": 5805.8525039650685
+        }
+      ]
+    },
+    {
+      "server": "rust",
+      "stack": "raw",
+      "duration_seconds": 60,
+      "client_count": 4,
+      "requests": 1354205,
+      "valid_requests": 843490,
+      "invalid_requests": 510715,
+      "client_max_elapsed_seconds": 60.006328958,
+      "wall_seconds": 60.08375783399998,
+      "requests_per_second": 22567.702832610266,
+      "server_peak_rss_bytes": 3031040,
+      "contract_smoke_requests": 76,
+      "client_results": [
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 0,
+          "mode": "mixed",
+          "iterations": 34601,
+          "requests": 337772,
+          "valid_requests": 210376,
+          "invalid_requests": 127396,
+          "statuses": {
+            "201": 35986,
+            "200": 138404,
+            "204": 35986,
+            "404": 38756,
+            "415": 2770,
+            "400": 20775,
+            "422": 55400,
+            "413": 1385,
+            "409": 2770,
+            "428": 2770,
+            "405": 1385,
+            "403": 1385
+          },
+          "valid_statuses": {
+            "201": 35986,
+            "200": 138404,
+            "204": 35986
+          },
+          "invalid_statuses": {
+            "404": 38756,
+            "415": 2770,
+            "400": 20775,
+            "422": 55400,
+            "413": 1385,
+            "409": 2770,
+            "428": 2770,
+            "405": 1385,
+            "403": 1385
+          },
+          "elapsed_seconds": 60.006263708,
+          "requests_per_second": 5628.945698796581
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 1,
+          "mode": "mixed",
+          "iterations": 34837,
+          "requests": 340045,
+          "valid_requests": 211810,
+          "invalid_requests": 128235,
+          "statuses": {
+            "201": 36231,
+            "200": 139348,
+            "204": 36231,
+            "404": 39019,
+            "415": 2788,
+            "400": 20910,
+            "422": 55760,
+            "413": 1394,
+            "409": 2788,
+            "428": 2788,
+            "405": 1394,
+            "403": 1394
+          },
+          "valid_statuses": {
+            "201": 36231,
+            "200": 139348,
+            "204": 36231
+          },
+          "invalid_statuses": {
+            "404": 39019,
+            "415": 2788,
+            "400": 20910,
+            "422": 55760,
+            "413": 1394,
+            "409": 2788,
+            "428": 2788,
+            "405": 1394,
+            "403": 1394
+          },
+          "elapsed_seconds": 60.000492667,
+          "requests_per_second": 5667.370131229326
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 2,
+          "mode": "mixed",
+          "iterations": 34601,
+          "requests": 337772,
+          "valid_requests": 210376,
+          "invalid_requests": 127396,
+          "statuses": {
+            "201": 35986,
+            "200": 138404,
+            "204": 35986,
+            "404": 38756,
+            "415": 2770,
+            "400": 20775,
+            "422": 55400,
+            "413": 1385,
+            "409": 2770,
+            "428": 2770,
+            "405": 1385,
+            "403": 1385
+          },
+          "valid_statuses": {
+            "201": 35986,
+            "200": 138404,
+            "204": 35986
+          },
+          "invalid_statuses": {
+            "404": 38756,
+            "415": 2770,
+            "400": 20775,
+            "422": 55400,
+            "413": 1385,
+            "409": 2770,
+            "428": 2770,
+            "405": 1385,
+            "403": 1385
+          },
+          "elapsed_seconds": 60.006328958,
+          "requests_per_second": 5628.939577963776
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 3,
+          "mode": "mixed",
+          "iterations": 34692,
+          "requests": 338616,
+          "valid_requests": 210928,
+          "invalid_requests": 127688,
+          "statuses": {
+            "201": 36080,
+            "200": 138768,
+            "204": 36080,
+            "404": 38856,
+            "415": 2776,
+            "400": 20820,
+            "422": 55520,
+            "413": 1388,
+            "409": 2776,
+            "428": 2776,
+            "405": 1388,
+            "403": 1388
+          },
+          "valid_statuses": {
+            "201": 36080,
+            "200": 138768,
+            "204": 36080
+          },
+          "invalid_statuses": {
+            "404": 38856,
+            "415": 2776,
+            "400": 20820,
+            "422": 55520,
+            "413": 1388,
+            "409": 2776,
+            "428": 2776,
+            "405": 1388,
+            "403": 1388
+          },
+          "elapsed_seconds": 60.000183833,
+          "requests_per_second": 5643.582708720998
+        }
+      ]
+    },
+    {
+      "server": "python",
+      "stack": "raw",
+      "duration_seconds": 60,
+      "client_count": 4,
+      "requests": 695977,
+      "valid_requests": 433466,
+      "invalid_requests": 262511,
+      "client_max_elapsed_seconds": 60.001861958,
+      "wall_seconds": 60.159655292,
+      "requests_per_second": 11599.25671118621,
+      "server_peak_rss_bytes": 23740416,
+      "contract_smoke_requests": 76,
+      "client_results": [
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 0,
+          "mode": "mixed",
+          "iterations": 17951,
+          "requests": 175268,
+          "valid_requests": 109144,
+          "invalid_requests": 66124,
+          "statuses": {
+            "201": 18670,
+            "200": 71804,
+            "204": 18670,
+            "404": 20108,
+            "415": 1438,
+            "400": 10785,
+            "422": 28760,
+            "413": 719,
+            "409": 1438,
+            "428": 1438,
+            "405": 719,
+            "403": 719
+          },
+          "valid_statuses": {
+            "201": 18670,
+            "200": 71804,
+            "204": 18670
+          },
+          "invalid_statuses": {
+            "404": 20108,
+            "415": 1438,
+            "400": 10785,
+            "422": 28760,
+            "413": 719,
+            "409": 1438,
+            "428": 1438,
+            "405": 719,
+            "403": 719
+          },
+          "elapsed_seconds": 60.001861958,
+          "requests_per_second": 2921.0426856867175
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 1,
+          "mode": "mixed",
+          "iterations": 17761,
+          "requests": 173386,
+          "valid_requests": 107988,
+          "invalid_requests": 65398,
+          "statuses": {
+            "201": 18472,
+            "200": 71044,
+            "204": 18472,
+            "404": 19894,
+            "415": 1422,
+            "400": 10665,
+            "422": 28440,
+            "413": 711,
+            "409": 1422,
+            "428": 1422,
+            "405": 711,
+            "403": 711
+          },
+          "valid_statuses": {
+            "201": 18472,
+            "200": 71044,
+            "204": 18472
+          },
+          "invalid_statuses": {
+            "404": 19894,
+            "415": 1422,
+            "400": 10665,
+            "422": 28440,
+            "413": 711,
+            "409": 1422,
+            "428": 1422,
+            "405": 711,
+            "403": 711
+          },
+          "elapsed_seconds": 60.001013542,
+          "requests_per_second": 2889.717852493139
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 2,
+          "mode": "mixed",
+          "iterations": 17788,
+          "requests": 173644,
+          "valid_requests": 108152,
+          "invalid_requests": 65492,
+          "statuses": {
+            "201": 18500,
+            "200": 71152,
+            "204": 18500,
+            "404": 19924,
+            "415": 1424,
+            "400": 10680,
+            "422": 28480,
+            "413": 712,
+            "409": 1424,
+            "428": 1424,
+            "405": 712,
+            "403": 712
+          },
+          "valid_statuses": {
+            "201": 18500,
+            "200": 71152,
+            "204": 18500
+          },
+          "invalid_statuses": {
+            "404": 19924,
+            "415": 1424,
+            "400": 10680,
+            "422": 28480,
+            "413": 712,
+            "409": 1424,
+            "428": 1424,
+            "405": 712,
+            "403": 712
+          },
+          "elapsed_seconds": 60.000225125,
+          "requests_per_second": 2894.055807928104
+        },
+        {
+          "schema": "ember.soak-client.result.v1",
+          "worker": 3,
+          "mode": "mixed",
+          "iterations": 17793,
+          "requests": 173679,
+          "valid_requests": 108182,
+          "invalid_requests": 65497,
+          "statuses": {
+            "201": 18505,
+            "200": 71172,
+            "204": 18505,
+            "404": 19929,
+            "415": 1424,
+            "400": 10680,
+            "422": 28480,
+            "413": 712,
+            "409": 1424,
+            "428": 1424,
+            "405": 712,
+            "403": 712
+          },
+          "valid_statuses": {
+            "201": 18505,
+            "200": 71172,
+            "204": 18505
+          },
+          "invalid_statuses": {
+            "404": 19929,
+            "415": 1424,
+            "400": 10680,
+            "422": 28480,
+            "413": 712,
+            "409": 1424,
+            "428": 1424,
+            "405": 712,
+            "403": 712
+          },
+          "elapsed_seconds": 60.000505916,
+          "requests_per_second": 2894.6255927099774
+        }
+      ]
+    }
+  ],
+  "json_result": "bench/polyglot/results/raw-http-rps-2026-07-30-115610-+0300.json"
+}

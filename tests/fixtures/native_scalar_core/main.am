@@ -2,6 +2,14 @@ package native.scalar_core
 
 export main
 
+class ScalarRoute:
+  attr method
+  def init(@method)
+
+class ScalarCandidate:
+  attr route
+  def init(@route)
+
 def main():
   score = 0
   if (-5).abs() == 5:
@@ -30,4 +38,7 @@ def main():
       and 4 == 4
     if multiline:
       score = score + 1
+  methods = [ScalarCandidate(ScalarRoute("GET"))].map: _1.route.method
+  if methods == ["GET"]:
+    score = score + 1
   score

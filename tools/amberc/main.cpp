@@ -6047,7 +6047,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           out << "  throw NativeBailout();\n";
         } else if (direct_chars_each_block_code_id.has_value()) {
           out << "  {\n";
-          out << "    NativeClosure invocation = *as_closure("
+          out << "    NativeClosure *invocation = as_closure("
               << read_reg_expr(static_cast<std::uint32_t>(block_reg))
               << ");\n";
           out << "    std::size_t direct_each_iterations = 0;\n";
@@ -6055,7 +6055,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               << ", [&](NativeValue item) {\n";
           out << "          (void)"
               << native_cpp_function_name(*direct_chars_each_block_code_id)
-              << "({std::move(item)}, &invocation, nullptr);\n";
+              << "({std::move(item)}, invocation, nullptr);\n";
           out << "          if ((++direct_each_iterations & 255U) == 0U) "
                  "native_cycle_checkpoint_if_due();\n";
           out << "          return true;\n";

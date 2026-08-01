@@ -24634,6 +24634,31 @@ private:
           *out = Value::boolean(self.find(needle) != std::string::npos);
           return SendStatus::Matched;
         }
+        if (selector == "contains_only?") {
+          if (!require_arity(1) || !require_no_block()) {
+            return SendStatus::Faulted;
+          }
+          std::string allowed;
+          if (!arg_str(0, &allowed)) {
+            return SendStatus::Faulted;
+          }
+          for (std::size_t i = 0; i < self.size();) {
+            const std::size_t j = next_cp(i);
+            const std::size_t length = j - i;
+            const bool present =
+                length == 1U
+                    ? allowed.find(self[i]) != std::string::npos
+                    : allowed.find(self.data() + i, 0U, length) !=
+                          std::string::npos;
+            if (!present) {
+              *out = Value::boolean(false);
+              return SendStatus::Matched;
+            }
+            i = j;
+          }
+          *out = Value::boolean(true);
+          return SendStatus::Matched;
+        }
         if (selector == "starts_with?") {
           if (!require_arity(1) || !require_no_block()) {
             return SendStatus::Faulted;

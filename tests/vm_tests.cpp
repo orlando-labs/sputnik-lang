@@ -3985,6 +3985,26 @@ void test_execute_emitted_block_map_suffixes() {
                       "explicit param indented map block");
 }
 
+void test_string_contains_only() {
+  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+      "[\"header-name\".contains_only?(\"abcdefghijklmnopqrstuvwxyz-\"), "
+      "\"bad name\".contains_only?(\"abcdefghijklmnopqrstuvwxyz-\"), "
+      "\"hé!\".contains_only?(\"!éh\"), "
+      "\"\".contains_only?(\"\"), \"x\".contains_only?(\"\")]\n");
+  expect(exec.ok(), "String#contains_only? should execute");
+  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> parts =
+      exec.value.is_list() ? exec.value.as_list() : nullptr;
+  expect(parts != nullptr && parts->items.size() == 5,
+         "String#contains_only? result shape");
+  expect(parts != nullptr && parts->items[0].is_bool() &&
+             parts->items[0].as_bool() && parts->items[1].is_bool() &&
+             !parts->items[1].as_bool() && parts->items[2].is_bool() &&
+             parts->items[2].as_bool() && parts->items[3].is_bool() &&
+             parts->items[3].as_bool() && parts->items[4].is_bool() &&
+             !parts->items[4].as_bool(),
+         "String#contains_only? preserves ASCII, UTF-8, and empty semantics");
+}
+
 void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {
   const amber::runtime::ExecutionResult exec = execute_emitted_init(
       "class Box:\n"
@@ -10928,6 +10948,7 @@ int main() {
   test_execute_emitted_control_condition_assignment();
   test_execute_emitted_block_map_suffixes();
   test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
+  test_string_contains_only();
   test_runtime_world_persists_runtime_strings_between_execute_calls();
   test_runtime_world_shared_module_keeps_runtime_names_private();
   test_runtime_world_reuses_native_bridge_session_after_stdlib_fault();

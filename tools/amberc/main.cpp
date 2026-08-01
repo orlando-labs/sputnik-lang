@@ -1378,6 +1378,7 @@ bool native_cpp_collection_selector(const std::string &selector,
          (selector == "deleted" && pos_count == 1U) ||
          ((selector == "take" || selector == "drop") && pos_count == 1U) ||
          ((selector == "contains?" || selector == "includes?" ||
+           selector == "contains_only?" ||
            selector == "include?" || selector == "member?" ||
            selector == "has_key?" || selector == "key?" ||
            selector == "value?" || selector == "has_value?" ||
@@ -6156,6 +6157,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                  selector == "include?" || selector == "member?" ||
                  selector == "has_key?" || selector == "key?") {
         write_reg_stmt(dst, "native_contains(" + read_reg_expr(recv) + ", " +
+                                read_reg_expr(arg) + ")");
+      } else if (selector == "contains_only?") {
+        write_reg_stmt(dst, "native_string_contains_only(" +
+                                read_reg_expr(recv) + ", " +
                                 read_reg_expr(arg) + ")");
       } else if (selector == "value?" || selector == "has_value?") {
         write_reg_stmt(dst, "native_map_has_value(" + read_reg_expr(recv) +
@@ -11306,6 +11311,27 @@ static void native_append_keyword_call_spread(
   out << "  }\n";
   out << "  return NativeValue::boolean(text.find(needle_text) != "
          "std::string::npos);\n";
+  out << "}\n\n";
+  out << "static NativeValue native_string_contains_only("
+         "const NativeValue &value, const NativeValue &allowed_value) {\n";
+  out << "  if (!native_value_is_string(value) || "
+         "!native_value_is_string(allowed_value)) throw NativeBailout();\n";
+  out << "  const std::string &text = native_string_text(value);\n";
+  out << "  const std::string &allowed = "
+         "native_string_text(allowed_value);\n";
+  out << "  for (std::size_t i = 0; i < text.size();) {\n";
+  out << "    std::size_t j = i + 1U;\n";
+  out << "    while (j < text.size() && "
+         "(static_cast<unsigned char>(text[j]) & 0xC0U) == 0x80U) ++j;\n";
+  out << "    const std::size_t length = j - i;\n";
+  out << "    const bool present = length == 1U "
+         "? allowed.find(text[i]) != std::string::npos "
+         ": allowed.find(text.data() + i, 0U, length) != "
+         "std::string::npos;\n";
+  out << "    if (!present) return NativeValue::boolean(false);\n";
+  out << "    i = j;\n";
+  out << "  }\n";
+  out << "  return NativeValue::boolean(true);\n";
   out << "}\n\n";
   out << "static std::size_t native_utf8_next_cp(const std::string &text, "
          "std::size_t i) {\n";

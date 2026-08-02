@@ -312,10 +312,17 @@ def arguments():
   parser.arg("--host", default: "127.0.0.1")
   parser.arg("--port", type: Int, default: 3340)
   parser.arg("--workers", type: Int, default: 4)
+  parser.arg(
+    "--max-requests-per-connection",
+    name: "max_requests_per_connection",
+    type: Int,
+    default: 500)
   parser.parse_or_raise()
 
 def main():
   args = arguments()
+  unless args["max_requests_per_connection"] > 0:
+    raise ArgumentError("max-requests-per-connection must be positive")
   store = MemoryStore()
   Server(
     host: args["host"],
@@ -328,5 +335,5 @@ def main():
     read_timeout: 15.0,
     write_timeout: 15.0,
     idle_timeout: 10.0,
-    max_requests_per_connection: 500).serve() |request|:
+    max_requests_per_connection: args["max_requests_per_connection"]).serve() |request|:
       raw_handle(request, store)

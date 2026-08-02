@@ -11,6 +11,7 @@
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -96,6 +97,12 @@ public:
   // that could not be registered (e.g. EBADF) so the reactor can fail their
   // waiters with Closed.
   std::vector<int> sync(const std::map<int, std::pair<bool, bool>> &desired);
+
+  // Forget backend bookkeeping for a descriptor before it can be reused by a
+  // different socket. close(2) removes the kernel registration, but without
+  // erasing this mirror a same-number fd can be mistaken for the old one and
+  // skipped by the next sync.
+  void invalidate(int fd);
 
   // Block up to timeout_ms (<0 = infinite) for readiness. Drains the wake pipe
   // internally and never reports it as a ready fd.
@@ -336,6 +343,25 @@ void PollBackend::poll(int timeout_ms, std::vector<ReadyFd> &out) {
 
 #endif
 
+void PollBackend::invalidate(int fd) {
+  const auto found = registered_.find(fd);
+  if (found == registered_.end()) {
+    return;
+  }
+#if defined(AMBER_REACTOR_KQUEUE)
+  bool bad = false;
+  if (found->second.first) {
+    (void)kq_apply(kq_, fd, EVFILT_READ, EV_DELETE, &bad);
+  }
+  if (found->second.second) {
+    (void)kq_apply(kq_, fd, EVFILT_WRITE, EV_DELETE, &bad);
+  }
+#elif defined(AMBER_REACTOR_EPOLL)
+  (void)::epoll_ctl(ep_, EPOLL_CTL_DEL, fd, nullptr);
+#endif
+  registered_.erase(found);
+}
+
 } // namespace
 
 class RuntimeReactor::Impl {
@@ -411,6 +437,7 @@ public:
   void notify_closed(int fd) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
+      invalidated_fds_.insert(fd);
       for (auto &[id, w] : waiters_) {
         (void)id;
         if (w.fd == fd && !w.done) {
@@ -548,6 +575,10 @@ private:
           }
         }
 
+        for (const int fd : invalidated_fds_) {
+          backend_.invalidate(fd);
+        }
+        invalidated_fds_.clear();
         const std::vector<int> failed = backend_.sync(desired);
         for (const int fd : failed) {
           for (auto &[id, w] : waiters_) {
@@ -581,7 +612,20 @@ private:
       {
         std::lock_guard<std::mutex> lock(mutex_);
         ++stats_.loop_wakeups;
+        // A close can race the backend wake and fd-number reuse. Invalidate
+        // before consuming the returned readiness batch, and ignore stale
+        // events for those descriptors; the next loop re-registers any waiter
+        // belonging to the new resource.
+        std::unordered_set<int> invalidated_after_poll;
+        invalidated_after_poll.swap(invalidated_fds_);
+        for (const int fd : invalidated_after_poll) {
+          backend_.invalidate(fd);
+        }
         for (const ReadyFd &rf : ready) {
+          if (invalidated_after_poll.find(rf.fd) !=
+              invalidated_after_poll.end()) {
+            continue;
+          }
           for (auto &[id, w] : waiters_) {
             (void)id;
             if (w.done || w.fd != rf.fd) {
@@ -607,6 +651,7 @@ private:
   std::unordered_map<std::uint64_t, Waiter> waiters_;
   std::uint64_t next_wait_id_ = 1;
   bool running_ = true;
+  std::unordered_set<int> invalidated_fds_;
   ReactorStats stats_;
   PollBackend backend_;
   std::thread thread_;

@@ -2188,6 +2188,9 @@ private:
   }
 
   static bool atomic_value_equals(const Value &lhs, const Value &rhs) {
+    if (lhs.is_string() && rhs.is_string()) {
+      return value_equals(lhs, rhs);
+    }
     if (lhs.kind_index() != rhs.kind_index()) {
       return false;
     }
@@ -2205,9 +2208,6 @@ private:
     }
     if (lhs.is_symbol()) {
       return lhs.as_symbol().symbol_id == rhs.as_symbol().symbol_id;
-    }
-    if (lhs.is_string()) {
-      return lhs.as_string().string_id == rhs.as_string().string_id;
     }
     if (lhs.is_class_object()) {
       return lhs.as_class_object().class_index ==

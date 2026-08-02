@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
 import os
 import platform
@@ -28,6 +29,7 @@ AMBER_SERVER_NAMES = {
     "ember": "amber.bench.polyglot.http_rps_server",
 }
 AMBER_CLIENT_NAME = "ember.example.soak.client"
+PINNED_CLIENT = BUILD / "amber-client-pinned" / AMBER_CLIENT_NAME
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -52,39 +54,17 @@ def captured(args: Sequence[str], cwd: Path = ROOT) -> str:
     return result.stdout.strip().splitlines()[0]
 
 
-def build_all(
-    compiler: Path,
-    stack: str,
-    languages: Sequence[str],
-) -> Dict[str, Path]:
-    amber_out = BUILD / f"amber-{stack}-server"
-    client_out = BUILD / "amber-client"
-    go_out = BUILD / "go-server"
-    rust_out = BUILD / "rust-server"
-    for directory in (amber_out, client_out, go_out, rust_out):
-        directory.mkdir(parents=True, exist_ok=True)
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    if "amber" in languages:
-        command(
-            [
-                str(compiler),
-                "build",
-                f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
-                if stack == "raw"
-                else "bench/polyglot/amber/http_rps_server.build.yaml",
-                "--target",
-                "native",
-                "--out-dir",
-                str(amber_out),
-                "--cache-dir",
-                str(amber_out / "cache"),
-                "--require-full-native",
-                "--grant",
-                "net.listen",
-                "--grant",
-                "random.secure",
-            ]
-        )
+
+def refresh_client_pin(compiler: Path) -> None:
+    client_out = PINNED_CLIENT.parent
+    client_out.mkdir(parents=True, exist_ok=True)
     command(
         [
             str(compiler),
@@ -102,6 +82,43 @@ def build_all(
         ],
         cwd=EMBER,
     )
+
+
+def build_all(
+    compiler: Path,
+    client: Path,
+    stack: str,
+    languages: Sequence[str],
+    amber_execution: str,
+) -> Dict[str, Path]:
+    amber_out = BUILD / f"amber-{stack}-server-{amber_execution}"
+    go_out = BUILD / "go-server"
+    rust_out = BUILD / "rust-server"
+    for directory in (amber_out, go_out, rust_out):
+        directory.mkdir(parents=True, exist_ok=True)
+
+    if "amber" in languages and amber_execution == "native":
+        amber_build = [
+            str(compiler),
+            "build",
+            f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+            if stack == "raw"
+            else "bench/polyglot/amber/http_rps_server.build.yaml",
+            "--target",
+            "native",
+            "--out-dir",
+            str(amber_out),
+            "--cache-dir",
+            str(amber_out / "cache"),
+        ]
+        amber_build.append("--require-full-native")
+        amber_build += [
+            "--grant",
+            "net.listen",
+            "--grant",
+            "random.secure",
+        ]
+        command(amber_build)
     if "go" in languages:
         go_env = os.environ.copy()
         go_env["GOCACHE"] = str(BUILD / "go-cache")
@@ -127,8 +144,17 @@ def build_all(
             ]
         )
     return {
-        "amber": amber_out / AMBER_SERVER_NAMES[stack],
-        "client": client_out / AMBER_CLIENT_NAME,
+        "amber": (
+            amber_out / AMBER_SERVER_NAMES[stack]
+            if amber_execution == "native"
+            else (
+                ROOT / f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+                if stack == "raw"
+                else ROOT / "bench/polyglot/amber/http_rps_server.build.yaml"
+            )
+        ),
+        "compiler": compiler,
+        "client": client,
         "go": go_out / "http-rps-server",
         "rust": rust_out / "http-rps-server",
         "python": ROOT / "bench/polyglot/python/http_rps_server.py",
@@ -136,10 +162,23 @@ def build_all(
     }
 
 
-def built_paths(stack: str) -> Dict[str, Path]:
+def built_paths(
+    compiler: Path, client: Path, stack: str, amber_execution: str
+) -> Dict[str, Path]:
     return {
-        "amber": BUILD / f"amber-{stack}-server" / AMBER_SERVER_NAMES[stack],
-        "client": BUILD / "amber-client" / AMBER_CLIENT_NAME,
+        "amber": (
+            BUILD
+            / f"amber-{stack}-server-{amber_execution}"
+            / AMBER_SERVER_NAMES[stack]
+            if amber_execution == "native"
+            else (
+                ROOT / f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+                if stack == "raw"
+                else ROOT / "bench/polyglot/amber/http_rps_server.build.yaml"
+            )
+        ),
+        "compiler": compiler,
+        "client": client,
         "go": BUILD / "go-server" / "http-rps-server",
         "rust": BUILD / "rust-server" / "http-rps-server",
         "python": ROOT / "bench/polyglot/python/http_rps_server.py",
@@ -275,17 +314,34 @@ def run_one(
     clients: int,
     port: int,
     stack: str,
+    amber_execution: str,
+    sample_seconds: int,
+    server_max_requests_per_connection: int | None,
 ) -> Dict[str, Any]:
     if name == "amber":
-        server_args = [
-            str(paths[name]),
-            "--host",
-            "127.0.0.1",
-            "--port",
-            str(port),
-            "--workers",
-            "4",
+        program_args = [
+            "--host", "127.0.0.1", "--port", str(port), "--workers", "4"
         ]
+        if stack == "raw" and server_max_requests_per_connection is not None:
+            program_args += [
+                "--max-requests-per-connection",
+                str(server_max_requests_per_connection),
+            ]
+        server_args = (
+            [str(paths[name]), *program_args]
+            if amber_execution == "native"
+            else [
+                str(paths["compiler"]),
+                "run",
+                str(paths[name]),
+                "--grant",
+                "net.listen",
+                "--grant",
+                "random.secure",
+                "--",
+                *program_args,
+            ]
+        )
     elif name in {"go", "rust"}:
         server_args = [str(paths[name]), "--host", "127.0.0.1", "--port", str(port)]
     elif name == "python":
@@ -306,7 +362,7 @@ def run_one(
     else:
         raise RuntimeError(f"unknown server {name}")
 
-    run_dir = BUILD / "runs" / name
+    run_dir = BUILD / "runs" / f"{name}-{stack}-{amber_execution}"
     run_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://127.0.0.1:{port}"
     print(f"\n== {name}: contract smoke + {duration}s measurement ==", flush=True)
@@ -347,6 +403,24 @@ def run_one(
                 )
                 for worker in range(clients)
             ]
+            sample_path = run_dir / "server.sample.txt"
+            sampler = (
+                subprocess.Popen(
+                    [
+                        "/usr/bin/sample",
+                        str(server.pid),
+                        str(min(sample_seconds, duration)),
+                        "1",
+                        "-file",
+                        str(sample_path),
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                )
+                if sample_seconds
+                else None
+            )
             peak_rss = server_rss(server.pid)
             deadline = time.monotonic() + duration + 45.0
             while any(process.poll() is None for process in processes):
@@ -370,6 +444,12 @@ def run_one(
                         f"{name} client {worker} failed ({process.returncode}): {error[-2000:]}"
                     )
                 client_results.append(parse_client_output(output, f"{name} client {worker}"))
+            if sampler is not None:
+                _, sample_error = sampler.communicate(timeout=10.0)
+                if sampler.returncode != 0:
+                    raise RuntimeError(
+                        f"{name} sample failed ({sampler.returncode}): {sample_error}"
+                    )
 
             elapsed = max(float(result["elapsed_seconds"]) for result in client_results)
             requests = sum(int(result["requests"]) for result in client_results)
@@ -378,6 +458,7 @@ def run_one(
             result = {
                 "server": name,
                 "stack": stack if name in {"amber", "rails"} else "raw",
+                "execution": amber_execution if name == "amber" else "native",
                 "duration_seconds": duration,
                 "client_count": clients,
                 "requests": requests,
@@ -388,6 +469,12 @@ def run_one(
                 "requests_per_second": requests / elapsed,
                 "server_peak_rss_bytes": peak_rss,
                 "contract_smoke_requests": smoke_result["requests"],
+                "sample_profile": str(sample_path) if sampler is not None else None,
+                "server_max_requests_per_connection": (
+                    server_max_requests_per_connection
+                    if name == "amber" and stack == "raw"
+                    else None
+                ),
                 "client_results": client_results,
             }
             print(json.dumps({k: v for k, v in result.items() if k != "client_results"}), flush=True)
@@ -396,8 +483,10 @@ def run_one(
             terminate(server)
 
 
-def runtime_versions(languages: Sequence[str]) -> Dict[str, str]:
-    versions = {"amber": captured([str(ROOT / "build/amberc"), "--version"])}
+def runtime_versions(
+    languages: Sequence[str], compiler: Path
+) -> Dict[str, str]:
+    versions = {"amber": captured([str(compiler), "--version"])}
     if "go" in languages:
         versions["go"] = captured(["go", "version"])
     if "rust" in languages:
@@ -419,6 +508,7 @@ def runtime_versions(languages: Sequence[str]) -> Dict[str, str]:
 def markdown_report(payload: Dict[str, Any]) -> str:
     rows = payload["results"]
     stack = payload["stack"]
+    amber_execution = payload["amber_execution"]
     amber_rps = next(row["requests_per_second"] for row in rows if row["server"] == "amber")
     relative = {
         row["server"]: row["requests_per_second"] / amber_rps
@@ -426,9 +516,17 @@ def markdown_report(payload: Dict[str, Any]) -> str:
     }
     labels = {
         "amber": (
-            "Amber `net.http` (full native; VM-independent server)"
-            if stack == "raw"
-            else "Amber + Ember (full native; VM-independent server)"
+            (
+                "Amber `net.http` (full native; VM-independent server)"
+                if stack == "raw"
+                else "Amber + Ember (full native; VM-independent server)"
+            )
+            if amber_execution == "native"
+            else (
+                "Amber `net.http` (interpreted bytecode VM)"
+                if stack == "raw"
+                else "Amber + Ember (interpreted bytecode VM)"
+            )
         ),
         "go": "Go `net/http`",
         "rust": "Rust `std::net`",
@@ -444,9 +542,11 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         f"Date: `{payload['timestamp']}`<br>",
         f"Host: `{payload['host']}`<br>",
-        "Client: the unchanged native-body-covered Amber client from "
-        "`ember/examples/soak/client.am` (`vm-stdlib-send-v1` client bridge)<br>",
+        "Client: pinned native-body-covered Amber client from "
+        f"`ember/examples/soak/client.am`; SHA-256 `{payload['client']['sha256']}` "
+        "(`vm-stdlib-send-v1` client bridge)<br>",
         f"Stack: `{stack}`<br>",
+        f"Amber execution: `{amber_execution}`<br>",
         f"Load: `{payload['client_count']}` concurrent clients, `{payload['duration_seconds']}` seconds per server, `mixed`, negative suite every 25 iterations.",
         "",
         "| Server | RPS | Requests | Valid | Invalid | Peak server RSS | vs Amber |",
@@ -471,19 +571,27 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         for name in (("go", "rust", "python") if stack == "raw" else ("rails",))
         if name in relative
     ]
-    comparison = (
-        ", ".join(competitors) + f" the Amber {stack} throughput"
-        if competitors
-        else "This run contains only the Amber/Ember baseline"
-    )
+    comparison = ", ".join(competitors) + f" the Amber {stack} throughput"
     lines += [
         "",
         "## Reading",
         "",
         (
-            f"On this workload, {comparison}. The raw lane bypasses Ember and isolates language/runtime, HTTP, JSON, validation, and in-memory-store costs."
+            (
+                f"On this workload, {comparison}. "
+                if competitors
+                else "This run contains only the Amber/Ember baseline. "
+            )
+            + "The raw lane bypasses Ember and isolates language/runtime, HTTP, JSON, validation, and in-memory-store costs."
             if stack == "raw"
-            else f"On this workload, {comparison}. This lane intentionally measures the complete Ember request flow; compare it with similarly featured framework servers, not the manual raw servers."
+            else (
+                (
+                    f"On this workload, {comparison}. "
+                    if competitors
+                    else "This run contains only the Amber/Ember baseline. "
+                )
+                + "This lane intentionally measures the complete Ember request flow; compare it with similarly featured framework servers, not the manual raw servers."
+            )
         ),
         "",
         "## Method",
@@ -504,7 +612,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "## Reproduce",
         "",
         "```sh",
-        f"python3 bench/polyglot/run_http_rps.py --stack {stack} --duration 60 --clients 4",
+        f"python3 bench/polyglot/run_http_rps.py --stack {stack} --amber-execution {amber_execution} --duration 60 --clients 4 --client {payload['client']['path']}",
         "```",
         "",
         f"Machine-readable result: `{payload['json_result']}`.",
@@ -523,16 +631,43 @@ def parse_args() -> argparse.Namespace:
         help="comma-separated servers (default: raw=amber,go,rust,python; ember=amber,rails)",
     )
     parser.add_argument("--stack", choices=("raw", "ember"), default="raw")
+    parser.add_argument(
+        "--amber-execution", choices=("native", "vm"), default="native"
+    )
     parser.add_argument("--compiler", type=Path, default=ROOT / "build/amberc")
+    parser.add_argument(
+        "--client",
+        type=Path,
+        default=PINNED_CLIENT,
+        help="prebuilt native Amber load client; never rebuilt implicitly",
+    )
+    parser.add_argument(
+        "--refresh-client-pin",
+        action="store_true",
+        help="explicitly rebuild the default pinned client before running",
+    )
     parser.add_argument("--skip-build", action="store_true")
+    parser.add_argument("--sample-seconds", type=int, default=0)
+    parser.add_argument(
+        "--server-max-requests-per-connection",
+        type=int,
+        help="override the raw Amber server keep-alive rotation limit",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    if args.duration <= 0 or args.clients <= 0:
+    if args.duration <= 0 or args.clients <= 0 or args.sample_seconds < 0:
         raise RuntimeError("duration and clients must be positive")
+    if (
+        args.server_max_requests_per_connection is not None
+        and args.server_max_requests_per_connection <= 0
+    ):
+        raise RuntimeError(
+            "server-max-requests-per-connection must be positive"
+        )
     language_text = args.languages or (
         "amber,go,rust,python" if args.stack == "raw" else "amber,rails"
     )
@@ -548,12 +683,26 @@ def main() -> None:
     if "amber" not in languages:
         raise RuntimeError("the Amber baseline must be included")
     compiler = args.compiler.resolve()
+    client = args.client.resolve()
+    if args.refresh_client_pin:
+        if client != PINNED_CLIENT.resolve():
+            raise RuntimeError(
+                "--refresh-client-pin only updates the default pinned client"
+            )
+        refresh_client_pin(compiler)
     paths = (
-        built_paths(args.stack)
+        built_paths(compiler, client, args.stack, args.amber_execution)
         if args.skip_build
-        else build_all(compiler, args.stack, languages)
+        else build_all(
+            compiler, client, args.stack, languages, args.amber_execution
+        )
     )
     ensure_paths(paths, languages)
+    client_sha256 = sha256_file(paths["client"])
+    print(
+        f"Pinned client: {paths['client']} (sha256:{client_sha256})",
+        flush=True,
+    )
     results = [
         run_one(
             name,
@@ -562,26 +711,34 @@ def main() -> None:
             args.clients,
             args.port + index,
             args.stack,
+            args.amber_execution,
+            args.sample_seconds,
+            args.server_max_requests_per_connection,
         )
         for index, name in enumerate(languages)
     ]
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
-    result_stem = f"{args.stack}-http-rps-{stamp}"
+    result_stem = f"{args.stack}-http-rps-{args.amber_execution}-{stamp}"
     json_path = RESULTS / f"{result_stem}.json"
     markdown_path = (
         args.output.resolve() if args.output else RESULTS / f"{result_stem}.md"
     )
     payload = {
-        "schema": "amber.polyglot.http-rps.v3",
+        "schema": "amber.polyglot.http-rps.v4",
         "stack": args.stack,
+        "amber_execution": args.amber_execution,
         "timestamp": dt.datetime.now().astimezone().isoformat(),
         "host": f"{platform.system()} {platform.release()} / {platform.machine()} / {platform.processor()}",
         "duration_seconds": args.duration,
         "client_count": args.clients,
         "languages": languages,
-        "versions": runtime_versions(languages),
+        "client": {
+            "path": str(paths["client"]),
+            "sha256": client_sha256,
+        },
+        "versions": runtime_versions(languages, compiler),
         "results": results,
         "json_result": str(json_path.relative_to(ROOT)),
     }

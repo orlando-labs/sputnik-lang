@@ -249,6 +249,11 @@ Value Value::string(std::uint32_t string_id) {
   return {StringValue{string_id}};
 }
 
+Value
+Value::heap_string(std::shared_ptr<RuntimeHeapStringValue> value) {
+  return {std::move(value)};
+}
+
 Value Value::class_object(std::uint32_t class_index) {
   return {ClassObjectValue{class_index}};
 }
@@ -400,7 +405,14 @@ bool Value::is_symbol() const {
 }
 
 bool Value::is_string() const {
-  return std::holds_alternative<StringValue>(payload);
+  return std::holds_alternative<StringValue>(payload) ||
+         std::holds_alternative<std::shared_ptr<RuntimeHeapStringValue>>(
+             payload);
+}
+
+bool Value::is_heap_string() const {
+  return std::holds_alternative<std::shared_ptr<RuntimeHeapStringValue>>(
+      payload);
 }
 
 bool Value::is_class_object() const {
@@ -568,6 +580,10 @@ double Value::as_float() const { return std::get<double>(payload); }
 SymbolValue Value::as_symbol() const { return std::get<SymbolValue>(payload); }
 
 StringValue Value::as_string() const { return std::get<StringValue>(payload); }
+
+std::shared_ptr<RuntimeHeapStringValue> Value::as_heap_string() const {
+  return std::get<std::shared_ptr<RuntimeHeapStringValue>>(payload);
+}
 
 ClassObjectValue Value::as_class_object() const {
   return std::get<ClassObjectValue>(payload);
@@ -923,7 +939,9 @@ bool Value::is_bool() const { return tag_ == ValueTag::Bool; }
 bool Value::is_integer() const { return tag_ == ValueTag::Int; }
 bool Value::is_float() const { return tag_ == ValueTag::Float; }
 bool Value::is_symbol() const { return tag_ == ValueTag::Symbol; }
-bool Value::is_string() const { return tag_ == ValueTag::String; }
+bool Value::is_string() const {
+  return tag_ == ValueTag::String || is_heap_string();
+}
 bool Value::is_class_object() const { return tag_ == ValueTag::ClassObject; }
 bool Value::is_native_type() const { return tag_ == ValueTag::NativeType; }
 bool Value::is_native_function() const {

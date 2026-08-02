@@ -39,11 +39,14 @@ python3 bench/polyglot/run_benchmark.py --workload string-ops --repeats 3
 python3 bench/polyglot/run_benchmark.py --workload map-words --repeats 3
 ```
 
-The HTTP RPS benchmark is a separate server-side comparison. It compiles the
-unchanged Amber client from the sibling Ember checkout with complete generated
-native-body coverage and uses that same executable, with the soak workload's
-default four clients, against raw Amber `net.http`, Go, Rust, and Python
-servers. This is deliberately not called full native execution: current
+The HTTP RPS benchmark is a separate server-side comparison. It uses one
+explicitly pinned Amber client from the sibling Ember checkout, built with
+complete generated native-body coverage, with the soak workload's default four
+clients against raw Amber `net.http`, Go, Rust, and Python servers. The runner
+never rebuilds this client implicitly: use `--refresh-client-pin` once when the
+client/runtime is intentionally changed, then reuse the reported path and
+SHA-256 for every comparison. This is deliberately not called full native
+execution: current
 `net.http` calls use the reported `vm-stdlib-send-v1` runtime bridge even when
 there is no bytecode-body fallback. Every server first has to
 pass the full 76-request mixed contract iteration (CRUD plus the schema/model-
@@ -51,6 +54,8 @@ validation and protocol negative suite); each accepted row is then measured
 for 60 seconds:
 
 ```sh
+python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4 \
+  --languages amber --refresh-client-pin
 python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4
 ```
 

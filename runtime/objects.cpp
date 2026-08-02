@@ -245,6 +245,22 @@ bool value_equals(const Value &lhs, const Value &rhs) {
     }
     return numeric_value_as_double(lhs) == numeric_value_as_double(rhs);
   }
+  if (lhs.is_string() && rhs.is_string()) {
+    if (lhs.is_heap_string() || rhs.is_heap_string()) {
+      if (!lhs.is_heap_string() || !rhs.is_heap_string()) {
+        // Runtime producers preserve the compact interned form whenever their
+        // text matches a module literal. A mixed pair therefore names distinct
+        // text without needing a VM table in this context-free equality layer.
+        return false;
+      }
+      const std::shared_ptr<RuntimeHeapStringValue> left =
+          lhs.as_heap_string();
+      const std::shared_ptr<RuntimeHeapStringValue> right =
+          rhs.as_heap_string();
+      return left != nullptr && right != nullptr && left->text == right->text;
+    }
+    return lhs.as_string().string_id == rhs.as_string().string_id;
+  }
   if (lhs.kind_index() != rhs.kind_index()) {
     return false;
   }
@@ -262,9 +278,6 @@ bool value_equals(const Value &lhs, const Value &rhs) {
   }
   if (lhs.is_symbol()) {
     return lhs.as_symbol().symbol_id == rhs.as_symbol().symbol_id;
-  }
-  if (lhs.is_string()) {
-    return lhs.as_string().string_id == rhs.as_string().string_id;
   }
   if (lhs.is_class_object()) {
     return lhs.as_class_object().class_index ==

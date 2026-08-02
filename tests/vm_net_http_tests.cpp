@@ -61,7 +61,9 @@ amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
 
   amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
       amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), "decode should succeed");
+  expect(decoded.ok(), "decode should succeed: " +
+                           amber::bytecode::verify_errors_to_json(
+                               decoded.errors));
   return std::move(decoded.module);
 }
 
@@ -278,6 +280,46 @@ amber::runtime::ExecutionResult run_with_server(const std::string &source,
                                                 const std::string &response,
                                                 std::string *server_error) {
   return run_with_server_capture(source, response, server_error, nullptr);
+}
+
+amber::runtime::ExecutionResult
+run_with_early_response_server(const std::string &source,
+                               const std::string &response,
+                               std::string *server_error) {
+  auto listening = RuntimeTcpListener::listen({"127.0.0.1", 0});
+  expect(listening.ok, "loopback listen failed: " + listening.error_name);
+  const std::uint16_t port = listening.listener->local_endpoint().port;
+  listening.listener->allow_unchecked_sharing();
+
+  std::thread server([&] {
+    auto accepted = listening.listener->accept(2s);
+    if (!accepted.ok) {
+      *server_error = "accept:" + accepted.error_name;
+      return;
+    }
+    (void)accepted.stream->set_recv_buffer(1024);
+    std::string request;
+    while (request.find("\r\n\r\n") == std::string::npos) {
+      RuntimeByteBuffer buffer(1024);
+      const auto read = accepted.stream->read(buffer, 2s);
+      if (!read.ok) {
+        *server_error = "read:" + read.error_name;
+        return;
+      }
+      request += buffer.bytes();
+    }
+    const auto written = accepted.stream->write_all(response, 2s);
+    if (!written.ok) {
+      *server_error = "write:" + written.error_name;
+    }
+    accepted.stream->close();
+  });
+
+  amber::runtime::ExecutionResult result =
+      execute_source(with_port(source, port));
+  server.join();
+  listening.listener->close();
+  return result;
 }
 
 amber::runtime::ExecutionResult run_with_server_until_request_contains(
@@ -563,10 +605,18 @@ void expect_ok_string(const amber::runtime::ExecutionResult &result,
   }
   expect(result.ok(), what + " should succeed");
   expect(result.value.is_string(), what + " should return Str");
-  expect(result.value.as_string().string_id < result.runtime_strings.size(),
-         what + " string id in range");
-  expect(result.runtime_strings[result.value.as_string().string_id] == expected,
-         what + " value mismatch");
+  if (result.value.is_heap_string()) {
+    const std::shared_ptr<amber::runtime::RuntimeHeapStringValue> value =
+        result.value.as_heap_string();
+    expect(value != nullptr, what + " string value present");
+    expect(value != nullptr && value->text == expected, what + " value mismatch");
+  } else {
+    expect(result.value.as_string().string_id < result.runtime_strings.size(),
+           what + " string id in range");
+    expect(
+        result.runtime_strings[result.value.as_string().string_id] == expected,
+        what + " value mismatch");
+  }
 }
 
 void test_get_status() {
@@ -1279,6 +1329,27 @@ void test_request_handle_early_response_is_terminal() {
                    "early response before finish is terminal");
 }
 
+void test_buffered_request_recovers_early_final_response() {
+  std::string server_error;
+  const amber::runtime::ExecutionResult result = run_with_early_response_server(
+      "import net\n"
+      "body = \"0123456789abcdef\"\n"
+      "17.times:\n"
+      "  body += body\n"
+      "response = net.http.Client().post("
+      "\"http://127.0.0.1:%PORT%/too-large\", body: body)\n"
+      "status = response.status()\n"
+      "response.close!()\n"
+      "status\n",
+      "HTTP/1.1 413 Payload Too Large\r\n"
+      "Content-Length: 0\r\nConnection: close\r\n\r\n",
+      &server_error);
+  expect(server_error.empty(), "server error: " + server_error);
+  expect_ok_int(result, 413,
+                "buffered request reads an early final response after "
+                "the peer stops accepting its body");
+}
+
 void test_response_body_read_chunks() {
   std::string server_error;
   const amber::runtime::ExecutionResult result = run_with_server(
@@ -1295,11 +1366,19 @@ void test_response_body_read_chunks() {
   expect(server_error.empty(), "server error: " + server_error);
   expect(result.ok(), "ResponseBody read! should succeed");
   expect(result.value.is_string(), "ResponseBody read! result Str");
-  expect(result.value.as_string().string_id < result.runtime_strings.size(),
-         "ResponseBody read! string id in range");
-  expect(result.runtime_strings[result.value.as_string().string_id] ==
-             "5:Hello:8:, world!",
-         "ResponseBody read! chunks match");
+  if (result.value.is_heap_string()) {
+    const std::shared_ptr<amber::runtime::RuntimeHeapStringValue> value =
+        result.value.as_heap_string();
+    expect(value != nullptr, "ResponseBody read! string value present");
+    expect(value != nullptr && value->text == "5:Hello:8:, world!",
+           "ResponseBody read! chunks match");
+  } else {
+    expect(result.value.as_string().string_id < result.runtime_strings.size(),
+           "ResponseBody read! string id in range");
+    expect(result.runtime_strings[result.value.as_string().string_id] ==
+               "5:Hello:8:, world!",
+           "ResponseBody read! chunks match");
+  }
 }
 
 void test_response_body_single_consumer() {
@@ -1440,6 +1519,74 @@ void test_request_invalid_url_scheme() {
              (result.fault.has_value() ? result.fault->error_name : ""));
 }
 
+void test_resumable_tasks_share_canonical_runtime_names() {
+  const amber::runtime::ExecutionResult result = execute_source(
+      "import json\n"
+      "import task\n"
+      "stored = null\n"
+      "key = \"runtime-\" + \"task-key-\" + 9137.to_str\n"
+      "value = \"runtime-\" + \"task-value-\" + 2468.to_str\n"
+      "document = \"{\\\"\" + key + \"\\\":\\\"\" + value + \"\\\"}\"\n"
+      "producer = task.spawn:\n"
+      "  stored = Json.parse(document)\n"
+      "producer.wait()\n"
+      "consumer = task.spawn:\n"
+      "  Json.generate(stored)\n"
+      "consumer.wait() == document\n");
+  expect_ok_true(
+      result,
+      "independently-created resumable task factories share runtime ids");
+}
+
+void test_resumable_task_sparse_string_cache_concat() {
+  std::string source =
+      "import task\n"
+      "stored = null\n"
+      "producer = task.spawn:\n"
+      "  values = []\n"
+      "  index = 0\n"
+      "  while index < 64:\n"
+      "    values.push!(\"runtime-value-\" + index.to_str)\n"
+      "    index += 1\n"
+      "  stored = values\n"
+      "producer.wait()\n"
+      "consumer = task.spawn:\n  stored[0]";
+  for (std::size_t index = 1; index < 64; ++index) {
+    source += " + stored[" + std::to_string(index) + "]";
+  }
+  source +=
+      "\n"
+      "joined = consumer.wait()\n"
+      "joined.starts_with?(\"runtime-value-0runtime-value-1\") and "
+      "joined.ends_with?(\"runtime-value-63\")\n";
+  const amber::runtime::ExecutionResult result = execute_source(source);
+  expect_ok_true(
+      result,
+      "sparse runtime string cache keeps concat operands stable across growth");
+}
+
+void test_nested_code_inherits_resumable_task_runtime_names() {
+  const amber::runtime::ExecutionResult result = execute_source(
+      "import json\n"
+      "import task\n"
+      "last = null\n"
+      "runner = task.spawn:\n"
+      "  index = 0\n"
+      "  while index < 64:\n"
+      "    document = \"{\\\"value\\\":\\\"runtime-value-\" + "
+      "index.to_str + \"\\\"}\"\n"
+      "    last = try:\n"
+      "      Json.parse(document)[\"value\"]\n"
+      "    rescue Exception:\n"
+      "      \"parse-failed\"\n"
+      "    index += 1\n"
+      "runner.wait()\n"
+      "last == \"runtime-value-63\"\n");
+  expect_ok_true(
+      result,
+      "nested code in a resumable task resolves the canonical runtime ids");
+}
+
 void test_from_import_client() {
   std::string server_error;
   const amber::runtime::ExecutionResult result =
@@ -1482,6 +1629,38 @@ void test_http_server_serves_request_hook() {
       "res.status() == 200 and body == \"POST:/submit:x=1:hello\" and "
       "res.headers().first(\"x-seen\") == \"yes\"\n");
   expect_ok_true(result, "net.http.Server serve hook responds");
+}
+
+void test_http_server_preserves_runtime_names_across_requests() {
+  const amber::runtime::ExecutionResult result = execute_source(
+      "import json\n"
+      "import task\n"
+      "from net.http import Client, Server, ServerResponse\n"
+      "\n"
+      "stored = null\n"
+      "server = Server(host: \"127.0.0.1\", port: 0, workers: 2)\n"
+      "port = server.port()\n"
+      "runner = task.spawn:\n"
+      "  server.serve(max_requests: 2) |req|:\n"
+      "    if req.path() == \"/store\":\n"
+      "      stored = Json.parse(req.body_text())\n"
+      "      ServerResponse.text(\"stored\")\n"
+      "    else:\n"
+      "      ServerResponse.text(Json.generate(stored))\n"
+      "\n"
+      "creator = Client()\n"
+      "created = creator.post(\"http://127.0.0.1:#{port}/store\", "
+      "body: \"{\\\"runtime-key\\\":\\\"runtime-value\\\"}\").body_text()\n"
+      "creator.close!()\n"
+      "viewer = Client()\n"
+      "shown = viewer.get(\"http://127.0.0.1:#{port}/show\").body_text()\n"
+      "viewer.close!()\n"
+      "runner.wait()\n"
+      "created == \"stored\" and "
+      "shown == \"{\\\"runtime-key\\\":\\\"runtime-value\\\"}\"\n");
+  expect_ok_true(
+      result,
+      "server request VMs share canonical runtime string and symbol ids");
 }
 
 void test_http_server_rejects_query_without_content_type() {
@@ -1713,6 +1892,29 @@ void test_http_server_expect_continue_before_body_read() {
                  "stream producer emits 100 Continue before first body read");
 }
 
+void test_http_server_bare_body_text_retries_after_io_park() {
+  const amber::runtime::ExecutionResult result = execute_source(
+      "import net\n"
+      "import task\n"
+      "from net.http import Server, ServerResponse\n"
+      "server = Server(host: \"127.0.0.1\", port: 0, workers: 1)\n"
+      "port = server.port()\n"
+      "runner = task.spawn:\n"
+      "  server.serve(max_requests: 1) |req|:\n"
+      "    ServerResponse.text(req.body_text)\n"
+      "socket = net.tcp.connect(\"127.0.0.1\", port)\n"
+      "socket.write_all!(\"POST /park HTTP/1.1\\r\\nhost: localhost\\r\\n"
+      "content-length: 4\\r\\nconnection: close\\r\\n\\r\\n\")\n"
+      "task.sleep(20)\n"
+      "socket.write_all!(\"data\")\n"
+      "wire = socket.read_all!().to_str()\n"
+      "runner.wait()\n"
+      "wire.contains?(\"HTTP/1.1 200 OK\") and wire.ends_with?(\"data\")\n");
+  expect_ok_true(
+      result,
+      "bare body_text retries the same SEND after cooperative IO park");
+}
+
 void test_http_server_keepalive_head_and_contentless_semantics() {
   const amber::runtime::ExecutionResult result = execute_source(
       "import task\n"
@@ -1830,6 +2032,9 @@ void test_http_server_control_flow_failure_is_not_a_500_response() {
 
 int main(int argc, char **argv) {
   test_http_server_runtime_state_is_vm_independent();
+  test_resumable_tasks_share_canonical_runtime_names();
+  test_resumable_task_sparse_string_cache_concat();
+  test_nested_code_inherits_resumable_task_runtime_names();
   if (argc == 2 && std::string(argv[1]) == "--runtime-core-only") {
     std::cout << "vm net.http runtime core tests passed (" << g_checks
               << " checks)\n";
@@ -1838,6 +2043,7 @@ int main(int argc, char **argv) {
   test_from_import_client();
   test_from_import_request_send();
   test_http_server_serves_request_hook();
+  test_http_server_preserves_runtime_names_across_requests();
   test_http_server_rejects_query_without_content_type();
   test_http_server_allows_cooperative_concurrency_per_worker();
   test_http_server_idle_headers_do_not_occupy_worker();
@@ -1846,6 +2052,7 @@ int main(int argc, char **argv) {
   test_http_server_streaming_is_full_duplex();
   test_http_server_non_chunked_body_stream_framing();
   test_http_server_expect_continue_before_body_read();
+  test_http_server_bare_body_text_retries_after_io_park();
   test_http_server_keepalive_head_and_contentless_semantics();
   test_http_server_deadline_cancellation_unwinds_ensure();
   test_http_server_overload_rejects_excess_connection();
@@ -1887,6 +2094,7 @@ int main(int argc, char **argv) {
   test_manual_request_handle_underwrite();
   test_request_handle_write_after_response_state();
   test_request_handle_early_response_is_terminal();
+  test_buffered_request_recovers_early_final_response();
   test_response_body_read_chunks();
   test_response_body_single_consumer();
   test_response_body_each_chunk_propagates_block_failure();

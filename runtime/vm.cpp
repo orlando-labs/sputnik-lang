@@ -48,6 +48,68 @@ namespace amber::runtime {
 
 namespace {
 
+// SEND selectors originate in the module symbol table, but the compatibility
+// dispatch layer still exposes them as std::string. Comparing std::string to a
+// C string asks libc++ to strlen the literal on every branch; in the large
+// scalar/native dispatchers that made selector decoding more expensive than
+// substantial parts of the operation itself. Keep the existing string-facing
+// ABI while making literal comparisons length-aware at compile time.
+class SelectorKey {
+public:
+  explicit SelectorKey(const std::string &text) : text_(text) {}
+
+  operator const std::string &() const { return text_; }
+
+  template <std::size_t N>
+  bool operator==(const char (&literal)[N]) const {
+    static_assert(N != 0U);
+    return text_.size() == N - 1U &&
+           std::char_traits<char>::compare(text_.data(), literal, N - 1U) == 0;
+  }
+
+  template <std::size_t N>
+  bool operator!=(const char (&literal)[N]) const {
+    return !(*this == literal);
+  }
+
+  bool operator==(const std::string &other) const { return text_ == other; }
+  bool operator!=(const std::string &other) const { return text_ != other; }
+  bool operator==(std::string_view other) const {
+    return text_.size() == other.size() &&
+           std::char_traits<char>::compare(text_.data(), other.data(),
+                                           other.size()) == 0;
+  }
+  bool operator!=(std::string_view other) const { return !(*this == other); }
+
+  friend bool operator==(const std::string &left, const SelectorKey &right) {
+    return right == left;
+  }
+
+  friend std::string operator+(std::string left, const SelectorKey &right) {
+    left += right.text_;
+    return left;
+  }
+
+  template <std::size_t N>
+  friend std::string operator+(const char (&left)[N],
+                               const SelectorKey &right) {
+    std::string result(left, N - 1U);
+    result += right.text_;
+    return result;
+  }
+
+  template <std::size_t N>
+  friend std::string operator+(const SelectorKey &left,
+                               const char (&right)[N]) {
+    std::string result = left.text_;
+    result.append(right, N - 1U);
+    return result;
+  }
+
+private:
+  const std::string &text_;
+};
+
 bool decode_keyword_utf8_codepoint(const std::string &source,
                                    std::size_t offset, std::uint32_t *codepoint,
                                    std::size_t *byte_count) {
@@ -863,6 +925,106 @@ public:
   bool finished = false;
   bool response_returned = false;
   bool aborted = false;
+  // A buffered request can race an early final response (notably 413) while
+  // its body is still being written. Preserve the transport long enough to
+  // read that response instead of replacing it with the socket write error.
+  bool recover_early_response = false;
+  bool request_write_failed = false;
+  http::HttpErrorKind request_write_error_kind =
+      http::HttpErrorKind::Connection;
+  std::string request_write_error;
+};
+
+// Scheduler-owned VMs execute concurrently, but Values stored in shared
+// objects encode Str/Symbol names as numeric ids. A per-factory pool gives
+// those VMs one canonical id space without serializing bytecode execution.
+// VMs resolve only the ids they actually touch: copying the complete,
+// append-only tables into every short-lived request VM makes a request cost
+// grow with the number of strings seen by the whole server.
+class SharedRuntimeNamePool {
+public:
+  SharedRuntimeNamePool(std::vector<std::string> strings,
+                        std::vector<std::string> symbols)
+      : strings_(std::move(strings)), symbols_(std::move(symbols)) {
+    for (std::uint32_t id = 0; id < strings_.size(); ++id) {
+      string_ids_.emplace(strings_[id], id);
+    }
+    for (std::uint32_t id = 0; id < symbols_.size(); ++id) {
+      symbol_ids_.emplace(symbols_[id], id);
+    }
+  }
+
+  std::uint32_t intern_string(const std::string &text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = string_ids_.find(text);
+    if (found != string_ids_.end()) {
+      return found->second;
+    }
+    const std::uint32_t id = static_cast<std::uint32_t>(strings_.size());
+    strings_.push_back(text);
+    string_ids_.emplace(strings_.back(), id);
+    return id;
+  }
+
+  std::optional<std::uint32_t> string_id(const std::string &text) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = string_ids_.find(text);
+    if (found == string_ids_.end()) {
+      return std::nullopt;
+    }
+    return found->second;
+  }
+
+  std::optional<std::string> string_text(std::uint32_t id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (id >= strings_.size()) {
+      return std::nullopt;
+    }
+    return strings_[id];
+  }
+
+  std::uint32_t intern_symbol(const std::string &text) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = symbol_ids_.find(text);
+    if (found != symbol_ids_.end()) {
+      return found->second;
+    }
+    const std::uint32_t id = static_cast<std::uint32_t>(symbols_.size());
+    symbols_.push_back(text);
+    symbol_ids_.emplace(symbols_.back(), id);
+    return id;
+  }
+
+  std::optional<std::uint32_t> symbol_id(const std::string &text) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = symbol_ids_.find(text);
+    if (found == symbol_ids_.end()) {
+      return std::nullopt;
+    }
+    return found->second;
+  }
+
+  std::optional<std::string> symbol_text(std::uint32_t id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (id >= symbols_.size()) {
+      return std::nullopt;
+    }
+    return symbols_[id];
+  }
+
+  void snapshot(std::vector<std::string> *strings,
+                std::vector<std::string> *symbols) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    *strings = strings_;
+    *symbols = symbols_;
+  }
+
+private:
+  mutable std::mutex mutex_;
+  std::vector<std::string> strings_;
+  std::vector<std::string> symbols_;
+  std::unordered_map<std::string, std::uint32_t> string_ids_;
+  std::unordered_map<std::string, std::uint32_t> symbol_ids_;
 };
 
 class Vm : public StdlibHost {
@@ -880,12 +1042,14 @@ public:
       const RuntimeDispatchRegistry *dispatch_registry = nullptr,
       const RuntimeErrorRegistry *error_registry = nullptr,
       std::function<ExecutionResult(const Value &)> macro_block_executor = {},
-      bool isolate_inline_caches = false)
+      bool isolate_inline_caches = false,
+      std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names = nullptr)
       : Vm(std::make_shared<const BcModule>(module), std::move(state),
            std::move(module_id), world_options, capabilities, effects,
            std::move(trace_recorder), native_registry, module_registry,
            type_registry, dispatch_registry, error_registry,
-           std::move(macro_block_executor), isolate_inline_caches) {}
+           std::move(macro_block_executor), isolate_inline_caches,
+           std::move(shared_runtime_names)) {}
 
   explicit Vm(
       std::shared_ptr<const BcModule> module,
@@ -900,13 +1064,15 @@ public:
       const RuntimeDispatchRegistry *dispatch_registry = nullptr,
       const RuntimeErrorRegistry *error_registry = nullptr,
       std::function<ExecutionResult(const Value &)> macro_block_executor = {},
-      bool isolate_inline_caches = false)
+      bool isolate_inline_caches = false,
+      std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names = nullptr)
       : module_owner_(std::move(module)), module_(*module_owner_),
         runtime_strings_(module_.strings), runtime_symbols_(module_.symbols),
         initial_string_count_(runtime_strings_.size()),
         initial_symbol_count_(runtime_symbols_.size()),
         state_(state == nullptr ? std::make_shared<RuntimeState>()
                                 : std::move(state)),
+        shared_runtime_names_(std::move(shared_runtime_names)),
         isolate_inline_caches_(isolate_inline_caches),
         module_id_(std::move(module_id)), world_options_(world_options),
         capabilities_(capabilities), effects_(effects),
@@ -920,46 +1086,61 @@ public:
     if (native_registry_ == nullptr) {
       // Direct VM entry points are not attached to a RuntimeWorld, so they keep
       // a local copy of the same compatibility registry.
-      register_builtin_stdlib(owned_native_registry_);
-      native_registry_ = &owned_native_registry_;
+      owned_native_registry_ = std::make_unique<NativeRegistry>();
+      register_builtin_stdlib(*owned_native_registry_);
+      native_registry_ = owned_native_registry_.get();
     }
     if (module_registry_ == nullptr) {
-      register_core_prelude_bindings(owned_module_registry_);
-      register_legacy_native_type_paths(owned_module_registry_);
-      module_registry_ = &owned_module_registry_;
+      owned_module_registry_ = std::make_unique<RuntimeModuleRegistry>();
+      register_core_prelude_bindings(*owned_module_registry_);
+      register_legacy_native_type_paths(*owned_module_registry_);
+      module_registry_ = owned_module_registry_.get();
     }
     if (type_registry_ == nullptr) {
-      type_registry_ = &owned_type_registry_;
+      owned_type_registry_ = std::make_unique<RuntimeTypeRegistry>();
+      type_registry_ = owned_type_registry_.get();
     }
     if (dispatch_registry_ == nullptr) {
-      dispatch_registry_ = &owned_dispatch_registry_;
+      owned_dispatch_registry_ = std::make_unique<RuntimeDispatchRegistry>();
+      dispatch_registry_ = owned_dispatch_registry_.get();
     }
-    if (module_registry_ == &owned_module_registry_ &&
-        dispatch_registry_ == &owned_dispatch_registry_) {
+    if (module_registry_ == owned_module_registry_.get() &&
+        dispatch_registry_ == owned_dispatch_registry_.get()) {
+      if (owned_type_registry_ == nullptr) {
+        owned_type_registry_ = std::make_unique<RuntimeTypeRegistry>();
+      }
+      owned_error_registry_ = std::make_unique<RuntimeErrorRegistry>();
       register_builtin_runtime_modules(
-          owned_module_registry_, owned_dispatch_registry_,
-          owned_type_registry_, &owned_error_registry_);
+          *owned_module_registry_, *owned_dispatch_registry_,
+          *owned_type_registry_, owned_error_registry_.get());
     }
-    if (dispatch_registry_ == &owned_dispatch_registry_ &&
-        type_registry_ == &owned_type_registry_ && error_registry_ == nullptr) {
+    if (dispatch_registry_ == owned_dispatch_registry_.get() &&
+        type_registry_ == owned_type_registry_.get() &&
+        error_registry_ == nullptr) {
+      if (owned_error_registry_ == nullptr) {
+        owned_error_registry_ = std::make_unique<RuntimeErrorRegistry>();
+      }
       RuntimeNativePackageDescriptor native_package =
           runtime_native_package_descriptor_from_module(module_);
       NativeExtRegistry::global().contribute_to(native_package);
       register_runtime_native_package_descriptor(
-          owned_dispatch_registry_, owned_type_registry_, owned_error_registry_,
-          native_package);
-      error_registry_ = &owned_error_registry_;
+          *owned_dispatch_registry_, *owned_type_registry_,
+          *owned_error_registry_, native_package);
+      error_registry_ = owned_error_registry_.get();
     } else {
-      if (dispatch_registry_ == &owned_dispatch_registry_) {
-        owned_dispatch_registry_.import_native_package_bindings(module_);
-        NativeExtRegistry::global().register_thunks(owned_dispatch_registry_);
+      if (dispatch_registry_ == owned_dispatch_registry_.get()) {
+        owned_dispatch_registry_->import_native_package_bindings(module_);
+        NativeExtRegistry::global().register_thunks(*owned_dispatch_registry_);
       }
-      if (type_registry_ == &owned_type_registry_) {
-        NativeExtRegistry::global().register_types(owned_type_registry_);
+      if (type_registry_ == owned_type_registry_.get()) {
+        NativeExtRegistry::global().register_types(*owned_type_registry_);
       }
       if (error_registry_ == nullptr) {
-        NativeExtRegistry::global().register_errors(owned_error_registry_);
-        error_registry_ = &owned_error_registry_;
+        if (owned_error_registry_ == nullptr) {
+          owned_error_registry_ = std::make_unique<RuntimeErrorRegistry>();
+        }
+        NativeExtRegistry::global().register_errors(*owned_error_registry_);
+        error_registry_ = owned_error_registry_.get();
       }
     }
   }
@@ -1013,18 +1194,16 @@ public:
   }
   std::optional<std::string> stdlib_text_of(const Value &value) override {
     if (value.is_string()) {
-      return string_text_from_id(value.as_string().string_id);
+      return string_text_from_value(value);
     }
     if (value.is_symbol()) {
-      const std::uint32_t sid = value.as_symbol().symbol_id;
-      if (sid < runtime_symbols_.size()) {
-        return runtime_symbols_[sid];
-      }
+      return selector_text_from_symbol(value.as_symbol().symbol_id);
     }
     return std::nullopt;
   }
   std::string stdlib_display_string(const void * /*frame*/,
                                     const Value &value) override {
+    materialize_shared_runtime_names();
     return runtime_stringify_value(value, RuntimeStringifyMode::Display,
                                    &module_, &runtime_strings_,
                                    &runtime_symbols_,
@@ -1731,6 +1910,16 @@ public:
     accept_runtime_name_baseline();
   }
 
+  void materialize_shared_runtime_names() {
+    if (shared_runtime_names_ == nullptr) {
+      return;
+    }
+    std::vector<std::string> strings;
+    std::vector<std::string> symbols;
+    shared_runtime_names_->snapshot(&strings, &symbols);
+    synchronize_runtime_names(strings, symbols);
+  }
+
   void accept_runtime_name_baseline() {
     initial_string_count_ = runtime_strings_.size();
     initial_symbol_count_ = runtime_symbols_.size();
@@ -1758,27 +1947,29 @@ private:
   }
 
   const NativeRegistry *child_native_registry() const {
-    return native_registry_ == &owned_native_registry_ ? nullptr
-                                                       : native_registry_;
+    return native_registry_ == owned_native_registry_.get() ? nullptr
+                                                            : native_registry_;
   }
 
   const RuntimeModuleRegistry *child_module_registry() const {
-    return module_registry_ == &owned_module_registry_ ? nullptr
-                                                       : module_registry_;
+    return module_registry_ == owned_module_registry_.get() ? nullptr
+                                                            : module_registry_;
   }
 
   const RuntimeTypeRegistry *child_type_registry() const {
-    return type_registry_ == &owned_type_registry_ ? nullptr : type_registry_;
+    return type_registry_ == owned_type_registry_.get() ? nullptr
+                                                        : type_registry_;
   }
 
   const RuntimeDispatchRegistry *child_dispatch_registry() const {
-    return dispatch_registry_ == &owned_dispatch_registry_ ? nullptr
-                                                           : dispatch_registry_;
+    return dispatch_registry_ == owned_dispatch_registry_.get()
+               ? nullptr
+               : dispatch_registry_;
   }
 
   const RuntimeErrorRegistry *child_error_registry() const {
-    return error_registry_ == &owned_error_registry_ ? nullptr
-                                                     : error_registry_;
+    return error_registry_ == owned_error_registry_.get() ? nullptr
+                                                          : error_registry_;
   }
 
   ExecutionResult with_runtime_names(ExecutionResult result) const {
@@ -1917,7 +2108,8 @@ private:
                  capabilities_, effects_, trace_recorder_,
                  child_native_registry(), child_module_registry(),
                  child_type_registry(), child_dispatch_registry(),
-                 child_error_registry(), macro_block_executor_);
+                 child_error_registry(), macro_block_executor_,
+                 isolate_inline_caches_, shared_runtime_names_);
       sync_runtime_names_to(init_vm);
       ExecutionResult init_result = init_vm.execute(
           module_.init.entry_code_id, {}, Value::null(), Value::null());
@@ -2468,9 +2660,9 @@ private:
     return copied;
   }
 
-  std::optional<Value> call_block_to_value(const Frame &frame,
-                                           const Value &block,
-                                           std::vector<Value> args) {
+  std::optional<Value>
+  call_block_to_value(const Frame &frame, const Value &block,
+                      const Value *args, std::size_t arg_count) {
     if (block.is_null()) {
       set_fault(frame, "TypeError", "builtin collection SEND requires block");
       return std::nullopt;
@@ -2492,115 +2684,71 @@ private:
       set_fault(frame, "VMError", "closure code id is unknown");
       return std::nullopt;
     }
-    if (!ensure_closure_arity(frame, *code, args.size())) {
+    if (!ensure_closure_arity(frame, *code, arg_count)) {
       return std::nullopt;
     }
 
-    BlockVmLease lease = acquire_block_vm();
-    Vm &nested = *lease.vm;
-    nested.push_frame_from_args(*code, args.data(), args.size(),
-                                closure->captures, closure->self, Value::null(),
-                                std::nullopt,
-                                closure->nonlocal_return_target);
-    while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
+    // The intrinsic is already executing inside this Vm, so run the block on
+    // the live stack. Keeping the caller frames attached lets raise/rescue,
+    // throw/catch, ensure, and non-local return use the ordinary unwinder and
+    // avoids detaching/restoring all VM execution state for every collection
+    // element.
+    const std::size_t caller_depth = frames_.size();
+    const Frame *caller_frame =
+        caller_depth == 0U ? nullptr : &frames_.back();
+    std::optional<Value> result;
+    push_frame_from_args(*code, args, arg_count, closure->captures,
+                         closure->self, Value::null(), std::nullopt,
+                         closure->nonlocal_return_target);
+    Frame *root_block = &frames_[caller_depth];
+    root_block->direct_return_sink = &result;
+
+    try {
+      // Stop when the root block returns normally or when dynamic control
+      // removes it. A parent rescue/catch may immediately push a handler above
+      // the caller, so stack depth alone is not a sufficient boundary.
+      while (fault_ == std::nullopt && frames_.size() > caller_depth &&
+             &frames_[caller_depth] == root_block) {
+        step();
+      }
+    } catch (...) {
+      while (frames_.size() > caller_depth &&
+             &frames_[caller_depth] == root_block) {
+        run_frame_scope_exit(frames_.back());
+        recycle_frame(frames_.take_back());
+      }
+      throw;
     }
-    merge_runtime_names_from(nested);
-    // throw/catch and raise/rescue are dynamically scoped through blocks: an
-    // exception or throw that escapes the block's child Vm must re-enter the
-    // *parent's* handler machinery, not collapse into a terminal fault here.
-    // (Names are already merged above, so the escaped Values are valid in us.)
-    if (nested.escaped_throw_.has_value()) {
-      const PendingThrow escaped = *nested.escaped_throw_;
-      throw_value(frame, escaped.tag, escaped.value);
+
+    // A terminal VM fault leaves the block activation in place because the
+    // outer execute loop stops on fault_. Release only the nested frames; the
+    // caller stack and fault trace remain intact.
+    while (frames_.size() > caller_depth &&
+           &frames_[caller_depth] == root_block) {
+      run_frame_scope_exit(frames_.back());
+      recycle_frame(frames_.take_back());
+    }
+
+    const bool returned_normally =
+        fault_ == std::nullopt && result.has_value() &&
+        frames_.size() == caller_depth && caller_depth != 0U &&
+        &frames_.back() == caller_frame;
+    if (!returned_normally) {
       return std::nullopt;
     }
-    if (nested.escaped_nonlocal_return_.has_value()) {
-      const PendingNonlocalReturn escaped =
-          *nested.escaped_nonlocal_return_;
-      nonlocal_return_value(frame, escaped.target, escaped.value);
-      return std::nullopt;
-    }
-    if (nested.escaped_exception_.has_value()) {
-      const Value escaped = *nested.escaped_exception_;
-      raise_value(frame, escaped);
-      return std::nullopt;
-    }
-    if (nested.fault_.has_value()) {
-      fault_ = nested.fault_;
-      return std::nullopt;
-    }
-    return std::move(nested.final_value_);
+    return std::move(*result);
+  }
+
+  std::optional<Value> call_block_to_value(const Frame &frame,
+                                           const Value &block,
+                                           const std::vector<Value> &args) {
+    return call_block_to_value(frame, block, args.data(), args.size());
   }
 
   std::optional<Value> call_block_to_value(const Frame &frame,
                                            const Value &block,
                                            std::initializer_list<Value> args) {
-    return call_block_to_value(frame, block, std::vector<Value>(args));
-  }
-
-  StdlibBlockResult
-  call_block_to_stdlib_result(const Frame &frame, const Value &block,
-                              const std::vector<Value> &args) {
-    StdlibBlockResult result;
-    if (block.is_null()) {
-      set_fault(frame, "TypeError", "native stdlib method requires block");
-      return result;
-    }
-    if (!block.is_closure()) {
-      set_fault(frame, "TypeError", "native stdlib block must be closure");
-      return result;
-    }
-    if (!ensure_lifecycle_access(frame, block)) {
-      return result;
-    }
-    const IntrusivePtr<ClosureValue> closure = block.as_closure();
-    if (closure == nullptr) {
-      set_fault(frame, "TypeError", "closure value is null");
-      return result;
-    }
-    const BcCode *code = find_code(module_, closure->code_id);
-    if (code == nullptr) {
-      set_fault(frame, "VMError", "closure code id is unknown");
-      return result;
-    }
-    if (!ensure_closure_arity(frame, *code, args.size())) {
-      return result;
-    }
-
-    BlockVmLease lease = acquire_block_vm();
-    Vm &nested = *lease.vm;
-    nested.push_frame_from_args(*code, args.data(), args.size(),
-                                closure->captures, closure->self, Value::null(),
-                                std::nullopt,
-                                closure->nonlocal_return_target);
-    while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
-    }
-    merge_runtime_names_from(nested);
-    if (nested.escaped_throw_.has_value()) {
-      const PendingThrow escaped = *nested.escaped_throw_;
-      throw_value(frame, escaped.tag, escaped.value, escaped.value_present);
-      return result;
-    }
-    if (nested.escaped_nonlocal_return_.has_value()) {
-      const PendingNonlocalReturn escaped =
-          *nested.escaped_nonlocal_return_;
-      nonlocal_return_value(frame, escaped.target, escaped.value);
-      return result;
-    }
-    if (nested.escaped_exception_.has_value()) {
-      result.status = StdlibBlockStatus::Raised;
-      result.exception = *nested.escaped_exception_;
-      return result;
-    }
-    if (nested.fault_.has_value()) {
-      fault_ = nested.fault_;
-      return result;
-    }
-    result.status = StdlibBlockStatus::Returned;
-    result.value = std::move(nested.final_value_);
-    return result;
+    return call_block_to_value(frame, block, args.begin(), args.size());
   }
 
   FastCallStatus try_evaluate_simple_stream_block(const Frame &caller,
@@ -3121,6 +3269,10 @@ private:
       vm->escaped_throw_ = std::nullopt;
       vm->escaped_nonlocal_return_ = std::nullopt;
       vm->final_value_ = Value::null();
+      vm->last_completed_regs_.clear();
+      vm->last_completed_initialized_.clear();
+      vm->inherited_no_suspend_label_.reset();
+      vm->capture_completed_frames_ = false;
       owner->block_vm_pool_.push_back(std::move(vm));
     }
   };
@@ -3138,7 +3290,8 @@ private:
           effects_, trace_recorder_, child_native_registry(),
           child_module_registry(), child_type_registry(),
           child_dispatch_registry(), child_error_registry(),
-          macro_block_executor_, isolate_inline_caches_);
+          macro_block_executor_, isolate_inline_caches_,
+          shared_runtime_names_);
       sync_runtime_names_to(*lease.vm);
       // Block results flow through final_value_; nobody reads the completed
       // register snapshot, so skip the per-return register copy.
@@ -3147,7 +3300,89 @@ private:
     return lease;
   }
 
+  StdlibBlockResult
+  call_block_to_stdlib_result(const Frame &frame, const Value &block,
+                              const std::vector<Value> &args) {
+    StdlibBlockResult result;
+    if (block.is_null()) {
+      set_fault(frame, "TypeError", "native stdlib method requires block");
+      return result;
+    }
+    if (!block.is_closure()) {
+      set_fault(frame, "TypeError", "native stdlib block must be closure");
+      return result;
+    }
+    if (!ensure_lifecycle_access(frame, block)) {
+      return result;
+    }
+    const IntrusivePtr<ClosureValue> closure = block.as_closure();
+    if (closure == nullptr) {
+      set_fault(frame, "TypeError", "closure value is null");
+      return result;
+    }
+    const BcCode *code = find_code(module_, closure->code_id);
+    if (code == nullptr) {
+      set_fault(frame, "VMError", "closure code id is unknown");
+      return result;
+    }
+    if (!ensure_closure_arity(frame, *code, args.size())) {
+      return result;
+    }
+
+    // Stdlib wrappers such as File.open must observe a raised block result so
+    // they can release resources before re-raising it into the caller. Keep
+    // that cleanup boundary on the existing pooled child VM; ordinary
+    // collection blocks use the faster live-stack path above.
+    BlockVmLease lease = acquire_block_vm();
+    Vm &nested = *lease.vm;
+    nested.push_frame_from_args(*code, args.data(), args.size(),
+                                closure->captures, closure->self,
+                                Value::null(), std::nullopt,
+                                closure->nonlocal_return_target);
+    while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
+      nested.step();
+    }
+    merge_runtime_names_from(nested);
+    if (nested.escaped_throw_.has_value()) {
+      const PendingThrow escaped = *nested.escaped_throw_;
+      throw_value(frame, escaped.tag, escaped.value, escaped.value_present);
+      return result;
+    }
+    if (nested.escaped_nonlocal_return_.has_value()) {
+      const PendingNonlocalReturn escaped =
+          *nested.escaped_nonlocal_return_;
+      nonlocal_return_value(frame, escaped.target, escaped.value);
+      return result;
+    }
+    if (nested.escaped_exception_.has_value()) {
+      result.status = StdlibBlockStatus::Raised;
+      result.exception = *nested.escaped_exception_;
+      return result;
+    }
+    if (nested.fault_.has_value()) {
+      fault_ = nested.fault_;
+      return result;
+    }
+    result.status = StdlibBlockStatus::Returned;
+    result.value = std::move(nested.final_value_);
+    return result;
+  }
+
   void sync_runtime_names_to(Vm &nested) const {
+    if (shared_runtime_names_ != nullptr) {
+      if (nested.shared_runtime_names_ != shared_runtime_names_) {
+        // Values carry numeric runtime string/symbol ids. A nested Vm that
+        // executes with a private name table can therefore return a perfectly
+        // valid Str whose id means something else (or nothing) to its parent.
+        // Adopt the parent's canonical pool before any frames are installed.
+        nested.shared_runtime_names_ = shared_runtime_names_;
+        nested.shared_string_text_cache_.clear();
+        nested.shared_string_id_cache_.clear();
+        nested.shared_symbol_text_cache_.clear();
+        nested.shared_symbol_id_cache_.clear();
+      }
+      return;
+    }
     // A pooled child may have the same table size as its parent but different
     // runtime-interned content. Size-only synchronization lets equal numeric
     // ids name unrelated strings after the child is reused. The parent is the
@@ -3166,6 +3401,10 @@ private:
   }
 
   void merge_runtime_names_from(const Vm &nested) {
+    if (shared_runtime_names_ != nullptr &&
+        nested.shared_runtime_names_ == shared_runtime_names_) {
+      return;
+    }
     if (runtime_strings_.size() < nested.runtime_strings_.size()) {
       runtime_strings_.insert(
           runtime_strings_.end(),
@@ -3265,7 +3504,8 @@ private:
 
   std::vector<Value> collect_gc_roots() {
     std::vector<Value> roots;
-    for (Frame &frame : frames_) {
+    for (std::size_t index = 0; index < frames_.size(); ++index) {
+      Frame &frame = frames_[index];
       materialize_integer_regs(frame);
       append_frame_roots(&roots, frame);
     }
@@ -3333,11 +3573,12 @@ private:
       return {};
     }
 
-    for (auto it = frames_.rbegin(); it != frames_.rend(); ++it) {
-      if (it->code != nullptr && it->code->kind == CodeKind::Module) {
+    for (std::size_t index = frames_.size(); index > 0; --index) {
+      const Frame &frame = frames_[index - 1U];
+      if (frame.code != nullptr && frame.code->kind == CodeKind::Module) {
         return text_source_location_for(
-            *it,
-            it->active_call_pc.value_or(static_cast<std::uint32_t>(it->pc)));
+            frame, frame.active_call_pc.value_or(
+                       static_cast<std::uint32_t>(frame.pc)));
       }
     }
 
@@ -3411,13 +3652,14 @@ private:
     const std::uint32_t pc = static_cast<std::uint32_t>(primary.pc);
     Fault fault{error_name, message, code_id, pc};
     fault.trace.push_back(trace_frame_for(primary, pc));
-    for (auto it = frames_.rbegin(); it != frames_.rend(); ++it) {
-      if (&*it == &primary) {
+    for (std::size_t index = frames_.size(); index > 0; --index) {
+      const Frame &frame = frames_[index - 1U];
+      if (&frame == &primary) {
         continue;
       }
       const std::uint32_t frame_pc =
-          it->active_call_pc.value_or(static_cast<std::uint32_t>(it->pc));
-      fault.trace.push_back(trace_frame_for(*it, frame_pc));
+          frame.active_call_pc.value_or(static_cast<std::uint32_t>(frame.pc));
+      fault.trace.push_back(trace_frame_for(frame, frame_pc));
     }
     fault.trace_text =
         format_trace_text(fault.error_name, fault.message, fault.trace);
@@ -4271,12 +4513,13 @@ private:
       }
 
       std::int64_t block_reg = -1;
-      if (!quick_operand_i64(insn, operand_index++, &block_reg) ||
-          (block_reg >= 0 &&
-           block_reg != static_cast<std::int64_t>(
-                            std::numeric_limits<std::uint32_t>::max()))) {
+      if (!quick_operand_i64(insn, operand_index++, &block_reg)) {
         break;
       }
+      const bool has_block =
+          block_reg >= 0 &&
+          block_reg != static_cast<std::int64_t>(
+                           std::numeric_limits<std::uint32_t>::max());
 
       std::uint32_t site_flags = 0;
       std::uint32_t site_id = 0;
@@ -4284,14 +4527,36 @@ private:
           site_id < code.call_site_table.size()) {
         site_flags = code.call_site_table[site_id].flags;
       }
-      if ((site_flags & (bytecode::kCallSiteFlagPropertyAccess |
-                         bytecode::kCallSiteFlagPropertyAssignment)) != 0U) {
+      // Property-style calls (`value.count`, `value.to_str`) are the normal
+      // spelling for zero-argument methods. Native-value quick paths are safe
+      // here because they check the receiver kind and fall back to the full
+      // SEND for instances/attributes. Assignment is the only form that must
+      // bypass method quickening entirely.
+      if ((site_flags & bytecode::kCallSiteFlagPropertyAssignment) != 0U) {
         break;
       }
 
       const std::string &selector = module.symbols[selector_id];
       const std::string &collection_selector =
           canonical_collection_selector(selector);
+      if (has_block) {
+        if (pos_count != 0U) {
+          break;
+        }
+        c = static_cast<std::uint32_t>(block_reg);
+        if (collection_selector == "each") {
+          out.quick_opcode = QuickOpcode::SendSeqEach;
+        } else if (collection_selector == "map") {
+          out.quick_opcode = QuickOpcode::SendSeqMap;
+        } else if (collection_selector == "all?") {
+          out.quick_opcode = QuickOpcode::SendSeqAll;
+        } else if (collection_selector == "any?") {
+          out.quick_opcode = QuickOpcode::SendSeqAny;
+        } else if (collection_selector == "none?") {
+          out.quick_opcode = QuickOpcode::SendSeqNone;
+        }
+        break;
+      }
       imm = static_cast<std::int64_t>(pos_count);
       if (pos_count == 2U) {
         if (collection_selector == "[]=") {
@@ -4299,7 +4564,9 @@ private:
           imm = static_cast<std::int64_t>(second_arg_reg);
         }
       } else if (pos_count == 1U) {
-        if (selector == "+") {
+        if (selector == "===") {
+          out.quick_opcode = QuickOpcode::SendTypeMatches;
+        } else if (selector == "+") {
           out.quick_opcode = QuickOpcode::SendIAdd;
           out.opcode = Opcode::IAdd;
         } else if (selector == "-") {
@@ -4355,6 +4622,8 @@ private:
           out.opcode = Opcode::IShr;
         } else if (collection_selector == "[]") {
           out.quick_opcode = QuickOpcode::SendSeqIndex;
+        } else if (selector == "contains?" || selector == "includes?") {
+          out.quick_opcode = QuickOpcode::SendContains;
         } else if (collection_selector == "include?") {
           out.quick_opcode = QuickOpcode::SendSeqContains;
         } else if (collection_selector == "first") {
@@ -4363,6 +4632,8 @@ private:
       } else {
         if (selector == "to_str") {
           out.quick_opcode = QuickOpcode::SendIntToStr;
+        } else if (selector == "length" || selector == "size") {
+          out.quick_opcode = QuickOpcode::SendLength;
         } else if (collection_selector == "count") {
           out.quick_opcode = QuickOpcode::SendSeqCount;
         } else if (collection_selector == "first") {
@@ -4996,7 +5267,8 @@ private:
                             std::optional<std::uint32_t> caller_result_reg,
                             std::shared_ptr<NonlocalReturnTarget>
                                 inherited_return_target = nullptr) {
-    Frame frame = acquire_frame(code);
+    std::unique_ptr<Frame> frame_owner = acquire_frame(code);
+    Frame &frame = *frame_owner;
     initialize_nonlocal_return_target(frame, code,
                                       std::move(inherited_return_target));
     const std::optional<std::uint32_t> rest_index =
@@ -5027,7 +5299,7 @@ private:
     frame.self = std::move(self);
     frame.block = std::move(block);
     frame.caller_result_reg = caller_result_reg;
-    frames_.push_back(std::move(frame));
+    frames_.push_back(std::move(frame_owner));
   }
 
   void push_frame_from_fast_args(
@@ -5036,7 +5308,8 @@ private:
       std::optional<std::uint32_t> caller_result_reg,
       std::shared_ptr<NonlocalReturnTarget> inherited_return_target =
           nullptr) {
-    Frame frame = acquire_frame(code);
+    std::unique_ptr<Frame> frame_owner = acquire_frame(code);
+    Frame &frame = *frame_owner;
     initialize_nonlocal_return_target(frame, code,
                                       std::move(inherited_return_target));
     const std::optional<std::uint32_t> rest_index =
@@ -5079,7 +5352,7 @@ private:
     frame.self = std::move(self);
     frame.block = std::move(block);
     frame.caller_result_reg = caller_result_reg;
-    frames_.push_back(std::move(frame));
+    frames_.push_back(std::move(frame_owner));
   }
 
   void push_frame(const BcCode &code, const std::vector<Value> &args,
@@ -5132,7 +5405,8 @@ private:
       const std::vector<Value> &args,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
       std::vector<Value> captures, Value self, Value block) {
-    Frame frame = acquire_frame(entry);
+    std::unique_ptr<Frame> frame_owner = acquire_frame(entry);
+    Frame &frame = *frame_owner;
     initialize_nonlocal_return_target(frame, entry, nullptr);
     frame.captures = std::move(captures);
     frame.self = std::move(self);
@@ -5146,83 +5420,89 @@ private:
         !apply_auto_assigns(frame, method, entry)) {
       return false;
     }
-    frames_.push_back(std::move(frame));
+    frames_.push_back(std::move(frame_owner));
     return true;
   }
 
-  Frame acquire_frame(const BcCode &code) {
-    Frame frame;
+  std::unique_ptr<Frame> acquire_frame(const BcCode &code) {
+    std::unique_ptr<Frame> frame;
     auto found = frame_pool_.find(code.code_id);
     if (found != frame_pool_.end() && !found->second.empty()) {
       frame = std::move(found->second.back());
       found->second.pop_back();
     }
+    if (frame == nullptr) {
+      frame = std::make_unique<Frame>();
+    }
 
-    frame.code = &code;
-    frame.quick_code = &quick_code_for(code);
-    frame.pc = 0;
-    if (frame.regs.size() != code.reg_count) {
-      frame.regs.assign(code.reg_count, Value::null());
+    frame->code = &code;
+    frame->quick_code = &quick_code_for(code);
+    frame->pc = 0;
+    if (frame->regs.size() != code.reg_count) {
+      frame->regs.assign(code.reg_count, Value::null());
     }
-    frame.initialized.assign(code.reg_count, 0U);
-    if (frame.int64_regs.size() != code.reg_count) {
-      frame.int64_regs.assign(code.reg_count, 0);
+    if (frame->initialized.size() != code.reg_count) {
+      frame->initialized.assign(code.reg_count, 0U);
     }
-    frame.int_valid.assign(code.reg_count, 0U);
-    frame.captures.clear();
-    frame.self = Value::null();
-    frame.block = Value::null();
-    frame.last_result = Value::null();
-    frame.no_suspend_extent = false;
-    frame.no_suspend_label.clear();
-    frame.caller_result_reg.reset();
-    frame.active_call_pc.reset();
-    frame.return_override.reset();
-    frame.merge_registers_to_caller = false;
-    frame.pending_exception_on_return.reset();
-    frame.pending_throw_on_return.reset();
-    frame.pending_nonlocal_return_on_return.reset();
-    frame.nonlocal_return_target.reset();
-    frame.owns_nonlocal_return_target = false;
-    frame.preserved_registers_on_return.clear();
-    frame.scope_exit = {};
-    frame.prepared_seq_regs.clear();
-    frame.prepared_map_regs.clear();
-    frame.pending_pattern_bindings.clear();
+    if (frame->int64_regs.size() != code.reg_count) {
+      frame->int64_regs.assign(code.reg_count, 0);
+    }
+    if (frame->int_valid.size() != code.reg_count) {
+      frame->int_valid.assign(code.reg_count, 0U);
+    }
+    // recycle_frame establishes the complete clean-frame invariant before a
+    // frame enters this per-code pool. A newly allocated Frame has the same
+    // defaults. Do not clear every field and both register masks a second time
+    // on acquisition; only the code-specific pointers need to be installed.
     return frame;
   }
 
-  void recycle_frame(Frame &&frame) {
-    if (frame.code == nullptr) {
+  void recycle_frame(std::unique_ptr<Frame> frame) {
+    if (frame == nullptr || frame->code == nullptr) {
       return;
     }
     constexpr std::size_t kMaxPooledFramesPerCode = 16;
-    const std::uint32_t code_id = frame.code->code_id;
-    frame.code = nullptr;
-    frame.quick_code = nullptr;
-    frame.pc = 0;
-    frame.captures.clear();
-    frame.self = Value::null();
-    frame.block = Value::null();
-    frame.last_result = Value::null();
-    frame.no_suspend_extent = false;
-    frame.no_suspend_label.clear();
-    frame.caller_result_reg.reset();
-    frame.active_call_pc.reset();
-    frame.return_override.reset();
-    frame.merge_registers_to_caller = false;
-    frame.pending_exception_on_return.reset();
-    frame.pending_throw_on_return.reset();
-    frame.pending_nonlocal_return_on_return.reset();
-    frame.nonlocal_return_target.reset();
-    frame.owns_nonlocal_return_target = false;
-    frame.preserved_registers_on_return.clear();
-    frame.scope_exit = {};
-    frame.prepared_seq_regs.clear();
-    frame.prepared_map_regs.clear();
-    frame.pending_pattern_bindings.clear();
+    const std::uint32_t code_id = frame->code->code_id;
+    frame->code = nullptr;
+    frame->quick_code = nullptr;
+    frame->pc = 0;
+    // Keep register-buffer capacity, not request-owned object graphs. Every
+    // initialized boxed register must release its Value before the frame sits
+    // idle in the per-code pool; integer sidecars already keep their boxed
+    // slot null. Uninitialized slots are guaranteed null by this same recycle
+    // invariant.
+    const std::size_t initialized_count =
+        std::min(frame->regs.size(), frame->initialized.size());
+    for (std::size_t index = 0; index < initialized_count; ++index) {
+      if (frame->initialized[index] != 0U) {
+        frame->regs[index] = Value::null();
+      }
+    }
+    std::fill(frame->initialized.begin(), frame->initialized.end(), 0U);
+    std::fill(frame->int_valid.begin(), frame->int_valid.end(), 0U);
+    frame->captures.clear();
+    frame->self = Value::null();
+    frame->block = Value::null();
+    frame->last_result = Value::null();
+    frame->no_suspend_extent = false;
+    frame->no_suspend_label.clear();
+    frame->caller_result_reg.reset();
+    frame->direct_return_sink = nullptr;
+    frame->active_call_pc.reset();
+    frame->return_override.reset();
+    frame->merge_registers_to_caller = false;
+    frame->pending_exception_on_return.reset();
+    frame->pending_throw_on_return.reset();
+    frame->pending_nonlocal_return_on_return.reset();
+    frame->nonlocal_return_target.reset();
+    frame->owns_nonlocal_return_target = false;
+    frame->preserved_registers_on_return.clear();
+    frame->scope_exit = {};
+    frame->prepared_seq_regs.clear();
+    frame->prepared_map_regs.clear();
+    frame->pending_pattern_bindings.clear();
 
-    std::vector<Frame> &bucket = frame_pool_[code_id];
+    std::vector<std::unique_ptr<Frame>> &bucket = frame_pool_[code_id];
     if (bucket.size() < kMaxPooledFramesPerCode) {
       bucket.push_back(std::move(frame));
     }
@@ -6354,21 +6634,21 @@ private:
                 "LOOKUP_CONST expects path constant in current runtime");
       return Value::null();
     }
+    if (const_id < state_->resolved_class_refs.size()) {
+      const std::uint32_t resolved = state_->resolved_class_refs[const_id];
+      if (resolved == RuntimeState::kClassRefAmbiguous) {
+        set_fault(frame, "VMError", "class path ref is ambiguous");
+        return Value::null();
+      }
+      if (resolved != RuntimeState::kClassRefUnknown) {
+        return Value::class_object(resolved);
+      }
+    }
     std::vector<std::string> segments;
     if (!path_segments_from_constant(frame, constant, &segments)) {
       return Value::null();
     }
     std::uint32_t class_index = 0;
-    bool ambiguous = false;
-    const std::optional<std::uint32_t> class_match =
-        lookup_class_by_path_segments_no_fault(segments, &ambiguous);
-    if (class_match.has_value()) {
-      return Value::class_object(*class_match);
-    }
-    if (ambiguous) {
-      set_fault(frame, "VMError", "class path ref is ambiguous");
-      return Value::null();
-    }
     if (std::optional<Value> native_value =
             lookup_native_prelude_constant(segments)) {
       return *native_value;
@@ -6826,8 +7106,7 @@ private:
       return symbol_id;
     }
     if (key.is_string()) {
-      const std::optional<std::string> text =
-          string_text_from_id(key.as_string().string_id);
+      const std::optional<std::string> text = string_text_from_value(key);
       if (!text.has_value()) {
         set_fault(frame, "VMError",
                   "keyword argument spread string key ref is invalid");
@@ -6992,7 +7271,7 @@ private:
     for (const MapEntry &entry : *entries) {
       std::optional<std::string> key;
       if (entry.key.is_string()) {
-        key = string_text_from_id(entry.key.as_string().string_id);
+        key = string_text_from_value(entry.key);
       } else if (entry.key.is_symbol()) {
         const std::uint32_t symbol_id = entry.key.as_symbol().symbol_id;
         if (symbol_id < runtime_symbols_.size()) {
@@ -7003,7 +7282,7 @@ private:
         continue;
       }
       const std::optional<std::string> schema =
-          string_text_from_id(entry.value.as_string().string_id);
+          string_text_from_value(entry.value);
       return schema.has_value() && *schema == expected_schema;
     }
     return false;
@@ -7129,8 +7408,7 @@ private:
       return symbol_id;
     }
     if (key.is_string()) {
-      const std::optional<std::string> text =
-          string_text_from_id(key.as_string().string_id);
+      const std::optional<std::string> text = string_text_from_value(key);
       if (!text.has_value()) {
         set_fault(frame, "VMError", context + " string key ref is invalid");
         return std::nullopt;
@@ -7221,43 +7499,78 @@ private:
     static const std::string kEach = "each";
     static const std::string kToA = "to_array";
     static const std::string kCount = "count";
-    if (selector == "collect") {
-      return kMap;
-    }
-    if (selector == "collect_concat") {
-      return kFlatMap;
-    }
-    if (selector == "filter" || selector == "find_all") {
-      return kSelect;
-    }
-    if (selector == "detect") {
-      return kFind;
-    }
-    if (selector == "inject") {
-      return kReduce;
-    }
-    if (selector == "member?" || selector == "includes?" ||
-        selector == "has_key?" || selector == "key?") {
-      return kInclude;
-    }
-    if (selector == "each_slice") {
-      return kEach;
-    }
-    if (selector == "entries") {
-      return kToA;
-    }
-    if (selector == "to_array") {
-      return kToA;
-    }
-    if (selector == "length" || selector == "size") {
-      return kCount;
+    const SelectorKey key(selector);
+    // Canonical selectors dominate real programs. Dispatch aliases by length
+    // so `each`, `map`, `count`, etc. do not fail every alias comparison first.
+    switch (selector.size()) {
+    case 4:
+      if (key == "key?") {
+        return kInclude;
+      }
+      if (key == "size") {
+        return kCount;
+      }
+      break;
+    case 6:
+      if (key == "filter") {
+        return kSelect;
+      }
+      if (key == "detect") {
+        return kFind;
+      }
+      if (key == "inject") {
+        return kReduce;
+      }
+      if (key == "length") {
+        return kCount;
+      }
+      break;
+    case 7:
+      if (key == "collect") {
+        return kMap;
+      }
+      if (key == "member?") {
+        return kInclude;
+      }
+      if (key == "entries") {
+        return kToA;
+      }
+      break;
+    case 8:
+      if (key == "find_all") {
+        return kSelect;
+      }
+      if (key == "has_key?") {
+        return kInclude;
+      }
+      if (key == "to_array") {
+        return kToA;
+      }
+      break;
+    case 9:
+      if (key == "includes?") {
+        return kInclude;
+      }
+      break;
+    case 10:
+      if (key == "each_slice") {
+        return kEach;
+      }
+      break;
+    case 14:
+      if (key == "collect_concat") {
+        return kFlatMap;
+      }
+      break;
+    default:
+      break;
     }
     return selector;
   }
 
   static bool collection_size_selector(const std::string &selector) {
     const std::string &canonical = canonical_collection_selector(selector);
-    return canonical == "count";
+    return SelectorKey(canonical) == "count";
   }
 
   std::optional<std::size_t>
@@ -7598,10 +7911,8 @@ private:
       return left.as_bool() == right.as_bool() ? 0 : (left.as_bool() ? 1 : -1);
     }
     if (left.is_string() && right.is_string()) {
-      const std::optional<std::string> lhs =
-          string_text_from_id(left.as_string().string_id);
-      const std::optional<std::string> rhs =
-          string_text_from_id(right.as_string().string_id);
+      const std::optional<std::string> lhs = string_text_from_value(left);
+      const std::optional<std::string> rhs = string_text_from_value(right);
       if (!lhs.has_value() || !rhs.has_value()) {
         set_fault(frame, "VMError", "sort string ref is invalid");
         return std::nullopt;
@@ -8203,7 +8514,7 @@ private:
           return std::nullopt;
         }
         const std::optional<std::string> text =
-            string_text_from_id(args[0].as_string().string_id);
+            string_text_from_value(args[0]);
         if (!text.has_value()) {
           set_fault(frame, "VMError", "string ref is invalid");
           return std::nullopt;
@@ -9628,24 +9939,45 @@ private:
 
   std::optional<std::string>
   selector_text_from_symbol(std::uint32_t symbol_id) {
-    if (symbol_id >= runtime_symbols_.size()) {
+    if (symbol_id < runtime_symbols_.size()) {
+      return runtime_symbols_[symbol_id];
+    }
+    const auto cached = shared_symbol_text_cache_.find(symbol_id);
+    if (cached != shared_symbol_text_cache_.end()) {
+      return cached->second;
+    }
+    if (shared_runtime_names_ == nullptr) {
       return std::nullopt;
     }
-    return runtime_symbols_[symbol_id];
+    std::optional<std::string> text =
+        shared_runtime_names_->symbol_text(symbol_id);
+    if (!text.has_value()) {
+      return std::nullopt;
+    }
+    shared_symbol_id_cache_.emplace(*text, symbol_id);
+    shared_symbol_text_cache_.emplace(symbol_id, *text);
+    return text;
   }
 
   std::optional<std::string> string_text_from_id(std::uint32_t string_id) {
-    if (string_id >= runtime_strings_.size()) {
+    if (string_id < runtime_strings_.size()) {
+      return runtime_strings_[string_id];
+    }
+    const auto cached = shared_string_text_cache_.find(string_id);
+    if (cached != shared_string_text_cache_.end()) {
+      return cached->second;
+    }
+    if (shared_runtime_names_ == nullptr) {
       return std::nullopt;
     }
-    return runtime_strings_[string_id];
-  }
-
-  const std::string *string_text_ptr_from_id(std::uint32_t string_id) {
-    if (string_id >= runtime_strings_.size()) {
-      return nullptr;
+    std::optional<std::string> text =
+        shared_runtime_names_->string_text(string_id);
+    if (!text.has_value()) {
+      return std::nullopt;
     }
-    return &runtime_strings_[string_id];
+    shared_string_id_cache_.emplace(*text, string_id);
+    shared_string_text_cache_.emplace(string_id, *text);
+    return text;
   }
 
   // Fold any string-table slots that were appended outside intern (e.g.
@@ -9673,22 +10005,70 @@ private:
     string_index_folded_ = runtime_strings_.size();
   }
 
-  std::uint32_t intern_runtime_string(const std::string &text) {
+  Value runtime_string_value(const std::string &text) {
     fold_string_index();
     const std::size_t hash = std::hash<std::string>{}(text);
     const auto existing = string_index_.find(hash);
     if (existing != string_index_.end()) {
       for (const std::uint32_t id : existing->second) {
         if (id < runtime_strings_.size() && runtime_strings_[id] == text) {
-          return id;
+          return Value::string(id);
         }
       }
     }
-    const std::uint32_t id = static_cast<std::uint32_t>(runtime_strings_.size());
-    runtime_strings_.push_back(text);
-    string_index_[hash].push_back(id);
-    string_index_folded_ = runtime_strings_.size();
-    return id;
+    const auto cached = shared_string_id_cache_.find(text);
+    if (cached != shared_string_id_cache_.end()) {
+      return Value::string(cached->second);
+    }
+    if (shared_runtime_names_ != nullptr) {
+      const std::optional<std::uint32_t> id =
+          shared_runtime_names_->string_id(text);
+      if (id.has_value()) {
+        shared_string_id_cache_.emplace(text, *id);
+        shared_string_text_cache_.emplace(*id, text);
+        return Value::string(*id);
+      }
+    }
+    auto owned = std::make_shared<RuntimeHeapStringValue>();
+    owned->text = text;
+    return Value::heap_string(std::move(owned));
+  }
+
+  const std::string *string_text_ref_from_value(const Value &value) {
+    if (!value.is_string()) {
+      return nullptr;
+    }
+    if (value.is_heap_string()) {
+      const std::shared_ptr<RuntimeHeapStringValue> owned =
+          value.as_heap_string();
+      return owned == nullptr ? nullptr : &owned->text;
+    }
+    const std::uint32_t string_id = value.as_string().string_id;
+    if (string_id < runtime_strings_.size()) {
+      return &runtime_strings_[string_id];
+    }
+    const auto cached = shared_string_text_cache_.find(string_id);
+    if (cached != shared_string_text_cache_.end()) {
+      return &cached->second;
+    }
+    if (shared_runtime_names_ == nullptr) {
+      return nullptr;
+    }
+    std::optional<std::string> text =
+        shared_runtime_names_->string_text(string_id);
+    if (!text.has_value()) {
+      return nullptr;
+    }
+    shared_string_id_cache_.emplace(*text, string_id);
+    const auto inserted =
+        shared_string_text_cache_.emplace(string_id, std::move(*text));
+    return &inserted.first->second;
+  }
+
+  std::optional<std::string> string_text_from_value(const Value &value) {
+    const std::string *text = string_text_ref_from_value(value);
+    return text == nullptr ? std::nullopt
+                           : std::optional<std::string>(*text);
   }
 
   void fold_symbol_index() {
@@ -9705,6 +10085,19 @@ private:
     if (existing != symbol_index_.end()) {
       return existing->second;
     }
+    const auto cached = shared_symbol_id_cache_.find(text);
+    if (cached != shared_symbol_id_cache_.end()) {
+      return cached->second;
+    }
+    if (shared_runtime_names_ != nullptr) {
+      const std::optional<std::uint32_t> id =
+          shared_runtime_names_->symbol_id(text);
+      if (id.has_value()) {
+        shared_symbol_id_cache_.emplace(text, *id);
+        shared_symbol_text_cache_.emplace(*id, text);
+      }
+      return id;
+    }
     return std::nullopt;
   }
 
@@ -9712,6 +10105,12 @@ private:
     if (const std::optional<std::uint32_t> existing =
             symbol_id_for_text(text)) {
       return *existing;
+    }
+    if (shared_runtime_names_ != nullptr) {
+      const std::uint32_t id = shared_runtime_names_->intern_symbol(text);
+      shared_symbol_id_cache_.emplace(text, id);
+      shared_symbol_text_cache_.emplace(id, text);
+      return id;
     }
     const std::uint32_t id = static_cast<std::uint32_t>(runtime_symbols_.size());
     runtime_symbols_.push_back(text);
@@ -9730,7 +10129,7 @@ private:
     }
     if (key.is_string()) {
       if (const std::optional<std::string> text =
-              string_text_from_id(key.as_string().string_id)) {
+              string_text_from_value(key)) {
         return intern_runtime_symbol(*text);
       }
     }
@@ -9748,7 +10147,7 @@ private:
     }
     if (key.is_string()) {
       if (const std::optional<std::string> text =
-              string_text_from_id(key.as_string().string_id)) {
+              string_text_from_value(key)) {
         return symbol_id_for_text(*text);
       }
     }
@@ -9914,8 +10313,7 @@ private:
 
   ConversionResult display_string_value(const Value &value) {
     if (value.is_string()) {
-      const std::optional<std::string> text =
-          string_text_from_id(value.as_string().string_id);
+      const std::optional<std::string> text = string_text_from_value(value);
       if (!text.has_value()) {
         return conversion_error("VMError", "string ref is invalid");
       }
@@ -9927,21 +10325,20 @@ private:
       if (!text.has_value()) {
         return conversion_error("VMError", "symbol ref is invalid");
       }
-      return conversion_ok(Value::string(intern_runtime_string(*text)));
+      return conversion_ok(runtime_string_value(*text));
     }
     if (value.is_float()) {
-      return conversion_ok(Value::string(
-          intern_runtime_string(display_float_text(value.as_float()))));
+      return conversion_ok(runtime_string_value(
+          display_float_text(value.as_float())));
     }
     if (value.is_native_type()) {
-      return conversion_ok(Value::string(intern_runtime_string(
+      return conversion_ok(runtime_string_value(
           std::string("<type ") +
-          native_type_name(value.as_native_type().kind) + ">")));
+          native_type_name(value.as_native_type().kind) + ">"));
     }
-    return conversion_ok(
-        Value::string(intern_runtime_string(runtime_stringify_value(
-            value, RuntimeStringifyMode::Display, &module_, &runtime_strings_,
-            &runtime_symbols_))));
+    return conversion_ok(runtime_string_value(runtime_stringify_value(
+        value, RuntimeStringifyMode::Display, &module_, &runtime_strings_,
+        &runtime_symbols_)));
   }
 
   ConversionResult convert_value_to_native_type(const Frame &frame,
@@ -9965,7 +10362,7 @@ private:
       }
       if (value.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(value.as_string().string_id);
+            string_text_from_value(value);
         std::int64_t parsed = 0;
         if (!text.has_value()) {
           return conversion_error("VMError", "string ref is invalid");
@@ -9999,7 +10396,7 @@ private:
       }
       if (value.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(value.as_string().string_id);
+            string_text_from_value(value);
         if (!text.has_value()) {
           return conversion_error("VMError", "string ref is invalid");
         }
@@ -10023,7 +10420,7 @@ private:
       }
       if (value.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(value.as_string().string_id);
+            string_text_from_value(value);
         double parsed = 0.0;
         if (!text.has_value()) {
           return conversion_error("VMError", "string ref is invalid");
@@ -10042,7 +10439,7 @@ private:
       }
       if (value.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(value.as_string().string_id);
+            string_text_from_value(value);
         if (!text.has_value()) {
           return conversion_error("VMError", "string ref is invalid");
         }
@@ -10062,7 +10459,7 @@ private:
       }
       if (value.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(value.as_string().string_id);
+            string_text_from_value(value);
         if (!text.has_value()) {
           return conversion_error("VMError", "string ref is invalid");
         }
@@ -10256,11 +10653,7 @@ private:
       return selector_text_from_symbol(value.as_symbol().symbol_id);
     }
     if (value.is_string()) {
-      const std::uint32_t string_id = value.as_string().string_id;
-      if (string_id >= runtime_strings_.size()) {
-        return std::nullopt;
-      }
-      return runtime_strings_[string_id];
+      return string_text_from_value(value);
     }
     return std::nullopt;
   }
@@ -10292,20 +10685,16 @@ private:
         klass.superclass_ref >= module_.const_pool.size()) {
       return std::nullopt;
     }
-    const Constant &constant = module_.const_pool[klass.superclass_ref];
-    if (constant.kind != ConstantKind::Path || constant.items.empty()) {
+    if (klass.superclass_ref >= state_->resolved_class_refs.size()) {
       return std::nullopt;
     }
-    std::vector<std::string> segments;
-    segments.reserve(constant.items.size());
-    for (const std::uint32_t symbol_id : constant.items) {
-      if (symbol_id >= runtime_symbols_.size()) {
-        return std::nullopt;
-      }
-      segments.push_back(runtime_symbols_[symbol_id]);
+    const std::uint32_t resolved =
+        state_->resolved_class_refs[klass.superclass_ref];
+    if (resolved == RuntimeState::kClassRefUnknown ||
+        resolved == RuntimeState::kClassRefAmbiguous) {
+      return std::nullopt;
     }
-    bool ambiguous = false;
-    return lookup_class_by_path_segments_no_fault(segments, &ambiguous);
+    return resolved;
   }
 
   bool class_has_effective_flag(std::uint32_t class_index,
@@ -10404,7 +10793,7 @@ private:
     }
     if (exception.is_string()) {
       const std::optional<std::string> name =
-          string_text_from_id(exception.as_string().string_id);
+          string_text_from_value(exception);
       if (name.has_value()) {
         return *name;
       }
@@ -10423,7 +10812,7 @@ private:
           instance_ivar_value_or_null(exception.as_instance_object(), "message");
       if (message.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(message.as_string().string_id);
+            string_text_from_value(message);
         if (text.has_value()) {
           return *text;
         }
@@ -11189,12 +11578,8 @@ private:
                     "missing default thunk for parameter slot");
           return false;
         }
-        Vm nested(module_owner_, state_, module_id_, world_options_,
-                  capabilities_, effects_, trace_recorder_,
-                  child_native_registry(), child_module_registry(),
-                  child_type_registry(), child_dispatch_registry(),
-                  child_error_registry(), macro_block_executor_);
-        sync_runtime_names_to(nested);
+        BlockVmLease lease = acquire_block_vm();
+        Vm &nested = *lease.vm;
         const ExecutionResult result =
             nested.execute(method.default_thunk_ids[thunk_index], frame.regs,
                            frame.self, frame.block);
@@ -11219,9 +11604,10 @@ private:
   // property-arm frame when execution is currently inside one (dynamic
   // extent, including frames pushed transitively and inherited nested Vms).
   const std::string *active_no_suspend_label() const {
-    for (auto it = frames_.rbegin(); it != frames_.rend(); ++it) {
-      if (it->no_suspend_extent) {
-        return &it->no_suspend_label;
+    for (std::size_t index = frames_.size(); index > 0; --index) {
+      const Frame &frame = frames_[index - 1U];
+      if (frame.no_suspend_extent) {
+        return &frame.no_suspend_label;
       }
     }
     if (inherited_no_suspend_label_.has_value()) {
@@ -11255,12 +11641,9 @@ private:
       return out;
     }
 
-    Vm nested(module_owner_, state_, module_id_, world_options_, capabilities_,
-              effects_, trace_recorder_, child_native_registry(),
-              child_module_registry(), child_type_registry(),
-              child_dispatch_registry(), child_error_registry(),
-              macro_block_executor_);
-    sync_runtime_names_to(nested);
+    BlockVmLease lease = acquire_block_vm();
+    Vm &nested = *lease.vm;
+    nested.capture_completed_frames_ = true;
     if (const std::string *label = active_no_suspend_label()) {
       nested.inherited_no_suspend_label_ = *label;
     }
@@ -11288,17 +11671,15 @@ private:
     out.regs = std::move(nested.last_completed_regs_);
     out.initialized = std::move(nested.last_completed_initialized_);
     out.fault = nested.fault_;
+    nested.capture_completed_frames_ = false;
     return out;
   }
 
   NestedExecution execute_prepared_frame(Frame frame) {
     NestedExecution out;
-    Vm nested(module_owner_, state_, module_id_, world_options_, capabilities_,
-              effects_, trace_recorder_, child_native_registry(),
-              child_module_registry(), child_type_registry(),
-              child_dispatch_registry(), child_error_registry(),
-              macro_block_executor_);
-    sync_runtime_names_to(nested);
+    BlockVmLease lease = acquire_block_vm();
+    Vm &nested = *lease.vm;
+    nested.capture_completed_frames_ = true;
     if (const std::string *label = active_no_suspend_label()) {
       nested.inherited_no_suspend_label_ = *label;
     }
@@ -11310,6 +11691,7 @@ private:
     out.regs = std::move(nested.last_completed_regs_);
     out.initialized = std::move(nested.last_completed_initialized_);
     out.fault = nested.fault_;
+    nested.capture_completed_frames_ = false;
     return out;
   }
 
@@ -11714,8 +12096,7 @@ private:
     auto instance = make_native_error_instance(error_id);
     if (!pos_args.empty()) {
       if (pos_args[0].is_string()) {
-        instance->message =
-            string_text_from_id(pos_args[0].as_string().string_id).value_or("");
+        instance->message = string_text_from_value(pos_args[0]).value_or("");
       } else {
         instance->message = value_to_debug_string(
             pos_args[0], &module_, &runtime_strings_, &runtime_symbols_);
@@ -11740,8 +12121,7 @@ private:
         }
         message_keyword_seen = true;
         if (value.is_string()) {
-          instance->message =
-              string_text_from_id(value.as_string().string_id).value_or("");
+          instance->message = string_text_from_value(value).value_or("");
         } else {
           instance->message = value_to_debug_string(
               value, &module_, &runtime_strings_, &runtime_symbols_);
@@ -12127,15 +12507,16 @@ private:
         return true;
       }
     }
+    const BcCode *code = find_code(module_, method.entry_code_id);
+    if (code == nullptr) {
+      set_fault(caller, "VMError", "method entry code id is unknown");
+      return false;
+    }
+
     std::vector<bytecode::MethodParamEntry> params;
     std::vector<BoundMethodArg> slots;
     if (!shape_method_call(caller, method, pos_args, kw_args, &params,
                            &slots)) {
-      return false;
-    }
-    const BcCode *code = find_code(module_, method.entry_code_id);
-    if (code == nullptr) {
-      set_fault(caller, "VMError", "method entry code id is unknown");
       return false;
     }
     if (!method.clause_table.empty()) {
@@ -12170,11 +12551,21 @@ private:
       set_fault(frame, "VMError", "class ref must point to path constant");
       return false;
     }
-    std::vector<std::string> segments;
-    if (!path_segments_from_constant(frame, constant, &segments)) {
+    if (path_ref >= state_->resolved_class_refs.size()) {
+      set_fault(frame, "VMError", "class path ref target is unknown");
       return false;
     }
-    return find_class_by_path_segments(frame, segments, out_class_index);
+    const std::uint32_t resolved = state_->resolved_class_refs[path_ref];
+    if (resolved == RuntimeState::kClassRefAmbiguous) {
+      set_fault(frame, "VMError", "class path ref is ambiguous");
+      return false;
+    }
+    if (resolved == RuntimeState::kClassRefUnknown) {
+      set_fault(frame, "VMError", "class path ref target is unknown");
+      return false;
+    }
+    *out_class_index = resolved;
+    return true;
   }
 
   const bytecode::BcMethod *
@@ -12588,8 +12979,8 @@ private:
   }
 
   void unwind_all_frame_scopes() {
-    for (auto frame = frames_.rbegin(); frame != frames_.rend(); ++frame) {
-      run_frame_scope_exit(*frame);
+    for (std::size_t index = frames_.size(); index > 0; --index) {
+      run_frame_scope_exit(frames_[index - 1U]);
     }
   }
 
@@ -12597,8 +12988,8 @@ private:
                                       Value *exception) {
     while (frames_.size() > target_index + 1U) {
       run_frame_scope_exit(frames_.back());
-      Frame completed_frame = std::move(frames_.back());
-      frames_.pop_back();
+      std::unique_ptr<Frame> completed_owner = frames_.take_back();
+      Frame &completed_frame = *completed_owner;
       if (exception != nullptr &&
           completed_frame.pending_exception_on_return.has_value()) {
         append_suppressed_exception(
@@ -12607,11 +12998,11 @@ private:
       if (completed_frame.merge_registers_to_caller && !frames_.empty()) {
         Frame &caller = frames_.back();
         if (!merge_frame_registers(caller, completed_frame)) {
-          recycle_frame(std::move(completed_frame));
+          recycle_frame(std::move(completed_owner));
           return false;
         }
       }
-      recycle_frame(std::move(completed_frame));
+      recycle_frame(std::move(completed_owner));
     }
     return true;
   }
@@ -12627,7 +13018,8 @@ private:
           pending_nonlocal_return_on_return = std::nullopt,
       std::vector<PreservedRegister> preserved_registers_on_return = {}) {
     materialize_integer_regs(target);
-    Frame handler = acquire_frame(handler_code);
+    std::unique_ptr<Frame> handler_owner = acquire_frame(handler_code);
+    Frame &handler = *handler_owner;
     const std::size_t count = std::min(handler.regs.size(), target.regs.size());
     for (std::size_t index = 0; index < count; ++index) {
       const bool initialized =
@@ -12657,10 +13049,10 @@ private:
     handler.preserved_registers_on_return =
         std::move(preserved_registers_on_return);
     if (!write_reg(handler, exception_slot, exception)) {
-      recycle_frame(std::move(handler));
+      recycle_frame(std::move(handler_owner));
       return false;
     }
-    frames_.push_back(std::move(handler));
+    frames_.push_back(std::move(handler_owner));
     return true;
   }
 
@@ -12685,6 +13077,7 @@ private:
     }
     const BcCode *completed_code = frame.code;
     const std::optional<std::uint32_t> caller_reg = frame.caller_result_reg;
+    std::optional<Value> *direct_return_sink = frame.direct_return_sink;
     const std::optional<Value> pending_exception =
         frame.pending_exception_on_return;
     const std::optional<PendingThrow> pending_throw =
@@ -12692,8 +13085,8 @@ private:
     const std::optional<PendingNonlocalReturn> pending_nonlocal_return =
         frame.pending_nonlocal_return_on_return;
     run_frame_scope_exit(frame);
-    Frame completed_frame = std::move(frames_.back());
-    frames_.pop_back();
+    std::unique_ptr<Frame> completed_owner = frames_.take_back();
+    Frame &completed_frame = *completed_owner;
     if (capture_completed_frame) {
       last_completed_regs_ = std::move(completed_regs);
       last_completed_initialized_ = std::move(completed_initialized);
@@ -12723,39 +13116,46 @@ private:
       } else {
         final_value_ = value;
       }
-      recycle_frame(std::move(completed_frame));
+      recycle_frame(std::move(completed_owner));
       return;
     }
 
     Frame &caller = frames_.back();
-    caller.active_call_pc.reset();
+    if (direct_return_sink == nullptr) {
+      caller.active_call_pc.reset();
+    }
     if (merge_registers && !merge_frame_registers(caller, completed_frame)) {
-      recycle_frame(std::move(completed_frame));
+      recycle_frame(std::move(completed_owner));
       return;
     }
     if (pending_exception.has_value()) {
       Value exception = *pending_exception;
-      recycle_frame(std::move(completed_frame));
+      recycle_frame(std::move(completed_owner));
       raise_value(caller, exception);
       return;
     }
     if (pending_throw.has_value()) {
       PendingThrow pending = *pending_throw;
-      recycle_frame(std::move(completed_frame));
+      recycle_frame(std::move(completed_owner));
       throw_value(caller, pending.tag, pending.value, pending.value_present);
       return;
     }
     if (pending_nonlocal_return.has_value()) {
       PendingNonlocalReturn pending = *pending_nonlocal_return;
-      recycle_frame(std::move(completed_frame));
+      recycle_frame(std::move(completed_owner));
       nonlocal_return_value(caller, pending.target, pending.value);
       return;
     }
-    if (!caller_reg.has_value() || !write_reg(caller, *caller_reg, value)) {
-      recycle_frame(std::move(completed_frame));
+    if (direct_return_sink != nullptr) {
+      *direct_return_sink = std::move(value);
+      recycle_frame(std::move(completed_owner));
       return;
     }
-    recycle_frame(std::move(completed_frame));
+    if (!caller_reg.has_value() || !write_reg(caller, *caller_reg, value)) {
+      recycle_frame(std::move(completed_owner));
+      return;
+    }
+    recycle_frame(std::move(completed_owner));
   }
 
   bool nonlocal_return_value(
@@ -12894,8 +13294,9 @@ private:
           handler_exception_slot(handler->flags),
           handler_result_slot(handler->flags), true, std::nullopt);
     }
-    push_frame(*handler_code, {active_exception}, target.captures, target.self,
-               target.block, 0U, target.nonlocal_return_target);
+    push_frame(*handler_code, {active_exception}, target.captures,
+               target.self, target.block, 0U,
+               target.nonlocal_return_target);
     return true;
   }
 
@@ -13074,6 +13475,8 @@ private:
     std::shared_ptr<const BcModule> module = module_owner_;
     std::vector<std::string> runtime_strings = runtime_strings_;
     std::vector<std::string> runtime_symbols = runtime_symbols_;
+    std::shared_ptr<SharedRuntimeNamePool> runtime_names =
+        shared_runtime_names_;
     std::shared_ptr<RuntimeState> runtime_state = state_;
     std::string module_id = module_id_;
     const RuntimeWorldOptions *world_options = world_options_;
@@ -13087,6 +13490,7 @@ private:
         [module = std::move(module),
          runtime_strings = std::move(runtime_strings),
          runtime_symbols = std::move(runtime_symbols),
+         runtime_names = std::move(runtime_names),
          runtime_state = std::move(runtime_state),
          module_id = std::move(module_id), code_id,
          captures = std::move(captures), self = std::move(self), world_options,
@@ -13098,8 +13502,10 @@ private:
           }
           Vm nested(module, runtime_state, module_id, world_options,
                     capabilities, effects, trace_recorder, nullptr, nullptr,
-                    nullptr, nullptr, nullptr, {}, true);
-          nested.synchronize_runtime_names(runtime_strings, runtime_symbols);
+                    nullptr, nullptr, nullptr, {}, true, runtime_names);
+          if (runtime_names == nullptr) {
+            nested.synchronize_runtime_names(runtime_strings, runtime_symbols);
+          }
           nested.push_frame(*code, args, captures, self, Value::null(),
                             std::nullopt);
           while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
@@ -13123,9 +13529,13 @@ private:
   // its terminal record is unlinked; retaining this small shared owner there
   // is bounded, while retaining a private BcModule per connection is not.
   struct ResumableTaskTemplate {
+    struct VmPool {
+      std::mutex mutex;
+      std::vector<std::unique_ptr<Vm>> idle;
+    };
+
     std::shared_ptr<const BcModule> module;
-    std::vector<std::string> runtime_strings;
-    std::vector<std::string> runtime_symbols;
+    std::shared_ptr<SharedRuntimeNamePool> runtime_names;
     std::shared_ptr<RuntimeState> runtime_state;
     std::string module_id;
     const RuntimeWorldOptions *world_options = nullptr;
@@ -13143,6 +13553,7 @@ private:
     const RuntimeTypeRegistry *child_types = nullptr;
     const RuntimeDispatchRegistry *child_dispatch = nullptr;
     const RuntimeErrorRegistry *child_errors = nullptr;
+    std::shared_ptr<VmPool> vm_pool = std::make_shared<VmPool>();
   };
 
   std::optional<ResumableTaskFactory>
@@ -13184,8 +13595,11 @@ private:
 
     auto mutable_template = std::make_shared<ResumableTaskTemplate>();
     mutable_template->module = module_owner_;
-    mutable_template->runtime_strings = runtime_strings_;
-    mutable_template->runtime_symbols = runtime_symbols_;
+    if (shared_runtime_names_ == nullptr) {
+      shared_runtime_names_ = std::make_shared<SharedRuntimeNamePool>(
+          runtime_strings_, runtime_symbols_);
+    }
+    mutable_template->runtime_names = shared_runtime_names_;
     mutable_template->runtime_state = state_;
     mutable_template->module_id = module_id_;
     mutable_template->world_options = world_options_;
@@ -13207,22 +13621,71 @@ private:
         std::move(mutable_template);
 
     return [template_state](std::vector<Value> args) -> std::function<Value()> {
-      // The persistent VM shares the immutable module image while keeping its
-      // runtime name overlay private. The shared owner keeps frame code
-      // pointers valid independently of the spawning VM.
+      // A request/task VM is leased for the complete suspendable invocation.
+      // Reusing it after completion preserves quickened code, inline caches,
+      // frame capacities, and child-block VMs. Without this pool every HTTP
+      // request pays cold VM construction and destroys the very caches meant
+      // to accelerate the interpreter.
+      std::unique_ptr<Vm> owned_vm;
+      {
+        std::lock_guard<std::mutex> lock(template_state->vm_pool->mutex);
+        if (!template_state->vm_pool->idle.empty()) {
+          owned_vm = std::move(template_state->vm_pool->idle.back());
+          template_state->vm_pool->idle.pop_back();
+        }
+      }
+      if (owned_vm == nullptr) {
+        owned_vm = std::make_unique<Vm>(
+            template_state->module, template_state->runtime_state,
+            template_state->module_id, template_state->world_options,
+            template_state->capabilities, template_state->effects,
+            template_state->trace_recorder, template_state->child_registry,
+            template_state->child_modules, template_state->child_types,
+            template_state->child_dispatch, template_state->child_errors,
+            std::function<ExecutionResult(const Value &)>{}, true,
+            template_state->runtime_names);
+      }
+      const std::shared_ptr<typename ResumableTaskTemplate::VmPool> vm_pool =
+          template_state->vm_pool;
       std::shared_ptr<Vm> vm(
-          new Vm(template_state->module, template_state->runtime_state,
-                 template_state->module_id, template_state->world_options,
-                 template_state->capabilities, template_state->effects,
-                 template_state->trace_recorder, template_state->child_registry,
-                 template_state->child_modules, template_state->child_types,
-                 template_state->child_dispatch, template_state->child_errors,
-                 {}, true));
-      vm->synchronize_runtime_names(template_state->runtime_strings,
-                                    template_state->runtime_symbols);
+          owned_vm.release(), [vm_pool](Vm *completed) {
+            // Fault/cancellation may leave live frames. Run dynamic-scope
+            // cleanup, then recycle those frames so their register buffers are
+            // reusable while all request-owned Values are released.
+            completed->unwind_all_frame_scopes();
+            while (!completed->frames_.empty()) {
+              completed->recycle_frame(completed->frames_.take_back());
+            }
+            completed->fault_ = std::nullopt;
+            completed->escaped_exception_ = std::nullopt;
+            completed->escaped_throw_ = std::nullopt;
+            completed->escaped_nonlocal_return_ = std::nullopt;
+            completed->final_value_ = Value::null();
+            completed->last_completed_regs_.clear();
+            completed->last_completed_initialized_.clear();
+            completed->park_request_.reset();
+            // These caches may contain unique request bodies or generated
+            // response strings. Retain execution caches, not request data.
+            completed->shared_string_text_cache_.clear();
+            completed->shared_string_id_cache_.clear();
+            completed->shared_symbol_text_cache_.clear();
+            completed->shared_symbol_id_cache_.clear();
+            completed->state_->heap.drain_remote_frees();
+
+            std::unique_ptr<Vm> reclaimed(completed);
+            constexpr std::size_t kMaxIdleResumableVms = 64;
+            std::lock_guard<std::mutex> lock(vm_pool->mutex);
+            if (vm_pool->idle.size() < kMaxIdleResumableVms) {
+              vm_pool->idle.push_back(std::move(reclaimed));
+            }
+          });
       const std::shared_ptr<RuntimeTaskModule> task = template_state->task;
       vm->parkable_ = true;
       vm->task_module_ = task;
+      // Resumable callers consume only final_value_; copying the completed
+      // entry frame into a debug snapshot on every request defeats the frame
+      // pool and adds a full register-file allocation.
+      vm->capture_completed_frames_ = false;
       const BcCode *code = find_code(vm->module_, template_state->code_id);
       if (code == nullptr) {
         return []() -> Value {
@@ -13552,7 +14015,7 @@ private:
       return selector_text_from_symbol(value.as_symbol().symbol_id);
     }
     if (value.is_string()) {
-      return string_text_from_id(value.as_string().string_id);
+      return string_text_from_value(value);
     }
     return std::nullopt;
   }
@@ -13706,7 +14169,7 @@ private:
     if (mode.is_symbol()) {
       mode_text = selector_text_from_symbol(mode.as_symbol().symbol_id);
     } else if (mode.is_string()) {
-      mode_text = string_text_from_id(mode.as_string().string_id);
+      mode_text = string_text_from_value(mode);
     }
     if (!mode_text.has_value()) {
       set_fault(frame, "TypeError",
@@ -13728,7 +14191,7 @@ private:
   }
 
   Value string_value_from_text(std::string text) {
-    return Value::string(intern_runtime_string(text));
+    return runtime_string_value(text);
   }
 
   // Macro `Ast.node(kind, fields)` builder. Constructs a fresh `ast::Expr`
@@ -13749,8 +14212,7 @@ private:
           name = runtime_symbols_[sid];
         }
       } else if (entry.key.is_string()) {
-        name =
-            string_text_from_id(entry.key.as_string().string_id).value_or("");
+        name = string_text_from_value(entry.key).value_or("");
       } else {
         set_fault(frame, "TypeError",
                   "Ast.node field name must be a Symbol or Str");
@@ -13758,8 +14220,7 @@ private:
       }
       const Value &v = entry.value;
       if (v.is_string()) {
-        expr->string_field(
-            name, string_text_from_id(v.as_string().string_id).value_or(""));
+        expr->string_field(name, string_text_from_value(v).value_or(""));
       } else if (v.is_bool()) {
         expr->bool_field(name, v.as_bool());
       } else if (v.is_ast_node()) {
@@ -13842,8 +14303,7 @@ private:
       return value;
     }
     if (value.is_string()) {
-      const std::string text =
-          string_text_from_id(value.as_string().string_id).value_or("");
+      const std::string text = string_text_from_value(value).value_or("");
       auto lit = ast::make_expr("AstStringLiteral", lexer::Span{});
       lit->string_field("quote_kind", "double");
       lit->bool_field("interpolation", false);
@@ -14665,7 +15125,7 @@ private:
                                                  const Value &value) {
     if (value.is_string()) {
       const std::optional<std::string> text =
-          string_text_from_id(value.as_string().string_id);
+          string_text_from_value(value);
       if (!text.has_value()) {
         set_fault(frame, "VMError", "string ref is invalid");
       }
@@ -14701,7 +15161,7 @@ private:
                                                   const Value &value) {
     if (value.is_string()) {
       const std::optional<std::string> text =
-          string_text_from_id(value.as_string().string_id);
+          string_text_from_value(value);
       if (!text.has_value()) {
         set_fault(frame, "VMError", "path string ref is invalid");
         return nullptr;
@@ -17564,6 +18024,15 @@ private:
     if (!http::http_write_request_body_chunk(
             *handle->transport, handle->request, bytes, &handle->bytes_written,
             &kind, &error)) {
+      if (handle->recover_early_response &&
+          kind == http::HttpErrorKind::Connection) {
+        handle->request_write_failed = true;
+        handle->request_write_error_kind = kind;
+        handle->request_write_error = std::move(error);
+        handle->finished = true;
+        *out = Value::null();
+        return SendStatus::Matched;
+      }
       (void)handle->close();
       return raise_http_error(frame, kind, error);
     }
@@ -17675,7 +18144,11 @@ private:
         }
         handle->pool_active = false;
       }
-      return raise_http_error(frame, started.error_kind, started.error_message);
+      return handle->request_write_failed
+                 ? raise_http_error(frame, handle->request_write_error_kind,
+                                    handle->request_write_error)
+                 : raise_http_error(frame, started.error_kind,
+                                    started.error_message);
     }
     if (!emit_http_trace_event(frame, handle->trace_hook, "read.headers.end",
                                origin, handle->request.method,
@@ -17904,6 +18377,10 @@ private:
       begin_status = http_begin_request_handle(frame, client, method, url,
                                                effective_headers, body->length,
                                                timeout, pool_timeout, &handle);
+      if (begin_status == SendStatus::Matched && handle != nullptr &&
+          body->kind == RuntimeHttpRequestBodyKind::Static) {
+        handle->recover_early_response = true;
+      }
     } else {
       if (client->closed()) {
         raise_runtime_error(frame, "ClosedResourceError",
@@ -20086,10 +20563,12 @@ private:
   };
 
   SendStatus try_apply_native_stdlib_send(
-      const Frame &frame, const Value &receiver, const std::string &selector,
+      const Frame &frame, const Value &receiver,
+      const std::string &selector_text,
       const std::vector<Value> &args, const Value &block,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out,
       NativeStdlibSendMode mode = NativeStdlibSendMode::Normal) {
+    const SelectorKey selector(selector_text);
     auto require_arity = [&](std::size_t expected) -> bool {
       if (args.size() != expected) {
         set_fault(frame, "TypeError", "wrong native stdlib SEND arity");
@@ -20165,7 +20644,7 @@ private:
         }
         std::string name;
         if (args[0].is_string()) {
-          name = string_text_from_id(args[0].as_string().string_id).value_or("");
+          name = string_text_from_value(args[0]).value_or("");
         } else if (args[0].is_symbol()) {
           const std::uint32_t id = args[0].as_symbol().symbol_id;
           if (id < runtime_symbols_.size()) {
@@ -20381,7 +20860,7 @@ private:
             return SendStatus::Faulted;
           }
           const std::string node_kind =
-              string_text_from_id(args[0].as_string().string_id).value_or("");
+              string_text_from_value(args[0]).value_or("");
           const std::optional<Value> built =
               build_ast_node_value(frame, node_kind, *args[1].as_map());
           if (!built.has_value()) {
@@ -21051,7 +21530,7 @@ private:
             set_fault(frame, "TypeError", "puts! expects Str");
             return SendStatus::Faulted;
           }
-          bytes = string_text_from_id(args[0].as_string().string_id);
+          bytes = string_text_from_value(args[0]);
           if (!bytes.has_value()) {
             set_fault(frame, "VMError", "puts string ref is invalid");
             return SendStatus::Faulted;
@@ -21969,7 +22448,7 @@ private:
           return SendStatus::Faulted;
         }
         const std::optional<std::string> annotation =
-            string_text_from_id(args[0].as_string().string_id);
+            string_text_from_value(args[0]);
         if (!annotation.has_value()) {
           set_fault(frame, "VMError", "string ref is invalid");
           return SendStatus::Faulted;
@@ -23650,33 +24129,43 @@ private:
   }
 
   SendStatus try_apply_scalar_send(
-      Frame &frame, const Value &receiver, const std::string &selector,
+      Frame &frame, const Value &receiver, const std::string &selector_text,
       const std::vector<Value> &args, const Value &block,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out) {
+    const SelectorKey selector(selector_text);
     if (!ensure_lifecycle_access(frame, receiver)) {
       return SendStatus::Faulted;
     }
 
-    Value native_result = Value::null();
-    const SendStatus native_status = try_apply_native_stdlib_send(
-        frame, receiver, selector, args, block, kw_args, &native_result);
-    if (native_status != SendStatus::NotHandled) {
-      if (native_status == SendStatus::Matched) {
-        *out = std::move(native_result);
+    // The native-stdlib dispatcher serves module/IO/task/tail values. Core
+    // scalars and ordinary collections cannot match it (apart from the
+    // explicit threaded collection constructors), yet previously every Int,
+    // Str, Map and Array send walked its full type chain first. Ember's request
+    // flow is dominated by those values, so reject them at the boundary.
+    const bool native_stdlib_candidate =
+        receiver.is_native_type() || receiver.is_arg_parser() ||
+        receiver.is_regexp_pattern() || receiver.is_regexp_match() ||
+        receiver.is_uuid() || receiver.is_time() ||
+        receiver.is_time_zone() || receiver.is_time_period() ||
+        receiver.is_ast_node() || receiver.is_io_value() ||
+        receiver.is_text_writer() || receiver.is_logger() ||
+        receiver.is_task_module() || receiver.is_task_handle() ||
+        receiver.is_task_local() || receiver.is_channel() ||
+        receiver.is_mutex() || receiver.is_atomic() ||
+        receiver.is_barrier() || receiver.is_flow_module() ||
+        receiver.is_threaded_collection() ||
+        ((receiver.is_list() || receiver.is_tuple() || receiver.is_set()) &&
+         (selector == "threaded" || selector == "parallel"));
+    if (native_stdlib_candidate) {
+      Value native_result = Value::null();
+      const SendStatus native_status = try_apply_native_stdlib_send(
+          frame, receiver, selector, args, block, kw_args, &native_result);
+      if (native_status != SendStatus::NotHandled) {
+        if (native_status == SendStatus::Matched) {
+          *out = std::move(native_result);
+        }
+        return native_status;
       }
-      return native_status;
-    }
-    const SendStatus early_benchmark_result_status =
-        apply_benchmark_result_method(frame, receiver, selector, args, block,
-                                      kw_args, out);
-    if (early_benchmark_result_status != SendStatus::NotHandled) {
-      return early_benchmark_result_status;
-    }
-    const SendStatus early_benchmark_profiler_status =
-        apply_benchmark_profiler_method(frame, receiver, selector, args, block,
-                                        kw_args, out);
-    if (early_benchmark_profiler_status != SendStatus::NotHandled) {
-      return early_benchmark_profiler_status;
     }
     if (selector == "to_json" && !receiver.is_instance_object() &&
         !receiver.is_class_object()) {
@@ -23735,8 +24224,9 @@ private:
       return true;
     };
 
-    auto selector_in = [&](std::initializer_list<const char *> names) -> bool {
-      for (const char *name : names) {
+    auto selector_in =
+        [&](std::initializer_list<std::string_view> names) -> bool {
+      for (const std::string_view name : names) {
         if (selector == name) {
           return true;
         }
@@ -23744,11 +24234,12 @@ private:
       return false;
     };
 
-    const std::string &collection_selector =
+    const std::string &collection_selector_text =
         canonical_collection_selector(selector);
+    const SelectorKey collection_selector(collection_selector_text);
     auto collection_selector_in =
-        [&](std::initializer_list<const char *> names) -> bool {
-      for (const char *name : names) {
+        [&](std::initializer_list<std::string_view> names) -> bool {
+      for (const std::string_view name : names) {
         if (collection_selector == name) {
           return true;
         }
@@ -23782,7 +24273,7 @@ private:
       bool calendar = false;
     };
     auto period_unit_for_selector =
-        [&](const std::string &name) -> std::optional<PeriodUnit> {
+        [&](const SelectorKey &name) -> std::optional<PeriodUnit> {
       if (name == "nanosecond" || name == "nanoseconds") {
         return PeriodUnit{0, 0, 1, false};
       }
@@ -24060,8 +24551,8 @@ private:
         if (!require_arity(0) || !require_no_block()) {
           return SendStatus::Faulted;
         }
-        *out = Value::string(
-            intern_runtime_string(error_registry().error_name(error_id)));
+        *out =
+            runtime_string_value(error_registry().error_name(error_id));
         return SendStatus::Matched;
       }
       if (selector == "===") {
@@ -24084,24 +24575,24 @@ private:
         if (!require_arity(0) || !require_no_block()) {
           return SendStatus::Faulted;
         }
-        *out = Value::string(intern_runtime_string(instance->message));
+        *out = runtime_string_value(instance->message);
         return SendStatus::Matched;
       }
       if (selector == "name") {
         if (!require_arity(0) || !require_no_block()) {
           return SendStatus::Faulted;
         }
-        *out = Value::string(intern_runtime_string(
-            error_registry().error_name(instance->error_id)));
+        *out =
+            runtime_string_value(error_registry().error_name(instance->error_id));
         return SendStatus::Matched;
       }
       if (selector == "to_str" || selector == "inspect") {
         if (!require_arity(0) || !require_no_block()) {
           return SendStatus::Faulted;
         }
-        *out = Value::string(intern_runtime_string(
+        *out = runtime_string_value(
             std::string(error_registry().error_name(instance->error_id)) +
-            ": " + instance->message));
+            ": " + instance->message);
         return SendStatus::Matched;
       }
       if (selector == "class") {
@@ -24177,8 +24668,7 @@ private:
         if (!require_arity(0) || !require_no_block()) {
           return SendStatus::Faulted;
         }
-        *out = Value::string(
-            intern_runtime_string(big_int_to_decimal_string(*lhs_big)));
+        *out = runtime_string_value(big_int_to_decimal_string(*lhs_big));
         return SendStatus::Matched;
       }
       if (selector_in({"+", "-", "*", "/", "%", "//", "**", "==", "!=", "<",
@@ -24288,20 +24778,20 @@ private:
         return SendStatus::Faulted;
       }
       const std::optional<std::string> left =
-          string_text_from_id(receiver.as_string().string_id);
+          string_text_from_value(receiver);
       const std::optional<std::string> right =
-          string_text_from_id(args[0].as_string().string_id);
+          string_text_from_value(args[0]);
       if (!left.has_value() || !right.has_value()) {
         set_fault(frame, "VMError", "string ref is invalid");
         return SendStatus::Faulted;
       }
-      *out = Value::string(intern_runtime_string(*left + *right));
+      *out = runtime_string_value(*left + *right);
       return SendStatus::Matched;
     }
 
     if (receiver.is_string()) {
       const std::optional<std::string> self_opt =
-          string_text_from_id(receiver.as_string().string_id);
+          string_text_from_value(receiver);
       if (self_opt.has_value()) {
         const std::string &self = *self_opt;
         // length/size/chars/reversed/[]/index are codepoint-correct (UTF-8);
@@ -24325,7 +24815,7 @@ private:
             return false;
           }
           const std::optional<std::string> t =
-              string_text_from_id(args[i].as_string().string_id);
+              string_text_from_value(args[i]);
           if (!t.has_value()) {
             set_fault(frame, "VMError", "string ref is invalid");
             return false;
@@ -24441,7 +24931,7 @@ private:
             }
             append_utf8_codepoint(mapped, &r);
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "capitalized" || selector == "titlecased" ||
@@ -24478,7 +24968,7 @@ private:
             }
             append_utf8_codepoint(mapped, &r);
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "underscored") {
@@ -24519,7 +25009,7 @@ private:
             }
             append_utf8_codepoint(cp, &r);
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "camelized") {
@@ -24542,7 +25032,7 @@ private:
             }
             upper_next = false;
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "dasherized") {
@@ -24555,7 +25045,7 @@ private:
               c = '-';
             }
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "reverse" || selector == "reversed") {
@@ -24573,7 +25063,7 @@ private:
           for (auto it = cps.rbegin(); it != cps.rend(); ++it) {
             r += *it;
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "chars") {
@@ -24583,8 +25073,7 @@ private:
           std::vector<Value> cps;
           for (std::size_t i = 0; i < self.size();) {
             const std::size_t j = next_cp(i);
-            cps.push_back(
-                Value::string(intern_runtime_string(self.substr(i, j - i))));
+            cps.push_back(runtime_string_value(self.substr(i, j - i)));
             i = j;
           }
           *out = make_list_value(std::move(cps));
@@ -24620,7 +25109,7 @@ private:
               --b;
             }
           }
-          *out = Value::string(intern_runtime_string(self.substr(a, b - a)));
+          *out = runtime_string_value(self.substr(a, b - a));
           return SendStatus::Matched;
         }
         if (selector == "contains?" || selector == "includes?") {
@@ -24696,8 +25185,7 @@ private:
           if (sep.empty()) {
             for (std::size_t i = 0; i < self.size();) {
               const std::size_t j = next_cp(i);
-              parts.push_back(
-                  Value::string(intern_runtime_string(self.substr(i, j - i))));
+              parts.push_back(runtime_string_value(self.substr(i, j - i)));
               i = j;
             }
           } else {
@@ -24705,12 +25193,11 @@ private:
             while (true) {
               const std::size_t pos = self.find(sep, start);
               if (pos == std::string::npos) {
-                parts.push_back(
-                    Value::string(intern_runtime_string(self.substr(start))));
+                parts.push_back(runtime_string_value(self.substr(start)));
                 break;
               }
-              parts.push_back(Value::string(
-                  intern_runtime_string(self.substr(start, pos - start))));
+              parts.push_back(
+                  runtime_string_value(self.substr(start, pos - start)));
               start = pos + sep.size();
             }
           }
@@ -24727,7 +25214,7 @@ private:
             return SendStatus::Faulted;
           }
           if (from.empty()) {
-            *out = Value::string(intern_runtime_string(self));
+            *out = runtime_string_value(self);
             return SendStatus::Matched;
           }
           std::string r;
@@ -24742,7 +25229,7 @@ private:
             r += to;
             start = pos + from.size();
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "*") {
@@ -24765,7 +25252,7 @@ private:
           for (std::int64_t i = 0; i < count; ++i) {
             r += self;
           }
-          *out = Value::string(intern_runtime_string(r));
+          *out = runtime_string_value(r);
           return SendStatus::Matched;
         }
         if (selector == "ljust" || selector == "rjust") {
@@ -24810,8 +25297,8 @@ private:
           for (std::int64_t i = 0; i < width - self_width; ++i) {
             padding += pad_cps[static_cast<std::size_t>(i) % pad_cps.size()];
           }
-          *out = Value::string(intern_runtime_string(
-              selector == "ljust" ? self + padding : padding + self));
+          *out = runtime_string_value(
+              selector == "ljust" ? self + padding : padding + self);
           return SendStatus::Matched;
         }
         if (selector == "index" || selector == "rindex") {
@@ -24870,8 +25357,7 @@ private:
             const std::size_t pos = self.find('\n', start);
             if (pos == std::string::npos) {
               if (start < self.size()) {
-                lines.push_back(
-                    Value::string(intern_runtime_string(self.substr(start))));
+                lines.push_back(runtime_string_value(self.substr(start)));
               }
               break;
             }
@@ -24879,8 +25365,8 @@ private:
             if (end > start && self[end - 1] == '\r') {
               --end;
             }
-            lines.push_back(Value::string(
-                intern_runtime_string(self.substr(start, end - start))));
+            lines.push_back(
+                runtime_string_value(self.substr(start, end - start)));
             start = pos + 1;
           }
           *out = make_list_value(std::move(lines));
@@ -24920,8 +25406,7 @@ private:
           std::vector<Value> cps;
           for (std::size_t i = 0; i < self.size();) {
             const std::size_t j = next_cp(i);
-            cps.push_back(
-                Value::string(intern_runtime_string(self.substr(i, j - i))));
+            cps.push_back(runtime_string_value(self.substr(i, j - i)));
             i = j;
           }
           if (value_is_range_instance(args[0])) {
@@ -24933,12 +25418,12 @@ private:
             std::string r;
             for (const Value &piece : *sliced) {
               const std::optional<std::string> text =
-                  string_text_from_id(piece.as_string().string_id);
+                  string_text_from_value(piece);
               if (text.has_value()) {
                 r += *text;
               }
             }
-            *out = Value::string(intern_runtime_string(r));
+            *out = runtime_string_value(r);
             return SendStatus::Matched;
           }
           if (!args[0].is_integer()) {
@@ -25134,6 +25619,12 @@ private:
         frame, receiver, selector, args, block, kw_args, out);
     if (benchmark_result_status != SendStatus::NotHandled) {
       return benchmark_result_status;
+    }
+    const SendStatus benchmark_profiler_status =
+        apply_benchmark_profiler_method(frame, receiver, selector, args, block,
+                                        kw_args, out);
+    if (benchmark_profiler_status != SendStatus::NotHandled) {
+      return benchmark_profiler_status;
     }
     if (!kw_args.empty() && builtin_selector &&
         !keyword_compatible_builtin_selector) {
@@ -27915,7 +28406,7 @@ private:
         present = receiver.as_bool();
       } else if (receiver.is_string()) {
         const std::optional<std::string> text =
-            string_text_from_id(receiver.as_string().string_id);
+            string_text_from_value(receiver);
         if (!text.has_value()) {
           set_fault(frame, "VMError", "string ref is invalid");
           return SendStatus::Faulted;
@@ -27977,9 +28468,11 @@ private:
   FastSendStatus step_fast_static_send(Frame &frame, const Instruction &insn,
                                        std::uint32_t dst,
                                        std::uint32_t recv_reg,
-                                       const std::string &selector) {
-    const std::string &collection_selector =
+                                       const std::string &selector_text) {
+    const SelectorKey selector(selector_text);
+    const std::string &collection_selector_text =
         canonical_collection_selector(selector);
+    const SelectorKey collection_selector(collection_selector_text);
     const bool collection_fast_selector =
         collection_selector == "[]" || collection_selector == "count" ||
         collection_selector == "first" || collection_selector == "empty?" ||
@@ -28034,8 +28527,7 @@ private:
     }
     const std::uint32_t site_flags =
         site_id.has_value() ? call_site_flags(frame, *site_id) : 0U;
-    if ((site_flags & (bytecode::kCallSiteFlagPropertyAccess |
-                       bytecode::kCallSiteFlagPropertyAssignment)) != 0U) {
+    if ((site_flags & bytecode::kCallSiteFlagPropertyAssignment) != 0U) {
       return FastSendStatus::NotHandled;
     }
 
@@ -28280,6 +28772,36 @@ private:
                                          std::uint32_t dst,
                                          std::uint32_t recv_reg,
                                          std::uint32_t arg_reg) {
+    const auto try_primitive_equality = [&]() -> FastSendStatus {
+      if (opcode != QuickOpcode::SendIEq &&
+          opcode != QuickOpcode::SendINe) {
+        return FastSendStatus::NotHandled;
+      }
+      const Value lhs_value = read_reg(frame, recv_reg);
+      const Value rhs_value = read_reg(frame, arg_reg);
+      if (fault_.has_value()) {
+        return FastSendStatus::Faulted;
+      }
+      const bool builtin_receiver =
+          lhs_value.is_null() || lhs_value.is_bool() ||
+          lhs_value.is_integer() || lhs_value.is_float() ||
+          lhs_value.is_string() || lhs_value.is_symbol();
+      if (!builtin_receiver) {
+        return FastSendStatus::NotHandled;
+      }
+      if (!ensure_lifecycle_access(frame, lhs_value) ||
+          !ensure_lifecycle_access(frame, rhs_value)) {
+        return FastSendStatus::Faulted;
+      }
+      const bool equal = value_equals(lhs_value, rhs_value);
+      return write_reg_fast_plain(
+                 frame, dst,
+                 Value::boolean(opcode == QuickOpcode::SendINe ? !equal
+                                                               : equal))
+                 ? FastSendStatus::Matched
+                 : FastSendStatus::Faulted;
+    };
+
     std::int64_t lhs = 0;
     std::int64_t rhs = 0;
     const bool rhs_fast = read_integer_reg_unboxed(frame, arg_reg, &rhs);
@@ -28297,11 +28819,11 @@ private:
           return FastSendStatus::Faulted;
         }
         if (lhs_value.is_string() && rhs_value.is_string()) {
-          const std::string *left =
-              string_text_ptr_from_id(lhs_value.as_string().string_id);
-          const std::string *right =
-              string_text_ptr_from_id(rhs_value.as_string().string_id);
-          if (left == nullptr || right == nullptr) {
+          const std::optional<std::string> left =
+              string_text_from_value(lhs_value);
+          const std::optional<std::string> right =
+              string_text_from_value(rhs_value);
+          if (!left.has_value() || !right.has_value()) {
             set_fault(frame, "VMError", "string ref is invalid");
             return FastSendStatus::Faulted;
           }
@@ -28309,20 +28831,20 @@ private:
           text.reserve(left->size() + right->size());
           text.append(*left);
           text.append(*right);
-          return write_reg_fast_plain(
-                     frame, dst, Value::string(intern_runtime_string(text)))
+          return write_reg_fast_plain(frame, dst,
+                                      runtime_string_value(text))
                      ? FastSendStatus::Matched
                      : FastSendStatus::Faulted;
         }
       }
-      return FastSendStatus::NotHandled;
+      return try_primitive_equality();
     }
     const bool lhs_fast = read_integer_reg_unboxed(frame, recv_reg, &lhs);
     if (fault_.has_value()) {
       return FastSendStatus::Faulted;
     }
     if (!lhs_fast) {
-      return FastSendStatus::NotHandled;
+      return try_primitive_equality();
     }
 
     switch (opcode) {
@@ -28457,6 +28979,32 @@ private:
     }
   }
 
+  FastSendStatus step_quick_type_matches(Frame &frame, std::uint32_t dst,
+                                         std::uint32_t recv_reg,
+                                         std::uint32_t arg_reg) {
+    const Value receiver = read_reg(frame, recv_reg);
+    const Value argument = read_reg(frame, arg_reg);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+    if (!receiver.is_native_type()) {
+      return FastSendStatus::NotHandled;
+    }
+    if (!ensure_lifecycle_access(frame, receiver) ||
+        !ensure_lifecycle_access(frame, argument)) {
+      return FastSendStatus::Faulted;
+    }
+    const RuntimeNativeTypeKind kind = receiver.as_native_type().kind;
+    const bool same_type_object =
+        argument.is_native_type() && argument.as_native_type().kind == kind;
+    return write_reg_fast_plain(
+               frame, dst,
+               Value::boolean(same_type_object ||
+                              value_matches_native_type_kind(argument, kind)))
+               ? FastSendStatus::Matched
+               : FastSendStatus::Faulted;
+  }
+
   FastSendStatus step_quick_int_to_str(Frame &frame, std::uint32_t dst,
                                        std::uint32_t recv_reg) {
     std::int64_t value = 0;
@@ -28467,9 +29015,8 @@ private:
     if (!value_fast) {
       return FastSendStatus::NotHandled;
     }
-    return write_reg_fast_plain(
-               frame, dst,
-               Value::string(intern_runtime_string(std::to_string(value))))
+    return write_reg_fast_plain(frame, dst,
+                                runtime_string_value(std::to_string(value)))
                ? FastSendStatus::Matched
                : FastSendStatus::Faulted;
   }
@@ -28567,7 +29114,8 @@ private:
     }
 
     if ((opcode == QuickOpcode::SendSeqIndex ||
-         opcode == QuickOpcode::SendSeqContains) &&
+         opcode == QuickOpcode::SendSeqContains ||
+         opcode == QuickOpcode::SendContains) &&
         receiver.is_map()) {
       const IntrusivePtr<MapValue> map = receiver.as_map();
       if (map == nullptr) {
@@ -28589,7 +29137,8 @@ private:
       }
       const std::optional<std::uint32_t> lookup_id = map_lookup_key_id(key);
       const MapEntry *entry = map_value_find_entry(*map, key, lookup_id);
-      if (opcode == QuickOpcode::SendSeqContains) {
+      if (opcode == QuickOpcode::SendSeqContains ||
+          opcode == QuickOpcode::SendContains) {
         return write_reg_fast_plain(frame, dst,
                                     Value::boolean(entry != nullptr))
                    ? FastSendStatus::Matched
@@ -28604,7 +29153,30 @@ private:
       return FastSendStatus::Faulted;
     }
 
-    if (opcode == QuickOpcode::SendSeqCount && receiver.is_map()) {
+    if (opcode == QuickOpcode::SendContains && receiver.is_string()) {
+      const Value needle = read_reg(frame, arg_reg);
+      if (fault_.has_value()) {
+        return FastSendStatus::Faulted;
+      }
+      if (!needle.is_string()) {
+        return FastSendStatus::NotHandled;
+      }
+      const std::string *text = string_text_ref_from_value(receiver);
+      const std::string *part = string_text_ref_from_value(needle);
+      if (text == nullptr || part == nullptr) {
+        set_fault(frame, "VMError", "string ref is invalid");
+        return FastSendStatus::Faulted;
+      }
+      return write_reg_fast_plain(
+                 frame, dst,
+                 Value::boolean(text->find(*part) != std::string::npos))
+                 ? FastSendStatus::Matched
+                 : FastSendStatus::Faulted;
+    }
+
+    if ((opcode == QuickOpcode::SendSeqCount ||
+         opcode == QuickOpcode::SendLength) &&
+        receiver.is_map()) {
       const IntrusivePtr<MapValue> map = receiver.as_map();
       if (map == nullptr) {
         set_fault(frame, "TypeError", "map value is null");
@@ -28615,6 +29187,24 @@ private:
       }
       return write_integer_reg_unboxed(
                  frame, dst, static_cast<std::int64_t>(map->entries.size()))
+                 ? FastSendStatus::Matched
+                 : FastSendStatus::Faulted;
+    }
+
+    if (opcode == QuickOpcode::SendLength && receiver.is_string()) {
+      const std::optional<std::string> text =
+          string_text_from_value(receiver);
+      if (!text.has_value()) {
+        set_fault(frame, "VMError", "string ref is invalid");
+        return FastSendStatus::Faulted;
+      }
+      std::int64_t length = 0;
+      for (const char byte : *text) {
+        if ((static_cast<unsigned char>(byte) & 0xC0U) != 0x80U) {
+          ++length;
+        }
+      }
+      return write_integer_reg_unboxed(frame, dst, length)
                  ? FastSendStatus::Matched
                  : FastSendStatus::Faulted;
     }
@@ -28650,11 +29240,13 @@ private:
         return FastSendStatus::Faulted;
       }
     case QuickOpcode::SendSeqCount:
+    case QuickOpcode::SendLength:
       return write_integer_reg_unboxed(frame, dst,
                                        static_cast<std::int64_t>(items->size()))
                  ? FastSendStatus::Matched
                  : FastSendStatus::Faulted;
-    case QuickOpcode::SendSeqContains: {
+    case QuickOpcode::SendSeqContains:
+    case QuickOpcode::SendContains: {
       const Value needle = read_reg(frame, arg_reg);
       if (fault_.has_value()) {
         return FastSendStatus::Faulted;
@@ -28688,6 +29280,88 @@ private:
     default:
       return FastSendStatus::NotHandled;
     }
+  }
+
+  FastSendStatus
+  step_quick_sequence_block_send(Frame &frame, QuickOpcode opcode,
+                                 std::uint32_t dst, std::uint32_t recv_reg,
+                                 std::uint32_t block_reg) {
+    const Value receiver = read_reg(frame, recv_reg);
+    const Value block = read_reg(frame, block_reg);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+    if (!ensure_lifecycle_access(frame, receiver)) {
+      return FastSendStatus::Faulted;
+    }
+    const std::vector<Value> *items_view =
+        sequence_items_view(frame, receiver);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+    if (items_view == nullptr) {
+      return FastSendStatus::NotHandled;
+    }
+
+    // Match the generic collection path's snapshot semantics: a block may
+    // mutate the receiver without invalidating this iteration.
+    const std::vector<Value> items = *items_view;
+    std::vector<Value> mapped;
+    if (opcode == QuickOpcode::SendSeqMap) {
+      mapped.reserve(items.size());
+    }
+
+    for (const Value &item : items) {
+      const std::optional<Value> result =
+          call_block_to_value(frame, block, {item});
+      if (!result.has_value()) {
+        return FastSendStatus::Faulted;
+      }
+      if (!ensure_lifecycle_access(frame, receiver)) {
+        return FastSendStatus::Faulted;
+      }
+      if (opcode == QuickOpcode::SendSeqMap) {
+        mapped.push_back(*result);
+        continue;
+      }
+      if (opcode == QuickOpcode::SendSeqEach) {
+        continue;
+      }
+
+      const bool truthy = is_truthy(*result);
+      if (opcode == QuickOpcode::SendSeqAll && !truthy) {
+        return write_reg_fast_plain(frame, dst, Value::boolean(false))
+                   ? FastSendStatus::Matched
+                   : FastSendStatus::Faulted;
+      }
+      if (opcode == QuickOpcode::SendSeqAny && truthy) {
+        return write_reg_fast_plain(frame, dst, Value::boolean(true))
+                   ? FastSendStatus::Matched
+                   : FastSendStatus::Faulted;
+      }
+      if (opcode == QuickOpcode::SendSeqNone && truthy) {
+        return write_reg_fast_plain(frame, dst, Value::boolean(false))
+                   ? FastSendStatus::Matched
+                   : FastSendStatus::Faulted;
+      }
+    }
+
+    if (opcode == QuickOpcode::SendSeqEach) {
+      return write_reg_fast_plain(frame, dst, receiver)
+                 ? FastSendStatus::Matched
+                 : FastSendStatus::Faulted;
+    }
+    if (opcode == QuickOpcode::SendSeqMap) {
+      return write_reg_fast_plain(frame, dst,
+                                  make_list_value(std::move(mapped)))
+                 ? FastSendStatus::Matched
+                 : FastSendStatus::Faulted;
+    }
+    const bool completed_value = opcode != QuickOpcode::SendSeqAny;
+    return write_reg_fast_plain(frame, dst,
+                                Value::boolean(completed_value))
+               ? FastSendStatus::Matched
+               : FastSendStatus::Faulted;
   }
 
   // Cache-hit fast paths for ivar access. Anything off the happy path —
@@ -28808,6 +29482,7 @@ private:
       selector_symbol_id_for_cache = selector_id;
       selector = static_selector;
     }
+    const SelectorKey selector_key(*selector);
 
     std::uint32_t pos_count = 0;
     if (!operand_u32(frame, insn, operand_index++, &pos_count)) {
@@ -28911,7 +29586,7 @@ private:
     // dynamic scope across a cooperative park. The restoration token lives in
     // the logical task context; the callee frame carries only its exit action.
     if (!property_access && !property_assignment && receiver.is_task_local() &&
-        *selector == "with") {
+        selector_key == "with") {
       if (args.size() != 1U || !kw_args.empty() || block.is_null()) {
         set_fault(frame, "TypeError",
                   "TaskLocal.with expects one value and a block");
@@ -28952,7 +29627,8 @@ private:
       };
       return true;
     }
-    if (!property_access && !property_assignment && *selector == "destroy!") {
+    if (!property_access && !property_assignment &&
+        selector_key == "destroy!") {
       if (!args.empty() || !kw_args.empty() || !block.is_null()) {
         set_fault(frame, "TypeError", "destroy! accepts no arguments");
         return false;
@@ -28972,7 +29648,7 @@ private:
     // applies uniformly to every value and, like `and`/`or`, is not
     // overridable, so it is resolved before any per-kind dispatch (foreign
     // handles, native types, instances, builtins).
-    if (*selector == "not" && !property_assignment) {
+    if (selector_key == "not" && !property_assignment) {
       if (!args.empty() || !kw_args.empty() || !block.is_null()) {
         set_fault(frame, "TypeError", "`not` does not accept arguments");
         return false;
@@ -29068,7 +29744,32 @@ private:
         return true;
       }
     }
-    if (!property_access && !property_assignment) {
+    // Ordinary user instances/classes cannot match the scalar/native stdlib
+    // dispatcher. Sending them through that very large selector/type chain
+    // before probing the class call cache made every Ember model/controller
+    // method pay a full failed builtin dispatch. Native Range and LazySeq are
+    // represented as instances for compatibility, so keep those on the scalar
+    // path; all other class-backed receivers go directly to method dispatch.
+    bool receiver_uses_class_dispatch = receiver.is_class_object();
+    if (receiver.is_instance_object()) {
+      const IntrusivePtr<InstanceValue> instance =
+          receiver.as_instance_object();
+      receiver_uses_class_dispatch =
+          instance != nullptr && !instance_is_native_range(instance) &&
+          !value_is_lazy_seq_instance(receiver);
+    }
+    if (receiver_uses_class_dispatch &&
+        !ensure_lifecycle_access(frame, receiver)) {
+      return false;
+    }
+    const bool class_requires_scalar_dispatch =
+        receiver.is_class_object() &&
+        (selector_key == "===" ||
+         (selector_key == "new" &&
+          class_has_flag(receiver.as_class_object().class_index,
+                         bytecode::kClassFlagNativeError)));
+    if (!property_access && !property_assignment &&
+        (!receiver_uses_class_dispatch || class_requires_scalar_dispatch)) {
       Value result = Value::null();
       const SendStatus scalar_status = try_apply_scalar_send(
           frame, receiver, *selector, args, block, kw_args, &result);
@@ -29092,7 +29793,7 @@ private:
         return true;
       }
     }
-    auto period_unit_selector = [](const std::string &name) {
+    auto period_unit_selector = [](const SelectorKey &name) {
       return name == "nanosecond" || name == "nanoseconds" ||
              name == "microsecond" || name == "microseconds" ||
              name == "millisecond" || name == "milliseconds" ||
@@ -29143,7 +29844,7 @@ private:
           receiver.is_regexp_match() || receiver.is_time() ||
           receiver.is_time_period() ||
           ((receiver.is_integer() || receiver.is_float()) &&
-           period_unit_selector(*selector))) {
+           period_unit_selector(selector_key))) {
         Value result = Value::null();
         const SendStatus scalar_status = try_apply_scalar_send(
             frame, receiver, *selector, args, block, kw_args, &result);
@@ -29158,7 +29859,7 @@ private:
           return true;
         }
       }
-      if (*selector == "to_json") {
+      if (selector_key == "to_json") {
         Value result = Value::null();
         const SendStatus scalar_status = try_apply_scalar_send(
             frame, receiver, *selector, args, block, kw_args, &result);
@@ -29206,7 +29907,7 @@ private:
           return true;
         }
       }
-      if (*selector == "times" && receiver.is_integer()) {
+      if (selector_key == "times" && receiver.is_integer()) {
         Value result = Value::null();
         const SendStatus scalar_status = try_apply_scalar_send(
             frame, receiver, *selector, args, block, kw_args, &result);
@@ -29227,7 +29928,7 @@ private:
       // through the general implicit nullary send below, like any other method.
       if (const std::optional<RuntimeNativeTypeKind> target =
               conversion_target_for_alias(*selector)) {
-        if (*selector == "map") {
+        if (selector_key == "map") {
           Value benchmark_result = Value::null();
           const SendStatus benchmark_status =
               apply_benchmark_result_method(frame, receiver, *selector, args,
@@ -29373,6 +30074,14 @@ private:
         if (bare_status == SendStatus::Faulted) {
           return false;
         }
+        // Bare member access is still a SEND. If a native property such as
+        // ServerRequest#body_text parks on IO, leave both its destination and
+        // PC untouched so resume retries the same operation. The ordinary
+        // parenthesised-send path above already enforces this contract.
+        if (park_request_.has_value() &&
+            park_request_->kind == ParkRequest::Kind::Io) {
+          return true;
+        }
         if (bare_status == SendStatus::Matched) {
           if (!write_reg(frame, dst, std::move(bare_result))) {
             return false;
@@ -29448,7 +30157,7 @@ private:
       return false;
     }
     if (method == nullptr) {
-      if ((*selector == "copy" || *selector == "deep_copy") &&
+      if ((selector_key == "copy" || selector_key == "deep_copy") &&
           receiver.is_instance_object() && !property_assignment) {
         if (!args.empty()) {
           set_fault(frame, "TypeError", *selector + " accepts no arguments");
@@ -29465,7 +30174,8 @@ private:
         }
         CopyMemo memo;
         const std::optional<Value> copied =
-            copy_runtime_value(frame, receiver, *selector == "deep_copy", &memo);
+            copy_runtime_value(frame, receiver, selector_key == "deep_copy",
+                               &memo);
         if (!copied.has_value()) {
           return false;
         }
@@ -29475,7 +30185,7 @@ private:
         ++frame.pc;
         return true;
       }
-      if ((*selector == "==" || *selector == "!=") && !property_access &&
+      if ((selector_key == "==" || selector_key == "!=") && !property_access &&
           !property_assignment) {
         if (args.size() != 1U) {
           set_fault(frame, "TypeError", "wrong builtin SEND arity");
@@ -29496,13 +30206,13 @@ private:
         }
         const bool equal = value_equals(receiver, args[0]);
         if (!write_reg(frame, dst,
-                       Value::boolean(*selector == "!=" ? !equal : equal))) {
+                       Value::boolean(selector_key == "!=" ? !equal : equal))) {
           return false;
         }
         ++frame.pc;
         return true;
       }
-      if (*selector == "present?" || *selector == "absent?") {
+      if (selector_key == "present?" || selector_key == "absent?") {
         if (!args.empty()) {
           set_fault(frame, "TypeError",
                     "present?/absent? accept no arguments");
@@ -29518,7 +30228,8 @@ private:
                     "present?/absent? do not accept a block");
           return false;
         }
-        if (!write_reg(frame, dst, Value::boolean(*selector == "present?"))) {
+        if (!write_reg(frame, dst,
+                       Value::boolean(selector_key == "present?"))) {
           return false;
         }
         ++frame.pc;
@@ -29576,7 +30287,7 @@ private:
       if (fault_.has_value()) {
         return false;
       }
-      if (*selector == "to_json") {
+      if (selector_key == "to_json") {
         if (!args.empty()) {
           set_fault(frame, "TypeError", "to_json accepts no arguments");
           return false;
@@ -29746,7 +30457,8 @@ private:
           return;
         }
         if (!write_reg(frame, quick->a,
-                       unwrap_watch_value_for_read(frame.captures[quick->b]))) {
+                       unwrap_watch_value_for_read(
+                           frame.captures[quick->b]))) {
           return;
         }
         ++frame.pc;
@@ -29862,6 +30574,18 @@ private:
         }
         break;
       }
+      case QuickOpcode::SendTypeMatches: {
+        const FastSendStatus status = step_quick_type_matches(
+            frame, quick->a, quick->b, quick->c);
+        if (status == FastSendStatus::Faulted) {
+          return;
+        }
+        if (status == FastSendStatus::Matched) {
+          ++frame.pc;
+          return;
+        }
+        break;
+      }
       case QuickOpcode::LoadIvar:
       case QuickOpcode::StoreIvar: {
         const FastSendStatus status =
@@ -29880,11 +30604,29 @@ private:
       case QuickOpcode::SendSeqIndex:
       case QuickOpcode::SendSeqIndexSet:
       case QuickOpcode::SendSeqContains:
+      case QuickOpcode::SendContains:
       case QuickOpcode::SendSeqCount:
+      case QuickOpcode::SendLength:
       case QuickOpcode::SendSeqFirst: {
         const FastSendStatus status =
             step_quick_sequence_send(frame, quick->quick_opcode, quick->a,
                                      quick->b, quick->c, quick->imm);
+        if (status == FastSendStatus::Faulted) {
+          return;
+        }
+        if (status == FastSendStatus::Matched) {
+          ++frame.pc;
+          return;
+        }
+        break;
+      }
+      case QuickOpcode::SendSeqEach:
+      case QuickOpcode::SendSeqMap:
+      case QuickOpcode::SendSeqAll:
+      case QuickOpcode::SendSeqAny:
+      case QuickOpcode::SendSeqNone: {
+        const FastSendStatus status = step_quick_sequence_block_send(
+            frame, quick->quick_opcode, quick->a, quick->b, quick->c);
         if (status == FastSendStatus::Faulted) {
           return;
         }
@@ -30530,7 +31272,8 @@ private:
         return;
       }
       if (!write_reg(frame, dst,
-                     unwrap_watch_value_for_read(frame.captures[slot]))) {
+                     unwrap_watch_value_for_read(
+                         frame.captures[slot]))) {
         return;
       }
       ++frame.pc;
@@ -31646,7 +32389,15 @@ private:
   std::size_t string_index_folded_ = 0;
   std::unordered_map<std::string, std::uint32_t> symbol_index_;
   std::size_t symbol_index_folded_ = 0;
+  // Sparse per-VM views over SharedRuntimeNamePool. Request VMs keep only
+  // names they use, so request startup and block calls stay independent of
+  // server lifetime and total historical string count.
+  std::unordered_map<std::uint32_t, std::string> shared_string_text_cache_;
+  std::unordered_map<std::string, std::uint32_t> shared_string_id_cache_;
+  std::unordered_map<std::uint32_t, std::string> shared_symbol_text_cache_;
+  std::unordered_map<std::string, std::uint32_t> shared_symbol_id_cache_;
   std::shared_ptr<RuntimeState> state_;
+  std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names_;
   // RuntimeWorld's host entry points are session-serialized and retain their
   // shared inline caches across calls. Scheduler tasks are not serialized:
   // every persistent/detached task VM owns these maps so independent strands
@@ -31661,9 +32412,10 @@ private:
   std::function<void(RuntimeTraceEvent)> trace_recorder_;
   std::unordered_map<std::uint32_t, QuickCode> quick_codes_;
   std::unordered_map<std::uint32_t, DirectClosureKind> direct_closure_kinds_;
-  std::unordered_map<std::uint32_t, std::vector<Frame>> frame_pool_;
+  std::unordered_map<std::uint32_t, std::vector<std::unique_ptr<Frame>>>
+      frame_pool_;
   std::vector<std::unique_ptr<Vm>> block_vm_pool_;
-  std::vector<Frame> frames_;
+  FrameStack frames_;
   // Layer B cooperative suspension. `parkable_` is true only for the persistent
   // VM that drives a task body (task.async/spawn); it gates whether a
   // suspension point (e.g. task.sleep or a blocking socket op) parks the strand
@@ -31700,28 +32452,28 @@ private:
   NumericPolicy numeric_policy_;
   std::string numeric_profile_error_;
   // Direct VM fallback for code paths that are not attached to RuntimeWorld.
-  NativeRegistry owned_native_registry_;
+  std::unique_ptr<NativeRegistry> owned_native_registry_;
   // World-owned compatibility registry, or `owned_native_registry_` for direct
   // VM entry points.
   const NativeRegistry *native_registry_ = nullptr;
   // Direct VM fallback for module/path bindings imported from the compatibility
   // registry.
-  RuntimeModuleRegistry owned_module_registry_;
+  std::unique_ptr<RuntimeModuleRegistry> owned_module_registry_;
   // World-owned module registry, or `owned_module_registry_` for direct VM
   // entry points.
   const RuntimeModuleRegistry *module_registry_ = nullptr;
   // Direct VM fallback for native type call metadata.
-  RuntimeTypeRegistry owned_type_registry_;
+  std::unique_ptr<RuntimeTypeRegistry> owned_type_registry_;
   // World-owned type registry, or `owned_type_registry_` for direct VM entry
   // points.
   const RuntimeTypeRegistry *type_registry_ = nullptr;
   // Direct VM fallback for migrated native handler dispatch.
-  RuntimeDispatchRegistry owned_dispatch_registry_;
+  std::unique_ptr<RuntimeDispatchRegistry> owned_dispatch_registry_;
   // World-owned dispatch registry, or `owned_dispatch_registry_` for direct VM
   // entry points.
   const RuntimeDispatchRegistry *dispatch_registry_ = nullptr;
   // Direct VM fallback for builtin runtime error lookup/matching.
-  RuntimeErrorRegistry owned_error_registry_;
+  std::unique_ptr<RuntimeErrorRegistry> owned_error_registry_;
   // World-owned error registry, or `owned_error_registry_` for direct VM entry
   // points.
   const RuntimeErrorRegistry *error_registry_ = nullptr;

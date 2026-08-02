@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -184,11 +185,19 @@ enum class QuickOpcode : std::uint8_t {
   SendIShl,
   SendIShr,
   SendIntToStr,
+  SendTypeMatches,
   SendSeqIndex,
   SendSeqIndexSet,
   SendSeqContains,
+  SendContains,
   SendSeqCount,
+  SendLength,
   SendSeqFirst,
+  SendSeqEach,
+  SendSeqMap,
+  SendSeqAll,
+  SendSeqAny,
+  SendSeqNone,
   LoadIvar,
   StoreIvar,
 };
@@ -296,6 +305,12 @@ struct Frame {
   bool no_suspend_extent = false;
   std::string no_suspend_label;
   std::optional<std::uint32_t> caller_result_reg;
+  // Synchronous runtime intrinsics (collection iteration, validation helpers)
+  // sometimes need a block result before the current opcode can finish. The
+  // root block frame writes through this short-lived sink instead of forcing
+  // the caller to reserve a bytecode register. It is never retained past the
+  // surrounding C++ call.
+  std::optional<Value> *direct_return_sink = nullptr;
   std::optional<std::uint32_t> active_call_pc;
   std::optional<Value> return_override;
   bool merge_registers_to_caller = false;
@@ -311,6 +326,43 @@ struct Frame {
   FlatRegMap<PreparedSeqState> prepared_seq_regs;
   FlatRegMap<PreparedMapState> prepared_map_regs;
   FlatRegMap<Value> pending_pattern_bindings;
+};
+
+// Active frames live at stable addresses. A Frame owns several register
+// vectors and cold side tables; moving that whole aggregate on every
+// call/return showed up prominently in interpreted request profiles. The stack
+// moves only owning pointers while preserving the existing back/index API.
+class FrameStack {
+public:
+  bool empty() const { return frames_.empty(); }
+  std::size_t size() const { return frames_.size(); }
+
+  Frame &back() { return *frames_.back(); }
+  const Frame &back() const { return *frames_.back(); }
+  Frame &operator[](std::size_t index) { return *frames_[index]; }
+  const Frame &operator[](std::size_t index) const { return *frames_[index]; }
+
+  void push_back(std::unique_ptr<Frame> frame) {
+    frames_.push_back(std::move(frame));
+  }
+
+  // Cold helper paths still prepare a Frame by value. Keep them source
+  // compatible; ordinary call dispatch uses the unique_ptr overload.
+  void push_back(Frame &&frame) {
+    frames_.push_back(std::make_unique<Frame>(std::move(frame)));
+  }
+
+  std::unique_ptr<Frame> take_back() {
+    std::unique_ptr<Frame> frame = std::move(frames_.back());
+    frames_.pop_back();
+    return frame;
+  }
+
+  void pop_back() { frames_.pop_back(); }
+  void clear() { frames_.clear(); }
+
+private:
+  std::vector<std::unique_ptr<Frame>> frames_;
 };
 
 struct MethodTableDescriptor {
@@ -389,6 +441,15 @@ struct RuntimeState {
   std::uint64_t call_cache_misses = 0;
   std::uint64_t call_cache_updates = 0;
   std::unordered_map<std::uint64_t, IvarCacheEntry> ivar_caches;
+  // Path constants and the bytecode class table are immutable for the
+  // lifetime of a RuntimeState. Resolve class references once when the module
+  // is installed instead of rebuilding path strings and linearly scanning all
+  // classes on every superclass/mixin dispatch.
+  static constexpr std::uint32_t kClassRefUnknown =
+      std::numeric_limits<std::uint32_t>::max();
+  static constexpr std::uint32_t kClassRefAmbiguous =
+      std::numeric_limits<std::uint32_t>::max() - 1U;
+  std::vector<std::uint32_t> resolved_class_refs;
   bool module_init_completed = false;
   std::unordered_map<std::string, Value> module_bindings;
   std::shared_ptr<std::atomic<std::uint64_t>> next_shape_id =
@@ -559,6 +620,68 @@ struct RuntimeState {
     dependency_capture.dependencies[found->second] = std::move(dependency);
   }
 
+  void resolve_class_refs_for_module(const bytecode::BcModule &module) {
+    std::unordered_map<std::string, std::uint32_t> full_names;
+    std::unordered_map<std::string, std::uint32_t> leaf_names;
+    std::unordered_set<std::string> ambiguous_leaves;
+    full_names.reserve(module.classes.size());
+    leaf_names.reserve(module.classes.size());
+    for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
+      const std::uint32_t symbol_id =
+          module.classes[index].class_name_sym_id;
+      if (symbol_id >= module.symbols.size()) {
+        continue;
+      }
+      const std::string &name = module.symbols[symbol_id];
+      full_names.emplace(name, index);
+      const std::size_t separator = name.rfind('.');
+      const std::string leaf =
+          separator == std::string::npos ? name : name.substr(separator + 1U);
+      const auto [found, inserted] = leaf_names.emplace(leaf, index);
+      if (!inserted && found->second != index) {
+        ambiguous_leaves.insert(leaf);
+      }
+    }
+
+    resolved_class_refs.assign(module.const_pool.size(), kClassRefUnknown);
+    for (std::uint32_t ref = 0; ref < module.const_pool.size(); ++ref) {
+      const bytecode::Constant &constant = module.const_pool[ref];
+      if (constant.kind != bytecode::ConstantKind::Path ||
+          constant.items.empty()) {
+        continue;
+      }
+      std::string full_path;
+      bool valid = true;
+      for (const std::uint32_t symbol_id : constant.items) {
+        if (symbol_id >= module.symbols.size()) {
+          valid = false;
+          break;
+        }
+        if (!full_path.empty()) {
+          full_path += '.';
+        }
+        full_path += module.symbols[symbol_id];
+      }
+      if (!valid) {
+        continue;
+      }
+      const auto exact = full_names.find(full_path);
+      if (exact != full_names.end()) {
+        resolved_class_refs[ref] = exact->second;
+        continue;
+      }
+      const std::string &leaf = module.symbols[constant.items.back()];
+      if (ambiguous_leaves.find(leaf) != ambiguous_leaves.end()) {
+        resolved_class_refs[ref] = kClassRefAmbiguous;
+        continue;
+      }
+      const auto short_name = leaf_names.find(leaf);
+      if (short_name != leaf_names.end()) {
+        resolved_class_refs[ref] = short_name->second;
+      }
+    }
+  }
+
   void initialize_for_module(const bytecode::BcModule &module) {
     if (dead_shape == nullptr) {
       dead_shape = std::make_shared<ShapeDescriptor>();
@@ -575,6 +698,7 @@ struct RuntimeState {
     if (owners_initialized) {
       return;
     }
+    resolve_class_refs_for_module(module);
     for (const bytecode::BcMethod &method : module.methods) {
       for (std::uint32_t i = 0; i < method.params.size(); ++i) {
         const std::uint32_t flags = method.params[i].flags;
@@ -712,6 +836,7 @@ struct RuntimeState {
     if (root_shapes.size() < module.classes.size()) {
       root_shapes.resize(module.classes.size());
     }
+    resolve_class_refs_for_module(module);
 
     for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
       ClassRuntimeState &runtime = classes[index];

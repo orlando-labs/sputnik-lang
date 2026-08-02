@@ -35,6 +35,7 @@ struct RuntimeRegexpPatternValue;
 struct RuntimeRegexpMatchValue;
 struct RuntimeForeignHandle;
 struct RuntimeArgParserValue;
+struct RuntimeHeapStringValue;
 
 // First-class macro `Ast` value (macro.v1 profile, DESIGN-macro-system §4).
 // Immutable wrapper over a parsed/expanded `amber.ast.v1` node. `node` is an
@@ -184,6 +185,14 @@ struct SymbolValue {
 
 struct StringValue {
   std::uint32_t string_id = 0;
+};
+
+// Runtime-produced strings have ordinary value lifetime instead of occupying
+// immortal slots in a VM-wide intern table. Module literals keep the compact
+// StringValue id representation; producers such as JSON parsing, concatenation
+// and formatting use this owned form.
+struct RuntimeHeapStringValue {
+  std::string text;
 };
 
 struct ClassObjectValue {
@@ -403,6 +412,8 @@ struct RuntimeForeignHandle {
   X(map, is_map, as_map, MapValue, Map)
 
 #define AMBER_VALUE_TAIL_KINDS(X)                                              \
+  X(heap_string, is_heap_string, as_heap_string, RuntimeHeapStringValue,       \
+    HeapString)                                                               \
   X(error_instance, is_error_instance, as_error_instance, ErrorInstanceValue,  \
     ErrorInstance)                                                             \
   X(native_error_namespace, is_native_error_namespace,                         \
@@ -469,7 +480,8 @@ struct Value {
       std::shared_ptr<RuntimeRegexpPatternValue>,
       std::shared_ptr<RuntimeRegexpMatchValue>,
       std::shared_ptr<RuntimeForeignHandle>, std::shared_ptr<RuntimeAstNode>,
-      std::shared_ptr<RuntimeTimeZoneValue>>;
+      std::shared_ptr<RuntimeTimeZoneValue>,
+      std::shared_ptr<RuntimeHeapStringValue>>;
 
   Payload payload;
 
@@ -479,6 +491,7 @@ struct Value {
   static Value floating(double value);
   static Value symbol(std::uint32_t symbol_id);
   static Value string(std::uint32_t string_id);
+  static Value heap_string(std::shared_ptr<RuntimeHeapStringValue> value);
   static Value class_object(std::uint32_t class_index);
   static Value closure(IntrusivePtr<ClosureValue> value);
   static Value instance(IntrusivePtr<InstanceValue> value);
@@ -525,6 +538,7 @@ struct Value {
   bool is_float() const;
   bool is_symbol() const;
   bool is_string() const;
+  bool is_heap_string() const;
   bool is_class_object() const;
   bool is_closure() const;
   bool is_instance_object() const;
@@ -568,6 +582,7 @@ struct Value {
   double as_float() const;
   SymbolValue as_symbol() const;
   StringValue as_string() const;
+  std::shared_ptr<RuntimeHeapStringValue> as_heap_string() const;
   ClassObjectValue as_class_object() const;
   IntrusivePtr<ClosureValue> as_closure() const;
   IntrusivePtr<InstanceValue> as_instance_object() const;
@@ -645,6 +660,7 @@ enum class ValueTag : std::uint8_t {
 };
 
 enum class ValueTailKind : std::uint8_t {
+  HeapString,
   ErrorInstance,
   NativeErrorNamespace,
   BigInt,
@@ -690,6 +706,7 @@ struct Value {
   static Value floating(double value);
   static Value symbol(std::uint32_t symbol_id);
   static Value string(std::uint32_t string_id);
+  static Value heap_string(std::shared_ptr<RuntimeHeapStringValue> value);
   static Value class_object(std::uint32_t class_index);
   static Value closure(IntrusivePtr<ClosureValue> value);
   static Value instance(IntrusivePtr<InstanceValue> value);
@@ -736,6 +753,7 @@ struct Value {
   bool is_float() const;
   bool is_symbol() const;
   bool is_string() const;
+  bool is_heap_string() const;
   bool is_class_object() const;
   bool is_closure() const;
   bool is_instance_object() const;
@@ -779,6 +797,7 @@ struct Value {
   double as_float() const;
   SymbolValue as_symbol() const;
   StringValue as_string() const;
+  std::shared_ptr<RuntimeHeapStringValue> as_heap_string() const;
   ClassObjectValue as_class_object() const;
   IntrusivePtr<ClosureValue> as_closure() const;
   IntrusivePtr<InstanceValue> as_instance_object() const;

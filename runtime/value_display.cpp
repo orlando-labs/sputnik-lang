@@ -246,7 +246,12 @@ std::string runtime_stringify_value_impl(RuntimeStringifyContext *context,
   }
   if (value.is_string()) {
     const std::optional<std::string> text =
-        string_text_for(*context, value.as_string().string_id);
+        value.is_heap_string()
+            ? (value.as_heap_string() == nullptr
+                   ? std::nullopt
+                   : std::optional<std::string>(
+                         value.as_heap_string()->text))
+            : string_text_for(*context, value.as_string().string_id);
     if (!text.has_value()) {
       return mode == RuntimeStringifyMode::Display ? "<invalid-string>"
                                                    : "\"<invalid>\"";
@@ -644,6 +649,12 @@ value_to_debug_string(const Value &value, const bytecode::BcModule *module,
     return ":<invalid>";
   }
   if (value.is_string()) {
+    if (value.is_heap_string()) {
+      const std::shared_ptr<RuntimeHeapStringValue> string =
+          value.as_heap_string();
+      return string == nullptr ? "\"<invalid>\""
+                               : "\"" + string->text + "\"";
+    }
     const StringValue string = value.as_string();
     if (debug_strings != nullptr && string.string_id < debug_strings->size()) {
       return "\"" + (*debug_strings)[string.string_id] + "\"";

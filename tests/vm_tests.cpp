@@ -2782,6 +2782,12 @@ string_value_text_or_die(const amber::runtime::Value &value,
                          const amber::bytecode::BcModule &module,
                          const amber::runtime::ExecutionResult &result) {
   expect(value.is_string(), "expected Str value");
+  if (value.is_heap_string()) {
+    const std::shared_ptr<amber::runtime::RuntimeHeapStringValue> string =
+        value.as_heap_string();
+    expect(string != nullptr, "heap Str value should be present");
+    return string->text;
+  }
   const std::uint32_t string_id = value.as_string().string_id;
   const std::vector<std::string> &strings =
       result.runtime_strings.empty() ? module.strings : result.runtime_strings;
@@ -3985,6 +3991,59 @@ void test_execute_emitted_block_map_suffixes() {
                       "explicit param indented map block");
 }
 
+void test_quick_sequence_block_sends() {
+  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+      "values = [1, 2, 3]\n"
+      "seen = []\n"
+      "each_result = values.each |value|:\n"
+      "  seen.push!(value)\n"
+      "  if value == 1:\n"
+      "    values.push!(4)\n"
+      "mapped = values.map |value|: value * 2\n"
+      "all_positive = values.all? |value|: value > 0\n"
+      "any_large = values.any? |value|: value > 3\n"
+      "none_negative = values.none? |value|: value < 0\n"
+      "[seen.count, values.count, each_result.count, mapped[3], "
+      "all_positive, any_large, none_negative, values.length, "
+      "\"Жa\".size, \"amber\".contains?(\"mb\"), "
+      "\"amber\" == \"amber\", Str === \"x\", Int === 1, "
+      "Array === values, Str === 1]\n");
+  expect(exec.ok(), "quick sequence block sends should execute");
+  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> parts =
+      exec.value.is_list() ? exec.value.as_list() : nullptr;
+  expect(parts != nullptr && parts->items.size() == 15,
+         "quick sequence block sends result shape");
+  expect(parts != nullptr && parts->items[0].is_integer() &&
+             parts->items[0].as_integer() == 3 &&
+             parts->items[1].is_integer() &&
+             parts->items[1].as_integer() == 4 &&
+             parts->items[2].is_integer() &&
+             parts->items[2].as_integer() == 4 &&
+             parts->items[3].is_integer() &&
+             parts->items[3].as_integer() == 8,
+         "quick each/map preserve snapshot and return semantics");
+  expect(parts != nullptr && parts->items[4].is_bool() &&
+             parts->items[4].as_bool() && parts->items[5].is_bool() &&
+             parts->items[5].as_bool() && parts->items[6].is_bool() &&
+             parts->items[6].as_bool(),
+         "quick all?/any?/none? preserve predicate semantics");
+  expect(parts != nullptr && parts->items[7].is_integer() &&
+             parts->items[7].as_integer() == 4 &&
+             parts->items[8].is_integer() &&
+             parts->items[8].as_integer() == 2,
+         "quick length/size preserve collection and UTF-8 semantics");
+  expect(parts != nullptr && parts->items[9].is_bool() &&
+             parts->items[9].as_bool(),
+         "quick string contains? preserves byte substring semantics");
+  expect(parts != nullptr && parts->items[10].is_bool() &&
+             parts->items[10].as_bool() && parts->items[11].is_bool() &&
+             parts->items[11].as_bool() && parts->items[12].is_bool() &&
+             parts->items[12].as_bool() && parts->items[13].is_bool() &&
+             parts->items[13].as_bool() && parts->items[14].is_bool() &&
+             !parts->items[14].as_bool(),
+         "quick primitive equality and native type matching preserve semantics");
+}
+
 void test_string_contains_only() {
   const amber::runtime::ExecutionResult exec = execute_emitted_init(
       "[\"header-name\".contains_only?(\"abcdefghijklmnopqrstuvwxyz-\"), "
@@ -4003,6 +4062,41 @@ void test_string_contains_only() {
              parts->items[3].as_bool() && parts->items[4].is_bool() &&
              !parts->items[4].as_bool(),
          "String#contains_only? preserves ASCII, UTF-8, and empty semantics");
+}
+
+void test_synchronous_collection_block_control_flow() {
+  const amber::runtime::ExecutionResult nonlocal_return =
+      execute_emitted_init(
+          "def first_even(values):\n"
+          "  values.each |value|:\n"
+          "    if value == 4:\n"
+          "      return value\n"
+          "  0\n"
+          "\n"
+          "first_even([1, 4, 6])\n");
+  expect(nonlocal_return.ok() && nonlocal_return.value.is_integer() &&
+             nonlocal_return.value.as_integer() == 4,
+         "return inside quick each exits the enclosing function");
+
+  const amber::runtime::ExecutionResult rescued =
+      execute_emitted_init(
+          "try:\n"
+          "  [1].map |value|:\n"
+          "    raise \"block failure\"\n"
+          "rescue |error|:\n"
+          "  7\n");
+  expect(rescued.ok() && rescued.value.is_integer() &&
+             rescued.value.as_integer() == 7,
+         "raise inside quick map reaches the enclosing rescue");
+
+  const amber::runtime::ExecutionResult caught =
+      execute_emitted_init(
+          "catch :done:\n"
+          "  [1].all? |value|:\n"
+          "    throw :done, 9\n");
+  expect(caught.ok() && caught.value.is_integer() &&
+             caught.value.as_integer() == 9,
+         "throw inside quick all? reaches the enclosing catch");
 }
 
 void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {
@@ -9428,13 +9522,19 @@ void test_runtime_io_v2_source_surface() {
                   : std::string{}));
   expect(buffer.value.is_list(), "ByteBuffer source result should be Array");
   const auto buffer_items = buffer.value.as_list()->items;
+  const bool buffer_hex_matches =
+      buffer_items.size() == 3 && buffer_items[2].is_string() &&
+      (buffer_items[2].is_heap_string()
+           ? (buffer_items[2].as_heap_string() != nullptr &&
+              buffer_items[2].as_heap_string()->text == "42")
+           : (buffer_items[2].as_string().string_id <
+                  buffer.runtime_strings.size() &&
+              buffer.runtime_strings[buffer_items[2].as_string().string_id] ==
+                  "42"));
   expect(
       buffer_items.size() == 3 && buffer_items[0].is_integer() &&
           buffer_items[0].as_integer() == 65 && buffer_items[1].is_integer() &&
-          buffer_items[1].as_integer() == 1 && buffer_items[2].is_string() &&
-          buffer_items[2].as_string().string_id <
-              buffer.runtime_strings.size() &&
-          buffer.runtime_strings[buffer_items[2].as_string().string_id] == "42",
+          buffer_items[1].as_integer() == 1 && buffer_hex_matches,
       "ByteBuffer v2 source contract mismatch");
 
   amber::runtime::ExecutionResult path =
@@ -10947,8 +11047,10 @@ int main() {
   test_manual_make_map();
   test_execute_emitted_control_condition_assignment();
   test_execute_emitted_block_map_suffixes();
-  test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
+  test_quick_sequence_block_sends();
   test_string_contains_only();
+  test_synchronous_collection_block_control_flow();
+  test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
   test_runtime_world_persists_runtime_strings_between_execute_calls();
   test_runtime_world_shared_module_keeps_runtime_names_private();
   test_runtime_world_reuses_native_bridge_session_after_stdlib_fault();

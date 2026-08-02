@@ -511,6 +511,63 @@ void test_reactor() {
     ::close(fds[1]);
   }
 
+  // Closing and immediately reusing the same descriptor number must replace
+  // the backend registration. Otherwise the reactor's fd-only mirror can
+  // mistake the new socket for the old one and never arm its read interest.
+  for (int iteration = 0; iteration < 64; ++iteration) {
+    int old_pair[2];
+    make_nonblocking_socketpair(old_pair);
+    const int reused_fd = old_pair[0];
+    std::atomic<bool> old_fired{false};
+    std::atomic<ReactorOutcome> old_outcome{ReactorOutcome::Error};
+    reactor.wait_async(
+        reused_fd, ReactorInterest::Read,
+        std::chrono::steady_clock::now() + 1s, nullptr,
+        [&](ReactorOutcome outcome) {
+          old_outcome = outcome;
+          old_fired = true;
+        });
+    std::this_thread::sleep_for(1ms);
+    reactor.notify_closed(reused_fd);
+    ::close(reused_fd);
+
+    int new_pair[2];
+    make_nonblocking_socketpair(new_pair);
+    if (new_pair[0] != reused_fd) {
+      expect(::dup2(new_pair[0], reused_fd) == reused_fd,
+             "reactor: could not force fd reuse");
+      ::close(new_pair[0]);
+      new_pair[0] = reused_fd;
+    }
+
+    std::atomic<bool> new_fired{false};
+    std::atomic<ReactorOutcome> new_outcome{ReactorOutcome::Error};
+    reactor.wait_async(
+        new_pair[0], ReactorInterest::Read,
+        std::chrono::steady_clock::now() + 250ms, nullptr,
+        [&](ReactorOutcome outcome) {
+          new_outcome = outcome;
+          new_fired = true;
+        });
+    const char byte = 'r';
+    expect(::write(new_pair[1], &byte, 1) == 1,
+           "reactor: reused-fd peer write failed");
+    for (int i = 0;
+         i < 500 && (!old_fired.load() || !new_fired.load()); ++i) {
+      std::this_thread::sleep_for(1ms);
+    }
+    expect(old_fired.load() &&
+               old_outcome.load() == ReactorOutcome::Closed,
+           "reactor: old generation should complete Closed");
+    expect(new_fired.load() &&
+               new_outcome.load() == ReactorOutcome::Ready,
+           "reactor: reused descriptor should re-register as Ready");
+    ::close(old_pair[1]);
+    reactor.notify_closed(new_pair[0]);
+    ::close(new_pair[0]);
+    ::close(new_pair[1]);
+  }
+
   // Two strands waiting on one fd (the duplex / shared-socket case) both wake.
   {
     int fds[2];

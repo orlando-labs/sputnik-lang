@@ -113,6 +113,8 @@ void test_byte_buffer() {
   expect(immutable.count() == 3 && immutable.at(-1).byte == 255,
          "Bytes indexing mismatch");
   expect(immutable.hex() == "007fff", "Bytes hex mismatch");
+  expect(RuntimeBytes("abc").stable_hash() == 1677554,
+         "Bytes stable hash mismatch");
 }
 
 void test_file_contract() {

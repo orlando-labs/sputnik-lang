@@ -467,6 +467,14 @@ std::string RuntimeBytes::hex() const {
   return result;
 }
 
+std::int64_t RuntimeBytes::stable_hash() const {
+  std::int64_t hash = 0;
+  for (const unsigned char byte : *bytes_) {
+    hash = (hash * 131 + byte) % 2147483647;
+  }
+  return hash;
+}
+
 const std::string &RuntimeBytes::string() const { return *bytes_; }
 
 RuntimeByteSlice::RuntimeByteSlice(std::shared_ptr<RuntimeByteBuffer> owner,

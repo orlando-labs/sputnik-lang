@@ -83,6 +83,7 @@ public:
         std::optional<std::size_t> length = std::nullopt) const;
   RuntimeIoStatus to_string(const std::string &encoding = "utf8") const;
   std::string hex() const;
+  std::int64_t stable_hash() const;
   const std::string &string() const;
 
 private:

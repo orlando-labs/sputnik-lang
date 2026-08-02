@@ -2488,8 +2488,8 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
       bool codec_send = false;
       if (selector == "new" && pos_count == 1U && kw_count == 0U && no_block) {
         codec_send = true;
-      } else if (selector == "hex" && pos_count == 0U && kw_count == 0U &&
-                 no_block) {
+      } else if ((selector == "hex" || selector == "stable_hash") &&
+                 pos_count == 0U && kw_count == 0U && no_block) {
         codec_send = true;
       } else if ((selector == "encode" || selector == "decode") &&
                  pos_count == 1U && kw_count <= 1U && no_block) {
@@ -6603,6 +6603,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                   read_reg_expr(recv) + ", " +
                                   read_reg_expr(arg) + ")");
         }
+      } else if (selector == "stable_hash") {
+        write_reg_stmt(dst, "native_bytes_stable_hash(" +
+                                read_reg_expr(recv) + ")");
       } else if (selector == "int") {
         write_reg_stmt(dst, "native_secure_random_int(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
@@ -14510,6 +14513,14 @@ static std::string native_hex_encode_bytes(const std::string &bytes) {
 static NativeValue native_bytes_hex(const NativeValue &value) {
   return NativeValue::heap_string(
       native_hex_encode_bytes(as_bytes(value).bytes));
+}
+
+static NativeValue native_bytes_stable_hash(const NativeValue &value) {
+  std::int64_t hash = 0;
+  for (const unsigned char byte : as_bytes(value).bytes) {
+    hash = (hash * 131 + byte) % 2147483647;
+  }
+  return NativeValue::integer(hash);
 }
 
 static int native_hex_value(char c) {

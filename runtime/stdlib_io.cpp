@@ -189,6 +189,13 @@ SendStatus bytes_instance_send(NativeStdlibCall &call) {
     *call.out = call.string_value(bytes->hex());
     return SendStatus::Matched;
   }
+  if (call.selector == "stable_hash") {
+    if (!call.require_arity(0) || !call.kw_args.empty()) {
+      return SendStatus::Faulted;
+    }
+    *call.out = Value::integer(bytes->stable_hash());
+    return SendStatus::Matched;
+  }
   return SendStatus::NotHandled;
 }
 

@@ -15,6 +15,7 @@
 #include "profile/modern.h"
 #include "profile/replay.h"
 #include "profile/wasm_accel.h"
+#include "runtime/amber_ext_runtime.h"
 #include "runtime/context.h"
 #include "runtime/errors.h"
 #include "runtime/macro_expander.h"
@@ -25,13 +26,16 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstring>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <dlfcn.h>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <map>
 #include <numeric>
@@ -71,6 +75,8 @@ std::string read_file(const std::string &path) {
 void usage(std::ostream &out) {
   out << "usage:\n";
   out << "  amberc <file.am>\n";
+  out << "  amberc run <file.am|manifest|file.amberbc> "
+         "[--grant <cap[=target]>...] [-- <program-args>...]\n";
   out << "  amberc build <file.am> [-o <path>] [--out-dir <dir>] "
          "[--target native|native-debug|bytecode-wrapper] "
          "[--entry auto|init|main|main-only] [--grant <cap[=target]>...] "
@@ -129,6 +135,42 @@ void usage(std::ostream &out) {
   out << "  amberc image-inspect <file.amberimg>\n";
   out << "  amberc image-verify <file.amberimg> [--sign-key <key>]\n";
   out << "  amberc --version\n";
+}
+
+bool append_cli_grant(
+    const std::string &raw,
+    std::vector<amber::capability::CapabilityRequest> *grants,
+    amber::capability::CapabilityDiagnostic *diagnostic) {
+  const std::size_t equals = raw.find('=');
+  const std::string name =
+      equals == std::string::npos ? raw : raw.substr(0, equals);
+  const std::string suffix =
+      equals == std::string::npos ? std::string() : raw.substr(equals);
+  if (name != "ffi") {
+    amber::capability::CapabilityRequest grant;
+    if (!amber::capability::parse_cli_grant(raw, &grant, diagnostic)) {
+      return false;
+    }
+    grants->push_back(std::move(grant));
+    return true;
+  }
+
+  // `ffi` is the consumer-facing acknowledgement for the complete native
+  // package boundary. Keep the policy engine canonical by expanding it to the
+  // two independently auditable operations rather than storing a group name.
+  std::vector<amber::capability::CapabilityRequest> expanded;
+  for (const std::string &canonical : {"ffi.load", "ffi.call"}) {
+    amber::capability::CapabilityRequest grant;
+    if (!amber::capability::parse_cli_grant(canonical + suffix, &grant,
+                                            diagnostic)) {
+      return false;
+    }
+    expanded.push_back(std::move(grant));
+  }
+  grants->insert(grants->end(),
+                 std::make_move_iterator(expanded.begin()),
+                 std::make_move_iterator(expanded.end()));
+  return true;
 }
 
 amber::lexer::LexResult lex_source(const std::string &source,
@@ -1062,8 +1104,14 @@ void maybe_dump_heap_stats(const amber::runtime::RuntimeWorld &world,
 
 amber::runtime::ExecutionResult
 execute_runnable_module(const amber::bytecode::BcModule &module,
-                        EntryExecutionMode mode) {
-  amber::runtime::RuntimeWorld world(module);
+                        EntryExecutionMode mode,
+                        const std::optional<std::uint32_t> main_code_id =
+                            std::nullopt,
+                        std::vector<amber::capability::CapabilityRequest>
+                            capability_grants = {}) {
+  amber::runtime::RuntimeWorldOptions options;
+  options.capability_grants = std::move(capability_grants);
+  amber::runtime::RuntimeWorld world(module, std::move(options));
   amber::runtime::ExecutionResult init_result;
   if (mode != EntryExecutionMode::MainOnly && module.init.has_entry_code_id) {
     init_result = world.execute(module.init.entry_code_id);
@@ -1075,6 +1123,12 @@ execute_runnable_module(const amber::bytecode::BcModule &module,
 
   if (mode == EntryExecutionMode::MainAfterInit ||
       mode == EntryExecutionMode::MainOnly) {
+    if (main_code_id.has_value()) {
+      const amber::runtime::ExecutionResult result =
+          world.execute(*main_code_id);
+      maybe_dump_heap_stats(world, module, &result);
+      return result;
+    }
     const amber::bytecode::BcMethod *main_method =
         zero_arg_method_by_name(module, "main");
     if (main_method == nullptr) {
@@ -1114,7 +1168,11 @@ bool should_print_run_value(const amber::runtime::Value &value) {
 
 int run_runnable_module(const std::string &module_name,
                         EntryExecutionMode entry_mode,
-                        const std::vector<std::uint8_t> &bytes) {
+                        const std::vector<std::uint8_t> &bytes,
+                        const std::optional<std::uint32_t> main_code_id =
+                            std::nullopt,
+                        std::vector<amber::capability::CapabilityRequest>
+                            capability_grants = {}) {
   (void)module_name;
   amber::bytecode::DecodeResult decode_result =
       amber::bytecode::deserialize_module(bytes);
@@ -1123,7 +1181,8 @@ int run_runnable_module(const std::string &module_name,
     return 1;
   }
   const amber::runtime::ExecutionResult result =
-      execute_runnable_module(decode_result.module, entry_mode);
+      execute_runnable_module(decode_result.module, entry_mode, main_code_id,
+                              std::move(capability_grants));
   if (!result.ok()) {
     print_execution_fault(result);
     return 1;
@@ -1141,7 +1200,11 @@ int run_source_file_command(const std::string &path) {
   const RunnableModuleArtifact artifact =
       compile_source_to_runnable_module(path);
   return run_runnable_module(artifact.module_name, artifact.entry_mode,
-                             artifact.bytes);
+                             artifact.bytes,
+                             artifact.has_entry_main_code_id
+                                 ? std::optional<std::uint32_t>(
+                                       artifact.entry_main_code_id)
+                                 : std::nullopt);
 }
 
 std::string render_executable_script(const std::string &amberc_ref,
@@ -22741,6 +22804,11 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
     // dynamic request/application data, so crossing the bridge must create a
     // refcounted string rather than grow the permanent literal intern table.
     out << "  if (value.is_string()) {\n";
+    out << "    if (value.is_heap_string()) {\n";
+    out << "      const auto string = value.as_heap_string();\n";
+    out << "      if (string == nullptr) throw NativeBailout();\n";
+    out << "      return NativeValue::heap_string(string->text);\n";
+    out << "    }\n";
     out << "    const std::uint32_t string_id = "
            "value.as_string().string_id;\n";
     out << "    if (string_id >= runtime_strings.size()) "
@@ -24127,12 +24195,11 @@ SourceBuildCliOptions parse_source_build_options(int argc, char **argv,
                                  options.entry);
       }
     } else if (arg == "--grant" && i + 1 < argc) {
-      amber::capability::CapabilityRequest grant;
       amber::capability::CapabilityDiagnostic diagnostic;
-      if (!amber::capability::parse_cli_grant(argv[++i], &grant, &diagnostic)) {
+      if (!append_cli_grant(argv[++i], &options.capability_grants,
+                            &diagnostic)) {
         throw std::runtime_error(diagnostic.message);
       }
-      options.capability_grants.push_back(std::move(grant));
     } else if (arg == "--require-native-body-coverage") {
       options.require_native_body_coverage = true;
     } else if (arg == "--require-full-native") {
@@ -24546,13 +24613,11 @@ BuildCliOptions parse_build_options(int argc, char **argv, int start_index) {
     } else if (arg == "--no-cache") {
       options.cache_enabled = false;
     } else if (arg == "--grant" && i + 1 < argc) {
-      amber::capability::CapabilityRequest grant;
       amber::capability::CapabilityDiagnostic diagnostic;
-      if (!amber::capability::parse_cli_grant(argv[++i], &grant,
-                                               &diagnostic)) {
+      if (!append_cli_grant(argv[++i], &options.capability_grants,
+                            &diagnostic)) {
         throw std::runtime_error(diagnostic.message);
       }
-      options.capability_grants.push_back(std::move(grant));
     } else if (arg == "--require-native-body-coverage") {
       options.require_native_body_coverage = true;
     } else if (arg == "--require-full-native") {
@@ -26037,6 +26102,59 @@ link_native_graph(const std::vector<NativeGraphModule> &modules,
   }
 }
 
+void build_manifest_modules(
+    const amber::build::BuildManifest &manifest,
+    const std::filesystem::path &manifest_dir,
+    const std::filesystem::path &out_dir,
+    const std::filesystem::path &cache_dir, bool cache_enabled,
+    amber::build::BuildSummary *summary) {
+  std::vector<BuiltStdlibAbi> stdlib_abis;
+  for (const amber::build::BuildModule &module : manifest.stdlib_modules) {
+    amber::build::BuildArtifactRecord artifact =
+        build_one_module(module, manifest_dir, out_dir, cache_dir,
+                         manifest.profiles, {}, cache_enabled);
+    BuiltStdlibAbi abi;
+    abi.name = module.name;
+    abi.abi_hash = array_from_hex32(artifact.abi_hash);
+    stdlib_abis.push_back(std::move(abi));
+    summary->artifacts.push_back(std::move(artifact));
+  }
+
+  // Cross-module macro staging (§11): a parse-only pre-pass harvests every
+  // module's `export macro` table before anything compiles, so staging is
+  // independent of build order (the manifest parser sorts modules by name).
+  amber::macros::MacroProviderMap macro_providers;
+  std::string macro_material;
+  for (const amber::build::BuildModule &module : manifest.modules) {
+    const std::string module_source =
+        read_file((manifest_dir / module.path).string());
+    const std::string module_source_hash =
+        amber::lexer::sha256_hex(module_source);
+    // Prefer the persisted artifact macro section of a fresh build output;
+    // fall back to the parse-only source harvest.
+    std::vector<amber::macros::MacroExport> exports;
+    std::optional<std::vector<amber::macros::MacroExport>> from_artifact =
+        macro_exports_from_artifact(
+            out_dir / (safe_artifact_name(module.name) + ".amberbc"),
+            module_source_hash, module.path);
+    if (from_artifact.has_value()) {
+      exports = std::move(*from_artifact);
+    } else {
+      exports = harvest_macro_exports(module_source, module.path);
+    }
+    if (!exports.empty()) {
+      macro_material +=
+          "macro-provider\n" + module.name + "\n" + module_source_hash + "\n";
+      macro_providers[module.name] = std::move(exports);
+    }
+  }
+  for (const amber::build::BuildModule &module : manifest.modules) {
+    summary->artifacts.push_back(build_one_module(
+        module, manifest_dir, out_dir, cache_dir, manifest.profiles,
+        stdlib_abis, cache_enabled, &macro_providers, macro_material));
+  }
+}
+
 int run_build_command(int argc, char **argv) {
   if (argc < 3 || std::string(argv[1]) != "build") {
     usage(std::cerr);
@@ -26076,56 +26194,8 @@ int run_build_command(int argc, char **argv) {
   summary.profiles = parsed.manifest.profiles;
 
   try {
-    std::vector<BuiltStdlibAbi> stdlib_abis;
-    for (const amber::build::BuildModule &module :
-         parsed.manifest.stdlib_modules) {
-      amber::build::BuildArtifactRecord artifact =
-          build_one_module(module, manifest_dir, out_dir, cache_dir,
-                           parsed.manifest.profiles, {}, options.cache_enabled);
-      BuiltStdlibAbi abi;
-      abi.name = module.name;
-      abi.abi_hash = array_from_hex32(artifact.abi_hash);
-      stdlib_abis.push_back(std::move(abi));
-      summary.artifacts.push_back(std::move(artifact));
-    }
-    // Cross-module macro staging (§11): a parse-only pre-pass harvests every
-    // module's `export macro` table before anything compiles, so staging is
-    // independent of build order (the manifest parser sorts modules by name).
-    // Providers do not need to be *built* first — the importer's expansion
-    // clones provider macro-def ASTs into its own macro module. Provider
-    // source hashes salt every cache key: expansion output, not just
-    // linkage, depends on provider sources.
-    amber::macros::MacroProviderMap macro_providers;
-    std::string macro_material;
-    for (const amber::build::BuildModule &module : parsed.manifest.modules) {
-      const std::string module_source =
-          read_file((manifest_dir / module.path).string());
-      const std::string module_source_hash =
-          amber::lexer::sha256_hex(module_source);
-      // Prefer the persisted artifact macro section of a fresh build output
-      // (§11); fall back to the parse-only source harvest.
-      std::vector<amber::macros::MacroExport> exports;
-      std::optional<std::vector<amber::macros::MacroExport>> from_artifact =
-          macro_exports_from_artifact(
-              out_dir / (safe_artifact_name(module.name) + ".amberbc"),
-              module_source_hash, module.path);
-      if (from_artifact.has_value()) {
-        exports = std::move(*from_artifact);
-      } else {
-        exports = harvest_macro_exports(module_source, module.path);
-      }
-      if (!exports.empty()) {
-        macro_material +=
-            "macro-provider\n" + module.name + "\n" + module_source_hash + "\n";
-        macro_providers[module.name] = std::move(exports);
-      }
-    }
-    for (const amber::build::BuildModule &module : parsed.manifest.modules) {
-      summary.artifacts.push_back(build_one_module(
-          module, manifest_dir, out_dir, cache_dir, parsed.manifest.profiles,
-          stdlib_abis, options.cache_enabled, &macro_providers,
-          macro_material));
-    }
+    build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
+                           options.cache_enabled, &summary);
     if (options.target == "native" || options.target == "both") {
       amber::build::BuildArtifactRecord *root_record = nullptr;
       for (amber::build::BuildArtifactRecord &artifact : summary.artifacts) {
@@ -26239,6 +26309,500 @@ int run_build_command(int argc, char **argv) {
   }
 }
 
+struct RunCliOptions {
+  std::vector<amber::capability::CapabilityRequest> capability_grants;
+  std::vector<std::string> process_arguments;
+};
+
+RunCliOptions parse_run_options(int argc, char **argv, int start_index) {
+  RunCliOptions options;
+  bool program_arguments = false;
+  for (int i = start_index; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (program_arguments) {
+      options.process_arguments.push_back(arg);
+    } else if (arg == "--") {
+      program_arguments = true;
+    } else if (arg == "--grant" && i + 1 < argc) {
+      amber::capability::CapabilityDiagnostic diagnostic;
+      if (!append_cli_grant(argv[++i], &options.capability_grants,
+                            &diagnostic)) {
+        throw std::runtime_error(diagnostic.message);
+      }
+    } else {
+      throw std::runtime_error(
+          "unknown run option: " + arg +
+          " (pass program arguments after --)");
+    }
+  }
+  return options;
+}
+
+class ScopedRunBuildDirectory {
+public:
+  ScopedRunBuildDirectory() {
+    const std::filesystem::path temp_root =
+        std::filesystem::temp_directory_path();
+    for (std::uint32_t attempt = 0; attempt < 1000U; ++attempt) {
+      path_ = temp_root /
+              ("amber-run-" + std::to_string(::getpid()) + "-" +
+               std::to_string(attempt));
+      std::error_code error;
+      if (std::filesystem::create_directory(path_, error)) {
+        return;
+      }
+      if (error && error != std::errc::file_exists) {
+        throw std::runtime_error("failed to create VM run directory: " +
+                                 error.message());
+      }
+    }
+    throw std::runtime_error("failed to allocate a VM run directory");
+  }
+
+  ~ScopedRunBuildDirectory() { cleanup(); }
+
+  const std::filesystem::path &path() const { return path_; }
+
+  void cleanup() {
+    if (path_.empty()) {
+      return;
+    }
+    std::error_code ignored;
+    std::filesystem::remove_all(path_, ignored);
+    path_.clear();
+  }
+
+private:
+  std::filesystem::path path_;
+};
+
+class ScopedNativeExtensionLibraries {
+public:
+  ScopedNativeExtensionLibraries() = default;
+  ScopedNativeExtensionLibraries(const ScopedNativeExtensionLibraries &) =
+      delete;
+  ScopedNativeExtensionLibraries &
+  operator=(const ScopedNativeExtensionLibraries &) = delete;
+
+  ~ScopedNativeExtensionLibraries() {
+    for (auto it = handles_.rbegin(); it != handles_.rend(); ++it) {
+      if (*it != nullptr) {
+        ::dlclose(*it);
+      }
+    }
+  }
+
+  void retain(void *handle) { handles_.push_back(handle); }
+
+private:
+  std::vector<void *> handles_;
+};
+
+bool is_ffi_grant(const amber::capability::CapabilityRequest &grant) {
+  return grant.name == "ffi.load" || grant.name == "ffi.call";
+}
+
+bool native_extension_grants_present(
+    const std::vector<amber::capability::CapabilityRequest> &grants) {
+  return std::any_of(grants.begin(), grants.end(), is_ffi_grant);
+}
+
+void require_native_extension_grants(
+    const std::vector<amber::pkg::PackageNativeExtension> &extensions,
+    const amber::bytecode::BcModule &module,
+    const std::vector<amber::capability::CapabilityRequest> &grants) {
+  for (const amber::pkg::PackageNativeExtension &extension : extensions) {
+    if (!amber::capability::capability_set_allows(
+            grants, "ffi.load", extension.name)) {
+      throw std::runtime_error(
+          "native extension '" + extension.name +
+          "' requires --grant ffi.load=" + extension.name +
+          " (or --grant ffi)");
+    }
+    for (const amber::pkg::PackageNativeSymbol &symbol : extension.symbols) {
+      if (!amber::capability::capability_set_allows(
+              grants, "ffi.call", symbol.logical)) {
+        throw std::runtime_error(
+            "native symbol '" + symbol.logical +
+            "' requires --grant ffi.call=" + symbol.logical +
+            " (or --grant ffi)");
+      }
+    }
+  }
+  for (const std::string &logical :
+       direct_native_symbols(module, extensions)) {
+    if (!amber::capability::capability_set_allows(grants, "ffi.call",
+                                                  logical)) {
+      throw std::runtime_error(
+          "native symbol '" + logical +
+          "' requires --grant ffi.call=" + logical + " (or --grant ffi)");
+    }
+  }
+}
+
+std::string native_shared_library_suffix() {
+#if defined(__APPLE__)
+  return ".dylib";
+#else
+  return ".so";
+#endif
+}
+
+void *dynamic_symbol(void *handle, const std::string &symbol,
+                     const std::filesystem::path &library_path) {
+  (void)::dlerror();
+  void *address = ::dlsym(handle, symbol.c_str());
+  const char *error = ::dlerror();
+  if (error != nullptr || address == nullptr) {
+    throw std::runtime_error(
+        "native extension symbol '" + symbol + "' is missing from " +
+        library_path.string() + (error == nullptr ? std::string()
+                                                  : std::string(": ") + error));
+  }
+  return address;
+}
+
+template <typename Function>
+Function dynamic_function(void *handle, const std::string &symbol,
+                          const std::filesystem::path &library_path) {
+  void *address = dynamic_symbol(handle, symbol, library_path);
+  static_assert(sizeof(Function) == sizeof(address),
+                "POSIX function and data pointers must have equal size");
+  Function function = nullptr;
+  std::memcpy(&function, &address, sizeof(function));
+  return function;
+}
+
+std::int64_t native_error_exit_code(const std::string &text) {
+  if (text.empty()) {
+    return -1;
+  }
+  std::size_t parsed = 0;
+  try {
+    const std::int64_t value = std::stoll(text, &parsed, 10);
+    return parsed == text.size() ? value : -1;
+  } catch (const std::exception &) {
+    return -1;
+  }
+}
+
+void compile_and_load_native_extensions(
+    const std::string &argv0,
+    const std::vector<amber::pkg::PackageNativeExtension> &extensions,
+    const amber::bytecode::BcModule &module,
+    const std::filesystem::path &manifest_dir,
+    const std::filesystem::path &build_dir,
+    ScopedNativeExtensionLibraries *loaded_libraries) {
+  std::filesystem::create_directories(build_dir);
+  const std::filesystem::path runtime_root = detect_native_runtime_root(argv0);
+  const std::string cxx = choose_native_cxx();
+  std::vector<std::string> objects;
+  std::vector<std::string> link_libraries;
+  std::size_t object_index = 0;
+
+  for (const amber::pkg::PackageNativeExtension &extension : extensions) {
+    std::vector<std::string> unit_flags;
+    for (const std::string &flag : extension.cxxflags) {
+      if (native_cxxflag_rejected(flag)) {
+        throw std::runtime_error(
+            "native extension '" + extension.name +
+            "' uses a disallowed cxxflag (use the include_dirs/defines/"
+            "link_libraries fields instead): " +
+            flag);
+      }
+      unit_flags.push_back(flag);
+    }
+    for (const std::string &include_dir : extension.include_dirs) {
+      unit_flags.push_back("-I");
+      unit_flags.push_back((manifest_dir / include_dir).string());
+    }
+    for (const std::string &define : extension.defines) {
+      unit_flags.push_back("-D" + define);
+    }
+
+    const bool compile_as_c =
+        extension.language == "c" || extension.language == "C";
+    for (const std::string &source : extension.sources) {
+      const std::filesystem::path object_path =
+          build_dir / ("amber_ext_" + std::to_string(object_index++) + ".o");
+      std::vector<std::string> command = {cxx};
+      if (compile_as_c) {
+        command.insert(command.end(), {"-x", "c", "-std=c11"});
+      } else {
+        command.push_back("-std=c++17");
+      }
+      command.insert(command.end(), {"-O3", "-fPIC", "-I",
+                                     runtime_root.string()});
+      command.insert(command.end(), unit_flags.begin(), unit_flags.end());
+      command.insert(command.end(), {"-c", (manifest_dir / source).string(),
+                                     "-o", object_path.string()});
+      const std::string rendered = shell_command(command);
+      if (std::system(rendered.c_str()) != 0) {
+        throw std::runtime_error("native extension compile failed: " +
+                                 rendered);
+      }
+      objects.push_back(object_path.string());
+    }
+    link_libraries.insert(link_libraries.end(),
+                          extension.link_libraries.begin(),
+                          extension.link_libraries.end());
+  }
+
+  // Existing static packages inherit the runtime's ABI marker. A shared
+  // package needs to own one so the loader can reject an incompatible image;
+  // weak linkage lets an out-of-tree package override it deliberately.
+  const std::filesystem::path abi_source = build_dir / "amber_ext_abi.c";
+  const std::filesystem::path abi_object = build_dir / "amber_ext_abi.o";
+  write_file(abi_source.string(),
+             "#include \"runtime/amber_ext.h\"\n"
+             "#if defined(__GNUC__)\n__attribute__((weak))\n#endif\n"
+             "uint32_t amber_ext_abi_version(void) {\n"
+             "  return AMBER_EXT_ABI_VERSION;\n}\n");
+  const std::vector<std::string> abi_compile = {
+      cxx, "-x", "c", "-std=c11", "-O2", "-fPIC", "-I",
+      runtime_root.string(), "-c", abi_source.string(), "-o",
+      abi_object.string()};
+  const std::string rendered_abi = shell_command(abi_compile);
+  if (std::system(rendered_abi.c_str()) != 0) {
+    throw std::runtime_error("native extension ABI shim compile failed: " +
+                             rendered_abi);
+  }
+  objects.push_back(abi_object.string());
+
+  const std::filesystem::path library_path =
+      build_dir / ("amber_manifest_extensions" +
+                   native_shared_library_suffix());
+  std::vector<std::string> link = {cxx};
+#if defined(__APPLE__)
+  link.insert(link.end(), {"-dynamiclib", "-Wl,-undefined,dynamic_lookup"});
+#else
+  link.push_back("-shared");
+#endif
+  link.insert(link.end(), objects.begin(), objects.end());
+  for (const std::string &library : link_libraries) {
+    link.push_back("-l" + library);
+  }
+  link.insert(link.end(), {"-pthread", "-o", library_path.string()});
+  const std::string rendered_link = shell_command(link);
+  if (std::system(rendered_link.c_str()) != 0) {
+    throw std::runtime_error("native extension shared-library link failed: " +
+                             rendered_link);
+  }
+
+  void *handle = ::dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  if (handle == nullptr) {
+    const char *error = ::dlerror();
+    throw std::runtime_error(
+        "failed to load native extension shared library " +
+        library_path.string() +
+        (error == nullptr ? std::string() : ": " + std::string(error)));
+  }
+  loaded_libraries->retain(handle);
+
+  using AbiVersionFunction = std::uint32_t (*)();
+  const AbiVersionFunction abi_version =
+      dynamic_function<AbiVersionFunction>(handle, "amber_ext_abi_version",
+                                           library_path);
+  if (abi_version() != AMBER_EXT_ABI_VERSION) {
+    throw std::runtime_error(
+        "native extension ABI mismatch in " + library_path.string() +
+        ": expected " + std::to_string(AMBER_EXT_ABI_VERSION) + ", got " +
+        std::to_string(abi_version()));
+  }
+
+  amber::runtime::RuntimeNativePackageDescriptor package;
+  std::unordered_map<std::string, std::string> logical_to_symbol;
+  std::set<std::string> registered_logicals;
+  for (const amber::pkg::PackageNativeExtension &extension : extensions) {
+    for (const amber::pkg::PackageNativeSymbol &symbol : extension.symbols) {
+      logical_to_symbol[symbol.logical] = symbol.symbol;
+      if (registered_logicals.insert(symbol.logical).second) {
+        package.thunks.push_back(
+            {symbol.logical,
+             dynamic_symbol(handle, symbol.symbol, library_path)});
+      }
+    }
+  }
+  for (const std::string &symbol : direct_native_symbols(module, extensions)) {
+    if (registered_logicals.insert(symbol).second) {
+      package.thunks.push_back(
+          {symbol, dynamic_symbol(handle, symbol, library_path)});
+    }
+  }
+
+  for (const amber::pkg::PackageNativeExtension &extension : extensions) {
+    for (const amber::pkg::PackageNativeType &type : extension.types) {
+      amber::runtime::NativeTypeDescriptor descriptor;
+      descriptor.tag = type.tag;
+      const auto destructor = logical_to_symbol.find(type.destructor);
+      const std::string destructor_symbol =
+          destructor != logical_to_symbol.end()
+              ? destructor->second
+              : (is_c_symbol_name(type.destructor) ? type.destructor
+                                                   : std::string());
+      if (type.ownership == "owned") {
+        descriptor.ownership =
+            amber::runtime::RuntimeForeignHandle::Ownership::Owned;
+        if (!destructor_symbol.empty()) {
+          descriptor.owned_destructor = dynamic_function<
+              decltype(descriptor.owned_destructor)>(
+              handle, destructor_symbol, library_path);
+        }
+      } else if (type.ownership == "collected") {
+        descriptor.ownership =
+            amber::runtime::RuntimeForeignHandle::Ownership::Collected;
+        if (!destructor_symbol.empty()) {
+          descriptor.collected_reclaim = dynamic_function<
+              decltype(descriptor.collected_reclaim)>(
+              handle, destructor_symbol, library_path);
+        }
+      } else {
+        descriptor.ownership =
+            amber::runtime::RuntimeForeignHandle::Ownership::Borrowed;
+      }
+      package.types.push_back(std::move(descriptor));
+    }
+    for (const amber::pkg::PackageNativeError &error : extension.errors) {
+      amber::runtime::RuntimeNativePackageErrorDescriptor descriptor;
+      descriptor.name = error.name;
+      descriptor.parent = error.parent.empty() ? "NativeError" : error.parent;
+      descriptor.default_message = error.default_message;
+      descriptor.default_exit_code =
+          native_error_exit_code(error.default_exit_code);
+      package.errors.push_back(std::move(descriptor));
+    }
+  }
+  amber::runtime::NativeExtRegistry::global().register_package(
+      std::move(package));
+}
+
+int run_command(int argc, char **argv) {
+  if (argc < 3 || std::string(argv[1]) != "run") {
+    usage(std::cerr);
+    return 2;
+  }
+  const std::string input_path = argv[2];
+  const RunCliOptions options = parse_run_options(argc, argv, 3);
+  amber::runtime::set_runtime_process_arguments(options.process_arguments);
+
+  if (is_amber_source_path(input_path)) {
+    const RunnableModuleArtifact artifact = compile_source_to_runnable_module(
+        input_path, std::nullopt, options.capability_grants);
+    return run_runnable_module(
+        artifact.module_name, artifact.entry_mode, artifact.bytes,
+        artifact.has_entry_main_code_id
+            ? std::optional<std::uint32_t>(artifact.entry_main_code_id)
+            : std::nullopt,
+        options.capability_grants);
+  }
+
+  if (has_suffix(input_path, ".amberbc")) {
+    amber::bytecode::DecodeResult decoded =
+        amber::bytecode::deserialize_module(read_bytes(input_path));
+    if (!decoded.ok()) {
+      std::cerr << amber::bytecode::verify_errors_to_json(decoded.errors);
+      return 1;
+    }
+    const EntryExecutionMode entry_mode =
+        default_entry_mode_for(true, decoded.module);
+    const amber::bytecode::BcMethod *main_method =
+        zero_arg_method_by_name(decoded.module, "main");
+    return run_runnable_module(
+        input_path, entry_mode,
+        amber::bytecode::serialize_module(decoded.module),
+        main_method == nullptr
+            ? std::nullopt
+            : std::optional<std::uint32_t>(main_method->entry_code_id),
+        options.capability_grants);
+  }
+
+  const amber::build::BuildManifestResult parsed =
+      amber::build::parse_build_manifest(read_file(input_path), input_path);
+  if (!parsed.ok()) {
+    std::cerr << amber::build::diagnostics_to_string(parsed.diagnostics);
+    return 1;
+  }
+  const bool load_native_extensions =
+      !parsed.manifest.native_extensions.empty() &&
+      native_extension_grants_present(options.capability_grants);
+
+  const std::filesystem::path manifest_dir =
+      std::filesystem::path(dirname(input_path));
+  ScopedRunBuildDirectory run_directory;
+  const std::filesystem::path out_dir = run_directory.path() / "out";
+  const std::filesystem::path cache_dir = run_directory.path() / "cache";
+  amber::build::BuildSummary summary;
+  summary.name = parsed.manifest.name;
+  summary.root_module = parsed.manifest.root_module;
+  summary.target = "vm";
+  summary.out_dir = out_dir.string();
+  summary.cache_dir = cache_dir.string();
+  summary.profiles = parsed.manifest.profiles;
+  build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
+                         false, &summary);
+
+  const amber::build::BuildArtifactRecord *root_record = nullptr;
+  for (const amber::build::BuildArtifactRecord &artifact : summary.artifacts) {
+    if (!artifact.stdlib && artifact.name == parsed.manifest.root_module) {
+      root_record = &artifact;
+      break;
+    }
+  }
+  if (root_record == nullptr) {
+    throw std::runtime_error("root build artifact is missing: " +
+                             parsed.manifest.root_module);
+  }
+  amber::bytecode::DecodeResult root_decoded =
+      amber::bytecode::deserialize_module(read_bytes(root_record->output_path));
+  if (!root_decoded.ok()) {
+    throw std::runtime_error(
+        amber::bytecode::verify_errors_to_json(root_decoded.errors));
+  }
+  const EntryExecutionMode entry_mode =
+      default_entry_mode_for(true, root_decoded.module);
+  NativeGraphLinkResult linked_graph =
+      link_native_graph(decode_native_graph_modules(summary),
+                        parsed.manifest.root_module, entry_mode,
+                        options.capability_grants);
+  if (!linked_graph.ok) {
+    throw std::runtime_error(
+        linked_graph.diagnostics.empty()
+            ? "VM graph link failed"
+            : amber::build::diagnostics_to_string(linked_graph.diagnostics));
+  }
+
+  ScopedNativeExtensionLibraries loaded_libraries;
+  if (load_native_extensions) {
+    const std::vector<amber::pkg::PackageNativeExtension> native_extensions =
+        augment_native_extensions_from_source(
+            parsed.manifest.native_extensions, linked_graph.artifact.module);
+    require_native_extension_grants(native_extensions,
+                                    linked_graph.artifact.module,
+                                    options.capability_grants);
+    compile_and_load_native_extensions(
+        argv[0], native_extensions, linked_graph.artifact.module, manifest_dir,
+        run_directory.path() / "native-extensions", &loaded_libraries);
+  }
+
+  // The complete linked graph is in memory before execution; discard compiler
+  // sidecars now so a long-running `amberc run` cannot dirty the source tree or
+  // leak per-process build directories after termination. A dynamically loaded
+  // package keeps its shared-library image until the RuntimeWorld is gone; its
+  // scoped loader closes the handle before the directory is removed.
+  if (!load_native_extensions) {
+    run_directory.cleanup();
+  }
+  const int status = run_runnable_module(
+      linked_graph.artifact.module_name, linked_graph.artifact.entry_mode,
+      linked_graph.artifact.bytes,
+      linked_graph.artifact.has_entry_main_code_id
+          ? std::optional<std::uint32_t>(
+                linked_graph.artifact.entry_main_code_id)
+          : std::nullopt,
+      options.capability_grants);
+  return status;
+}
+
 int run_capabilities_command(int argc, char **argv) {
   if (argc < 3 || std::string(argv[1]) != "capabilities-check") {
     usage(std::cerr);
@@ -26259,13 +26823,11 @@ int run_capabilities_command(int argc, char **argv) {
     if (arg != "--grant" || i + 1 >= argc) {
       throw std::runtime_error("unknown capabilities option: " + arg);
     }
-    amber::capability::CapabilityRequest grant;
     amber::capability::CapabilityDiagnostic diagnostic;
-    if (!amber::capability::parse_cli_grant(argv[++i], &grant, &diagnostic)) {
+    if (!append_cli_grant(argv[++i], &grants, &diagnostic)) {
       diagnostics.push_back(std::move(diagnostic));
       continue;
     }
-    grants.push_back(std::move(grant));
   }
 
   amber::capability::CapabilityResolutionResult resolved =
@@ -26519,6 +27081,9 @@ int main(int argc, char **argv) {
     }
     if (argc >= 2 && std::string(argv[1]) == "run-embedded") {
       return run_embedded_command(argc, argv);
+    }
+    if (argc >= 2 && std::string(argv[1]) == "run") {
+      return run_command(argc, argv);
     }
     if (argc == 2 && is_amber_source_path(argv[1])) {
       return run_source_file_command(argv[1]);

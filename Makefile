@@ -26,6 +26,20 @@ LDFLAGS ?=
 MALLOC ?= system
 UNAME_S := $(shell uname -s)
 
+# `amberc run <manifest> --grant ffi` loads package thunks into the interpreter
+# with dlopen. Export the stable amber_ext.h ABI from the main executable so a
+# package .dylib/.so can resolve it without linking a second runtime copy.
+ifeq ($(UNAME_S),Darwin)
+AMBERC_DYNAMIC_EXPORT_FLAGS := -Wl,-export_dynamic
+AMBERC_DYNAMIC_LOADER_LIBS :=
+else ifeq ($(UNAME_S),Linux)
+AMBERC_DYNAMIC_EXPORT_FLAGS := -Wl,--export-dynamic
+AMBERC_DYNAMIC_LOADER_LIBS := -ldl
+else
+AMBERC_DYNAMIC_EXPORT_FLAGS :=
+AMBERC_DYNAMIC_LOADER_LIBS := -ldl
+endif
+
 ifeq ($(MALLOC),system)
 CPPFLAGS += -DAMBER_ALLOCATOR=\"system\"
 else ifeq ($(MALLOC),mimalloc)
@@ -314,7 +328,7 @@ $(BUILD_DIR)/.dir:
 	touch $(BUILD_DIR)/.dir
 
 $(BUILD_DIR)/amberc: $(AMBERC_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERC_SRCS) $(LDFLAGS) -o $@
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERC_SRCS) $(LDFLAGS) $(AMBERC_DYNAMIC_EXPORT_FLAGS) $(AMBERC_DYNAMIC_LOADER_LIBS) -o $@
 
 $(BUILD_DIR)/ambertest: $(AMBERTEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERTEST_SRCS) $(LDFLAGS) -o $@
@@ -701,6 +715,12 @@ test: build
 	grep -q '^42$$' $(BUILD_DIR)/native-ext-demo-native.out
 	$(BUILD_DIR)/amberc tests/fixtures/native_ext_demo/src/main.am > $(BUILD_DIR)/native-ext-demo-bytecode.out
 	grep -q '^210$$' $(BUILD_DIR)/native-ext-demo-bytecode.out
+	$(BUILD_DIR)/amberc run tests/fixtures/native_ext_demo/amber.build.json > $(BUILD_DIR)/native-ext-demo-run-fallback.out
+	grep -q '^210$$' $(BUILD_DIR)/native-ext-demo-run-fallback.out
+	$(BUILD_DIR)/amberc run tests/fixtures/native_ext_demo/amber.build.json --grant ffi > $(BUILD_DIR)/native-ext-demo-run-dylib.out
+	grep -q '^42$$' $(BUILD_DIR)/native-ext-demo-run-dylib.out
+	! $(BUILD_DIR)/amberc run tests/fixtures/native_ext_demo/amber.build.json --grant ffi.load > $(BUILD_DIR)/native-ext-demo-run-incomplete.out 2>&1
+	grep -q 'requires --grant ffi.call=demo.doubled' $(BUILD_DIR)/native-ext-demo-run-incomplete.out
 	rm -rf $(BUILD_DIR)/native_graph_pure
 	$(BUILD_DIR)/amberc build tests/fixtures/native_graph_pure/amber.build.json --target native --out-dir $(BUILD_DIR)/native_graph_pure/out --cache-dir $(BUILD_DIR)/native_graph_pure/cache > $(BUILD_DIR)/native-graph-pure-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_vm_fallback_code_count"] == 0, result' $(BUILD_DIR)/native-graph-pure-build.json

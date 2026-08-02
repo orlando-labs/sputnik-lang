@@ -3,9 +3,10 @@
 // In-tree C++ surface for the native-extension ABI (native-packages design §6,
 // 5c-ii dispatch). `runtime/amber_ext.h` is the stable C contract an external
 // author compiles against; this header is how the runtime *drives* that
-// contract from inside the tree: a process-global registration table the
-// generated native binary populates at startup, and the bridge helpers the VM
-// SEND path uses to marshal a call across the ABI to a linked C thunk.
+// contract from inside the tree: a process-global registration table populated
+// either by a generated native binary or by the interpreted manifest loader
+// after `dlopen`, and the bridge helpers the VM SEND path uses to marshal a
+// call across the ABI to a linked C thunk.
 //
 // The marshalling itself (AmberCtx, AmberValue arena, every amber_ext.h
 // function) lives in `runtime/amber_ext.cpp`; AmberCtx is opaque here, exactly
@@ -22,11 +23,12 @@ namespace amber::runtime {
 
 using NativeExtErrorDescriptor = RuntimeNativePackageErrorDescriptor;
 
-// The native binary's logical-name -> thunk table, foreign-handle tag table,
-// and package error descriptors. Populated once at process startup by
-// generated registration calls, then imported into the active RuntimeWorld
-// registries. Empty in a plain bytecode run, which is exactly what makes a
-// `native def` fall back to its Amber body when no thunk is registered.
+// The host's logical-name -> thunk table, foreign-handle tag table, and package
+// error descriptors. Populated before RuntimeWorld construction by generated
+// registration calls or by the scoped shared-library loader, then imported
+// into the active runtime registries. Empty in a plain bytecode run, which is
+// exactly what makes a `native def` fall back to its Amber body when no thunk
+// is registered.
 //
 // A thunk is stored as a raw `void *`: the registration table is generated from
 // the build manifest, which does not record whether a symbol is a free function
@@ -48,8 +50,8 @@ public:
                                       RuntimeTypeRegistry &types,
                                       RuntimeErrorRegistry &errors) const;
 
-  // The single process-global instance the generated binary fills and runtime
-  // worlds import from.
+  // The single process-global instance the native host fills and runtime worlds
+  // import from.
   static NativeExtRegistry &global();
 
 private:

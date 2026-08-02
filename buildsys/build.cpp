@@ -1168,8 +1168,9 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
 
   // Native extensions execute foreign code, so a build that declares any must
   // opt into FFI by enabling the `ffi.v1` profile feature (native-packages
-  // design §2.3/§6). Bytecode runtimes do not support ffi.v1, so this also
-  // ensures such builds target the native backend.
+  // design §2.3/§6). A plain bytecode host leaves the package unregistered and
+  // executes Amber fallback bodies; an FFI-enabled host must additionally
+  // receive explicit `ffi.load`/`ffi.call` grants before loading it.
   if (!result.manifest.native_extensions.empty()) {
     bool declares_ffi = false;
     for (const std::string &feature :

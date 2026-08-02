@@ -186,6 +186,15 @@ artifact/container baseline for `W4.1`-`W4.4` from the implementation matrix:
   pinning, required/optional/forbidden profile feature metadata in `PROF`, and
   a root native executable sidecar by default (`--target bytecode` keeps the
   bytecode-only path);
+- `amberc run <file.am|amber.build.yaml|amber.build.json|file.amberbc>` for
+  explicit interpreted execution; manifest inputs compile and link their full
+  module graph before entering the bytecode VM. Manifest native extensions use
+  their Amber fallback bodies by default; `--grant ffi` explicitly permits
+  compiling them as a temporary `.dylib`/`.so`, validating and loading that
+  shared package into the same VM process, and calling its registered thunks.
+  The alias grants both `ffi.load` and `ffi.call`; either operation can instead
+  be granted separately and scoped to an extension/symbol. Other `--grant`
+  values supply host capabilities, and program arguments follow `--`;
 - `amberc build <file.am>` for single-file native executables generated from
   eligible bytecode through the `cpp-bytecode-direct-v1` backend, with verified
   VM fallback for unsupported bytecode and explicit

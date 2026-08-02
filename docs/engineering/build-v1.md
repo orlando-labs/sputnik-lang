@@ -58,6 +58,15 @@ artifacts remain deterministic cacheable sidecars, and the root module also
 gets a host native executable at `<out-dir>/<root-module>`. Use
 `--target bytecode` for bytecode-only builds.
 
+`amberc run <manifest>` always executes the Amber graph in the bytecode VM.
+Native definitions use their Amber fallback bodies unless the consumer passes
+`--grant ffi`. That alias grants both `ffi.load` and `ffi.call`: `amberc`
+compiles the manifest extension units into a temporary `.dylib`/`.so`, checks
+the extension ABI and every declared symbol, loads the package with `dlopen`,
+and registers its thunks, foreign-handle types, destructors, and errors before
+creating the `RuntimeWorld`. The shared-library handle remains live until the
+world is destroyed; no native Amber executable is produced.
+
 Single-file builds emit `amber.executable.build.v2` JSON and create an
 executable at `-o <path>`, `--out-dir <dir>/<source-stem>`, or the source path
 without the `.am` extension. The default target is `native`: eligible bytecode

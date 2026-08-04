@@ -2753,6 +2753,83 @@ private:
     return call_block_to_value(frame, block, args.begin(), args.size());
   }
 
+  // `text.chars.all? |char|: "...".contains?(char)` is a common validation
+  // shape. Its bytecode is a closed, one-argument predicate with no user code
+  // other than the same String#contains? fast path used by QuickOpcode. When
+  // that exact shape is present we can evaluate the predicate directly in the
+  // collection loop, avoiding one block frame (and its register cleanup) per
+  // character. Anything not proven to be this shape keeps the ordinary block
+  // invocation path below.
+  FastCallStatus prepare_constant_string_contains_block(
+      const Frame &caller, const Value &block, const std::string **text_out) {
+    *text_out = nullptr;
+    if (!block.is_closure()) {
+      return FastCallStatus::NotHandled;
+    }
+    if (!ensure_lifecycle_access(caller, block)) {
+      return FastCallStatus::Faulted;
+    }
+    const IntrusivePtr<ClosureValue> closure = block.as_closure();
+    if (closure == nullptr) {
+      return FastCallStatus::NotHandled;
+    }
+    const BcCode *code = find_code(module_, closure->code_id);
+    if (code == nullptr || code->kind != CodeKind::Block ||
+        !code->capture_layout.empty() || !code->handler_table.empty() ||
+        (code->flags & bytecode::kCodeFlagNonlocalReturnBlock) != 0U ||
+        code->instructions.size() != 6U) {
+      return FastCallStatus::NotHandled;
+    }
+
+    const Instruction &bind = code->instructions[0];
+    const Instruction &commit = code->instructions[1];
+    const Instruction &load = code->instructions[2];
+    const Instruction &send = code->instructions[3];
+    const Instruction &close = code->instructions[4];
+    const Instruction &ret = code->instructions[5];
+    std::uint32_t const_id = 0;
+    std::uint32_t selector_id = 0;
+    std::uint32_t pos_count = 0;
+    std::uint32_t kw_count = 0;
+    std::int64_t block_reg = -1;
+    if (bind.opcode != Opcode::PBind ||
+        !quick_operand_reg_equals(bind, 0, 0U) ||
+        !quick_operand_reg_equals(bind, 1, 0U) ||
+        commit.opcode != Opcode::PCommit ||
+        !quick_operand_reg_equals(commit, 0, 0U) ||
+        !quick_operand_reg_equals(commit, 1, 1U) ||
+        load.opcode != Opcode::LoadK ||
+        !quick_operand_reg_equals(load, 0, 2U) ||
+        !quick_operand_u32(load, 1, &const_id) ||
+        send.opcode != Opcode::Send ||
+        !quick_operand_reg_equals(send, 0, 1U) ||
+        !quick_operand_reg_equals(send, 1, 2U) ||
+        !quick_operand_u32(send, 2, &selector_id) ||
+        selector_id >= runtime_symbols_.size() ||
+        runtime_symbols_[selector_id] != "contains?" ||
+        !quick_operand_u32(send, 3, &pos_count) || pos_count != 1U ||
+        !quick_operand_reg_equals(send, 4, 0U) ||
+        !quick_operand_u32(send, 5, &kw_count) || kw_count != 0U ||
+        !quick_operand_i64(send, 6, &block_reg) ||
+        has_optional_reg(block_reg) || close.opcode != Opcode::CloseUpvalues ||
+        ret.opcode != Opcode::Return ||
+        !quick_operand_reg_equals(ret, 0, 1U) ||
+        const_id >= module_.const_pool.size() ||
+        module_.const_pool[const_id].kind != ConstantKind::StringRef) {
+      return FastCallStatus::NotHandled;
+    }
+
+    const Constant &constant = module_.const_pool[const_id];
+    const std::string *text =
+        string_text_ref_from_value(Value::string(constant.ref_id));
+    if (text == nullptr) {
+      set_fault(caller, "VMError", "string ref is invalid");
+      return FastCallStatus::Faulted;
+    }
+    *text_out = text;
+    return FastCallStatus::Matched;
+  }
+
   FastCallStatus try_evaluate_simple_stream_block(const Frame &caller,
                                                   ClosureValue &closure,
                                                   const BcCode &code,
@@ -29347,6 +29424,60 @@ private:
     }
     if (items_view == nullptr) {
       return FastSendStatus::NotHandled;
+    }
+
+    // This predicate has no captures or handlers and directly evaluates the
+    // immutable String#contains? operation. It therefore cannot mutate the
+    // receiver, so unlike the general block path it does not need a snapshot.
+    // If an item has a shape the fast predicate cannot prove, restart through
+    // the generic path before any observable user code has run.
+    if (opcode == QuickOpcode::SendSeqAll ||
+        opcode == QuickOpcode::SendSeqAny ||
+        opcode == QuickOpcode::SendSeqNone) {
+      const std::string *contains_text = nullptr;
+      const FastCallStatus predicate_status =
+          prepare_constant_string_contains_block(frame, block, &contains_text);
+      if (predicate_status == FastCallStatus::Faulted) {
+        return FastSendStatus::Faulted;
+      }
+      if (predicate_status == FastCallStatus::Matched) {
+        bool fallback_to_block = false;
+        for (const Value &item : *items_view) {
+          if (!item.is_string()) {
+            fallback_to_block = true;
+            break;
+          }
+          const std::string *needle = string_text_ref_from_value(item);
+          if (needle == nullptr) {
+            set_fault(frame, "VMError", "string ref is invalid");
+            return FastSendStatus::Faulted;
+          }
+          const bool truthy =
+              contains_text->find(*needle) != std::string::npos;
+          if (opcode == QuickOpcode::SendSeqAll && !truthy) {
+            return write_reg_fast_plain(frame, dst, Value::boolean(false))
+                       ? FastSendStatus::Matched
+                       : FastSendStatus::Faulted;
+          }
+          if (opcode == QuickOpcode::SendSeqAny && truthy) {
+            return write_reg_fast_plain(frame, dst, Value::boolean(true))
+                       ? FastSendStatus::Matched
+                       : FastSendStatus::Faulted;
+          }
+          if (opcode == QuickOpcode::SendSeqNone && truthy) {
+            return write_reg_fast_plain(frame, dst, Value::boolean(false))
+                       ? FastSendStatus::Matched
+                       : FastSendStatus::Faulted;
+          }
+        }
+        if (!fallback_to_block) {
+          const bool completed_value = opcode != QuickOpcode::SendSeqAny;
+          return write_reg_fast_plain(frame, dst,
+                                      Value::boolean(completed_value))
+                     ? FastSendStatus::Matched
+                     : FastSendStatus::Faulted;
+        }
+      }
     }
 
     // Match the generic collection path's snapshot semantics: a block may

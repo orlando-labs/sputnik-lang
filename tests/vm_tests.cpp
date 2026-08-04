@@ -4061,6 +4061,25 @@ void test_quick_sequence_block_sends() {
          "quick primitive equality and native type matching preserve semantics");
 }
 
+void test_quick_constant_string_contains_predicate() {
+  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+      "sku = \"AMBER-42\"\n"
+      "valid_sku = sku.chars.all? |char|: \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_\".contains?(char)\n"
+      "invalid_sku = \"AMBER!\".chars.all? |char|: \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_\".contains?(char)\n"
+      "digit_only = \"2048\".chars.none? |char|: \"ABC\".contains?(char)\n"
+      "[valid_sku, invalid_sku, digit_only]\n");
+  expect(exec.ok(), "constant string contains? predicate should execute");
+  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+      exec.value.is_list() ? exec.value.as_list() : nullptr;
+  expect(values != nullptr && values->items.size() == 3,
+         "constant string contains? predicate result shape");
+  expect(values != nullptr && values->items[0].is_bool() &&
+             values->items[0].as_bool() && values->items[1].is_bool() &&
+             !values->items[1].as_bool() && values->items[2].is_bool() &&
+             values->items[2].as_bool(),
+         "constant string contains? predicate preserves all?/none? semantics");
+}
+
 void test_string_contains_only() {
   const amber::runtime::ExecutionResult exec = execute_emitted_init(
       "[\"header-name\".contains_only?(\"abcdefghijklmnopqrstuvwxyz-\"), "
@@ -11065,6 +11084,7 @@ int main() {
   test_execute_emitted_control_condition_assignment();
   test_execute_emitted_block_map_suffixes();
   test_quick_sequence_block_sends();
+  test_quick_constant_string_contains_predicate();
   test_string_contains_only();
   test_synchronous_collection_block_control_flow();
   test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();

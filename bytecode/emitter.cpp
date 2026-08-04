@@ -1523,6 +1523,9 @@ private:
     if (bool_field(item, "property_setter")) {
       method.flags |= kMethodFlagPropertySetter;
     }
+    if (bool_field(item, "attr_reader")) {
+      method.flags |= kMethodFlagAttrReader;
+    }
     if (has_clause_fallback) {
       method.flags |= kMethodFlagClauseFallback;
     }

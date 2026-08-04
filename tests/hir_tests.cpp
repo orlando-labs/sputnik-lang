@@ -1643,6 +1643,8 @@ void test_property_lowering() {
          "attr getter lowers to HMethod");
   expect(bool_field(*value_getter, "property_getter"),
          "attr getter property flag");
+  expect(bool_field(*value_getter, "attr_reader"),
+         "attr getter direct-reader marker");
   const amber::ast::Expr *value_setter = list_item(*box_class, "body", 1);
   expect(value_setter != nullptr && value_setter->kind == "HMethod",
          "attr setter lowers to HMethod");

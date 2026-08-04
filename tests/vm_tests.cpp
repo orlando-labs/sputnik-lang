@@ -2446,6 +2446,23 @@ void test_execute_emitted_properties() {
   expect(exec.ok(), "read-write attr execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 18,
          "read-write attr should use explicit storage and return rhs");
+
+  // The first loop iteration populates the property call cache; subsequent
+  // iterations exercise the guarded direct-ivar path for a generated attr
+  // reader at this same call site.
+  emit_result = emit_ok("class Counter:\n"
+                        "  attr value from @raw_value\n"
+                        "  def init(@raw_value)\n"
+                        "counter = Counter(7)\n"
+                        "total = 0\n"
+                        "3.times:\n"
+                        "  total += counter.value\n"
+                        "total\n");
+  exec = amber::runtime::execute_code(emit_result.module,
+                                      emit_result.module.init.entry_code_id);
+  expect(exec.ok(), "cached attr reader execution failed");
+  expect(exec.value.is_integer() && exec.value.as_integer() == 21,
+         "cached attr reader should preserve direct ivar semantics");
 }
 
 void test_bare_nullary_member_implicit_call() {

@@ -365,6 +365,9 @@ inline constexpr std::uint32_t kMethodFlagClass = 0x2U;
 inline constexpr std::uint32_t kMethodFlagPropertyGetter = 0x4U;
 inline constexpr std::uint32_t kMethodFlagPropertySetter = 0x8U;
 inline constexpr std::uint32_t kMethodFlagClauseFallback = 0x10U;
+// A getter generated from an `attr` declaration. Its body is the compiler's
+// direct ivar read, unlike an arbitrary user-authored `prop` getter.
+inline constexpr std::uint32_t kMethodFlagAttrReader = 0x20U;
 
 inline constexpr std::uint32_t kClassFlagMixin = 0x1U;
 inline constexpr std::uint32_t kClassFlagException = 0x2U;

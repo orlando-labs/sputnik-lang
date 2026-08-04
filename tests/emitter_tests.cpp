@@ -920,6 +920,20 @@ void test_property_emission() {
   expect((emit_result.module.methods[3].flags &
           amber::bytecode::kMethodFlagPropertyGetter) != 0U,
          "attr getter flag emitted");
+  expect((emit_result.module.methods[3].flags &
+          amber::bytecode::kMethodFlagAttrReader) != 0U,
+         "attr getter direct-reader flag emitted");
+  const amber::bytecode::BcCode *attr_getter = code_by_id(
+      emit_result.module, emit_result.module.methods[3].entry_code_id);
+  expect(attr_getter != nullptr && attr_getter->instructions.size() == 4U,
+         "attr getter keeps canonical direct-ivar bytecode shape");
+  expect(attr_getter->instructions[0].opcode == amber::bytecode::Opcode::LoadSelf &&
+             attr_getter->instructions[1].opcode ==
+                 amber::bytecode::Opcode::LoadIvar &&
+             attr_getter->instructions[2].opcode ==
+                 amber::bytecode::Opcode::CloseUpvalues &&
+             attr_getter->instructions[3].opcode == amber::bytecode::Opcode::Return,
+         "attr getter bytecode is safe for the VM direct-reader path");
   expect((emit_result.module.methods[4].flags &
           amber::bytecode::kMethodFlagPropertySetter) != 0U,
          "attr setter flag emitted");

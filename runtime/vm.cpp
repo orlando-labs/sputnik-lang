@@ -485,6 +485,8 @@ constexpr std::uint32_t kMethodFlagPropertySetter =
     amber::bytecode::kMethodFlagPropertySetter;
 constexpr std::uint32_t kMethodFlagClauseFallback =
     amber::bytecode::kMethodFlagClauseFallback;
+constexpr std::uint32_t kMethodFlagAttrReader =
+    amber::bytecode::kMethodFlagAttrReader;
 constexpr std::int64_t kPatternFailModeSoft = 0;
 constexpr std::int64_t kPatternFailModeMatchError = 1;
 
@@ -10896,7 +10898,7 @@ private:
     }
   }
 
-  const bytecode::BcMethod *probe_call_cache(
+  const CallCacheEntry *probe_call_cache_entry(
       const Frame &frame, std::uint32_t site_id,
       std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
       std::uint32_t selector_symbol_id, std::uint32_t positional_count,
@@ -10923,7 +10925,50 @@ private:
       return nullptr;
     }
     record_call_cache_hit();
-    return &entry.method;
+    return &entry;
+  }
+
+  const bytecode::BcMethod *probe_call_cache(
+      const Frame &frame, std::uint32_t site_id,
+      std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
+      std::uint32_t selector_symbol_id, std::uint32_t positional_count,
+      const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
+      const Value &block) {
+    const CallCacheEntry *entry = probe_call_cache_entry(
+        frame, site_id, receiver_class_index, dispatch_flags,
+        selector_symbol_id, positional_count, kw_args, block);
+    return entry == nullptr ? nullptr : &entry->method;
+  }
+
+  std::optional<std::uint32_t>
+  attr_reader_ivar_symbol_id(const bytecode::BcMethod &method) const {
+    if ((method.flags & kMethodFlagAttrReader) == 0U) {
+      return std::nullopt;
+    }
+    const BcCode *code = find_code(module_, method.entry_code_id);
+    if (code == nullptr || code->instructions.size() != 4U) {
+      return std::nullopt;
+    }
+    const Instruction &load_self = code->instructions[0];
+    const Instruction &load_ivar = code->instructions[1];
+    const Instruction &close = code->instructions[2];
+    const Instruction &ret = code->instructions[3];
+    if (load_self.opcode != Opcode::LoadSelf ||
+        load_self.operands.size() != 1U ||
+        load_ivar.opcode != Opcode::LoadIvar ||
+        load_ivar.operands.size() != 4U ||
+        close.opcode != Opcode::CloseUpvalues || close.operands.size() != 1U ||
+        ret.opcode != Opcode::Return || ret.operands.size() != 1U ||
+        load_ivar.operands[1].value != load_self.operands[0].value ||
+        ret.operands[0].value != load_ivar.operands[0].value) {
+      return std::nullopt;
+    }
+    const std::int64_t raw_symbol = load_ivar.operands[2].value;
+    if (raw_symbol < 0 ||
+        static_cast<std::uint64_t>(raw_symbol) >= runtime_symbols_.size()) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint32_t>(raw_symbol);
   }
 
   void update_call_cache(
@@ -10946,6 +10991,7 @@ private:
     entry.method_version = state_->classes[receiver_class_index].method_version;
     entry.world_epoch = state_->world_epoch;
     entry.method = method;
+    entry.attr_reader_ivar_symbol_id = attr_reader_ivar_symbol_id(method);
     call_caches()[inline_cache_key(frame, site_id)] = entry;
     record_call_cache_update();
   }
@@ -29424,6 +29470,49 @@ private:
     return FastSendStatus::Matched;
   }
 
+  // An `attr` getter is generated as LOAD_SELF, LOAD_IVAR, CLOSE_UPVALUES,
+  // RETURN. Once the ordinary send cache has validated that exact method,
+  // read its ivar at the caller's site instead of allocating a short-lived
+  // callee frame. Watched objects and incomplete layouts deliberately take the
+  // generic path, which remains the sole owner of those semantics.
+  FastSendStatus step_cached_attr_reader(Frame &frame, std::uint32_t dst,
+                                         const Value &receiver,
+                                         std::uint32_t site_id,
+                                         const CallCacheEntry &entry) {
+    if (!entry.attr_reader_ivar_symbol_id.has_value() ||
+        *entry.attr_reader_ivar_symbol_id >= runtime_symbols_.size() ||
+        !receiver.is_instance_object()) {
+      return FastSendStatus::NotHandled;
+    }
+    const IntrusivePtr<InstanceValue> instance = receiver.as_instance_object();
+    if (instance == nullptr || instance->watch_state != nullptr ||
+        lifecycle_access_error_name(instance->header).has_value()) {
+      return FastSendStatus::NotHandled;
+    }
+
+    const std::uint32_t symbol_id = *entry.attr_reader_ivar_symbol_id;
+    const std::shared_ptr<const ShapeDescriptor> shape = instance->header.shape;
+    if (shape == nullptr || shape->dead ||
+        instance->ivar_storage.size() < shape->slot_names.size()) {
+      return FastSendStatus::NotHandled;
+    }
+
+    std::optional<std::uint32_t> slot =
+        probe_ivar_cache(frame, site_id, *instance, symbol_id);
+    if (!slot.has_value()) {
+      const auto found = shape->ivar_slots.find(runtime_symbols_[symbol_id]);
+      if (found == shape->ivar_slots.end() ||
+          found->second >= instance->ivar_storage.size()) {
+        return FastSendStatus::NotHandled;
+      }
+      slot = found->second;
+      update_ivar_cache(frame, site_id, *instance, symbol_id, *slot);
+    }
+    return write_reg_fast_plain(frame, dst, instance->ivar_storage[*slot])
+               ? FastSendStatus::Matched
+               : FastSendStatus::Faulted;
+  }
+
   bool step_send(Frame &frame, const Instruction &insn, bool dynamic_selector,
                  bool expanded = false) {
     std::uint32_t dst = 0;
@@ -30132,21 +30221,31 @@ private:
     }
 
     if (site_id.has_value() && selector_symbol_id_for_cache.has_value()) {
-      const bytecode::BcMethod *cached = probe_call_cache(
+      const CallCacheEntry *cached_entry = probe_call_cache_entry(
           frame, *site_id, class_index, dispatch_flags,
           *selector_symbol_id_for_cache,
           static_cast<std::uint32_t>(args.size()), kw_args, block);
-      if (cached != nullptr) {
+      if (cached_entry != nullptr) {
+        const bytecode::BcMethod &cached = cached_entry->method;
         if (property_assignment) {
-          return invoke_property_setter(*cached);
+          return invoke_property_setter(cached);
         }
         if (property_access) {
-          return invoke_bare_member(*cached);
+          const FastSendStatus attr_status = step_cached_attr_reader(
+              frame, dst, receiver, *site_id, *cached_entry);
+          if (attr_status == FastSendStatus::Faulted) {
+            return false;
+          }
+          if (attr_status == FastSendStatus::Matched) {
+            ++frame.pc;
+            return true;
+          }
+          return invoke_bare_member(cached);
         }
-        if ((cached->flags & kMethodFlagPropertyGetter) != 0U) {
+        if ((cached.flags & kMethodFlagPropertyGetter) != 0U) {
           return fault_property_called_as_method();
         }
-        return invoke_method(frame, *cached, args, kw_args, receiver, block,
+        return invoke_method(frame, cached, args, kw_args, receiver, block,
                              dst);
       }
     }

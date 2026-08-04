@@ -1091,6 +1091,12 @@ private:
       node->bool_field("property_setter", true);
     } else {
       node->bool_field("property_getter", true);
+      if (item.kind == "AstAttrDef") {
+        // `attr` synthesizes a direct ivar reader. Keep that provenance so the
+        // VM can recognize the strictly mechanical getter without treating
+        // arbitrary user-defined properties as interchangeable.
+        node->bool_field("attr_reader", true);
+      }
     }
     node->list_field("auto_assign", build_auto_assign_nodes(signature));
     std::unique_ptr<Node> signature_node =

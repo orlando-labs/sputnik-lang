@@ -94,6 +94,10 @@ struct CallCacheEntry {
   bool has_block = false;
   std::uint64_t method_version = 0;
   std::uint64_t world_epoch = 0;
+  // Populated only for compiler-generated `attr` readers after their bytecode
+  // shape has been validated by the VM. The call cache remains authoritative
+  // for method/world invalidation.
+  std::optional<std::uint32_t> attr_reader_ivar_symbol_id;
   bytecode::BcMethod method;
 };
 

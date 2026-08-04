@@ -8,9 +8,39 @@ profiles:
   forbidden: []
 
 modules:
+  - name: sqlite3
+    path: ../../../../ember/.build/dependencies/sqlite3-amber/src/sqlite3.am
+  - name: orm
+    path: ../../../../ember/.build/dependencies/amber-orm/src/orm.am
+  - name: orm.pool
+    path: ../../../../ember/.build/dependencies/amber-orm/src/orm/pool.am
+  - name: orm.sqlite3.adapter
+    path: ../../../../ember/.build/dependencies/amber-orm/src/orm/sqlite3/adapter.am
+  - name: orm.sqlite3.pool
+    path: ../../../../ember/.build/dependencies/amber-orm/src/orm/sqlite3/pool.am
+  - name: orm.sqlite3
+    path: ../../../../ember/.build/dependencies/amber-orm/src/orm/sqlite3.am
   - name: ember
     path: ../../../../ember/src/ember.am
   - name: ember.telemetry
     path: ../../../../ember/src/ember/telemetry.am
+  - name: ember.integrations.orm
+    path: ../../../../ember/packages/ember-orm/src/ember/integrations/orm.am
   - name: amber.bench.polyglot.http_rps_server
     path: http_rps_server.am
+
+native_extensions:
+  - name: sqlite3
+    language: c
+    sources:
+      - ../../../../ember/.build/dependencies/sqlite3-amber/native/sqlite3_ext.c
+      - ../../../../ember/.build/dependencies/sqlite3-amber/native/sqlite3.c
+    headers:
+      - ../../../../ember/.build/dependencies/sqlite3-amber/native/sqlite3.h
+    defines:
+      - SQLITE_THREADSAFE=1
+      - SQLITE_ENABLE_COLUMN_METADATA=1
+      - SQLITE_ENABLE_FTS5=1
+      - SQLITE_ENABLE_JSON1=1
+      - SQLITE_DQS=0
+      - SQLITE_OMIT_LOAD_EXTENSION=1

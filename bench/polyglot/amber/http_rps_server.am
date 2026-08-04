@@ -1,9 +1,11 @@
 package amber.bench.polyglot.http_rps_server
 
 import ember
+import orm
 import task
 from ember.telemetry import MetricsRegistry, Telemetry
-from sync import Mutex
+from ember.integrations.orm import pool as orm_pool
+from orm.sqlite3 import memory_pool
 
 export main
 
@@ -32,36 +34,47 @@ def valid_barcode?(value):
   return false unless bounded_text?(value, 8, 32)
   value.chars.all? |char|: "0123456789".contains?(char)
 
-def valid_tags?(tags):
-  Array === tags and tags.count <= 16
-    and tags.all? |tag|: bounded_text?(tag, 1, 32)
+def valid_tags_json?(value):
+  return false unless Str === value
+  try:
+    tags = Json.parse(value)
+    Array === tags and tags.count <= 16
+      and tags.all? |tag|: bounded_text?(tag, 1, 32)
+  rescue Exception |error|:
+    false
 
-def valid_metadata?(metadata):
-  Map === metadata and metadata.count == 3
-    and bounded_text?(metadata[:source], 1, 64)
-    and bounded_text?(metadata[:batch], 1, 64)
-    and Bool === metadata[:fragile]
+def valid_metadata_json?(value):
+  return false unless Str === value
+  try:
+    metadata = Json.parse(value)
+    Map === metadata and metadata.count == 3
+      and bounded_text?(metadata[:source], 1, 64)
+      and bounded_text?(metadata[:batch], 1, 64)
+      and Bool === metadata[:fragile]
+  rescue Exception |error|:
+    false
 
-def invalid_item_field(attrs):
-  return ["sku", "invalid_format"] unless valid_sku?(attrs[:sku])
-  return ["name", "invalid_length"] unless bounded_text?(attrs[:name], 1, 160)
-  return ["description", "invalid_length"] unless bounded_text?(attrs[:description], 1, 2000)
-  return ["category", "unsupported"] unless catalog_category?(attrs[:category])
-  return ["status", "unsupported"] unless catalog_status?(attrs[:status])
-  return ["price_cents", "out_of_range"] unless integer_between?(attrs[:price_cents], 0, 1000000000)
-  return ["currency", "invalid_format"] unless Str === attrs[:currency] and attrs[:currency].length == 3 and upper_ascii?(attrs[:currency])
-  return ["stock_count", "out_of_range"] unless integer_between?(attrs[:stock_count], 0, 1000000)
-  return ["weight_grams", "out_of_range"] unless integer_between?(attrs[:weight_grams], 1, 10000000)
-  return ["active", "invalid"] unless Bool === attrs[:active]
-  return ["manufacturer", "invalid_length"] unless bounded_text?(attrs[:manufacturer], 1, 120)
-  return ["country_code", "invalid_format"] unless Str === attrs[:country_code] and attrs[:country_code].length == 2 and upper_ascii?(attrs[:country_code])
-  return ["barcode", "invalid_format"] unless valid_barcode?(attrs[:barcode])
-  return ["color", "invalid_length"] unless bounded_text?(attrs[:color], 1, 40)
-  return ["size", "invalid_length"] unless bounded_text?(attrs[:size], 1, 40)
-  return ["rating_milli", "out_of_range"] unless integer_between?(attrs[:rating_milli], 0, 5000)
-  return ["tags", "invalid"] unless valid_tags?(attrs[:tags])
-  return ["metadata", "invalid"] unless valid_metadata?(attrs[:metadata])
-  null
+class CatalogItem:
+  use orm.model(table: :catalog_items):
+    validate:
+      expect(:sku, valid_sku?(sku), code: :invalid_format)
+      expect(:name, bounded_text?(name, 1, 160), code: :invalid_length)
+      expect(:description, bounded_text?(description, 1, 2000), code: :invalid_length)
+      expect(:category, catalog_category?(category), code: :unsupported)
+      expect(:status, catalog_status?(status), code: :unsupported)
+      expect(:price_cents, integer_between?(price_cents, 0, 1000000000), code: :out_of_range)
+      expect(:currency, Str === currency and currency.length == 3 and upper_ascii?(currency), code: :invalid_format)
+      expect(:stock_count, integer_between?(stock_count, 0, 1000000), code: :out_of_range)
+      expect(:weight_grams, integer_between?(weight_grams, 1, 10000000), code: :out_of_range)
+      expect(:active, active == 0 or active == 1, code: :invalid)
+      expect(:manufacturer, bounded_text?(manufacturer, 1, 120), code: :invalid_length)
+      expect(:country_code, Str === country_code and country_code.length == 2 and upper_ascii?(country_code), code: :invalid_format)
+      expect(:barcode, valid_barcode?(barcode), code: :invalid_format)
+      expect(:color, bounded_text?(color, 1, 40), code: :invalid_length)
+      expect(:size, bounded_text?(size, 1, 40), code: :invalid_length)
+      expect(:rating_milli, integer_between?(rating_milli, 0, 5000), code: :out_of_range)
+      expect(:tags_json, valid_tags_json?(tags_json), code: :invalid)
+      expect(:metadata_json, valid_metadata_json?(metadata_json), code: :invalid)
 
 class Schemas:
   attr create_item
@@ -130,84 +143,51 @@ def validation_problem(issue):
     "catalog item is invalid",
     details: [{field: issue[0], code: issue[1]}])
 
-def map_without(values, omitted):
+def storage_attrs(attrs):
   result = {}
-  values.each |key, value|:
-    result[key] = value unless key == omitted
+  [
+    :sku, :name, :description, :category, :status, :price_cents, :currency,
+    :stock_count, :weight_grams, :manufacturer, :country_code, :barcode,
+    :color, :size, :rating_milli
+  ].each |name|:
+    result[name] = attrs[name] if attrs.has_key?(name)
+  if attrs.has_key?(:active):
+    result[:active] = if attrs[:active] then 1 else 0
+  result[:tags_json] = Json.generate(attrs[:tags]) if attrs.has_key?(:tags)
+  result[:metadata_json] = Json.generate(attrs[:metadata]) if attrs.has_key?(:metadata)
   result
 
-class MemoryStore:
-  def init():
-    @mutex = Mutex.new()
-    @next_id = 1
-    @items = {}
-    @sku_ids = {}
+def item_json(item):
+  {
+    id: item[:id],
+    sku: item[:sku],
+    name: item[:name],
+    description: item[:description],
+    category: item[:category],
+    status: item[:status],
+    price_cents: item[:price_cents],
+    currency: item[:currency],
+    stock_count: item[:stock_count],
+    weight_grams: item[:weight_grams],
+    active: item[:active] == 1,
+    manufacturer: item[:manufacturer],
+    country_code: item[:country_code],
+    barcode: item[:barcode],
+    color: item[:color],
+    size: item[:size],
+    rating_milli: item[:rating_milli],
+    tags: Json.parse(item[:tags_json]),
+    metadata: Json.parse(item[:metadata_json]),
+    version: item[:version],
+    created_at: item[:created_at],
+    updated_at: item[:updated_at]
+  }
 
-  def create(attrs):
-    @mutex.synchronize:
-      if @sku_ids[?attrs[:sku]]:
-        {kind: "conflict"}
-      else:
-        now = Time.now.iso8601
-        item = attrs.copy
-        item[:id] = @next_id
-        item[:version] = 1
-        item[:created_at] = now
-        item[:updated_at] = now
-        @next_id += 1
-        @items[item[:id]] = item
-        @sku_ids[item[:sku]] = item[:id]
-        {kind: "ok", item: item.copy}
-
-  def find(id):
-    @mutex.synchronize:
-      item = @items[?id]
-      if item then item.copy else null
-
-  def list(status):
-    @mutex.synchronize:
-      result = []
-      @items.each |id, item|:
-        if status == null or item[:status] == status:
-          result.push!(item.copy)
-      result
-
-  def update(id, attrs, version):
-    @mutex.synchronize:
-      item = @items[?id]
-      if item == null:
-        {kind: "not_found"}
-      else if item[:version] != version:
-        {kind: "version_conflict"}
-      else:
-        candidate = item.copy
-        attrs.each |name, value|:
-          candidate[name] = value
-        issue = invalid_item_field(candidate)
-        if issue:
-          {kind: "invalid", issue: issue}
-        else if candidate[:sku] != item[:sku] and @sku_ids[?candidate[:sku]]:
-          {kind: "conflict"}
-        else:
-          if candidate[:sku] != item[:sku]:
-            @sku_ids = map_without(@sku_ids, item[:sku])
-            @sku_ids[candidate[:sku]] = id
-          candidate[:version] = item[:version] + 1
-          candidate[:updated_at] = Time.now.iso8601
-          @items[id] = candidate
-          {kind: "ok", item: candidate.copy}
-
-  def delete(id, version):
-    @mutex.synchronize:
-      item = @items[?id]
-      if item == null:
-        {kind: "not_found"}
-      else if item[:version] != version:
-        {kind: "version_conflict"}
-      else:
-        @items = map_without(@items, id)
-        @sku_ids = map_without(@sku_ids, item[:sku])
-        {kind: "ok"}
+def find_item(id):
+  result = CatalogItem.find(id)
+  return result if result.ok?
+  return Err(problem(404, "not_found", "catalog item was not found")) if orm.NotFoundError === result.error
+  Err(problem(503, "storage_unavailable", "catalog storage is unavailable"))
 
 def requested_version(request):
   raw = request.header("if-match")
@@ -220,12 +200,44 @@ def requested_version(request):
   return Err(problem(400, "invalid_precondition", "If-Match must be a positive integer")) unless version > 0
   Ok(version)
 
-def store_problem(result):
-  return problem(404, "not_found", "catalog item was not found") if result[:kind] == "not_found"
-  return problem(409, "version_conflict", "catalog item version is stale") if result[:kind] == "version_conflict"
-  return problem(409, "sku_conflict", "catalog item SKU already exists") if result[:kind] == "conflict"
-  return validation_problem(result[:issue]) if result[:kind] == "invalid"
-  null
+def validation_details(error):
+  error.errors.issues.map |issue|:
+    field = issue.attribute.to_str
+    field = "tags" if issue.attribute == :tags_json
+    field = "metadata" if issue.attribute == :metadata_json
+    {field: field, code: issue.code.to_str}
+
+def persistence_problem(result):
+  if orm.ValidationError === result.error:
+    return problem(
+      422,
+      "validation_failed",
+      "catalog item is invalid",
+      details: validation_details(result.error))
+  message = result.error.message.downcase
+  if message.contains?("constraint") or message.contains?("unique"):
+    return problem(409, "sku_conflict", "catalog item SKU already exists")
+  problem(503, "storage_unavailable", "catalog storage is unavailable")
+
+def update_item(item, attrs, request, partial: false):
+  version = requested_version(request)
+  return version.error if version.err?
+  return problem(409, "version_conflict", "catalog item version is stale") unless version.value == item[:version]
+  if partial and attrs.empty?:
+    return problem(
+      422,
+      "validation_failed",
+      "catalog item is invalid",
+      details: [{field: "item", code: "empty"}])
+
+  item.assign!(storage_attrs(attrs))
+  item[:version] = item[:version] + 1
+  item[:updated_at] = Time.now.iso8601
+  saved = item.save
+  return persistence_problem(saved) if saved.err?
+  ember.render(
+    json: item_json(saved.value),
+    headers: {"etag": saved.value[:version].to_str})
 
 class Items < ember.Controller:
   def index():
@@ -236,23 +248,28 @@ class Items < ember.Controller:
         "validation_failed",
         "catalog filter is invalid",
         details: [{field: "status", code: "unsupported"}])
-    status = if filters.has_key?(:status) then filters[:status] else null
-    items = service(:store).list(status)
+    relation = CatalogItem.where()
+    relation = relation.where({status: filters[:status]}) if filters.has_key?(:status)
+    result = relation.all
+    return problem(503, "storage_unavailable", "catalog storage is unavailable") if result.err?
+    items = result.value
     render(json: {
-      data: items.take(100),
+      data: items.take(100).map |item|: item_json(item),
       meta: {count: items.count, truncated: items.count > 100}
     })
 
   def create():
     attrs = params.json.expect(service(:schemas).create_item)
-    issue = invalid_item_field(attrs)
-    return validation_problem(issue) if issue
-    result = service(:store).create(attrs)
-    error = store_problem(result)
-    return error if error
-    item = result[:item]
+    now = Time.now.iso8601
+    values = storage_attrs(attrs)
+    values[:version] = 1
+    values[:created_at] = now
+    values[:updated_at] = now
+    result = CatalogItem.create(values)
+    return persistence_problem(result) if result.err?
+    item = result.value
     render(
-      json: item,
+      json: item_json(item),
       status: 201,
       headers: {
         "location": "/v1/items/" + item[:id].to_str,
@@ -260,45 +277,37 @@ class Items < ember.Controller:
       })
 
   def show(id as Int):
-    item = service(:store).find(id)
-    return problem(404, "not_found", "catalog item was not found") unless item
-    render(json: item, headers: {"etag": item[:version].to_str})
+    result = find_item(id)
+    return result.error if result.err?
+    item = result.value
+    render(json: item_json(item), headers: {"etag": item[:version].to_str})
 
   def replace(id as Int):
-    return problem(404, "not_found", "catalog item was not found") unless service(:store).find(id)
-    version = requested_version(request)
-    return version.error if version.err?
-    attrs = params.json.expect(service(:schemas).create_item)
-    result = service(:store).update(id, attrs, version.value)
-    error = store_problem(result)
-    return error if error
-    item = result[:item]
-    render(json: item, headers: {"etag": item[:version].to_str})
+    result = find_item(id)
+    return result.error if result.err?
+    update_item(
+      result.value,
+      params.json.expect(service(:schemas).create_item),
+      request)
 
   def patch(id as Int):
-    return problem(404, "not_found", "catalog item was not found") unless service(:store).find(id)
-    version = requested_version(request)
-    return version.error if version.err?
-    attrs = params.json.expect(service(:schemas).patch_item)
-    if attrs.empty?:
-      return problem(
-        422,
-        "validation_failed",
-        "catalog item is invalid",
-        details: [{field: "item", code: "empty"}])
-    result = service(:store).update(id, attrs, version.value)
-    error = store_problem(result)
-    return error if error
-    item = result[:item]
-    render(json: item, headers: {"etag": item[:version].to_str})
+    result = find_item(id)
+    return result.error if result.err?
+    update_item(
+      result.value,
+      params.json.expect(service(:schemas).patch_item),
+      request,
+      partial: true)
 
   def destroy(id as Int):
-    return problem(404, "not_found", "catalog item was not found") unless service(:store).find(id)
+    result = find_item(id)
+    return result.error if result.err?
+    item = result.value
     version = requested_version(request)
     return version.error if version.err?
-    result = service(:store).delete(id, version.value)
-    error = store_problem(result)
-    return error if error
+    return problem(409, "version_conflict", "catalog item version is stale") unless version.value == item[:version]
+    deleted = item.delete
+    return persistence_problem(deleted) if deleted.err?
     render(status: 204)
 
 class QuietSink:
@@ -322,6 +331,36 @@ def service_routes():
     get "/health/live", to: &liveness
     get "/health/ready", to: &readiness
 
+def migrate(database):
+  database.with_connection |connection|:
+    connection.exec("""
+      create table catalog_items(
+        id integer primary key autoincrement,
+        sku text not null unique,
+        name text not null,
+        description text not null,
+        category text not null,
+        status text not null,
+        price_cents integer not null,
+        currency text not null,
+        stock_count integer not null,
+        weight_grams integer not null,
+        active integer not null,
+        manufacturer text not null,
+        country_code text not null,
+        barcode text not null,
+        color text not null,
+        size text not null,
+        rating_milli integer not null,
+        tags_json text not null,
+        metadata_json text not null,
+        version integer not null,
+        created_at text not null,
+        updated_at text not null
+      )
+    """)
+    connection.exec("create index catalog_items_status on catalog_items(status)")
+
 def arguments():
   parser = ArgParser()
   parser.name("amber-polyglot-http-rps-server")
@@ -332,16 +371,28 @@ def arguments():
 
 def main():
   args = arguments()
+  database = memory_pool(
+    name: "amber_polyglot_http_rps",
+    # A single lease keeps duplicate-SKU and optimistic-lock responses stable
+    # under the shared-memory SQLite writer lock.
+    min_size: 1,
+    max_size: 1,
+    checkout_timeout: 1.0,
+    idle_timeout: 60.0,
+    busy_timeout: 2.0,
+    pragmas: {foreign_keys: true})
+  migrate(database)
+  database.bind!(CatalogItem).or_raise
   telemetry = Telemetry(
     sink: QuietSink(),
     metrics: MetricsRegistry(max_series: 256),
     tracer: false)
   app = ember.App(
     routes: service_routes(),
+    integrations: [orm_pool(database, name: "catalog")],
     services: {
       telemetry: telemetry,
-      schemas: Schemas(),
-      store: MemoryStore()
+      schemas: Schemas()
     },
     security: ember.SecurityPolicy(allowed_hosts: ["localhost", "127.0.0.1", "::1"]),
     telemetry: telemetry)

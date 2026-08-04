@@ -69,10 +69,12 @@ python3 bench/polyglot/run_http_rps.py --stack ember --duration 60 --clients 4
 
 This framework lane compares the complete Ember pipeline with Rails API 8 on
 Puma. It rejects manual raw servers; conversely, the raw lane rejects Rails.
-Both framework servers use mutex-protected in-memory stores so the timed table
-does not measure unrelated database drivers. Set `AMBER_BENCH_RUBY` when Rails
-and Puma are installed under a Ruby that is not discoverable through RVM or
-`PATH`. The production Ember 72-hour qualification soak remains SQLite-backed.
+Both framework servers persist the catalog with ORM models over a shared
+process-local SQLite `:memory:` database, so the timed table includes model
+lifecycle, SQL generation, pooling, and SQLite execution without an external
+database. They serialize SQLite-backed actions to keep lock-retry policy from
+changing the common HTTP contract. Set `AMBER_BENCH_RUBY` when Rails and Puma
+are installed under a Ruby that is not discoverable through RVM or `PATH`.
 The HTTP runner writes machine-readable JSON and a Markdown comparison table
 to `bench/polyglot/results/`. Amber server builds require VM-independent full
 native coverage; the Amber load-generator client remains a separately reported

@@ -117,6 +117,8 @@ def build_all(
             "net.listen",
             "--grant",
             "random.secure",
+            "--grant",
+            "ffi",
         ]
         command(amber_build)
     if "go" in languages:
@@ -338,6 +340,8 @@ def run_one(
                 "net.listen",
                 "--grant",
                 "random.secure",
+                "--grant",
+                "ffi",
                 "--",
                 *program_args,
             ]
@@ -533,6 +537,19 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "python": "Python `ThreadingHTTPServer`",
         "rails": "Rails API 8 + Puma",
     }
+    storage_method = (
+        "The Ember and Rails framework servers persist the catalog through ORM "
+        "models backed by a process-local shared in-memory SQLite database. "
+        "The raw lane keeps its mutex-protected in-memory store. This makes the "
+        "framework table include model lifecycle, SQL generation, connection-pool, "
+        "and SQLite costs while keeping the database local and deterministic. "
+        "Both framework implementations serialize SQLite-backed actions so lock "
+        "retry policy cannot alter the HTTP contract."
+        if stack == "ember"
+        else "All raw benchmark servers use a process-local, mutex-protected "
+        "in-memory store so the table compares HTTP routing, JSON/schema handling, "
+        "validation, and concurrency rather than unrelated database drivers."
+    )
     lines = [
         (
             "# Polyglot raw HTTP RPS benchmark"
@@ -598,7 +615,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         "This is a server-side polyglot comparison, not a replacement-client microbenchmark. Every row is driven by the same compiled Amber executable and therefore performs the same persistent-connection CRUD cycle, JSON checks, schema failures, model-validation failures, optimistic-lock conflicts, method/Host rejection, and oversized-body case.",
         "",
-        "All benchmark servers use a process-local, mutex-protected in-memory store so the table compares HTTP routing, JSON/schema handling, validation, and concurrency rather than unrelated database drivers. The production Ember qualification soak remains the separate SQLite-backed workload.",
+        storage_method,
         "",
         "Before each timed row, the runner executes one complete mixed Amber-client iteration (76 requests) and rejects the row on any contract mismatch. Timed RPS is total requests divided by the maximum elapsed time reported by the concurrent Amber clients. Server and clients share the same host, so client CPU is part of the available-machine budget; results are comparative for this machine, not universal language rankings.",
         "",

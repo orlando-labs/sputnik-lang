@@ -4,8 +4,10 @@
 # framework lane, deliberately separate from the raw Ruby polyglot workloads.
 
 require "action_controller/railtie"
+require "active_record"
 require "json"
 require "logger"
+require "sqlite3"
 require "time"
 
 class PolyglotRailsApp < Rails::Application
@@ -35,17 +37,6 @@ module CatalogContract
   STATUSES = %w[draft active paused retired].freeze
 
   module_function
-
-  def deep_copy(value)
-    case value
-    when Hash
-      value.to_h { |key, nested| [key, deep_copy(nested)] }
-    when Array
-      value.map { |nested| deep_copy(nested) }
-    else
-      value
-    end
-  end
 
   def schema_error(item, patch: false)
     return "item" unless item.is_a?(Hash)
@@ -77,116 +68,116 @@ module CatalogContract
     value.length.between?(minimum, maximum)
   end
 
-  def model_error(item)
-    sku = item["sku"]
-    return "sku" unless bounded?(sku, 3, 64) && /\A[A-Z0-9_-]+\z/.match?(sku)
-    return "name" unless bounded?(item["name"], 1, 160)
-    return "description" unless bounded?(item["description"], 1, 2000)
-    return "category" unless CATEGORIES.include?(item["category"])
-    return "status" unless STATUSES.include?(item["status"])
-    return "price_cents" unless item["price_cents"].between?(0, 1_000_000_000)
-    return "currency" unless /\A[A-Z]{3}\z/.match?(item["currency"])
-    return "stock_count" unless item["stock_count"].between?(0, 1_000_000)
-    return "weight_grams" unless item["weight_grams"].between?(1, 10_000_000)
-    return "manufacturer" unless bounded?(item["manufacturer"], 1, 120)
-    return "country_code" unless /\A[A-Z]{2}\z/.match?(item["country_code"])
-    barcode = item["barcode"]
-    return "barcode" unless bounded?(barcode, 8, 32) && /\A[0-9]+\z/.match?(barcode)
-    return "color" unless bounded?(item["color"], 1, 40)
-    return "size" unless bounded?(item["size"], 1, 40)
-    return "rating_milli" unless item["rating_milli"].between?(0, 5000)
-    tags = item["tags"]
-    return "tags" unless tags.length <= 16 && tags.all? { |tag| bounded?(tag, 1, 32) }
-    metadata = item["metadata"]
-    return "metadata" unless bounded?(metadata["source"], 1, 64)
-    return "metadata" unless bounded?(metadata["batch"], 1, 64)
+  def record_error(record)
+    sku = record[:sku]
+    return "sku" unless sku.is_a?(String) && bounded?(sku, 3, 64) && /\A[A-Z0-9_-]+\z/.match?(sku)
+    return "name" unless record[:name].is_a?(String) && bounded?(record[:name], 1, 160)
+    return "description" unless record[:description].is_a?(String) && bounded?(record[:description], 1, 2000)
+    return "category" unless CATEGORIES.include?(record[:category])
+    return "status" unless STATUSES.include?(record[:status])
+    return "price_cents" unless record[:price_cents].is_a?(Integer) && record[:price_cents].between?(0, 1_000_000_000)
+    return "currency" unless record[:currency].is_a?(String) && /\A[A-Z]{3}\z/.match?(record[:currency])
+    return "stock_count" unless record[:stock_count].is_a?(Integer) && record[:stock_count].between?(0, 1_000_000)
+    return "weight_grams" unless record[:weight_grams].is_a?(Integer) && record[:weight_grams].between?(1, 10_000_000)
+    return "active" unless [0, 1].include?(record[:active])
+    return "manufacturer" unless record[:manufacturer].is_a?(String) && bounded?(record[:manufacturer], 1, 120)
+    return "country_code" unless record[:country_code].is_a?(String) && /\A[A-Z]{2}\z/.match?(record[:country_code])
+    barcode = record[:barcode]
+    return "barcode" unless barcode.is_a?(String) && bounded?(barcode, 8, 32) && /\A[0-9]+\z/.match?(barcode)
+    return "color" unless record[:color].is_a?(String) && bounded?(record[:color], 1, 40)
+    return "size" unless record[:size].is_a?(String) && bounded?(record[:size], 1, 40)
+    return "rating_milli" unless record[:rating_milli].is_a?(Integer) && record[:rating_milli].between?(0, 5000)
+
+    tags = JSON.parse(record[:tags_json])
+    return "tags" unless tags.is_a?(Array) && tags.length <= 16 && tags.all? { |tag| tag.is_a?(String) && bounded?(tag, 1, 32) }
+    metadata = JSON.parse(record[:metadata_json])
+    return "metadata" unless metadata.is_a?(Hash)
+    return "metadata" unless metadata.keys.sort == %w[batch fragile source]
+    return "metadata" unless metadata["source"].is_a?(String) && bounded?(metadata["source"], 1, 64)
+    return "metadata" unless metadata["batch"].is_a?(String) && bounded?(metadata["batch"], 1, 64)
+    return "metadata" unless [true, false].include?(metadata["fragile"])
     nil
+  rescue JSON::ParserError, TypeError
+    "tags"
   end
 end
 
-class CatalogStore
-  def initialize
-    @mutex = Mutex.new
-    @next_id = 1
-    @items = {}
-    @sku_ids = {}
-  end
+module CatalogDatabase
+  URI = "file:amber_polyglot_rails?mode=memory&cache=shared"
+  # Keep lock contention from changing the shared HTTP contract into a
+  # driver-specific retry-policy comparison.
+  LOCK = Mutex.new
 
-  def create(attrs)
-    @mutex.synchronize do
-      return { kind: :conflict } if @sku_ids.key?(attrs["sku"])
+  module_function
 
-      now = Time.now.utc.iso8601(6)
-      item = CatalogContract.deep_copy(attrs)
-      item.merge!(
-        "id" => @next_id,
-        "version" => 1,
-        "created_at" => now,
-        "updated_at" => now
+  def prepare!
+    ActiveRecord::Base.establish_connection(
+      adapter: "sqlite3",
+      database: URI,
+      uri: true,
+      pool: 4,
+      timeout: 2_000
+    )
+    ActiveRecord::Base.logger = Logger.new(IO::NULL)
+    connection = ActiveRecord::Base.connection
+    connection.execute("PRAGMA foreign_keys = ON")
+    connection.execute("PRAGMA busy_timeout = 2000")
+    connection.execute(<<~SQL)
+      CREATE TABLE catalog_items(
+        id integer primary key autoincrement,
+        sku text not null unique,
+        name text not null,
+        description text not null,
+        category text not null,
+        status text not null,
+        price_cents integer not null,
+        currency text not null,
+        stock_count integer not null,
+        weight_grams integer not null,
+        active integer not null,
+        manufacturer text not null,
+        country_code text not null,
+        barcode text not null,
+        color text not null,
+        size text not null,
+        rating_milli integer not null,
+        tags_json text not null,
+        metadata_json text not null,
+        version integer not null,
+        created_at text not null,
+        updated_at text not null
       )
-      @next_id += 1
-      @items[item["id"]] = item
-      @sku_ids[item["sku"]] = item["id"]
-      { kind: :ok, item: CatalogContract.deep_copy(item) }
-    end
+    SQL
+    connection.execute("CREATE INDEX catalog_items_status ON catalog_items(status)")
   end
 
-  def find(id)
-    @mutex.synchronize do
-      item = @items[id]
-      item && CatalogContract.deep_copy(item)
-    end
+  def synchronize(&block)
+    LOCK.synchronize(&block)
   end
+end
 
-  def list(status)
-    @mutex.synchronize do
-      @items.values.filter_map do |item|
-        CatalogContract.deep_copy(item) if status.nil? || item["status"] == status
-      end
-    end
-  end
+class CatalogItem < ActiveRecord::Base
+  self.table_name = "catalog_items"
 
-  def update(id, attrs, version)
-    @mutex.synchronize do
-      item = @items[id]
-      return { kind: :not_found } unless item
-      return { kind: :version_conflict } unless item["version"] == version
+  validates :sku, uniqueness: true
+  validate :catalog_contract
 
-      candidate = CatalogContract.deep_copy(item).merge(CatalogContract.deep_copy(attrs))
-      issue = CatalogContract.model_error(candidate)
-      return { kind: :invalid, issue: issue } if issue
+  private
 
-      owner = @sku_ids[candidate["sku"]]
-      return { kind: :conflict } if owner && owner != id
-
-      if candidate["sku"] != item["sku"]
-        @sku_ids.delete(item["sku"])
-        @sku_ids[candidate["sku"]] = id
-      end
-      candidate["version"] = item["version"] + 1
-      candidate["updated_at"] = Time.now.utc.iso8601(6)
-      @items[id] = candidate
-      { kind: :ok, item: CatalogContract.deep_copy(candidate) }
-    end
-  end
-
-  def delete(id, version)
-    @mutex.synchronize do
-      item = @items[id]
-      return { kind: :not_found } unless item
-      return { kind: :version_conflict } unless item["version"] == version
-
-      @items.delete(id)
-      @sku_ids.delete(item["sku"])
-      { kind: :ok }
-    end
+  def catalog_contract
+    issue = CatalogContract.record_error(self)
+    errors.add(issue, :invalid) if issue
   end
 end
 
 class ItemsController < ActionController::API
-  STORE = CatalogStore.new
+  STORED_ATTRIBUTES = %w[
+    sku name description category status price_cents currency stock_count
+    weight_grams manufacturer country_code barcode color size rating_milli
+  ].freeze
 
   before_action :require_integer_id, only: %i[show update patch destroy]
+  around_action :with_catalog_lock
 
   def ready
     render json: { status: "ready" }
@@ -199,35 +190,42 @@ class ItemsController < ActionController::API
     status = request.query_parameters["status"]
     return validation_problem("status") if status && !CatalogContract::STATUSES.include?(status)
 
-    items = STORE.list(status)
+    relation = CatalogItem.all
+    relation = relation.where(status: status) if status
+    items = relation.to_a
     render json: {
-      data: items.take(100),
+      data: items.take(100).map { |item| item_json(item) },
       meta: { count: items.length, truncated: items.length > 100 }
     }
+  rescue ActiveRecord::StatementInvalid
+    storage_problem
   end
 
   def show
-    item = STORE.find(@item_id)
+    item = CatalogItem.find_by(id: @item_id)
     return problem(404, "not_found") unless item
 
-    response.set_header("ETag", item["version"].to_s)
-    render json: item
+    response.set_header("ETag", item[:version].to_s)
+    render json: item_json(item)
+  rescue ActiveRecord::StatementInvalid
+    storage_problem
   end
 
   def create
-    item = parsed_item
+    attrs = parsed_item
     return if performed?
 
-    issue = CatalogContract.model_error(item)
-    return validation_problem(issue) if issue
+    now = Time.now.utc.iso8601(6)
+    item = CatalogItem.new(storage_attributes(attrs).merge(
+      "version" => 1,
+      "created_at" => now,
+      "updated_at" => now
+    ))
+    return unless save_item(item)
 
-    result = STORE.create(item)
-    return store_problem(result) unless result[:kind] == :ok
-
-    created = result[:item]
-    response.set_header("Location", "/v1/items/#{created['id']}")
-    response.set_header("ETag", created["version"].to_s)
-    render json: created, status: 201
+    response.set_header("Location", "/v1/items/#{item[:id]}")
+    response.set_header("ETag", item[:version].to_s)
+    render json: item_json(item), status: 201
   end
 
   def update
@@ -239,15 +237,17 @@ class ItemsController < ActionController::API
   end
 
   def destroy
-    return problem(404, "not_found") unless STORE.find(@item_id)
+    item = CatalogItem.find_by(id: @item_id)
+    return problem(404, "not_found") unless item
 
     version = requested_version
     return if performed?
+    return problem(409, "version_conflict") unless item[:version] == version
 
-    result = STORE.delete(@item_id, version)
-    return store_problem(result) unless result[:kind] == :ok
-
+    item.delete
     head :no_content
+  rescue ActiveRecord::StatementInvalid
+    storage_problem
   end
 
   def method_not_allowed
@@ -255,6 +255,10 @@ class ItemsController < ActionController::API
   end
 
   private
+
+  def with_catalog_lock(&block)
+    CatalogDatabase.synchronize(&block)
+  end
 
   def require_integer_id
     text = params[:id].to_s
@@ -294,7 +298,8 @@ class ItemsController < ActionController::API
   end
 
   def mutate(patch:)
-    return problem(404, "not_found") unless STORE.find(@item_id)
+    item = CatalogItem.find_by(id: @item_id)
+    return problem(404, "not_found") unless item
 
     version = requested_version
     return if performed?
@@ -302,28 +307,75 @@ class ItemsController < ActionController::API
     attrs = parsed_item(patch: patch)
     return if performed?
     return validation_problem("item") if patch && attrs.empty?
+    return problem(409, "version_conflict") unless item[:version] == version
 
-    result = STORE.update(@item_id, attrs, version)
-    return store_problem(result) unless result[:kind] == :ok
+    item.assign_attributes(storage_attributes(attrs))
+    item[:version] += 1
+    item[:updated_at] = Time.now.utc.iso8601(6)
+    return unless save_item(item)
 
-    item = result[:item]
-    response.set_header("ETag", item["version"].to_s)
-    render json: item
+    response.set_header("ETag", item[:version].to_s)
+    render json: item_json(item)
+  rescue ActiveRecord::StatementInvalid
+    storage_problem
   end
 
-  def store_problem(result)
-    case result[:kind]
-    when :not_found
-      problem(404, "not_found")
-    when :version_conflict
-      problem(409, "version_conflict")
-    when :conflict
-      problem(409, "sku_conflict")
-    when :invalid
-      validation_problem(result[:issue])
-    else
-      problem(500, "internal_error")
-    end
+  def storage_attributes(attrs)
+    values = attrs.slice(*STORED_ATTRIBUTES)
+    values["active"] = attrs["active"] ? 1 : 0 if attrs.key?("active")
+    values["tags_json"] = JSON.generate(attrs["tags"]) if attrs.key?("tags")
+    values["metadata_json"] = JSON.generate(attrs["metadata"]) if attrs.key?("metadata")
+    values
+  end
+
+  def item_json(item)
+    {
+      id: item[:id],
+      sku: item[:sku],
+      name: item[:name],
+      description: item[:description],
+      category: item[:category],
+      status: item[:status],
+      price_cents: item[:price_cents],
+      currency: item[:currency],
+      stock_count: item[:stock_count],
+      weight_grams: item[:weight_grams],
+      active: item[:active] == 1,
+      manufacturer: item[:manufacturer],
+      country_code: item[:country_code],
+      barcode: item[:barcode],
+      color: item[:color],
+      size: item[:size],
+      rating_milli: item[:rating_milli],
+      tags: JSON.parse(item[:tags_json]),
+      metadata: JSON.parse(item[:metadata_json]),
+      version: item[:version],
+      created_at: item[:created_at],
+      updated_at: item[:updated_at]
+    }
+  end
+
+  def save_item(item)
+    return true if item.save
+
+    return conflict_problem if item.errors.of_kind?(:sku, :taken)
+
+    validation_problem(item.errors.attribute_names.first.to_s)
+    false
+  rescue ActiveRecord::RecordNotUnique
+    conflict_problem
+  rescue ActiveRecord::StatementInvalid
+    storage_problem
+  end
+
+  def conflict_problem
+    problem(409, "sku_conflict")
+    false
+  end
+
+  def storage_problem
+    problem(503, "storage_unavailable")
+    false
   end
 
   def validation_problem(field)
@@ -350,6 +402,7 @@ class ItemsController < ActionController::API
 end
 
 PolyglotRailsApp.initialize!
+CatalogDatabase.prepare!
 
 PolyglotRailsApp.routes.draw do
   get "/health/ready", to: "items#ready"

@@ -26179,6 +26179,49 @@ void build_manifest_modules(
   }
 }
 
+std::string vm_graph_cache_key(
+    const amber::build::BuildSummary &summary, const std::string &root_module,
+    EntryExecutionMode entry_mode,
+    const std::vector<amber::capability::CapabilityRequest> &grants) {
+  std::ostringstream material;
+  material << "amber.vm.graph.v2\n";
+  material << summary.name << '\n' << root_module << '\n'
+           << entry_mode_name(entry_mode) << '\n';
+  for (const amber::capability::CapabilityRequest &grant : grants) {
+    material << grant.name << '\n'
+             << grant.target << '\n'
+             << grant.reason << '\n'
+             << grant.flags << '\n';
+  }
+  for (const amber::build::BuildArtifactRecord &artifact : summary.artifacts) {
+    material << artifact.name << '\n'
+             << artifact.path << '\n'
+             << artifact.cache_key << '\n'
+             << artifact.artifact_hash << '\n'
+             << artifact.abi_hash << '\n';
+  }
+  return amber::lexer::sha256_hex(material.str());
+}
+
+void populate_cached_graph_entry(RunnableModuleArtifact *artifact,
+                                 const std::string &root_module,
+                                 EntryExecutionMode entry_mode,
+                                 std::size_t graph_module_count,
+                                 bool has_entry_main_code_id,
+                                 std::uint32_t entry_main_code_id,
+                                 std::vector<amber::capability::CapabilityRequest>
+                                     capability_grants) {
+  artifact->module_name = root_module;
+  artifact->entry_mode = entry_mode;
+  artifact->capability_grants = std::move(capability_grants);
+  artifact->whole_graph_native = true;
+  artifact->graph_module_count = graph_module_count;
+  artifact->has_entry_init_code_id = artifact->module.init.has_entry_code_id;
+  artifact->entry_init_code_id = artifact->module.init.entry_code_id;
+  artifact->has_entry_main_code_id = has_entry_main_code_id;
+  artifact->entry_main_code_id = entry_main_code_id;
+}
+
 int run_build_command(int argc, char **argv) {
   if (argc < 3 || std::string(argv[1]) != "build") {
     usage(std::cerr);
@@ -26899,15 +26942,60 @@ int run_command(int argc, char **argv) {
   }
   const EntryExecutionMode entry_mode =
       default_entry_mode_for(true, root_decoded.module);
-  NativeGraphLinkResult linked_graph =
-      link_native_graph(decode_native_graph_modules(summary),
-                        parsed.manifest.root_module, entry_mode,
-                        options.capability_grants);
-  if (!linked_graph.ok) {
-    throw std::runtime_error(
-        linked_graph.diagnostics.empty()
-            ? "VM graph link failed"
-            : amber::build::diagnostics_to_string(linked_graph.diagnostics));
+  const std::string graph_key = vm_graph_cache_key(
+      summary, parsed.manifest.root_module, entry_mode,
+      options.capability_grants);
+  const std::filesystem::path graph_path =
+      vm_cache_root / "graph" / (graph_key + ".amberbc");
+  const std::filesystem::path graph_metadata_path =
+      vm_cache_root / "graph" / (graph_key + ".meta");
+  NativeGraphLinkResult linked_graph;
+  bool graph_cache_hit = false;
+  if (std::filesystem::exists(graph_path)) {
+    try {
+      const std::vector<std::uint8_t> graph_bytes =
+          read_bytes(graph_path.string());
+      amber::bytecode::DecodeResult graph_decoded =
+          amber::bytecode::deserialize_module(graph_bytes);
+      if (graph_decoded.ok()) {
+        std::istringstream metadata(read_file(graph_metadata_path.string()));
+        int has_entry_main_code_id = 0;
+        std::uint32_t entry_main_code_id = 0;
+        if (!(metadata >> has_entry_main_code_id >> entry_main_code_id) ||
+            (has_entry_main_code_id != 0 && has_entry_main_code_id != 1)) {
+          throw std::runtime_error("invalid cached VM graph metadata");
+        }
+        linked_graph.ok = true;
+        linked_graph.artifact.bytes = graph_bytes;
+        linked_graph.artifact.module = std::move(graph_decoded.module);
+        populate_cached_graph_entry(
+            &linked_graph.artifact, parsed.manifest.root_module, entry_mode,
+            summary.artifacts.size(), has_entry_main_code_id != 0,
+            entry_main_code_id, options.capability_grants);
+        graph_cache_hit = true;
+      }
+    } catch (const std::exception &) {
+      // A truncated or stale generated cache falls back to a fresh link below.
+    }
+  }
+  if (!graph_cache_hit) {
+    linked_graph =
+        link_native_graph(decode_native_graph_modules(summary),
+                          parsed.manifest.root_module, entry_mode,
+                          options.capability_grants);
+    if (!linked_graph.ok) {
+      throw std::runtime_error(
+          linked_graph.diagnostics.empty()
+              ? "VM graph link failed"
+              : amber::build::diagnostics_to_string(linked_graph.diagnostics));
+    }
+    std::filesystem::create_directories(graph_path.parent_path());
+    write_bytes(graph_path.string(), linked_graph.artifact.bytes);
+    write_file(graph_metadata_path.string(),
+               std::to_string(linked_graph.artifact.has_entry_main_code_id) +
+                   " " +
+                   std::to_string(linked_graph.artifact.entry_main_code_id) +
+                   "\n");
   }
 
   ScopedNativeExtensionLibraries loaded_libraries;

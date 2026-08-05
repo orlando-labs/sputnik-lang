@@ -1166,6 +1166,28 @@ bool should_print_run_value(const amber::runtime::Value &value) {
   return !value.is_null() && !value.is_closure();
 }
 
+int run_decoded_module(
+    const std::string &module_name, EntryExecutionMode entry_mode,
+    const amber::bytecode::BcModule &module,
+    const std::optional<std::uint32_t> main_code_id,
+    std::vector<amber::capability::CapabilityRequest> capability_grants) {
+  (void)module_name;
+  const amber::runtime::ExecutionResult result =
+      execute_runnable_module(module, entry_mode, main_code_id,
+                              std::move(capability_grants));
+  if (!result.ok()) {
+    print_execution_fault(result);
+    return 1;
+  }
+  if (should_print_run_value(result.value)) {
+    std::cout << amber::runtime::value_to_debug_string(
+                     result.value, &module, &result.runtime_strings,
+                     &result.runtime_symbols)
+              << "\n";
+  }
+  return 0;
+}
+
 int run_runnable_module(const std::string &module_name,
                         EntryExecutionMode entry_mode,
                         const std::vector<std::uint8_t> &bytes,
@@ -1180,20 +1202,8 @@ int run_runnable_module(const std::string &module_name,
     std::cerr << amber::bytecode::verify_errors_to_json(decode_result.errors);
     return 1;
   }
-  const amber::runtime::ExecutionResult result =
-      execute_runnable_module(decode_result.module, entry_mode, main_code_id,
-                              std::move(capability_grants));
-  if (!result.ok()) {
-    print_execution_fault(result);
-    return 1;
-  }
-  if (should_print_run_value(result.value)) {
-    std::cout << amber::runtime::value_to_debug_string(
-                     result.value, &decode_result.module,
-                     &result.runtime_strings, &result.runtime_symbols)
-              << "\n";
-  }
-  return 0;
+  return run_decoded_module(module_name, entry_mode, decode_result.module,
+                            main_code_id, std::move(capability_grants));
 }
 
 int run_source_file_command(const std::string &path) {
@@ -26913,9 +26923,9 @@ int run_command(int argc, char **argv) {
         native_extension_cache_root(manifest_dir), &loaded_libraries);
   }
 
-  const int status = run_runnable_module(
+  const int status = run_decoded_module(
       linked_graph.artifact.module_name, linked_graph.artifact.entry_mode,
-      linked_graph.artifact.bytes,
+      linked_graph.artifact.module,
       linked_graph.artifact.has_entry_main_code_id
           ? std::optional<std::uint32_t>(
                 linked_graph.artifact.entry_main_code_id)

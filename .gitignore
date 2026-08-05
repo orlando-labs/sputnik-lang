@@ -1,4 +1,5 @@
 build/
+.amber/
 # Alternate BUILD_DIRs (e.g. the tagged value-repr lane used for A/B testing).
 build-*/
 *.o

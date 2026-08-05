@@ -26459,6 +26459,137 @@ std::string native_shared_library_suffix() {
 #endif
 }
 
+void append_native_cache_atom(std::ostringstream *material,
+                              const std::string &value) {
+  *material << value.size() << ':' << value << '\n';
+}
+
+void append_native_cache_file(std::ostringstream *material,
+                              const std::filesystem::path &manifest_dir,
+                              const std::string &kind,
+                              const std::filesystem::path &path) {
+  append_native_cache_atom(material, kind);
+  append_native_cache_atom(
+      material, path.lexically_relative(manifest_dir).generic_string());
+  if (!std::filesystem::exists(path) ||
+      !std::filesystem::is_regular_file(path)) {
+    append_native_cache_atom(material, "missing");
+    return;
+  }
+  append_native_cache_atom(material,
+                           amber::lexer::sha256_hex(read_file(path.string())));
+}
+
+void append_native_cache_tree(std::ostringstream *material,
+                              const std::filesystem::path &manifest_dir,
+                              const std::string &kind,
+                              const std::filesystem::path &root) {
+  append_native_cache_atom(material, kind);
+  append_native_cache_atom(
+      material, root.lexically_relative(manifest_dir).generic_string());
+  if (!std::filesystem::exists(root) ||
+      !std::filesystem::is_directory(root)) {
+    append_native_cache_atom(material, "missing");
+    return;
+  }
+  std::vector<std::filesystem::path> files;
+  for (const auto &entry :
+       std::filesystem::recursive_directory_iterator(root)) {
+    if (entry.is_regular_file()) {
+      files.push_back(entry.path());
+    }
+  }
+  std::sort(files.begin(), files.end());
+  for (const std::filesystem::path &file : files) {
+    append_native_cache_file(material, manifest_dir, "include-file", file);
+  }
+}
+
+std::string native_extension_cache_key(
+    const std::string &cxx, const std::filesystem::path &runtime_root,
+    const std::vector<amber::pkg::PackageNativeExtension> &extensions,
+    const amber::bytecode::BcModule &module,
+    const std::filesystem::path &manifest_dir) {
+  std::ostringstream material;
+  append_native_cache_atom(&material, "amber.native-extensions.v1");
+  append_native_cache_atom(&material, cxx);
+  append_native_cache_atom(
+      &material, capture_command_output(shell_single_quote(cxx) + " --version"));
+  append_native_cache_atom(&material, native_shared_library_suffix());
+  append_native_cache_atom(&material,
+                           std::to_string(AMBER_EXT_ABI_VERSION));
+  append_native_cache_file(&material, runtime_root, "runtime-abi",
+                           runtime_root / "runtime" / "amber_ext.h");
+
+  for (const amber::pkg::PackageNativeExtension &extension : extensions) {
+    append_native_cache_atom(&material, "extension");
+    append_native_cache_atom(&material, extension.name);
+    append_native_cache_atom(&material, extension.language);
+    for (const std::string &source : extension.sources) {
+      append_native_cache_file(&material, manifest_dir, "source",
+                               manifest_dir / source);
+    }
+    for (const std::string &header : extension.headers) {
+      append_native_cache_file(&material, manifest_dir, "header",
+                               manifest_dir / header);
+    }
+    for (const std::string &include_dir : extension.include_dirs) {
+      append_native_cache_tree(&material, manifest_dir, "include-dir",
+                               manifest_dir / include_dir);
+    }
+    for (const std::string &define : extension.defines) {
+      append_native_cache_atom(&material, "define");
+      append_native_cache_atom(&material, define);
+    }
+    for (const std::string &flag : extension.cxxflags) {
+      append_native_cache_atom(&material, "cxxflag");
+      append_native_cache_atom(&material, flag);
+    }
+    for (const std::string &library : extension.link_libraries) {
+      append_native_cache_atom(&material, "link-library");
+      append_native_cache_atom(&material, library);
+    }
+    for (const amber::pkg::PackageNativeSymbol &symbol : extension.symbols) {
+      append_native_cache_atom(&material, "symbol");
+      append_native_cache_atom(&material, symbol.logical);
+      append_native_cache_atom(&material, symbol.symbol);
+    }
+    for (const amber::pkg::PackageNativeType &type : extension.types) {
+      append_native_cache_atom(&material, "type");
+      append_native_cache_atom(&material, type.amber);
+      append_native_cache_atom(&material, type.tag);
+      append_native_cache_atom(&material, type.ownership);
+      append_native_cache_atom(&material, type.destructor);
+    }
+    for (const amber::pkg::PackageNativeError &error : extension.errors) {
+      append_native_cache_atom(&material, "error");
+      append_native_cache_atom(&material, error.name);
+      append_native_cache_atom(&material, error.parent);
+      append_native_cache_atom(&material, error.default_message);
+      append_native_cache_atom(&material, error.default_exit_code);
+    }
+  }
+  for (const std::string &symbol : direct_native_symbols(module, extensions)) {
+    append_native_cache_atom(&material, "direct-symbol");
+    append_native_cache_atom(&material, symbol);
+  }
+  return amber::lexer::sha256_hex(material.str());
+}
+
+// Native package images belong to the application that declares them. Keep
+// the default beside the manifest so a copied application remains
+// self-contained; deployments with a read-only application directory can
+// redirect the cache to a writable location.
+std::filesystem::path native_extension_cache_root(
+    const std::filesystem::path &manifest_dir) {
+  if (const char *env = std::getenv("AMBER_NATIVE_EXT_CACHE")) {
+    if (*env != '\0') {
+      return env;
+    }
+  }
+  return manifest_dir / ".amber" / "native";
+}
+
 void *dynamic_symbol(void *handle, const std::string &symbol,
                      const std::filesystem::path &library_path) {
   (void)::dlerror();
@@ -26502,102 +26633,110 @@ void compile_and_load_native_extensions(
     const std::vector<amber::pkg::PackageNativeExtension> &extensions,
     const amber::bytecode::BcModule &module,
     const std::filesystem::path &manifest_dir,
-    const std::filesystem::path &build_dir,
+    const std::filesystem::path &cache_root,
     ScopedNativeExtensionLibraries *loaded_libraries) {
-  std::filesystem::create_directories(build_dir);
   const std::filesystem::path runtime_root = detect_native_runtime_root(argv0);
   const std::string cxx = choose_native_cxx();
+  const std::string cache_key = native_extension_cache_key(
+      cxx, runtime_root, extensions, module, manifest_dir);
+  const std::filesystem::path artifact_dir = cache_root / cache_key;
+  const std::filesystem::path library_path =
+      artifact_dir /
+      ("amber_manifest_extensions" + native_shared_library_suffix());
   std::vector<std::string> objects;
   std::vector<std::string> link_libraries;
   std::size_t object_index = 0;
 
-  for (const amber::pkg::PackageNativeExtension &extension : extensions) {
-    std::vector<std::string> unit_flags;
-    for (const std::string &flag : extension.cxxflags) {
-      if (native_cxxflag_rejected(flag)) {
-        throw std::runtime_error(
-            "native extension '" + extension.name +
-            "' uses a disallowed cxxflag (use the include_dirs/defines/"
-            "link_libraries fields instead): " +
-            flag);
+  if (!std::filesystem::exists(library_path)) {
+    std::filesystem::create_directories(artifact_dir);
+    for (const amber::pkg::PackageNativeExtension &extension : extensions) {
+      std::vector<std::string> unit_flags;
+      for (const std::string &flag : extension.cxxflags) {
+        if (native_cxxflag_rejected(flag)) {
+          throw std::runtime_error(
+              "native extension '" + extension.name +
+              "' uses a disallowed cxxflag (use the include_dirs/defines/"
+              "link_libraries fields instead): " +
+              flag);
+        }
+        unit_flags.push_back(flag);
       }
-      unit_flags.push_back(flag);
-    }
-    for (const std::string &include_dir : extension.include_dirs) {
-      unit_flags.push_back("-I");
-      unit_flags.push_back((manifest_dir / include_dir).string());
-    }
-    for (const std::string &define : extension.defines) {
-      unit_flags.push_back("-D" + define);
+      for (const std::string &include_dir : extension.include_dirs) {
+        unit_flags.push_back("-I");
+        unit_flags.push_back((manifest_dir / include_dir).string());
+      }
+      for (const std::string &define : extension.defines) {
+        unit_flags.push_back("-D" + define);
+      }
+
+      const bool compile_as_c =
+          extension.language == "c" || extension.language == "C";
+      for (const std::string &source : extension.sources) {
+        const std::filesystem::path object_path =
+            artifact_dir /
+            ("amber_ext_" + std::to_string(object_index++) + ".o");
+        std::vector<std::string> command = {cxx};
+        if (compile_as_c) {
+          command.insert(command.end(), {"-x", "c", "-std=c11"});
+        } else {
+          command.push_back("-std=c++17");
+        }
+        command.insert(command.end(),
+                       {"-O3", "-fPIC", "-I", runtime_root.string()});
+        command.insert(command.end(), unit_flags.begin(), unit_flags.end());
+        command.insert(command.end(), {"-c", (manifest_dir / source).string(),
+                                       "-o", object_path.string()});
+        const std::string rendered = shell_command(command);
+        if (std::system(rendered.c_str()) != 0) {
+          throw std::runtime_error("native extension compile failed: " +
+                                   rendered);
+        }
+        objects.push_back(object_path.string());
+      }
+      link_libraries.insert(link_libraries.end(),
+                            extension.link_libraries.begin(),
+                            extension.link_libraries.end());
     }
 
-    const bool compile_as_c =
-        extension.language == "c" || extension.language == "C";
-    for (const std::string &source : extension.sources) {
-      const std::filesystem::path object_path =
-          build_dir / ("amber_ext_" + std::to_string(object_index++) + ".o");
-      std::vector<std::string> command = {cxx};
-      if (compile_as_c) {
-        command.insert(command.end(), {"-x", "c", "-std=c11"});
-      } else {
-        command.push_back("-std=c++17");
-      }
-      command.insert(command.end(), {"-O3", "-fPIC", "-I",
-                                     runtime_root.string()});
-      command.insert(command.end(), unit_flags.begin(), unit_flags.end());
-      command.insert(command.end(), {"-c", (manifest_dir / source).string(),
-                                     "-o", object_path.string()});
-      const std::string rendered = shell_command(command);
-      if (std::system(rendered.c_str()) != 0) {
-        throw std::runtime_error("native extension compile failed: " +
-                                 rendered);
-      }
-      objects.push_back(object_path.string());
+    // Existing static packages inherit the runtime's ABI marker. A shared
+    // package needs to own one so the loader can reject an incompatible image;
+    // weak linkage lets an out-of-tree package override it deliberately.
+    const std::filesystem::path abi_source = artifact_dir / "amber_ext_abi.c";
+    const std::filesystem::path abi_object = artifact_dir / "amber_ext_abi.o";
+    write_file(abi_source.string(),
+               "#include \"runtime/amber_ext.h\"\n"
+               "#if defined(__GNUC__)\n__attribute__((weak))\n#endif\n"
+               "uint32_t amber_ext_abi_version(void) {\n"
+               "  return AMBER_EXT_ABI_VERSION;\n}\n");
+    const std::vector<std::string> abi_compile = {cxx,   "-x",
+                                                  "c",   "-std=c11",
+                                                  "-O2", "-fPIC",
+                                                  "-I",  runtime_root.string(),
+                                                  "-c",  abi_source.string(),
+                                                  "-o",  abi_object.string()};
+    const std::string rendered_abi = shell_command(abi_compile);
+    if (std::system(rendered_abi.c_str()) != 0) {
+      throw std::runtime_error("native extension ABI shim compile failed: " +
+                               rendered_abi);
     }
-    link_libraries.insert(link_libraries.end(),
-                          extension.link_libraries.begin(),
-                          extension.link_libraries.end());
-  }
+    objects.push_back(abi_object.string());
 
-  // Existing static packages inherit the runtime's ABI marker. A shared
-  // package needs to own one so the loader can reject an incompatible image;
-  // weak linkage lets an out-of-tree package override it deliberately.
-  const std::filesystem::path abi_source = build_dir / "amber_ext_abi.c";
-  const std::filesystem::path abi_object = build_dir / "amber_ext_abi.o";
-  write_file(abi_source.string(),
-             "#include \"runtime/amber_ext.h\"\n"
-             "#if defined(__GNUC__)\n__attribute__((weak))\n#endif\n"
-             "uint32_t amber_ext_abi_version(void) {\n"
-             "  return AMBER_EXT_ABI_VERSION;\n}\n");
-  const std::vector<std::string> abi_compile = {
-      cxx, "-x", "c", "-std=c11", "-O2", "-fPIC", "-I",
-      runtime_root.string(), "-c", abi_source.string(), "-o",
-      abi_object.string()};
-  const std::string rendered_abi = shell_command(abi_compile);
-  if (std::system(rendered_abi.c_str()) != 0) {
-    throw std::runtime_error("native extension ABI shim compile failed: " +
-                             rendered_abi);
-  }
-  objects.push_back(abi_object.string());
-
-  const std::filesystem::path library_path =
-      build_dir / ("amber_manifest_extensions" +
-                   native_shared_library_suffix());
-  std::vector<std::string> link = {cxx};
+    std::vector<std::string> link = {cxx};
 #if defined(__APPLE__)
-  link.insert(link.end(), {"-dynamiclib", "-Wl,-undefined,dynamic_lookup"});
+    link.insert(link.end(), {"-dynamiclib", "-Wl,-undefined,dynamic_lookup"});
 #else
-  link.push_back("-shared");
+    link.push_back("-shared");
 #endif
-  link.insert(link.end(), objects.begin(), objects.end());
-  for (const std::string &library : link_libraries) {
-    link.push_back("-l" + library);
-  }
-  link.insert(link.end(), {"-pthread", "-o", library_path.string()});
-  const std::string rendered_link = shell_command(link);
-  if (std::system(rendered_link.c_str()) != 0) {
-    throw std::runtime_error("native extension shared-library link failed: " +
-                             rendered_link);
+    link.insert(link.end(), objects.begin(), objects.end());
+    for (const std::string &library : link_libraries) {
+      link.push_back("-l" + library);
+    }
+    link.insert(link.end(), {"-pthread", "-o", library_path.string()});
+    const std::string rendered_link = shell_command(link);
+    if (std::system(rendered_link.c_str()) != 0) {
+      throw std::runtime_error("native extension shared-library link failed: " +
+                               rendered_link);
+    }
   }
 
   void *handle = ::dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
@@ -26792,17 +26931,14 @@ int run_command(int argc, char **argv) {
                                     options.capability_grants);
     compile_and_load_native_extensions(
         argv[0], native_extensions, linked_graph.artifact.module, manifest_dir,
-        run_directory.path() / "native-extensions", &loaded_libraries);
+        native_extension_cache_root(manifest_dir), &loaded_libraries);
   }
 
   // The complete linked graph is in memory before execution; discard compiler
-  // sidecars now so a long-running `amberc run` cannot dirty the source tree or
-  // leak per-process build directories after termination. A dynamically loaded
-  // package keeps its shared-library image until the RuntimeWorld is gone; its
-  // scoped loader closes the handle before the directory is removed.
-  if (!load_native_extensions) {
-    run_directory.cleanup();
-  }
+  // sidecars now. Native package images intentionally live in the persistent
+  // application cache, while the scoped loader keeps the image mapped until
+  // the RuntimeWorld is gone.
+  run_directory.cleanup();
   const int status = run_runnable_module(
       linked_graph.artifact.module_name, linked_graph.artifact.entry_mode,
       linked_graph.artifact.bytes,

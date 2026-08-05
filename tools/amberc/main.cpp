@@ -24902,7 +24902,10 @@ amber::build::BuildArtifactRecord build_one_module(
   record.artifact_hash = amber::lexer::sha256_hex(bytes_to_string(bytes));
   record.byte_size = static_cast<std::uint64_t>(bytes.size());
   std::filesystem::create_directories(out_dir);
-  write_bytes(output_path.string(), bytes);
+  if (!std::filesystem::exists(output_path) ||
+      read_bytes(output_path.string()) != bytes) {
+    write_bytes(output_path.string(), bytes);
+  }
   return record;
 }
 

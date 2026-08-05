@@ -26349,44 +26349,6 @@ RunCliOptions parse_run_options(int argc, char **argv, int start_index) {
   return options;
 }
 
-class ScopedRunBuildDirectory {
-public:
-  ScopedRunBuildDirectory() {
-    const std::filesystem::path temp_root =
-        std::filesystem::temp_directory_path();
-    for (std::uint32_t attempt = 0; attempt < 1000U; ++attempt) {
-      path_ = temp_root /
-              ("amber-run-" + std::to_string(::getpid()) + "-" +
-               std::to_string(attempt));
-      std::error_code error;
-      if (std::filesystem::create_directory(path_, error)) {
-        return;
-      }
-      if (error && error != std::errc::file_exists) {
-        throw std::runtime_error("failed to create VM run directory: " +
-                                 error.message());
-      }
-    }
-    throw std::runtime_error("failed to allocate a VM run directory");
-  }
-
-  ~ScopedRunBuildDirectory() { cleanup(); }
-
-  const std::filesystem::path &path() const { return path_; }
-
-  void cleanup() {
-    if (path_.empty()) {
-      return;
-    }
-    std::error_code ignored;
-    std::filesystem::remove_all(path_, ignored);
-    path_.clear();
-  }
-
-private:
-  std::filesystem::path path_;
-};
-
 class ScopedNativeExtensionLibraries {
 public:
   ScopedNativeExtensionLibraries() = default;
@@ -26588,6 +26550,16 @@ std::filesystem::path native_extension_cache_root(
     }
   }
   return manifest_dir / ".amber" / "native";
+}
+
+std::filesystem::path vm_build_cache_root(
+    const std::filesystem::path &manifest_dir) {
+  if (const char *env = std::getenv("AMBER_VM_CACHE")) {
+    if (*env != '\0') {
+      return env;
+    }
+  }
+  return manifest_dir / ".amber" / "vm";
 }
 
 void *dynamic_symbol(void *handle, const std::string &symbol,
@@ -26878,9 +26850,13 @@ int run_command(int argc, char **argv) {
 
   const std::filesystem::path manifest_dir =
       std::filesystem::path(dirname(input_path));
-  ScopedRunBuildDirectory run_directory;
-  const std::filesystem::path out_dir = run_directory.path() / "out";
-  const std::filesystem::path cache_dir = run_directory.path() / "cache";
+  const std::filesystem::path vm_cache_root =
+      vm_build_cache_root(manifest_dir);
+  // Keep bytecode artifacts beside the application just like native package
+  // images. The cache key still hashes every module/profile/stdlib input, so
+  // source edits select a new artifact without requiring a clean build.
+  const std::filesystem::path out_dir = vm_cache_root / "out";
+  const std::filesystem::path cache_dir = vm_cache_root / "cache";
   amber::build::BuildSummary summary;
   summary.name = parsed.manifest.name;
   summary.root_module = parsed.manifest.root_module;
@@ -26889,7 +26865,7 @@ int run_command(int argc, char **argv) {
   summary.cache_dir = cache_dir.string();
   summary.profiles = parsed.manifest.profiles;
   build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
-                         false, &summary);
+                         true, &summary);
 
   const amber::build::BuildArtifactRecord *root_record = nullptr;
   for (const amber::build::BuildArtifactRecord &artifact : summary.artifacts) {
@@ -26934,11 +26910,6 @@ int run_command(int argc, char **argv) {
         native_extension_cache_root(manifest_dir), &loaded_libraries);
   }
 
-  // The complete linked graph is in memory before execution; discard compiler
-  // sidecars now. Native package images intentionally live in the persistent
-  // application cache, while the scoped loader keeps the image mapped until
-  // the RuntimeWorld is gone.
-  run_directory.cleanup();
   const int status = run_runnable_module(
       linked_graph.artifact.module_name, linked_graph.artifact.entry_mode,
       linked_graph.artifact.bytes,

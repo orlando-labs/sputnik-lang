@@ -19677,6 +19677,9 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  default: return false;\n";
   out << "  }\n";
   out << "}\n";
+  out << "static bool native_named_callable_value(const NativeValue &value);\n";
+  out << "static std::string native_named_callable_type_name("
+         "const NativeValue &value);\n";
   out << R"AMBERCPP(static std::vector<NativeValue> native_shape_method_args(
     std::uint32_t code_id,
     const NativeArgsView &positional,
@@ -19842,8 +19845,14 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     if (!is_present(slot) &&
         (params[slot].flags & amber::bytecode::kMethodParamFlagHasDefault) ==
             0U) {
-      throw NativeRaised{native_named_error(
-          "TypeError", "missing required parameter")};
+      if ((params[slot].flags &
+           amber::bytecode::kMethodParamFlagNamedCallable) != 0U) {
+        throw NativeRaised{native_named_error(
+            "KeywordArgumentError", "missing named callable argument `" +
+                native_symbol_text(params[slot].keyword_symbol_id) + "`")};
+      }
+      throw NativeRaised{native_named_error("TypeError",
+                                             "missing required parameter")};
     }
   }
 
@@ -19859,6 +19868,24 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     shaped[slot] = amber_native_call_code(
         params[slot].default_thunk_id, shaped, &thunk);
     mark_present(slot);
+  }
+  for (std::size_t slot = 0; slot < descriptor->param_count; ++slot) {
+    if ((params[slot].flags &
+         amber::bytecode::kMethodParamFlagNamedCallable) == 0U) {
+      continue;
+    }
+    if (shaped[slot].tag == NativeValue::Tag::Null &&
+        (params[slot].flags &
+         amber::bytecode::kMethodParamFlagNamedCallableNullable) != 0U) {
+      continue;
+    }
+    if (!native_named_callable_value(shaped[slot])) {
+      throw NativeRaised{native_named_error(
+          "TypeError", "named callable argument `" +
+              native_symbol_text(params[slot].keyword_symbol_id) +
+              "` must be callable; got " +
+              native_named_callable_type_name(shaped[slot]))};
+    }
   }
   return shaped;
 }
@@ -22237,6 +22264,60 @@ static bool native_http_try_fast_server_response(
   out << "  class_cache.emplace(selector, resolved);\n";
   out << "  return resolved;\n";
   out << "}\n";
+  out << R"AMBERCPP(static bool native_named_callable_value(
+    const NativeValue &value) {
+  switch (value.tag) {
+  case NativeValue::Tag::Closure:
+  case NativeValue::Tag::Class:
+  case NativeValue::Tag::ErrorClass:
+  case NativeValue::Tag::ResultOkFunction:
+  case NativeValue::Tag::ResultErrFunction:
+  case NativeValue::Tag::DescFunction:
+  case NativeValue::Tag::StrType:
+  case NativeValue::Tag::IntType:
+  case NativeValue::Tag::BigIntType:
+  case NativeValue::Tag::FloatType:
+  case NativeValue::Tag::BoolType:
+  case NativeValue::Tag::SymbolType:
+  case NativeValue::Tag::ArrayType:
+  case NativeValue::Tag::TupleType:
+  case NativeValue::Tag::SetType:
+  case NativeValue::Tag::MapType:
+  case NativeValue::Tag::StrictMapType:
+    return true;
+  case NativeValue::Tag::Instance:
+    return native_lookup_user_method(as_native_instance(value)->class_index,
+                                     "call", false)
+        .has_value();
+  case NativeValue::Tag::ForeignHandle:
+    return native_lookup_user_method(
+               as_native_foreign_handle(value)->class_index, "call", false)
+        .has_value();
+  default:
+    return false;
+  }
+}
+
+static std::string native_named_callable_type_name(
+    const NativeValue &value) {
+  switch (value.tag) {
+  case NativeValue::Tag::Null: return "Null";
+  case NativeValue::Tag::Bool: return "Bool";
+  case NativeValue::Tag::Integer: return "Int";
+  case NativeValue::Tag::Float: return "Float";
+  case NativeValue::Tag::String:
+  case NativeValue::Tag::HeapString: return "Str";
+  case NativeValue::Tag::Symbol: return "Symbol";
+  case NativeValue::Tag::List: return "Array";
+  case NativeValue::Tag::Tuple: return "Tuple";
+  case NativeValue::Tag::Set: return "Set";
+  case NativeValue::Tag::Map: return "Map";
+  case NativeValue::Tag::Instance:
+  case NativeValue::Tag::ForeignHandle: return "Object";
+  default: return "Value";
+  }
+}
+)AMBERCPP";
   out << "static void native_apply_auto_assigns(std::uint32_t code_id, "
          "const NativeValue &receiver, "
          "const NativeArgsView &args) {\n";
@@ -26181,12 +26262,10 @@ void build_manifest_modules(
 
 std::string vm_graph_cache_key(
     const amber::build::BuildSummary &summary, const std::string &root_module,
-    EntryExecutionMode entry_mode,
     const std::vector<amber::capability::CapabilityRequest> &grants) {
   std::ostringstream material;
-  material << "amber.vm.graph.v2\n";
-  material << summary.name << '\n' << root_module << '\n'
-           << entry_mode_name(entry_mode) << '\n';
+  material << "amber.vm.graph.v3\n";
+  material << summary.name << '\n' << root_module << '\n';
   for (const amber::capability::CapabilityRequest &grant : grants) {
     material << grant.name << '\n'
              << grant.target << '\n'
@@ -26934,17 +27013,8 @@ int run_command(int argc, char **argv) {
     throw std::runtime_error("root build artifact is missing: " +
                              parsed.manifest.root_module);
   }
-  amber::bytecode::DecodeResult root_decoded =
-      amber::bytecode::deserialize_module(read_bytes(root_record->output_path));
-  if (!root_decoded.ok()) {
-    throw std::runtime_error(
-        amber::bytecode::verify_errors_to_json(root_decoded.errors));
-  }
-  const EntryExecutionMode entry_mode =
-      default_entry_mode_for(true, root_decoded.module);
   const std::string graph_key = vm_graph_cache_key(
-      summary, parsed.manifest.root_module, entry_mode,
-      options.capability_grants);
+      summary, parsed.manifest.root_module, options.capability_grants);
   const std::filesystem::path graph_path =
       vm_cache_root / "graph" / (graph_key + ".amberbc");
   const std::filesystem::path graph_metadata_path =
@@ -26959,12 +27029,16 @@ int run_command(int argc, char **argv) {
           amber::bytecode::deserialize_module(graph_bytes);
       if (graph_decoded.ok()) {
         std::istringstream metadata(read_file(graph_metadata_path.string()));
+        std::string entry_mode_text;
         int has_entry_main_code_id = 0;
         std::uint32_t entry_main_code_id = 0;
-        if (!(metadata >> has_entry_main_code_id >> entry_main_code_id) ||
+        if (!(metadata >> entry_mode_text >> has_entry_main_code_id >>
+              entry_main_code_id) ||
             (has_entry_main_code_id != 0 && has_entry_main_code_id != 1)) {
           throw std::runtime_error("invalid cached VM graph metadata");
         }
+        const EntryExecutionMode entry_mode =
+            parse_entry_mode(entry_mode_text);
         linked_graph.ok = true;
         linked_graph.artifact.bytes = graph_bytes;
         linked_graph.artifact.module = std::move(graph_decoded.module);
@@ -26979,10 +27053,18 @@ int run_command(int argc, char **argv) {
     }
   }
   if (!graph_cache_hit) {
-    linked_graph =
-        link_native_graph(decode_native_graph_modules(summary),
-                          parsed.manifest.root_module, entry_mode,
-                          options.capability_grants);
+    amber::bytecode::DecodeResult root_decoded =
+        amber::bytecode::deserialize_module(
+            read_bytes(root_record->output_path));
+    if (!root_decoded.ok()) {
+      throw std::runtime_error(
+          amber::bytecode::verify_errors_to_json(root_decoded.errors));
+    }
+    const EntryExecutionMode entry_mode =
+        default_entry_mode_for(true, root_decoded.module);
+    linked_graph = link_native_graph(decode_native_graph_modules(summary),
+                                     parsed.manifest.root_module, entry_mode,
+                                     options.capability_grants);
     if (!linked_graph.ok) {
       throw std::runtime_error(
           linked_graph.diagnostics.empty()
@@ -26991,11 +27073,11 @@ int run_command(int argc, char **argv) {
     }
     std::filesystem::create_directories(graph_path.parent_path());
     write_bytes(graph_path.string(), linked_graph.artifact.bytes);
-    write_file(graph_metadata_path.string(),
-               std::to_string(linked_graph.artifact.has_entry_main_code_id) +
-                   " " +
-                   std::to_string(linked_graph.artifact.entry_main_code_id) +
-                   "\n");
+    write_file(
+        graph_metadata_path.string(),
+        entry_mode_name(linked_graph.artifact.entry_mode) + " " +
+            std::to_string(linked_graph.artifact.has_entry_main_code_id) + " " +
+            std::to_string(linked_graph.artifact.entry_main_code_id) + "\n");
   }
 
   ScopedNativeExtensionLibraries loaded_libraries;

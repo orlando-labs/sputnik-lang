@@ -711,6 +711,10 @@ private:
       param_descriptor.kind = string_value(*param, "param_kind");
       param_descriptor.auto_assign_kind = auto_assign_kind;
       param_descriptor.type_expr = string_value(*param, "type_expr");
+      param_descriptor.source_named_callable =
+          bool_value(*param, "source_named_callable");
+      param_descriptor.nullable_named_callable =
+          bool_value(*param, "nullable_named_callable");
       param_descriptor.span = param->span;
       if (const ast::Expr *default_expr = node_field(*param, "default_expr")) {
         param_descriptor.has_default = true;
@@ -1129,11 +1133,16 @@ private:
                    tails->values.front()->span);
       }
     }
+    std::set<std::string> current_call_keywords;
     for (const std::unique_ptr<ast::Expr> &tail : tails->values) {
       if (tail->kind == "AstTailCall" || tail->kind == "AstTailSafeCall" ||
           tail->kind == "AstTailDotCall") {
+        current_call_keywords.clear();
         if (const ast::ListField *args = list_field(*tail, "args")) {
           for (const std::unique_ptr<ast::Expr> &arg : args->values) {
+            if (arg->kind == "AstKeywordArg") {
+              current_call_keywords.insert(string_value(*arg, "name"));
+            }
             visit_expr(scope_index, *arg);
           }
         }
@@ -1145,6 +1154,28 @@ private:
       } else if (tail->kind == "AstTailBlockSuffix") {
         if (const ast::Expr *block = node_field(*tail, "block")) {
           visit_expr(scope_index, *block);
+        }
+      } else if (tail->kind == "AstTailMultiblockSuffix") {
+        const ast::Expr *suffix = node_field(*tail, "suffix");
+        const ast::ListField *entries =
+            suffix == nullptr ? nullptr : list_field(*suffix, "entries");
+        if (entries == nullptr) {
+          continue;
+        }
+        std::set<std::string> seen_entries;
+        for (const std::unique_ptr<ast::Expr> &entry : entries->values) {
+          const std::string name = string_value(*entry, "name");
+          if (!seen_entries.insert(name).second) {
+            diagnostic("AMB_MULTIBLOCK_DUPLICATE", "error", "binder",
+                       "duplicate named block entry `" + name + "`",
+                       entry->span);
+          }
+          if (current_call_keywords.count(name) != 0U) {
+            diagnostic("AMB_MULTIBLOCK_KEYWORD_DUPLICATE", "error", "binder",
+                       "duplicate keyword argument `" + name + "`",
+                       entry->span);
+          }
+          visit_block(scope_index, *entry);
         }
       }
     }
@@ -1495,12 +1526,18 @@ bool is_native_prelude_name(const std::string &name) {
 CallSiteShape extract_call_shape(const ast::Expr &expr) {
   CallSiteShape result;
   const ast::Expr *tail = nullptr;
+  const ast::Expr *multiblock_suffix = nullptr;
   if (expr.kind == "AstTailCall" || expr.kind == "AstTailSafeCall") {
     tail = &expr;
   } else if (expr.kind == "AstPostfixChain") {
     const ast::ListField *tails = list_field(expr, "tails");
     if (tails != nullptr && !tails->values.empty()) {
       const ast::Expr *last_tail = tails->values.back().get();
+      if (last_tail->kind == "AstTailMultiblockSuffix" &&
+          tails->values.size() >= 2U) {
+        multiblock_suffix = node_field(*last_tail, "suffix");
+        last_tail = tails->values[tails->values.size() - 2U].get();
+      }
       if (last_tail->kind == "AstTailCall" ||
           last_tail->kind == "AstTailSafeCall") {
         tail = last_tail;
@@ -1534,6 +1571,20 @@ CallSiteShape extract_call_shape(const ast::Expr &expr) {
       arg.keyword_spread = true;
     }
     result.args.push_back(std::move(arg));
+  }
+
+  const ast::ListField *entries =
+      multiblock_suffix == nullptr
+          ? nullptr
+          : list_field(*multiblock_suffix, "entries");
+  if (entries != nullptr) {
+    for (const std::unique_ptr<ast::Expr> &entry : entries->values) {
+      CallArgShape arg;
+      arg.keyword_name = string_value(*entry, "name");
+      arg.source_multiblock = true;
+      arg.span = entry->span;
+      result.args.push_back(std::move(arg));
+    }
   }
 
   return result;
@@ -1650,9 +1701,14 @@ CallBindResult bind_call_shape(const Signature &signature,
     const ParamDescriptor &param = signature.params[i];
     const BoundCallSlot &slot = result.slots[i];
     if (slot.source_kind == "missing" && !param.has_default) {
-      result.diagnostics.push_back(
-          lexer::Diagnostic{"E2011", "error", "binder",
-                            "missing required parameter", param.span});
+      result.diagnostics.push_back(lexer::Diagnostic{
+          param.source_named_callable ? "AMB_NAMED_CALLABLE_MISSING"
+                                      : "E2011",
+          "error", "binder",
+          param.source_named_callable
+              ? "missing named callable argument `" + param.external_name + "`"
+              : "missing required parameter",
+          param.span});
     }
   }
 
@@ -1837,7 +1893,13 @@ std::string bind_graph_to_json(const BindGraph &graph,
           << json_escape(param.type_expr)
           << "\",\"has_default\":" << (param.has_default ? "true" : "false")
           << ",\"default_kind\":\"" << json_escape(param.default_kind)
-          << "\",\"span\":";
+          << "\"";
+      if (param.source_named_callable) {
+        out << ",\"source_named_callable\":true"
+            << ",\"nullable_named_callable\":"
+            << (param.nullable_named_callable ? "true" : "false");
+      }
+      out << ",\"span\":";
       append_span_json(out, param.span);
       out << "}";
     }

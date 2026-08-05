@@ -3956,6 +3956,96 @@ amber::runtime::ExecutionResult execute_emitted_init_with_errors(
       amber::runtime::Value::null(), amber::runtime::Value::null());
 }
 
+void test_execute_emitted_v20_9_named_multiblock() {
+  const amber::runtime::ExecutionResult multiblock = execute_emitted_init(
+      "def request(value, &success:, &error: null):\n"
+      "  success(value) + success(value)\n"
+      "request(21) with:\n"
+      "  success |response|:\n"
+      "    response\n");
+  expect(multiblock.ok(), "named multiblock execution failed");
+  expect(multiblock.value.is_integer() &&
+             multiblock.value.as_integer() == 42,
+         "named multiblock closure can be invoked multiple times");
+
+  const amber::runtime::ExecutionResult callable_values =
+      execute_emitted_init(
+          "def add_one(value): value + 1\n"
+          "def invoke(value, &done:): done(value)\n"
+          "callback = &add_one\n"
+          "invoke(41, done: callback)\n");
+  expect(callable_values.ok() && callable_values.value.is_integer() &&
+             callable_values.value.as_integer() == 42,
+         "prebuilt callable values satisfy named callable parameters");
+
+  const amber::runtime::ExecutionResult callable_object =
+      execute_emitted_init(
+          "class AddOne:\n"
+          "  def call(value): value + 1\n"
+          "def invoke(value, &done:): done(value)\n"
+          "invoke(41, done: AddOne())\n");
+  expect(callable_object.ok() && callable_object.value.is_integer() &&
+             callable_object.value.as_integer() == 42,
+         "objects implementing call satisfy named callable parameters");
+
+  const amber::runtime::ExecutionResult reflective = execute_emitted_init(
+      "class Client:\n"
+      "  def request(value, &success:): success(value)\n"
+      "client = Client()\n"
+      "send(client, :request, 21) with:\n"
+      "  success:\n"
+      "    _1 * 2\n");
+  expect(reflective.ok() && reflective.value.is_integer() &&
+             reflective.value.as_integer() == 42,
+         "reflective send forwards multiblock entries as keywords");
+
+  const amber::runtime::ExecutionResult nullable = execute_emitted_init(
+      "def skip(&done: null): 42\n"
+      "skip(done: null)\n");
+  expect(nullable.ok() && nullable.value.is_integer() &&
+             nullable.value.as_integer() == 42,
+         "exact null default permits omitted and explicit null callbacks");
+
+  const amber::runtime::ExecutionResult missing = execute_emitted_init(
+      "def invoke(&done:): null\n"
+      "invoke()\n");
+  expect(!missing.ok() && missing.fault.has_value() &&
+             missing.fault->error_name == "KeywordArgumentError" &&
+             missing.fault->message.find("missing named callable argument "
+                                         "`done`") != std::string::npos,
+         "missing required named callable reports its keyword name");
+
+  const amber::runtime::ExecutionResult non_callable = execute_emitted_init(
+      "def invoke(&done:): null\n"
+      "invoke(done: 42)\n");
+  expect(!non_callable.ok() && non_callable.fault.has_value() &&
+             non_callable.fault->error_name == "TypeError" &&
+             non_callable.fault->message.find(
+                 "named callable argument `done` must be callable; got Int") !=
+                 std::string::npos,
+         "non-callable explicit value reports named callable TypeError");
+
+  const amber::runtime::ExecutionResult bad_default = execute_emitted_init(
+      "def invoke(&done: 42): null\n"
+      "invoke()\n");
+  expect(!bad_default.ok() && bad_default.fault.has_value() &&
+             bad_default.fault->error_name == "TypeError" &&
+             bad_default.fault->message.find("`done`") != std::string::npos,
+         "non-callable default is checked before method body execution");
+
+  const amber::runtime::ExecutionResult spread_duplicate =
+      execute_emitted_init(
+          "def keep(value): value\n"
+          "def invoke(&done:): null\n"
+          "options = {done: &keep}\n"
+          "invoke(**options) with:\n"
+          "  done:\n"
+          "    _1\n");
+  expect(!spread_duplicate.ok() && spread_duplicate.fault.has_value() &&
+             spread_duplicate.fault->error_name == "KeywordArgumentError",
+         "keyword spread collision with multiblock is rejected at runtime");
+}
+
 const amber::runtime::ExecutionLocal *
 execution_local_by_name(const amber::runtime::ExecutionResult &result,
                         const std::string &name) {
@@ -4113,6 +4203,25 @@ void test_synchronous_collection_block_control_flow() {
   expect(nonlocal_return.ok() && nonlocal_return.value.is_integer() &&
              nonlocal_return.value.as_integer() == 4,
          "return inside quick each exits the enclosing function");
+
+  const amber::runtime::ExecutionResult return_through_ensure =
+      execute_emitted_init(
+          "log = []\n"
+          "\n"
+          "def guarded_each():\n"
+          "  try:\n"
+          "    [1].each |value|:\n"
+          "      return value * 40\n"
+          "    -1\n"
+          "  ensure:\n"
+          "    log.push!(\"ensure\")\n"
+          "\n"
+          "value = guarded_each()\n"
+          "value == 40 and log[0] == \"ensure\"\n");
+  expect(return_through_ensure.ok() &&
+             return_through_ensure.value.is_bool() &&
+             return_through_ensure.value.as_bool(),
+         "non-local return through ensure preserves its dynamic target");
 
   const amber::runtime::ExecutionResult rescued =
       execute_emitted_init(
@@ -10999,6 +11108,7 @@ int main() {
   test_execute_native_range_literal();
   test_execute_emitted_collection_literals();
   test_execute_emitted_v20_7_spread();
+  test_execute_emitted_v20_9_named_multiblock();
   test_execute_emitted_v20_6_value_keyed_maps();
   test_runtime_string_interpolation_and_conversions();
   test_runtime_present_absent_predicates();

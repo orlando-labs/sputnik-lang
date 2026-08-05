@@ -430,6 +430,48 @@ void test_keyword_param_emission() {
          "optional keyword param carries default flag");
 }
 
+void test_v20_9_named_callable_param_emission() {
+  const amber::bytecode::EmitResult emit_result = emit_ok(
+      "def request(value, &success:, &error: null):\n"
+      "  value\n"
+      "request(1) with:\n"
+      "  success:\n"
+      "    _1\n");
+  expect(emit_result.module.methods.size() == 1,
+         "expected one named-callable method");
+  const amber::bytecode::BcMethod &method = emit_result.module.methods[0];
+  expect(method.params.size() == 3, "named callable bytecode param count");
+  expect((method.params[1].flags &
+          amber::bytecode::kMethodParamFlagKeyword) != 0U &&
+             (method.params[1].flags &
+              amber::bytecode::kMethodParamFlagNamedCallable) != 0U &&
+             (method.params[1].flags &
+              amber::bytecode::kMethodParamFlagNamedCallableNullable) == 0U,
+         "required named callable flags");
+  expect((method.params[2].flags &
+          amber::bytecode::kMethodParamFlagKeyword) != 0U &&
+             (method.params[2].flags &
+              amber::bytecode::kMethodParamFlagHasDefault) != 0U &&
+             (method.params[2].flags &
+              amber::bytecode::kMethodParamFlagNamedCallable) != 0U &&
+             (method.params[2].flags &
+              amber::bytecode::kMethodParamFlagNamedCallableNullable) != 0U,
+         "nullable optional named callable flags");
+  expect(module_contains_opcode(emit_result.module,
+                                amber::bytecode::Opcode::MakeClosure),
+         "multiblock entry emits an ordinary closure");
+
+  const amber::bytecode::DecodeResult decoded =
+      amber::bytecode::deserialize_module(
+          amber::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), "named callable bytecode round-trips");
+  expect((decoded.module.methods[0].params[1].flags &
+          amber::bytecode::kMethodParamFlagNamedCallable) != 0U &&
+             (decoded.module.methods[0].params[2].flags &
+              amber::bytecode::kMethodParamFlagNamedCallableNullable) != 0U,
+         "named callable flags survive serialization");
+}
+
 void test_case_emission() {
   const amber::bytecode::EmitResult emit_result = emit_ok("def choose(x):\n"
                                                           "  case x:\n"
@@ -1100,6 +1142,7 @@ int main() {
   test_default_thunk_emission();
   test_type_hook_emission();
   test_keyword_param_emission();
+  test_v20_9_named_callable_param_emission();
   test_case_emission();
   test_last_result_elision_without_explicit_last_value();
   test_explicit_last_value_preserves_last_result_updates();

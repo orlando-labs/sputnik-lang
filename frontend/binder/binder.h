@@ -64,6 +64,8 @@ struct ParamDescriptor {
   std::string type_expr;
   bool has_default = false;
   std::string default_kind;
+  bool source_named_callable = false;
+  bool nullable_named_callable = false;
   lexer::Span span;
 };
 
@@ -82,6 +84,7 @@ struct CallArgShape {
   std::string keyword_name;
   bool positional_spread = false;
   bool keyword_spread = false;
+  bool source_multiblock = false;
   lexer::Span span;
 };
 

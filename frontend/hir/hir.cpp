@@ -1339,6 +1339,11 @@ private:
         param_node->string_field("type_expr", param.type_expr);
         param_node->bool_field("has_default", param.has_default);
         param_node->string_field("default_kind", param.default_kind);
+        if (param.source_named_callable) {
+          param_node->bool_field("source_named_callable", true);
+          param_node->bool_field("nullable_named_callable",
+                                 param.nullable_named_callable);
+        }
         params.push_back(std::move(param_node));
       }
     }
@@ -2498,14 +2503,34 @@ private:
       const ast::Expr &tail = *tails->values[i];
       if (i == 0 && tail.kind == "AstTailCall" && is_builtin_send_base(*base)) {
         std::unique_ptr<Node> block;
+        const ast::Expr *multiblock_tail = nullptr;
         if (i + 1 < tail_count &&
             tails->values[i + 1]->kind == "AstTailBlockSuffix") {
           block = lower_block_suffix(*tails->values[i + 1]);
+          ++i;
+        } else if (i + 1 < tail_count &&
+                   tails->values[i + 1]->kind ==
+                       "AstTailMultiblockSuffix") {
+          multiblock_tail = tails->values[i + 1].get();
           ++i;
         }
         std::unique_ptr<Node> lowered =
             lower_builtin_send_call(*base, tail, std::move(block));
         if (lowered) {
+          if (multiblock_tail != nullptr) {
+            std::vector<std::unique_ptr<Node>> multiblock_args;
+            append_multiblock_keyword_args(*multiblock_tail,
+                                           &multiblock_args);
+            ast::ListField *kw_args = mutable_list_field(*lowered, "kw_args");
+            if (kw_args != nullptr) {
+              for (std::unique_ptr<Node> &arg : multiblock_args) {
+                kw_args->values.push_back(std::move(arg));
+              }
+            }
+            lowered->bool_field("source_multiblock", true);
+            lowered->span = ast::join_spans(lowered->span,
+                                            multiblock_tail->span);
+          }
           current = std::move(lowered);
           ++i;
           continue;
@@ -2519,6 +2544,7 @@ private:
         std::unique_ptr<Node> block;
         bool has_explicit_call = false;
         bool has_block_suffix = false;
+        bool has_multiblock_suffix = false;
         if (i + 1 < tail_count && tails->values[i + 1]->kind == "AstTailCall") {
           collect_call_args(*tails->values[i + 1], &pos_args, &kw_args, &block);
           has_explicit_call = true;
@@ -2529,8 +2555,16 @@ private:
           block = lower_block_suffix(*tails->values[i + 1]);
           has_block_suffix = true;
           ++i;
+        } else if (i + 1 < tail_count &&
+                   tails->values[i + 1]->kind ==
+                       "AstTailMultiblockSuffix") {
+          append_multiblock_keyword_args(*tails->values[i + 1], &kw_args);
+          has_multiblock_suffix = true;
+          ++i;
         }
-        const lexer::Span node_span = ast::join_spans(current->span, tail.span);
+        const lexer::Span node_span = ast::join_spans(
+            current->span,
+            has_multiblock_suffix ? tails->values[i]->span : tail.span);
         std::unique_ptr<Node> guard_base;
         std::unique_ptr<Node> receiver;
         std::string temp_slot;
@@ -2544,8 +2578,12 @@ private:
         auto node = make_node("HSend", node_span);
         node->node_field("receiver", std::move(receiver));
         node->string_field("selector", selector);
-        if (!has_explicit_call && !has_block_suffix) {
+        if (!has_explicit_call && !has_block_suffix &&
+            !has_multiblock_suffix) {
           node->bool_field("property_access", true);
+        }
+        if (has_multiblock_suffix) {
+          node->bool_field("source_multiblock", true);
         }
         node->list_field("pos_args", std::move(pos_args));
         node->list_field("kw_args", std::move(kw_args));
@@ -2568,22 +2606,52 @@ private:
         std::unique_ptr<Node> block;
         if (!safe && tail.kind == "AstTailCall" && i == 0 &&
             is_implicit_receiver_call(*base)) {
+          const ast::Expr *multiblock_tail = nullptr;
           if (i + 1 < tail_count &&
               tails->values[i + 1]->kind == "AstTailBlockSuffix") {
             block = lower_block_suffix(*tails->values[i + 1]);
             ++i;
+          } else if (i + 1 < tail_count &&
+                     tails->values[i + 1]->kind ==
+                         "AstTailMultiblockSuffix") {
+            multiblock_tail = tails->values[i + 1].get();
+            ++i;
           }
           current = lower_implicit_receiver_send(*base, tail, std::move(block));
+          if (multiblock_tail != nullptr) {
+            std::vector<std::unique_ptr<Node>> multiblock_args;
+            append_multiblock_keyword_args(*multiblock_tail,
+                                           &multiblock_args);
+            ast::ListField *lowered_kw_args =
+                mutable_list_field(*current, "kw_args");
+            if (lowered_kw_args != nullptr) {
+              for (std::unique_ptr<Node> &arg : multiblock_args) {
+                lowered_kw_args->values.push_back(std::move(arg));
+              }
+            }
+            current->bool_field("source_multiblock", true);
+            current->span =
+                ast::join_spans(current->span, multiblock_tail->span);
+          }
           ++i;
           continue;
         }
         collect_call_args(tail, &pos_args, &kw_args, &block);
+        bool source_multiblock = false;
         if (i + 1 < tail_count &&
             tails->values[i + 1]->kind == "AstTailBlockSuffix") {
           block = lower_block_suffix(*tails->values[i + 1]);
           ++i;
+        } else if (i + 1 < tail_count &&
+                   tails->values[i + 1]->kind ==
+                       "AstTailMultiblockSuffix") {
+          source_multiblock = append_multiblock_keyword_args(
+              *tails->values[i + 1], &kw_args);
+          ++i;
         }
-        const lexer::Span node_span = ast::join_spans(current->span, tail.span);
+        const lexer::Span node_span = ast::join_spans(
+            current->span,
+            source_multiblock ? tails->values[i]->span : tail.span);
         std::unique_ptr<Node> guard_base;
         std::unique_ptr<Node> callable;
         std::string temp_slot;
@@ -2598,6 +2666,9 @@ private:
         node->node_field("callable", std::move(callable));
         node->list_field("pos_args", std::move(pos_args));
         node->list_field("kw_args", std::move(kw_args));
+        if (source_multiblock) {
+          node->bool_field("source_multiblock", true);
+        }
         if (block) {
           node->node_field("block", std::move(block));
         }
@@ -2858,6 +2929,25 @@ private:
         pos_args->push_back(lower_expr(*arg));
       }
     }
+  }
+
+  bool append_multiblock_keyword_args(
+      const ast::Expr &tail,
+      std::vector<std::unique_ptr<Node>> *kw_args) {
+    const ast::Expr *suffix = node_field(tail, "suffix");
+    const ast::ListField *entries =
+        suffix == nullptr ? nullptr : list_field(*suffix, "entries");
+    if (entries == nullptr) {
+      return false;
+    }
+    for (const std::unique_ptr<ast::Expr> &entry : entries->values) {
+      auto keyword = make_node("HKeywordArg", entry->span);
+      keyword->string_field("name", string_value(*entry, "name"));
+      keyword->bool_field("source_multiblock", true);
+      keyword->node_field("value", lower_block(*entry));
+      kw_args->push_back(std::move(keyword));
+    }
+    return true;
   }
 
   std::unique_ptr<Node> lower_block_suffix(const ast::Expr &tail) {

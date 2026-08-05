@@ -2158,11 +2158,18 @@ std::unique_ptr<ast::Expr> Parser::parse_param() {
   // parameter binds the frame's block channel. `&` is the callable-channel
   // sigil already established for callable references (§4.6).
   const bool is_block = match(lexer::TokenKind::Ampersand);
+  const bool is_named_callable =
+      is_block && ampersand_param_has_keyword_colon();
   std::string auto_assign_kind = "none";
   if (match(lexer::TokenKind::At)) {
     auto_assign_kind = "@";
   } else if (match(lexer::TokenKind::AtAt)) {
     auto_assign_kind = "@@";
+  }
+  if (is_named_callable && auto_assign_kind != "none") {
+    error_code(start, "AMB_NAMED_CALLABLE_PARAM_FORM",
+               "a named callable parameter must be `&name:`; auto-assign "
+               "markers and patterns are not allowed");
   }
   // A `*name` rest parameter collects surplus positional arguments into an
   // immutable Tuple. It cannot combine with `&` (block) or `@`/`@@`
@@ -2174,12 +2181,44 @@ std::unique_ptr<ast::Expr> Parser::parse_param() {
   const bool is_kw_rest = !is_block && !is_rest && auto_assign_kind == "none" &&
                           match(lexer::TokenKind::StarStar);
   // §4.2: a block parameter is always a single name, never a pattern.
-  if (is_block && !check(lexer::TokenKind::Identifier)) {
-    error_code(current(), "AMB_BLOCK_PARAM_PATTERN",
-               "a block parameter must be a single name, not a pattern");
+  const bool invalid_ampersand_name =
+      is_block && !check(lexer::TokenKind::Identifier);
+  if (invalid_ampersand_name) {
+    error_code(current(),
+               is_named_callable ? "AMB_NAMED_CALLABLE_PARAM_FORM"
+                                 : "AMB_BLOCK_PARAM_PATTERN",
+               is_named_callable
+                   ? "a named callable parameter must use a single name in "
+                     "the form `&name:`"
+                   : "a block parameter must be a single name, not a pattern");
   }
-  const lexer::Token name =
-      consume(lexer::TokenKind::Identifier, "expected parameter name");
+  lexer::Token name = current();
+  if (invalid_ampersand_name) {
+    name.lexeme.clear();
+    int depth = 0;
+    while (!at_end()) {
+      const lexer::TokenKind token_kind = current().kind;
+      if (depth == 0 &&
+          (token_kind == lexer::TokenKind::Colon ||
+           token_kind == lexer::TokenKind::Comma ||
+           token_kind == lexer::TokenKind::RParen)) {
+        break;
+      }
+      if (token_kind == lexer::TokenKind::LParen ||
+          token_kind == lexer::TokenKind::LBracket ||
+          token_kind == lexer::TokenKind::LBrace) {
+        ++depth;
+      } else if ((token_kind == lexer::TokenKind::RParen ||
+                  token_kind == lexer::TokenKind::RBracket ||
+                  token_kind == lexer::TokenKind::RBrace) &&
+                 depth > 0) {
+        --depth;
+      }
+      advance();
+    }
+  } else {
+    name = consume(lexer::TokenKind::Identifier, "expected parameter name");
+  }
   std::string kind = is_block     ? "block"
                      : is_rest    ? "rest"
                      : is_kw_rest ? "kw_rest"
@@ -2191,10 +2230,20 @@ std::unique_ptr<ast::Expr> Parser::parse_param() {
     type_expr = parse_type_term_text_until_param_boundary();
   }
 
-  // Block parameters take neither a keyword `:` nor a default `=` in v1
-  // (default deferred per RFC §10.1); leaving them unconsumed lets the
-  // signature's `)` expectation flag a malformed `&blk: …` / `&blk = …`.
-  if (!is_block && !is_rest && !is_kw_rest && match(lexer::TokenKind::Colon)) {
+  // v20.9 gives `&name:` a distinct, syntax-faithful named-callable meaning.
+  // Bare `&name` remains the existing anonymous block parameter.
+  if (is_named_callable && match(lexer::TokenKind::Colon)) {
+    kind = "keyword";
+    if (check(lexer::TokenKind::Star) || check(lexer::TokenKind::StarStar)) {
+      error_code(current(), "AMB_NAMED_CALLABLE_PARAM_FORM",
+                 "a named callable parameter cannot use a rest parameter as "
+                 "its default");
+    }
+    if (!check(lexer::TokenKind::Comma) && !check(lexer::TokenKind::RParen)) {
+      default_expr = parse_expression(1, StopMode::Normal);
+    }
+  } else if (!is_block && !is_rest && !is_kw_rest &&
+             match(lexer::TokenKind::Colon)) {
     kind = "keyword";
     if (!check(lexer::TokenKind::Comma) && !check(lexer::TokenKind::RParen)) {
       default_expr = parse_expression(1, StopMode::Normal);
@@ -2204,13 +2253,27 @@ std::unique_ptr<ast::Expr> Parser::parse_param() {
     default_expr = parse_expression(1, StopMode::Normal);
   }
 
-  auto param =
-      ast::make_expr("AstParam", ast::join_spans(start.span, previous().span));
+  auto param = ast::make_expr(
+      is_named_callable ? "AstNamedCallableParameter" : "AstParam",
+      ast::join_spans(start.span, previous().span));
   param->string_field("param_kind", kind);
   param->string_field("external_name", name.lexeme);
   param->string_field("local_name", name.lexeme);
   param->string_field("auto_assign_kind", auto_assign_kind);
   param->string_field("type_expr", type_expr);
+  if (is_named_callable) {
+    const bool nullable_by_null_default =
+        default_expr != nullptr && default_expr->kind == "AstLiteral" &&
+        string_value(*default_expr, "token") == "KEYWORD_NULL";
+    param->bool_field("source_named_callable", true);
+    param->bool_field("nullable_by_null_default", nullable_by_null_default);
+    // The typed profile spells nullable unions in the ordinary type term.
+    // Preserve that permission in runtime metadata even when the checker is
+    // not active; the checker remains responsible for validating the term.
+    param->bool_field("nullable_named_callable",
+                      nullable_by_null_default ||
+                          type_expr.find("Null") != std::string::npos);
+  }
   if (default_expr) {
     param->node_field("default_expr", std::move(default_expr));
   }
@@ -3264,7 +3327,8 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       break;
     }
 
-    if (check(lexer::TokenKind::Dot) || check(lexer::TokenKind::ChainDot) ||
+    if (starts_multiblock_suffix() || check(lexer::TokenKind::Dot) ||
+        check(lexer::TokenKind::ChainDot) ||
         check(lexer::TokenKind::SafeDot) || check(lexer::TokenKind::LParen) ||
         check(lexer::TokenKind::LBracket) ||
         (!header_mode && check(lexer::TokenKind::Colon)) ||
@@ -4366,6 +4430,29 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
 
 std::unique_ptr<ast::Expr>
 Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
+  if (starts_multiblock_suffix()) {
+    const lexer::Token with_token = current();
+    const bool completed_call = has_completed_call_segment(*expr);
+    if (!completed_call) {
+      error_code(with_token, "AMB_MULTIBLOCK_TARGET",
+                 "`with:` must follow a syntactically complete call segment");
+    }
+    if (has_anonymous_block_channel(*expr)) {
+      error_code(with_token, "AMB_MULTIBLOCK_ANON_BLOCK_CONFLICT",
+                 "a call cannot combine `with:` with an anonymous block "
+                 "suffix or trailing block-pass");
+    }
+    if (has_multiblock_suffix(*expr)) {
+      error_code(with_token, "AMB_MULTIBLOCK_TARGET",
+                 "a call may have at most one `with:` suffix");
+    }
+    auto suffix = parse_multiblock_suffix(stop_mode);
+    auto tail = ast::make_expr("AstTailMultiblockSuffix", suffix->span);
+    tail->node_field("suffix", std::move(suffix));
+    auto chain = ensure_postfix_chain(std::move(expr));
+    append_postfix_tail(*chain, std::move(tail));
+    return chain;
+  }
   if (check(lexer::TokenKind::Dot) || check(lexer::TokenKind::ChainDot)) {
     const lexer::Token dot = advance();
     if (match(lexer::TokenKind::LParen)) {
@@ -4481,6 +4568,11 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
   if (stop_mode != StopMode::ControlHeader &&
       (check(lexer::TokenKind::Colon) || check(lexer::TokenKind::Pipe)) &&
       can_accept_direct_block_suffix(*expr)) {
+    if (has_multiblock_suffix(*expr)) {
+      error_code(current(), "AMB_MULTIBLOCK_ANON_BLOCK_CONFLICT",
+                 "a call cannot combine `with:` with an anonymous block "
+                 "suffix");
+    }
     auto block = parse_block_suffix(stop_mode);
     auto block_tail = ast::make_expr("AstTailBlockSuffix", block->span);
     block_tail->node_field("block", std::move(block));
@@ -4550,6 +4642,137 @@ std::unique_ptr<ast::Expr> Parser::parse_block_suffix(StopMode stop_mode) {
   block->list_field("params", std::move(params));
   block->node_field("body", std::move(body));
   return block;
+}
+
+std::unique_ptr<ast::Expr>
+Parser::parse_named_block_entry(StopMode stop_mode) {
+  (void)stop_mode;
+  const lexer::Token name =
+      consume(lexer::TokenKind::Identifier,
+              "expected named block entry identifier");
+  std::vector<std::unique_ptr<ast::Expr>> params;
+  if (match(lexer::TokenKind::Pipe)) {
+    params = parse_block_params();
+    consume(lexer::TokenKind::Pipe,
+            "expected '|' after named block entry parameters");
+  }
+  if (!match(lexer::TokenKind::Colon)) {
+    error_code(current(), "AMB_MULTIBLOCK_ENTRY",
+               "a named block entry must use `name |params|:` or `name:`");
+    while (!at_end() && !check(lexer::TokenKind::Newline) &&
+           !check(lexer::TokenKind::Dedent)) {
+      advance();
+    }
+    auto entry = ast::make_expr("AstNamedBlockEntry", name.span);
+    entry->string_field("name", name.lexeme);
+    entry->list_field("params", std::move(params));
+    entry->list_field("body", {});
+    return entry;
+  }
+
+  if (match(lexer::TokenKind::Newline)) {
+    std::vector<std::unique_ptr<ast::Expr>> body;
+    if (!match(lexer::TokenKind::Indent)) {
+      error_code(name, "AMB_MULTIBLOCK_ENTRY",
+                 "a named block entry requires a non-empty indented body");
+      auto entry = ast::make_expr(
+          "AstNamedBlockEntry", ast::join_spans(name.span, previous().span));
+      entry->string_field("name", name.lexeme);
+      entry->list_field("params", std::move(params));
+      entry->list_field("body", std::move(body));
+      return entry;
+    }
+    while (!at_end() && !check(lexer::TokenKind::Dedent)) {
+      std::unique_ptr<ast::Expr> item = parse_statement(BodyContext::Def);
+      if (item) {
+        append_item_or_merge_clause_def(&body, std::move(item));
+      }
+      while (match(lexer::TokenKind::Newline)) {
+      }
+    }
+    consume(lexer::TokenKind::Dedent,
+            "expected named block entry body dedent");
+    lexer::Span end_span = previous().span;
+    if (!body.empty()) {
+      end_span = body.back()->span;
+    } else {
+      error_code(name, "AMB_MULTIBLOCK_ENTRY",
+                 "a named block entry body cannot be empty");
+    }
+    auto entry = ast::make_expr("AstNamedBlockEntry",
+                                ast::join_spans(name.span, end_span));
+    entry->string_field("name", name.lexeme);
+    entry->list_field("params", std::move(params));
+    entry->list_field("body", std::move(body));
+    return entry;
+  }
+
+  std::unique_ptr<ast::Expr> body =
+      parse_expression(1, StopMode::InlineBlock);
+  if (body == nullptr || body->kind == "AstError") {
+    error_code(name, "AMB_MULTIBLOCK_ENTRY",
+               "a named block entry body cannot be empty");
+  }
+  const lexer::Span end_span = body == nullptr ? previous().span : body->span;
+  auto entry = ast::make_expr("AstNamedBlockEntry",
+                              ast::join_spans(name.span, end_span));
+  entry->string_field("name", name.lexeme);
+  entry->list_field("params", std::move(params));
+  entry->node_field("body", std::move(body));
+  return entry;
+}
+
+std::unique_ptr<ast::Expr>
+Parser::parse_multiblock_suffix(StopMode stop_mode) {
+  const lexer::Token with_token = advance();
+  consume(lexer::TokenKind::Colon, "expected ':' after `with`");
+  std::vector<std::unique_ptr<ast::Expr>> entries;
+
+  if (!match(lexer::TokenKind::Newline)) {
+    error_code(with_token, "AMB_MULTIBLOCK_ENTRY",
+               "`with:` must be followed by an indented named block suite");
+  } else if (!match(lexer::TokenKind::Indent)) {
+    error_code(with_token, "AMB_MULTIBLOCK_EMPTY",
+               "`with:` must contain at least one named block entry");
+  } else {
+    while (!at_end() && !check(lexer::TokenKind::Dedent)) {
+      while (match(lexer::TokenKind::Newline)) {
+      }
+      if (at_end() || check(lexer::TokenKind::Dedent)) {
+        break;
+      }
+      if (!check(lexer::TokenKind::Identifier)) {
+        error_code(current(), "AMB_MULTIBLOCK_ENTRY",
+                   "a `with:` suite may contain only named block entries");
+        while (!at_end() && !check(lexer::TokenKind::Newline) &&
+               !check(lexer::TokenKind::Dedent)) {
+          advance();
+        }
+        continue;
+      }
+      entries.push_back(parse_named_block_entry(stop_mode));
+      while (match(lexer::TokenKind::Newline)) {
+      }
+    }
+    consume(lexer::TokenKind::Dedent, "expected `with:` suite dedent");
+  }
+
+  if (entries.empty() &&
+      std::none_of(diagnostics_.begin(), diagnostics_.end(),
+                   [&](const lexer::Diagnostic &diagnostic) {
+                     return diagnostic.code == "AMB_MULTIBLOCK_EMPTY" &&
+                            diagnostic.span.start.offset ==
+                                with_token.span.start.offset;
+                   })) {
+    error_code(with_token, "AMB_MULTIBLOCK_EMPTY",
+               "`with:` must contain at least one named block entry");
+  }
+  const lexer::Span end_span =
+      entries.empty() ? previous().span : entries.back()->span;
+  auto suffix = ast::make_expr("AstMultiblockSuffix",
+                               ast::join_spans(with_token.span, end_span));
+  suffix->list_field("entries", std::move(entries));
+  return suffix;
 }
 
 std::vector<std::unique_ptr<ast::Expr>>
@@ -4984,6 +5207,86 @@ bool Parser::can_accept_direct_block_suffix(const ast::Expr &expr) const {
     return false;
   }
   return tail->kind == "AstTailDotMember" || tail->kind == "AstTailSafeMember";
+}
+
+bool Parser::starts_multiblock_suffix() const {
+  return check(lexer::TokenKind::Identifier) && current().lexeme == "with" &&
+         peek().kind == lexer::TokenKind::Colon;
+}
+
+bool Parser::has_completed_call_segment(const ast::Expr &expr) const {
+  const ast::Expr *tail = last_postfix_tail(expr);
+  return tail != nullptr &&
+         (tail->kind == "AstTailCall" || tail->kind == "AstTailSafeCall" ||
+          tail->kind == "AstTailDotCall");
+}
+
+bool Parser::has_anonymous_block_channel(const ast::Expr &expr) const {
+  if (expr.kind != "AstPostfixChain") {
+    return false;
+  }
+  const ast::ListField *tails = find_list_field(expr, "tails");
+  if (tails == nullptr) {
+    return false;
+  }
+  for (auto it = tails->values.rbegin(); it != tails->values.rend(); ++it) {
+    const ast::Expr &tail = **it;
+    if (tail.kind == "AstTailBlockSuffix") {
+      return true;
+    }
+    if (tail.kind != "AstTailCall" && tail.kind != "AstTailSafeCall" &&
+        tail.kind != "AstTailDotCall") {
+      continue;
+    }
+    const ast::ListField *args = find_list_field(tail, "args");
+    if (args == nullptr) {
+      return false;
+    }
+    return std::any_of(args->values.begin(), args->values.end(),
+                       [](const std::unique_ptr<ast::Expr> &arg) {
+                         return arg != nullptr && arg->kind == "AstBlockPass";
+                       });
+  }
+  return false;
+}
+
+bool Parser::has_multiblock_suffix(const ast::Expr &expr) const {
+  if (expr.kind != "AstPostfixChain") {
+    return false;
+  }
+  const ast::ListField *tails = find_list_field(expr, "tails");
+  return tails != nullptr &&
+         std::any_of(tails->values.begin(), tails->values.end(),
+                     [](const std::unique_ptr<ast::Expr> &tail) {
+                       return tail != nullptr &&
+                              tail->kind == "AstTailMultiblockSuffix";
+                     });
+}
+
+bool Parser::ampersand_param_has_keyword_colon() const {
+  int depth = 0;
+  for (std::size_t index = current_; index < tokens_.size(); ++index) {
+    const lexer::TokenKind kind = tokens_[index].kind;
+    if (depth == 0 && kind == lexer::TokenKind::Colon) {
+      return true;
+    }
+    if (depth == 0 &&
+        (kind == lexer::TokenKind::Comma || kind == lexer::TokenKind::RParen ||
+         kind == lexer::TokenKind::Newline || kind == lexer::TokenKind::Eof)) {
+      return false;
+    }
+    if (kind == lexer::TokenKind::LParen ||
+        kind == lexer::TokenKind::LBracket ||
+        kind == lexer::TokenKind::LBrace) {
+      ++depth;
+    } else if ((kind == lexer::TokenKind::RParen ||
+                kind == lexer::TokenKind::RBracket ||
+                kind == lexer::TokenKind::RBrace) &&
+               depth > 0) {
+      --depth;
+    }
+  }
+  return false;
 }
 
 bool Parser::is_assignable(const ast::Expr &expr) const {

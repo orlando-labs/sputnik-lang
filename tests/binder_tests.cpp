@@ -782,6 +782,72 @@ void test_bind_call_shape_diagnostics() {
   expect_call_diagnostic_code(unknown, "E2011");
 }
 
+void test_v20_9_named_multiblock_binding() {
+  amber::binder::BindResult bind_result =
+      bind_ok("def request(url, &success:, &error: null)\n");
+  const amber::binder::Signature *signature =
+      signature_by_owner(bind_result.graph, "request");
+  expect(signature != nullptr && signature->params.size() == 3,
+         "named callable signature is bound");
+  expect(signature->params[1].kind == "keyword" &&
+             signature->params[1].source_named_callable &&
+             !signature->params[1].nullable_named_callable &&
+             signature->params[2].source_named_callable &&
+             signature->params[2].nullable_named_callable &&
+             signature->params[2].has_default,
+         "named callable contract metadata survives binding");
+
+  amber::binder::CallBindResult missing = amber::binder::bind_call_shape(
+      *signature, {positional_arg(0)});
+  expect(!missing.ok(), "required named callable is required by call shape");
+  expect_call_diagnostic_code(missing, "AMB_NAMED_CALLABLE_MISSING");
+
+  std::unique_ptr<amber::ast::Expr> multiblock = parse_expr_ok(
+      "request(1) with:\n"
+      "  success:\n"
+      "    _1\n"
+      "  error |problem|:\n"
+      "    problem\n");
+  amber::binder::CallSiteShape shape =
+      amber::binder::extract_call_shape(*multiblock);
+  expect(shape.found && shape.args.size() == 3,
+         "multiblock entries participate in ordinary call shape");
+  expect(shape.args[1].keyword_name == "success" &&
+             shape.args[1].source_multiblock &&
+             shape.args[2].keyword_name == "error" &&
+             shape.args[2].source_multiblock,
+         "multiblock call shape preserves entry names and provenance");
+  expect(amber::binder::bind_call_shape(*signature, shape.args).ok(),
+         "multiblock call shape satisfies named callable parameters");
+
+  amber::binder::BindResult duplicate = bind_any(
+      "request() with:\n"
+      "  success:\n"
+      "    null\n"
+      "  success:\n"
+      "    null\n");
+  expect_diagnostic_code(duplicate, "AMB_MULTIBLOCK_DUPLICATE");
+
+  amber::binder::BindResult explicit_collision = bind_any(
+      "request(success: null) with:\n"
+      "  success:\n"
+      "    null\n");
+  expect_diagnostic_code(explicit_collision,
+                         "AMB_MULTIBLOCK_KEYWORD_DUPLICATE");
+
+  amber::binder::BindResult placeholder_scope = bind_ok(
+      "request() with:\n"
+      "  success:\n"
+      "    _1 + _2\n");
+  const amber::binder::Scope *block =
+      scope_by_kind_owner(placeholder_scope.graph, "block", "block_suffix");
+  expect(block != nullptr && binding_in_scope(placeholder_scope.graph, *block,
+                                              "_1") != nullptr &&
+             binding_in_scope(placeholder_scope.graph, *block, "_2") !=
+                 nullptr,
+         "each named entry gets ordinary block placeholder bindings");
+}
+
 void test_property_bindings_and_conflicts() {
   amber::binder::BindResult bound = bind_ok("prop answer: 42\n"
                                             "answer\n");
@@ -922,6 +988,7 @@ int main() {
   test_bind_call_shape_from_ast_args();
   test_bind_call_auto_assign_plan();
   test_bind_call_shape_diagnostics();
+  test_v20_9_named_multiblock_binding();
   test_property_bindings_and_conflicts();
   test_bare_nullary_diagnostics();
   std::cout << "binder_tests: ok\n";

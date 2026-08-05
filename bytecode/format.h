@@ -311,6 +311,10 @@ inline constexpr std::uint32_t kMethodParamFlagRest = 0x8U;
 // argument not bound to a declared keyword parameter into a frozen, name-
 // indifferent Map. At most one per signature.
 inline constexpr std::uint32_t kMethodParamFlagKwRest = 0x10U;
+// Amber v20.9 named callable keyword parameters (`&name:`). They use the
+// ordinary keyword slot/ABI and add a pre-body callable contract check.
+inline constexpr std::uint32_t kMethodParamFlagNamedCallable = 0x20U;
+inline constexpr std::uint32_t kMethodParamFlagNamedCallableNullable = 0x40U;
 
 // Block/lambda procedures do not have a BcMethod parameter descriptor. Their
 // compact calling-convention metadata therefore lives on BcCode::flags. The

@@ -183,6 +183,8 @@ private:
   std::unique_ptr<ast::Expr> parse_postfix(std::unique_ptr<ast::Expr> expr,
                                            StopMode stop_mode);
   std::unique_ptr<ast::Expr> parse_block_suffix(StopMode stop_mode);
+  std::unique_ptr<ast::Expr> parse_multiblock_suffix(StopMode stop_mode);
+  std::unique_ptr<ast::Expr> parse_named_block_entry(StopMode stop_mode);
   std::vector<std::unique_ptr<ast::Expr>> parse_paren_args(StopMode stop_mode);
   std::vector<std::unique_ptr<ast::Expr>>
   parse_call_arg_list(lexer::TokenKind closing_kind, StopMode stop_mode);
@@ -209,6 +211,11 @@ private:
   std::size_t find_inline_then_delimiter(std::size_t begin) const;
   bool can_accept_bare_call(const ast::Expr &expr) const;
   bool can_accept_direct_block_suffix(const ast::Expr &expr) const;
+  bool starts_multiblock_suffix() const;
+  bool has_completed_call_segment(const ast::Expr &expr) const;
+  bool has_anonymous_block_channel(const ast::Expr &expr) const;
+  bool has_multiblock_suffix(const ast::Expr &expr) const;
+  bool ampersand_param_has_keyword_colon() const;
   bool is_assignable(const ast::Expr &expr) const;
   bool is_optional_bracket_access(const ast::Expr &expr) const;
   bool infix_info(lexer::TokenKind kind, InfixInfo *info) const;

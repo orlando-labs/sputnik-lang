@@ -5687,7 +5687,10 @@ private:
         return false;
       }
       if (kind == bytecode::kSpreadOperandValue) {
-        out->kw_args.push_back({name_symbol_id, std::move(value)});
+        if (!append_keyword_spread_entry(frame, name_symbol_id,
+                                         std::move(value), &out->kw_args)) {
+          return false;
+        }
       } else if (kind == bytecode::kSpreadOperandExpand) {
         if (!append_keyword_spread_entries(frame, value, &out->kw_args)) {
           return false;
@@ -11646,9 +11649,115 @@ private:
       }
       if (((*out_params)[i].flags & bytecode::kMethodParamFlagHasDefault) ==
           0U) {
-        set_fault(frame, "TypeError", "missing required parameter");
+        if (((*out_params)[i].flags &
+             bytecode::kMethodParamFlagNamedCallable) != 0U) {
+          const std::string name =
+              (*out_params)[i].external_name_sym_id < runtime_symbols_.size()
+                  ? runtime_symbols_[(*out_params)[i].external_name_sym_id]
+                  : "<unknown>";
+          set_fault(frame, "KeywordArgumentError",
+                    "missing named callable argument `" + name + "`");
+        } else {
+          set_fault(frame, "TypeError", "missing required parameter");
+        }
         return false;
       }
+    }
+    return true;
+  }
+
+  bool named_callable_value(Frame &frame, const Value &value) {
+    if (value.is_closure() || value.is_native_function() ||
+        value.is_class_object() || value.is_native_error_class()) {
+      return true;
+    }
+    if (value.is_native_type()) {
+      const RuntimeNativeTypeKind kind = value.as_native_type().kind;
+      return type_registry().native_type_call(kind).has_value() ||
+             is_conversion_type(kind);
+    }
+    if (value.is_instance_object()) {
+      const IntrusivePtr<InstanceValue> instance = value.as_instance_object();
+      if (instance == nullptr) {
+        return false;
+      }
+      const bytecode::BcMethod *method = find_method_for_dispatch(
+          frame, instance->class_index, "call", kMethodFlagInstance);
+      return method != nullptr && !fault_.has_value();
+    }
+    return false;
+  }
+
+  std::string named_callable_type_name(const Value &value) const {
+    if (value.is_null()) {
+      return "Null";
+    }
+    if (value.is_integer()) {
+      return "Int";
+    }
+    if (value.is_float()) {
+      return "Float";
+    }
+    if (value.is_bool()) {
+      return "Bool";
+    }
+    if (value.is_string() || value.is_heap_string()) {
+      return "Str";
+    }
+    if (value.is_symbol()) {
+      return "Symbol";
+    }
+    if (value.is_list()) {
+      return "Array";
+    }
+    if (value.is_tuple()) {
+      return "Tuple";
+    }
+    if (value.is_set()) {
+      return "Set";
+    }
+    if (value.is_map()) {
+      return "Map";
+    }
+    if (value.is_instance_object()) {
+      return "Object";
+    }
+    return "Value";
+  }
+
+  bool validate_named_callable_params(
+      Frame &frame, const std::vector<bytecode::MethodParamEntry> &params) {
+    for (std::size_t slot = 0; slot < params.size(); ++slot) {
+      const bytecode::MethodParamEntry &param = params[slot];
+      if ((param.flags & bytecode::kMethodParamFlagNamedCallable) == 0U) {
+        continue;
+      }
+      if (slot >= frame.regs.size()) {
+        set_fault(frame, "VMError",
+                  "named callable parameter slot is out of range");
+        return false;
+      }
+      const Value &value = frame.regs[slot];
+      if (value.is_null() &&
+          (param.flags &
+           bytecode::kMethodParamFlagNamedCallableNullable) != 0U) {
+        continue;
+      }
+      if (named_callable_value(frame, value)) {
+        continue;
+      }
+      if (fault_.has_value()) {
+        return false;
+      }
+      const std::string name =
+          param.external_name_sym_id < runtime_symbols_.size()
+              ? runtime_symbols_[param.external_name_sym_id]
+              : "<unknown>";
+      set_fault(frame, "TypeError",
+                "named callable argument `" + name +
+                    "` must be callable; got " +
+                    named_callable_type_name(value));
+      return false;
     }
     return true;
   }
@@ -11720,7 +11829,7 @@ private:
       }
       ++thunk_index;
     }
-    return true;
+    return validate_named_callable_params(frame, params);
   }
 
   // Non-suspendable property arms: returns the label of the innermost live
@@ -13283,7 +13392,7 @@ private:
 
   bool nonlocal_return_value(
       const Frame &returning_frame,
-      const std::shared_ptr<NonlocalReturnTarget> &target, Value value) {
+      std::shared_ptr<NonlocalReturnTarget> target, Value value) {
     if (target == nullptr ||
         !target->active.load(std::memory_order_acquire)) {
       raise_runtime_error(returning_frame, "LocalJumpError",
@@ -29758,7 +29867,10 @@ private:
         return false;
       }
       if (kind == bytecode::kSpreadOperandValue) {
-        kw_args.push_back({name_symbol_id, std::move(value)});
+        if (!append_keyword_spread_entry(frame, name_symbol_id,
+                                         std::move(value), &kw_args)) {
+          return false;
+        }
       } else if (kind == bytecode::kSpreadOperandExpand) {
         if (!append_keyword_spread_entries(frame, value, &kw_args)) {
           return false;

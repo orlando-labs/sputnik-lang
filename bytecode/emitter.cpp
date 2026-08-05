@@ -1473,6 +1473,12 @@ private:
           } else if (string_field(*param, "kind") == "kw_rest") {
             entry.flags |= kMethodParamFlagKwRest;
           }
+          if (bool_field(*param, "source_named_callable")) {
+            entry.flags |= kMethodParamFlagNamedCallable;
+          }
+          if (bool_field(*param, "nullable_named_callable")) {
+            entry.flags |= kMethodParamFlagNamedCallableNullable;
+          }
           if (!bool_field(*param, "has_default")) {
             method.params.push_back(entry);
             const std::string type_expr = string_field(*param, "type_expr");

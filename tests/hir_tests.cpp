@@ -1386,6 +1386,94 @@ void test_default_param_lowering() {
          "default expression reads local slot");
 }
 
+void test_v20_9_named_multiblock_lowering() {
+  const amber::hir::Program program = lower_ok(
+      "def request(value, tag:, &success:, &error: null):\n"
+      "  value\n"
+      "request(1, tag: 2) with:\n"
+      "  success |result|:\n"
+      "    result\n"
+      "  error:\n"
+      "    _1\n");
+
+  const amber::ast::Expr *method = module_item_by_name(program, "request");
+  expect(method != nullptr, "named callable HMethod exists");
+  const amber::ast::Expr *signature = node_field(*method, "signature");
+  const amber::ast::Expr *success =
+      signature == nullptr ? nullptr : list_item(*signature, "params", 2);
+  const amber::ast::Expr *error =
+      signature == nullptr ? nullptr : list_item(*signature, "params", 3);
+  expect(success != nullptr && bool_field(*success, "source_named_callable") &&
+             !bool_field(*success, "nullable_named_callable"),
+         "required named callable HParam metadata");
+  expect(error != nullptr && bool_field(*error, "source_named_callable") &&
+             bool_field(*error, "nullable_named_callable") &&
+             bool_field(*error, "has_default"),
+         "nullable named callable HParam metadata");
+
+  const amber::hir::Procedure *init =
+      procedure_by_name(program, "__module_init__");
+  expect(init != nullptr && init->body != nullptr,
+         "multiblock module init exists");
+  const amber::ast::Expr *call_stmt = nullptr;
+  for (int index = 0;; ++index) {
+    const amber::ast::Expr *item = list_item(*init->body, "items", index);
+    if (item == nullptr) {
+      break;
+    }
+    if (item->kind == "HLastSet") {
+      const amber::ast::Expr *value = node_field(*item, "expr");
+      if (value != nullptr && value->kind == "HCall") {
+        call_stmt = item;
+      }
+    }
+  }
+  expect(call_stmt != nullptr, "multiblock lowers to ordinary HCall");
+  const amber::ast::Expr *call = node_field(*call_stmt, "expr");
+  expect(call != nullptr && bool_field(*call, "source_multiblock"),
+         "HCall retains multiblock source metadata");
+  expect(node_field(*call, "block") == nullptr,
+         "pure multiblock leaves anonymous block slot empty");
+  const amber::ast::Expr *tag = list_item(*call, "kw_args", 0);
+  const amber::ast::Expr *success_arg = list_item(*call, "kw_args", 1);
+  const amber::ast::Expr *error_arg = list_item(*call, "kw_args", 2);
+  expect(tag != nullptr && string_field(*tag, "name") == "tag" &&
+             !bool_field(*tag, "source_multiblock"),
+         "explicit keyword remains before multiblock closure creation");
+  expect(success_arg != nullptr &&
+             string_field(*success_arg, "name") == "success" &&
+             bool_field(*success_arg, "source_multiblock") &&
+             node_field(*success_arg, "value") != nullptr &&
+             node_field(*success_arg, "value")->kind == "HClosure" &&
+             error_arg != nullptr &&
+             string_field(*error_arg, "name") == "error" &&
+             node_field(*error_arg, "value") != nullptr &&
+             node_field(*error_arg, "value")->kind == "HClosure",
+         "entries lower top-down into ordinary keyword closures");
+}
+
+void test_v20_9_reflective_multiblock_lowering() {
+  const amber::hir::Program program = lower_ok(
+      "def invoke(client):\n"
+      "  send(client, :request, 1) with:\n"
+      "    success:\n"
+      "      _1\n");
+  const amber::hir::Procedure *invoke = procedure_by_name(program, "invoke");
+  const amber::ast::Expr *stmt =
+      invoke == nullptr ? nullptr : list_item(*invoke->body, "items", 0);
+  const amber::ast::Expr *send =
+      stmt == nullptr ? nullptr : node_field(*stmt, "expr");
+  expect(send != nullptr && send->kind == "HSendDyn" &&
+             node_field(*send, "selector_expr") != nullptr &&
+             bool_field(*send, "source_multiblock"),
+         "reflective send accepts a multiblock suffix");
+  const amber::ast::Expr *arg = list_item(*send, "kw_args", 0);
+  expect(arg != nullptr && string_field(*arg, "name") == "success" &&
+             node_field(*arg, "value") != nullptr &&
+             node_field(*arg, "value")->kind == "HClosure",
+         "reflective multiblock uses the ordinary keyword path");
+}
+
 void test_dynamic_pattern_without_with_lowering() {
   const amber::hir::Program program =
       lower_ok("def classify(shape):\n"
@@ -1811,6 +1899,8 @@ int main() {
   test_pattern_assignment_lowering();
   test_index_assignment_lowering();
   test_default_param_lowering();
+  test_v20_9_named_multiblock_lowering();
+  test_v20_9_reflective_multiblock_lowering();
   test_dynamic_pattern_without_with_lowering();
   test_direct_capture_lowering();
   test_indented_block_suffix_lowering();

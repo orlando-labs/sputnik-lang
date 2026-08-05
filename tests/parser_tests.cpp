@@ -1964,6 +1964,110 @@ void test_bare_block_suffix_statement() {
   }
 }
 
+void test_v20_9_named_multiblock_surface() {
+  amber::parser::ParseModuleResult signature = parse_module_raw(
+      "def request(url, &success as Handler:, &error: null, &body):\n"
+      "  null\n");
+  expect(signature.ok(), "named callable signature parses");
+  const Expr &def = *signature.items[0];
+  const amber::ast::ListField &params =
+      list_field(node_field(def, "signature"), "params");
+  expect(params.values.size() == 4, "named callable signature arity");
+  expect(params.values[1]->kind == "AstNamedCallableParameter",
+         "required named callable preserves surface AST");
+  expect(string_field(*params.values[1], "param_kind") == "keyword" &&
+             string_field(*params.values[1], "type_expr") == "Handler" &&
+             bool_field(*params.values[1], "source_named_callable"),
+         "required named callable metadata");
+  expect(params.values[2]->kind == "AstNamedCallableParameter" &&
+             bool_field(*params.values[2], "nullable_by_null_default") &&
+             bool_field(*params.values[2], "nullable_named_callable"),
+         "null default marks optional nullable callable");
+  expect(params.values[3]->kind == "AstParam" &&
+             string_field(*params.values[3], "param_kind") == "block",
+         "final anonymous block parameter remains independent");
+
+  amber::parser::ParseModuleResult call = parse_module_raw(
+      "request(url, success: &handler) with:\n"
+      "  result |value|:\n"
+      "    value\n"
+      "  failed:\n"
+      "    _1\n");
+  expect(call.ok(), "named multiblock call parses");
+  const Expr &chain = node_field(*call.items[0], "expr");
+  const amber::ast::ListField &tails = list_field(chain, "tails");
+  expect(tails.values.size() == 2 &&
+             tails.values[1]->kind == "AstTailMultiblockSuffix",
+         "multiblock is a distinct postfix tail");
+  const Expr &suffix = node_field(*tails.values[1], "suffix");
+  expect(suffix.kind == "AstMultiblockSuffix",
+         "multiblock suffix preserves surface AST");
+  const amber::ast::ListField &entries = list_field(suffix, "entries");
+  expect(entries.values.size() == 2 &&
+             entries.values[0]->kind == "AstNamedBlockEntry" &&
+             string_field(*entries.values[0], "name") == "result" &&
+             string_field(*entries.values[1], "name") == "failed",
+         "arbitrary entry names and source order are preserved");
+  expect(list_field(*entries.values[0], "params").values.size() == 1 &&
+             list_field(*entries.values[1], "params").values.empty(),
+         "explicit and placeholder entry parameter forms stay distinct");
+
+  const amber::ast::ListField &args = list_field(*tails.values[0], "args");
+  expect(args.values[1]->kind == "AstKeywordArg" &&
+             node_field(*args.values[1], "value").kind == "AstCallableRef",
+         "callable reference keyword value is not a block-pass");
+
+  amber::parser::ParseModuleResult contextual =
+      parse_module_raw("with = 1\nwith\n");
+  expect(contextual.ok(), "with remains a contextual identifier");
+}
+
+void test_v20_9_named_multiblock_parser_diagnostics() {
+  expect(has_diagnostic(parse_module_raw(
+                            "callback with:\n"
+                            "  success:\n"
+                            "    null\n"),
+                        "AMB_MULTIBLOCK_TARGET"),
+         "multiblock requires a completed call segment");
+  expect(has_diagnostic(parse_module_raw("callback() with:\n"),
+                        "AMB_MULTIBLOCK_EMPTY"),
+         "empty multiblock is rejected");
+  expect(has_diagnostic(parse_module_raw(
+                            "callback() with:\n"
+                            "  success 1\n"),
+                        "AMB_MULTIBLOCK_ENTRY"),
+         "malformed multiblock entry is rejected");
+  expect(has_diagnostic(parse_module_raw(
+                            "def bad(&@success:):\n"
+                            "  null\n"),
+                        "AMB_NAMED_CALLABLE_PARAM_FORM"),
+         "auto-assign named callable parameter is rejected");
+  expect(has_diagnostic(parse_module_raw(
+                            "def bad(&(left, right):):\n"
+                            "  null\n"),
+                        "AMB_NAMED_CALLABLE_PARAM_FORM"),
+         "pattern named callable parameter is rejected");
+  expect(has_diagnostic(parse_module_raw(
+                            "def bad(&success: *rest):\n"
+                            "  null\n"),
+                        "AMB_NAMED_CALLABLE_PARAM_FORM"),
+         "rest default on a named callable parameter is rejected");
+  expect(has_diagnostic(parse_module_raw(
+                            "operation(&body) with:\n"
+                            "  success:\n"
+                            "    null\n"),
+                        "AMB_MULTIBLOCK_ANON_BLOCK_CONFLICT"),
+         "multiblock conflicts with trailing block-pass");
+  expect(has_diagnostic(parse_module_raw(
+                            "operation():\n"
+                            "  null\n"
+                            "with:\n"
+                            "  success:\n"
+                            "    null\n"),
+                        "AMB_MULTIBLOCK_ANON_BLOCK_CONFLICT"),
+         "multiblock conflicts with anonymous block suffix");
+}
+
 } // namespace
 
 int main() {
@@ -2015,6 +2119,8 @@ int main() {
   test_template_splice_surface();
   test_export_macro_marker();
   test_bare_block_suffix_statement();
+  test_v20_9_named_multiblock_surface();
+  test_v20_9_named_multiblock_parser_diagnostics();
   std::cout << "parser_tests: ok\n";
   return 0;
 }

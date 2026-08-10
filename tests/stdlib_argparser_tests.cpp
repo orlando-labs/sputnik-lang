@@ -110,6 +110,23 @@ void test_options_positionals_and_rest() {
   expect_ok_integer(result, 42, "ArgParser options, positionals, rest");
 }
 
+void test_option_name_normalization_and_explicit_override() {
+  const amber::runtime::ExecutionResult result = execute_source(
+      "parser = ArgParser(cmdline: [\"--pool-size\", \"4\", "
+      "\"--cache-dir\", \"tmp\"])\n"
+      "parser.arg(\"--pool-size\", type: Int)\n"
+      "parser.arg(\"--cache-dir\", name: \"cache_root\")\n"
+      "args = parser.parse_or_raise()\n"
+      "if args[\"pool_size\"] == 4 and "
+      "args[\"cache_root\"] == \"tmp\" and "
+      "not args.has_key?(\"cache_dir\"):\n"
+      "  42\n"
+      "else:\n"
+      "  0\n");
+  expect_ok_integer(result, 42,
+                    "ArgParser normalizes option names and honors overrides");
+}
+
 void test_result_mode_choices_and_help() {
   const amber::runtime::ExecutionResult result = execute_source(
       "bad_parser = ArgParser(cmdline: [\"--mode\", \"staging\"])\n"
@@ -402,6 +419,7 @@ void test_default_cmdline_uses_process_arguments() {
 
 int main() {
   test_options_positionals_and_rest();
+  test_option_name_normalization_and_explicit_override();
   test_result_mode_choices_and_help();
   test_env_multiple_negatable_and_defaults();
   test_cmdline_override_and_local_converter();

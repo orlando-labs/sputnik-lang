@@ -367,7 +367,7 @@ def arguments():
   parser.arg("--host", default: "127.0.0.1")
   parser.arg("--port", type: Int, default: 3340)
   parser.arg("--workers", type: Int, default: 4)
-  parser.arg("--pool-size", name: "pool_size", type: Int, default: 1)
+  parser.arg("--pool-size", type: Int, default: 1)
   parser.parse_or_raise()
 
 def main():

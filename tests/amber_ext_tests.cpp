@@ -603,6 +603,11 @@ void test_native_extension_thunk_import() {
          "native extension thunks import into RuntimeDispatchRegistry");
   expect(dispatch.native_package_thunk("pkg.missing") == nullptr,
          "imported native extension thunk map preserves misses");
+  const auto resolved = extension_registry.resolve_thunk("pkg.fn");
+  expect(resolved.has_value() && resolved->fn == &marker,
+         "fully-native hosts can resolve a registered thunk directly");
+  expect(!extension_registry.resolve_thunk("pkg.missing").has_value(),
+         "direct thunk lookup preserves misses");
 }
 
 void test_native_extension_runtime_contributions() {
@@ -673,6 +678,64 @@ AmberStatus direct_increment(AmberCtx *cx, const AmberValue *args,
   }
   *out = amber_make_int(cx, value + 1);
   return AMBER_OK;
+}
+
+struct DirectIntArena {
+  std::vector<std::int64_t> values;
+  std::string error_name;
+  std::string error_message;
+
+  AmberValue push(std::int64_t value) {
+    values.push_back(value);
+    return reinterpret_cast<AmberValue>(
+        static_cast<std::uintptr_t>(values.size()));
+  }
+  bool resolve(AmberValue handle, std::int64_t *out) const {
+    const std::uintptr_t raw = reinterpret_cast<std::uintptr_t>(handle);
+    if (raw == 0U || raw > values.size()) {
+      return false;
+    }
+    *out = values[raw - 1U];
+    return true;
+  }
+};
+
+int direct_int_as_int(void *opaque, AmberValue value, std::int64_t *out) {
+  return static_cast<DirectIntArena *>(opaque)->resolve(value, out) ? 1 : 0;
+}
+AmberValue direct_int_make_int(void *opaque, std::int64_t value) {
+  return static_cast<DirectIntArena *>(opaque)->push(value);
+}
+AmberStatus direct_int_fault(void *opaque, const char *name,
+                             const char *message) {
+  auto *arena = static_cast<DirectIntArena *>(opaque);
+  arena->error_name = name == nullptr ? "RuntimeError" : name;
+  arena->error_message = message == nullptr ? "" : message;
+  return AMBER_ERR;
+}
+
+void test_direct_amber_ctx_dispatch() {
+  amber::runtime::AmberExtDirectOps ops;
+  ops.as_int = &direct_int_as_int;
+  ops.make_int = &direct_int_make_int;
+  ops.fault = &direct_int_fault;
+
+  DirectIntArena arena;
+  const AmberValue input = arena.push(41);
+  const amber::runtime::AmberExtDirectCallOutcome result =
+      amber::runtime::amber_ext_invoke_direct_free(
+          ops, &arena, &direct_increment, &input, 1U);
+  std::int64_t output = 0;
+  expect(result.status == AMBER_OK && arena.resolve(result.value, &output) &&
+             output == 42,
+         "direct AmberCtx dispatch keeps values in the owner arena");
+
+  const amber::runtime::AmberExtDirectCallOutcome faulted =
+      amber::runtime::amber_ext_invoke_direct_free(
+          ops, &arena, &direct_increment, nullptr, 0U);
+  expect(faulted.status == AMBER_ERR && arena.error_name == "TypeError" &&
+             arena.error_message == "increment expects one Int",
+         "direct AmberCtx dispatch records thunk faults in its backend");
 }
 
 AmberStatus blocking_thread_probe(AmberCtx *cx, const AmberValue * /*args*/,
@@ -767,6 +830,7 @@ int main() {
   test_native_extension_type_import();
   test_native_extension_thunk_import();
   test_native_extension_runtime_contributions();
+  test_direct_amber_ctx_dispatch();
   test_runtime_world_direct_native_extension_call();
   std::cout << "amber_ext_tests: ok\n";
   return 0;

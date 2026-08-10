@@ -16,6 +16,7 @@
 #include "runtime/stdlib_registry.h" // StdlibHost, NativeTagRegistry, Value
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -37,6 +38,11 @@ using NativeExtErrorDescriptor = RuntimeNativePackageErrorDescriptor;
 // reinterpret_casts the pointer to `AmberFreeFn` / `AmberMethodFn`.
 class NativeExtRegistry {
 public:
+  struct ResolvedThunk {
+    void *fn = nullptr;
+    bool blocking = false;
+  };
+
   void register_thunk(const std::string &logical, void *fn);
   void register_type(NativeTypeDescriptor descriptor);
   void register_error(NativeExtErrorDescriptor descriptor);
@@ -49,6 +55,9 @@ public:
   void register_runtime_contributions(RuntimeDispatchRegistry &dispatch,
                                       RuntimeTypeRegistry &types,
                                       RuntimeErrorRegistry &errors) const;
+  std::optional<ResolvedThunk>
+  resolve_thunk(const std::string &logical) const;
+  const NativeTypeDescriptor *find_type(const std::string &tag) const;
 
   // The single process-global instance the native host fills and runtime worlds
   // import from.
@@ -65,6 +74,62 @@ struct NativeExtCallOutcome {
   bool ok = false;
   Value value = Value::null();
 };
+
+// Backend-neutral operations for an AmberCtx driven by a fully-native host.
+// The public C ABI keeps AmberCtx/AmberValue opaque; generated native code owns
+// the value arena and supplies these operations so a C thunk can work directly
+// on NativeValue without round-tripping through RuntimeWorld and a VM frame.
+// This is an in-tree C++ contract, not part of the stable extension ABI.
+struct AmberExtDirectOps {
+  int (*is_null)(void *, AmberValue) = nullptr;
+  int (*is_bool)(void *, AmberValue) = nullptr;
+  int (*is_int)(void *, AmberValue) = nullptr;
+  int (*is_float)(void *, AmberValue) = nullptr;
+  int (*is_str)(void *, AmberValue) = nullptr;
+  int (*is_bytes)(void *, AmberValue) = nullptr;
+  int (*is_list)(void *, AmberValue) = nullptr;
+  int (*is_handle)(void *, AmberValue) = nullptr;
+
+  int (*as_bool)(void *, AmberValue, int *) = nullptr;
+  int (*as_int)(void *, AmberValue, std::int64_t *) = nullptr;
+  int (*as_float)(void *, AmberValue, double *) = nullptr;
+  int (*str_view)(void *, AmberValue, const char **, std::size_t *) = nullptr;
+  int (*bytes_view)(void *, AmberValue, const std::uint8_t **,
+                    std::size_t *) = nullptr;
+  std::size_t (*list_len)(void *, AmberValue) = nullptr;
+  AmberValue (*list_at)(void *, AmberValue, std::size_t) = nullptr;
+  int (*handle_ptr)(void *, AmberValue, const char *, void **) = nullptr;
+
+  AmberValue (*make_null)(void *) = nullptr;
+  AmberValue (*make_bool)(void *, int) = nullptr;
+  AmberValue (*make_int)(void *, std::int64_t) = nullptr;
+  AmberValue (*make_float)(void *, double) = nullptr;
+  AmberValue (*make_str)(void *, const char *, std::size_t) = nullptr;
+  AmberValue (*make_bytes)(void *, const std::uint8_t *, std::size_t) = nullptr;
+  AmberValue (*make_list)(void *, const AmberValue *, std::size_t) = nullptr;
+  AmberValue (*make_handle)(void *, const char *, void *) = nullptr;
+
+  AmberStatus (*fault)(void *, const char *, const char *) = nullptr;
+  AmberStatus (*call_block)(void *, AmberValue, const AmberValue *,
+                            std::size_t, AmberValue *) = nullptr;
+};
+
+struct AmberExtDirectCallOutcome {
+  AmberStatus status = AMBER_ERR;
+  AmberValue value = nullptr;
+};
+
+// Stack-construct an AmberCtx backed by `ops`, invoke a linked C thunk, and
+// return its opaque result handle. The generated owner resolves that handle
+// from its NativeValue arena before the arena goes out of scope.
+AmberExtDirectCallOutcome
+amber_ext_invoke_direct_free(const AmberExtDirectOps &ops, void *state,
+                             AmberFreeFn fn, const AmberValue *args,
+                             std::size_t argc);
+AmberExtDirectCallOutcome
+amber_ext_invoke_direct_method(const AmberExtDirectOps &ops, void *state,
+                               AmberMethodFn fn, AmberValue self,
+                               const AmberValue *args, std::size_t argc);
 
 // Build an AmberCtx over (host, frame, tags), marshal `args` (and `self` for a
 // method) into the per-call arena, invoke the thunk, and marshal the result

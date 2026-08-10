@@ -1,15 +1,10 @@
 // Implementation of the native-extension ABI (runtime/amber_ext.h) and its
 // in-tree driver surface (runtime/amber_ext_runtime.h).
 //
-// Decision 1 (DESIGN-native-packages-5c-dispatch-2026-06-21): an `AmberValue`
-// is an opaque handle into a per-call arena of runtime `Value`s owned by an
-// `AmberCtx`. The ctx wraps the active VM frame (type-erased), the `StdlibHost`
-// facade, and the foreign-handle `NativeTagRegistry`. Every amber_ext.h
-// function is a thin shim over those: builders push a `Value`, readers read
-// one, faults and block calls forward to the host. Extension calls therefore
-// execute in the VM lane on runtime `Value`s; the emitted native lane reaches
-// them through the existing per-function VM bridge, so `NativeValue` is never
-// involved.
+// `AmberValue` is an opaque handle into a per-call arena owned by AmberCtx. VM
+// calls use the runtime::Value arena below. Fully-native generated code supplies
+// AmberExtDirectOps over its NativeValue arena, keeping the stable C ABI while
+// avoiding a RuntimeWorld/VM round-trip for every extension leaf.
 
 #include "runtime/amber_ext_runtime.h"
 
@@ -52,6 +47,8 @@ struct AmberCtx {
   amber::runtime::StdlibHost *host = nullptr;
   const void *frame = nullptr;
   const amber::runtime::NativeTagRegistry *tags = nullptr;
+  const amber::runtime::AmberExtDirectOps *direct_ops = nullptr;
+  void *direct_state = nullptr;
   // The per-call value arena. `AmberValue` is a 1-based index encoded as a
   // pointer, so reallocation here never invalidates a handle.
   std::vector<Value> arena;
@@ -84,33 +81,60 @@ extern "C" {
 // ---- value predicates ---------------------------------------------------
 
 int amber_is_null(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_null(cx->direct_state, value);
+  }
   return cx->resolve(value).is_null() ? 1 : 0;
 }
 int amber_is_bool(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_bool(cx->direct_state, value);
+  }
   return cx->resolve(value).is_bool() ? 1 : 0;
 }
 int amber_is_int(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_int(cx->direct_state, value);
+  }
   return cx->resolve(value).is_integer() ? 1 : 0;
 }
 int amber_is_float(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_float(cx->direct_state, value);
+  }
   return cx->resolve(value).is_float() ? 1 : 0;
 }
 int amber_is_str(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_str(cx->direct_state, value);
+  }
   return cx->resolve(value).is_string() ? 1 : 0;
 }
 int amber_is_bytes(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_bytes(cx->direct_state, value);
+  }
   return value_is_bytes(cx->resolve(value)) ? 1 : 0;
 }
 int amber_is_list(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_list(cx->direct_state, value);
+  }
   return cx->resolve(value).is_list() ? 1 : 0;
 }
 int amber_is_handle(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->is_handle(cx->direct_state, value);
+  }
   return cx->resolve(value).is_foreign_handle() ? 1 : 0;
 }
 
 // ---- readers ------------------------------------------------------------
 
 int amber_as_bool(AmberCtx *cx, AmberValue value, int *out) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->as_bool(cx->direct_state, value, out);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_bool()) {
     return 0;
@@ -119,6 +143,9 @@ int amber_as_bool(AmberCtx *cx, AmberValue value, int *out) {
   return 1;
 }
 int amber_as_int(AmberCtx *cx, AmberValue value, int64_t *out) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->as_int(cx->direct_state, value, out);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_integer()) {
     return 0;
@@ -127,6 +154,9 @@ int amber_as_int(AmberCtx *cx, AmberValue value, int64_t *out) {
   return 1;
 }
 int amber_as_float(AmberCtx *cx, AmberValue value, double *out) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->as_float(cx->direct_state, value, out);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_float()) {
     return 0;
@@ -137,6 +167,9 @@ int amber_as_float(AmberCtx *cx, AmberValue value, double *out) {
 
 int amber_str_view(AmberCtx *cx, AmberValue value, const char **ptr,
                    size_t *len) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->str_view(cx->direct_state, value, ptr, len);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_string()) {
     return 0;
@@ -154,6 +187,9 @@ int amber_str_view(AmberCtx *cx, AmberValue value, const char **ptr,
 
 int amber_bytes_view(AmberCtx *cx, AmberValue value, const uint8_t **ptr,
                      size_t *len) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->bytes_view(cx->direct_state, value, ptr, len);
+  }
   const Value &v = cx->resolve(value);
   if (!value_is_bytes(v)) {
     return 0;
@@ -167,6 +203,9 @@ int amber_bytes_view(AmberCtx *cx, AmberValue value, const uint8_t **ptr,
 }
 
 size_t amber_list_len(AmberCtx *cx, AmberValue value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->list_len(cx->direct_state, value);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_list()) {
     return 0;
@@ -176,6 +215,9 @@ size_t amber_list_len(AmberCtx *cx, AmberValue value) {
   return list == nullptr ? 0 : list->items.size();
 }
 AmberValue amber_list_at(AmberCtx *cx, AmberValue value, size_t index) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->list_at(cx->direct_state, value, index);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_list()) {
     return cx->push(Value::null());
@@ -190,6 +232,9 @@ AmberValue amber_list_at(AmberCtx *cx, AmberValue value, size_t index) {
 
 int amber_handle_ptr(AmberCtx *cx, AmberValue value, const char *tag,
                      void **out) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->handle_ptr(cx->direct_state, value, tag, out);
+  }
   const Value &v = cx->resolve(value);
   if (!v.is_foreign_handle()) {
     cx->host->stdlib_raise_runtime_error(cx->frame, "TypeError",
@@ -219,26 +264,49 @@ int amber_handle_ptr(AmberCtx *cx, AmberValue value, const char *tag,
 
 // ---- builders -----------------------------------------------------------
 
-AmberValue amber_make_null(AmberCtx *cx) { return cx->push(Value::null()); }
+AmberValue amber_make_null(AmberCtx *cx) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_null(cx->direct_state);
+  }
+  return cx->push(Value::null());
+}
 AmberValue amber_make_bool(AmberCtx *cx, int value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_bool(cx->direct_state, value);
+  }
   return cx->push(Value::boolean(value != 0));
 }
 AmberValue amber_make_int(AmberCtx *cx, int64_t value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_int(cx->direct_state, value);
+  }
   return cx->push(Value::integer(value));
 }
 AmberValue amber_make_float(AmberCtx *cx, double value) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_float(cx->direct_state, value);
+  }
   return cx->push(Value::floating(value));
 }
 AmberValue amber_make_str(AmberCtx *cx, const char *ptr, size_t len) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_str(cx->direct_state, ptr, len);
+  }
   return cx->push(cx->host->stdlib_string_value_from_text(
       std::string(ptr == nullptr ? "" : ptr, ptr == nullptr ? 0 : len)));
 }
 AmberValue amber_make_bytes(AmberCtx *cx, const uint8_t *ptr, size_t len) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_bytes(cx->direct_state, ptr, len);
+  }
   return cx->push(cx->host->stdlib_bytes_value_from_bytes(std::string(
       reinterpret_cast<const char *>(ptr), ptr == nullptr ? 0 : len)));
 }
 AmberValue amber_make_list(AmberCtx *cx, const AmberValue *items,
                            size_t count) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_list(cx->direct_state, items, count);
+  }
   std::vector<Value> values;
   values.reserve(count);
   for (size_t i = 0; i < count; ++i) {
@@ -248,6 +316,9 @@ AmberValue amber_make_list(AmberCtx *cx, const AmberValue *items,
 }
 
 AmberValue amber_make_handle(AmberCtx *cx, const char *tag, void *ptr) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->make_handle(cx->direct_state, tag, ptr);
+  }
   const std::string tag_str = tag == nullptr ? std::string() : tag;
   const amber::runtime::NativeTypeDescriptor *descriptor =
       cx->tags == nullptr ? nullptr : cx->tags->lookup(tag_str);
@@ -291,6 +362,9 @@ AmberValue amber_make_handle(AmberCtx *cx, const char *tag, void *ptr) {
 
 AmberStatus amber_fault(AmberCtx *cx, const char *error_class,
                         const char *message) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->fault(cx->direct_state, error_class, message);
+  }
   // Rescuable: maps to an Amber error class an enclosing `rescue` can catch
   // (native-packages design §6), not a terminal fault.
   cx->host->stdlib_raise_runtime_error(
@@ -302,6 +376,10 @@ AmberStatus amber_fault(AmberCtx *cx, const char *error_class,
 AmberStatus amber_call_block(AmberCtx *cx, AmberValue block,
                              const AmberValue *args, size_t argc,
                              AmberValue *out) {
+  if (cx->direct_ops != nullptr) {
+    return cx->direct_ops->call_block(cx->direct_state, block, args, argc,
+                                      out);
+  }
   std::vector<Value> block_args;
   block_args.reserve(argc);
   for (size_t i = 0; i < argc; ++i) {
@@ -333,6 +411,30 @@ uint32_t amber_ext_abi_version(void) { return AMBER_EXT_ABI_VERSION; }
 } // extern "C"
 
 namespace amber::runtime {
+
+AmberExtDirectCallOutcome
+amber_ext_invoke_direct_free(const AmberExtDirectOps &ops, void *state,
+                             AmberFreeFn fn, const AmberValue *args,
+                             std::size_t argc) {
+  AmberCtx ctx;
+  ctx.direct_ops = &ops;
+  ctx.direct_state = state;
+  AmberExtDirectCallOutcome outcome;
+  outcome.status = fn(&ctx, args, argc, &outcome.value);
+  return outcome;
+}
+
+AmberExtDirectCallOutcome
+amber_ext_invoke_direct_method(const AmberExtDirectOps &ops, void *state,
+                               AmberMethodFn fn, AmberValue self,
+                               const AmberValue *args, std::size_t argc) {
+  AmberCtx ctx;
+  ctx.direct_ops = &ops;
+  ctx.direct_state = state;
+  AmberExtDirectCallOutcome outcome;
+  outcome.status = fn(&ctx, self, args, argc, &outcome.value);
+  return outcome;
+}
 
 // ---- process-global registration ---------------------------------------
 
@@ -435,6 +537,27 @@ void NativeExtRegistry::register_runtime_contributions(
   contribute_to(descriptor);
   register_runtime_native_package_descriptor(dispatch, types, errors,
                                             descriptor);
+}
+std::optional<NativeExtRegistry::ResolvedThunk>
+NativeExtRegistry::resolve_thunk(const std::string &logical) const {
+  const auto found = std::find_if(
+      descriptor_.thunks.begin(), descriptor_.thunks.end(),
+      [&](const RuntimeNativePackageThunkDescriptor &descriptor) {
+        return descriptor.logical == logical;
+      });
+  if (found == descriptor_.thunks.end()) {
+    return std::nullopt;
+  }
+  return ResolvedThunk{found->fn, found->blocking};
+}
+const NativeTypeDescriptor *
+NativeExtRegistry::find_type(const std::string &tag) const {
+  const auto found = std::find_if(
+      descriptor_.types.begin(), descriptor_.types.end(),
+      [&](const NativeTypeDescriptor &descriptor) {
+        return descriptor.tag == tag;
+      });
+  return found == descriptor_.types.end() ? nullptr : &*found;
 }
 NativeExtRegistry &NativeExtRegistry::global() {
   static NativeExtRegistry registry;

@@ -7951,6 +7951,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include <filesystem>\n";
   out << "#include <fstream>\n";
   out << "#include <functional>\n";
+  out << "#include <future>\n";
   out << "#include <iomanip>\n";
   out << "#include <initializer_list>\n";
   out << "#include <iostream>\n";
@@ -10446,8 +10447,7 @@ static void native_collect_finished_cycles() {
     out << "static NativeValue amber_native_bridge_execution_result("
            "const amber::runtime::ExecutionResult &result);\n";
   }
-  if (!plan.vm_callable_code_ids.empty() ||
-      !plan.native_extension_code_ids.empty()) {
+  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
     out << "struct NativeTaskLocalStoredValueHolder final : "
            "amber::runtime::RuntimeTaskLocalStoredValueBase {\n";
     out << "  NativeValue value;\n";
@@ -19559,8 +19559,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "NativeClosure *current_closure, "
          "NativeHandlerSeed *handler_seed = nullptr, "
          "bool cycle_boundary = true) {\n";
-  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty() ||
-      !plan.native_extension_code_ids.empty()) {
+  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
     out << "  AmberNativeBridgeRequestStateScope bridge_state_scope("
            "cycle_boundary);\n";
   }
@@ -22097,8 +22096,7 @@ static NativeValue native_channel_send(
          "amber::runtime::RuntimeTaskLocalStoredValue<NativeValue>>("
          "stored_binding->value);\n";
   out << "      if (typed != nullptr) return typed->value;\n";
-  if (!plan.vm_callable_code_ids.empty() ||
-      !plan.native_extension_code_ids.empty()) {
+  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
     out << "      const auto native_holder = std::dynamic_pointer_cast<"
            "NativeTaskLocalStoredValueHolder>(stored_binding->value);\n";
     out << "      if (native_holder != nullptr) return native_holder->value;\n";
@@ -22127,8 +22125,7 @@ static NativeValue native_channel_send(
   out << "    if (selector == \"set!\" && args.size() == 1U && "
          "kwargs.empty() && block.tag == NativeValue::Tag::Null) {\n";
   out << "      NativeValue value = *args.begin();\n";
-  if (!plan.vm_callable_code_ids.empty() ||
-      !plan.native_extension_code_ids.empty()) {
+  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
     out << "      context->set(local.key, std::make_shared<"
            "NativeTaskLocalStoredValueHolder>(value));\n";
   } else {
@@ -22149,8 +22146,7 @@ static NativeValue native_channel_send(
          "local.key.slot_id()));\n";
   out << "    if (selector == \"with\" && args.size() == 1U && "
          "kwargs.empty() && block.tag != NativeValue::Tag::Null) {\n";
-  if (!plan.vm_callable_code_ids.empty() ||
-      !plan.native_extension_code_ids.empty()) {
+  if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
     out << "      const std::uint64_t token = context->push_scope("
            "local.key, std::make_shared<NativeTaskLocalStoredValueHolder>("
            "*args.begin()));\n";
@@ -23430,37 +23426,411 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
       out << "}\n\n";
     }
     if (!plan.native_extension_code_ids.empty()) {
+      out << R"AMBERCPP(struct AmberNativeExtensionState {
+  std::vector<NativeValue> arena;
+  std::optional<NativeRaised> raised;
+  std::string error_name;
+  std::string error_message;
+
+  AmberValue push(NativeValue value) {
+    arena.push_back(std::move(value));
+    return reinterpret_cast<AmberValue>(
+        static_cast<std::uintptr_t>(arena.size()));
+  }
+  const NativeValue &resolve(AmberValue handle) const {
+    const std::uintptr_t raw = reinterpret_cast<std::uintptr_t>(handle);
+    if (raw == 0U || raw > arena.size()) {
+      static const NativeValue null_value = NativeValue::nullv();
+      return null_value;
+    }
+    return arena[raw - 1U];
+  }
+  AmberStatus fail(const char *name, const char *message) {
+    error_name = name == nullptr ? "RuntimeError" : name;
+    error_message = message == nullptr ? "" : message;
+    return AMBER_ERR;
+  }
+};
+
+static AmberNativeExtensionState *amber_native_ext_state(void *opaque) {
+  return static_cast<AmberNativeExtensionState *>(opaque);
+}
+static int amber_native_ext_is_null(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::Null
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_bool(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::Bool
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_int(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::Integer
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_float(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::Float
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_str(void *opaque, AmberValue value) {
+  return native_value_is_string(amber_native_ext_state(opaque)->resolve(value))
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_bytes(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::Bytes
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_list(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::List
+             ? 1
+             : 0;
+}
+static int amber_native_ext_is_handle(void *opaque, AmberValue value) {
+  return amber_native_ext_state(opaque)->resolve(value).tag ==
+                 NativeValue::Tag::ForeignHandle
+             ? 1
+             : 0;
+}
+static int amber_native_ext_as_bool(void *opaque, AmberValue value, int *out) {
+  const NativeValue &resolved = amber_native_ext_state(opaque)->resolve(value);
+  if (resolved.tag != NativeValue::Tag::Bool) return 0;
+  *out = resolved.scalar_value != 0 ? 1 : 0;
+  return 1;
+}
+static int amber_native_ext_as_int(void *opaque, AmberValue value,
+                                   std::int64_t *out) {
+  const NativeValue &resolved = amber_native_ext_state(opaque)->resolve(value);
+  if (resolved.tag != NativeValue::Tag::Integer) return 0;
+  *out = resolved.scalar_value;
+  return 1;
+}
+static int amber_native_ext_as_float(void *opaque, AmberValue value,
+                                     double *out) {
+  const NativeValue &resolved = amber_native_ext_state(opaque)->resolve(value);
+  if (resolved.tag != NativeValue::Tag::Float) return 0;
+  *out = resolved.float_value;
+  return 1;
+}
+static int amber_native_ext_str_view(void *opaque, AmberValue value,
+                                     const char **ptr, std::size_t *len) {
+  const NativeValue &resolved = amber_native_ext_state(opaque)->resolve(value);
+  if (!native_value_is_string(resolved)) return 0;
+  const std::string &text = native_string_text(resolved);
+  *ptr = text.data();
+  *len = text.size();
+  return 1;
+}
+static int amber_native_ext_bytes_view(void *opaque, AmberValue value,
+                                       const std::uint8_t **ptr,
+                                       std::size_t *len) {
+  const NativeValue &resolved = amber_native_ext_state(opaque)->resolve(value);
+  if (resolved.tag != NativeValue::Tag::Bytes) return 0;
+  const std::string &bytes = as_bytes(resolved).bytes;
+  *ptr = reinterpret_cast<const std::uint8_t *>(bytes.data());
+  *len = bytes.size();
+  return 1;
+}
+static std::size_t amber_native_ext_list_len(void *opaque, AmberValue value) {
+  const NativeValue &resolved = amber_native_ext_state(opaque)->resolve(value);
+  return resolved.tag == NativeValue::Tag::List
+             ? as_list(resolved).items.size()
+             : 0U;
+}
+static AmberValue amber_native_ext_list_at(void *opaque, AmberValue value,
+                                           std::size_t index) {
+  AmberNativeExtensionState *state = amber_native_ext_state(opaque);
+  const NativeValue &resolved = state->resolve(value);
+  if (resolved.tag != NativeValue::Tag::List ||
+      index >= as_list(resolved).items.size()) {
+    return state->push(NativeValue::nullv());
+  }
+  return state->push(as_list(resolved).items[index]);
+}
+static int amber_native_ext_handle_ptr(void *opaque, AmberValue value,
+                                       const char *tag, void **out) {
+  AmberNativeExtensionState *state = amber_native_ext_state(opaque);
+  const NativeValue &resolved = state->resolve(value);
+  if (resolved.tag != NativeValue::Tag::ForeignHandle) {
+    state->fail("TypeError", "expected a native handle");
+    return 0;
+  }
+  const auto runtime_handle =
+      as_native_foreign_handle(resolved)->value.as_foreign_handle();
+  if (runtime_handle == nullptr) {
+    state->fail("TypeError", "native handle is null");
+    return 0;
+  }
+  if (tag != nullptr && runtime_handle->tag != tag) {
+    state->fail("TypeError", "native handle tag mismatch");
+    return 0;
+  }
+  if (!runtime_handle->live) {
+    state->fail("LifetimeError", "native handle used after destroy!");
+    return 0;
+  }
+  *out = runtime_handle->ptr;
+  return 1;
+}
+static AmberValue amber_native_ext_make_null(void *opaque) {
+  return amber_native_ext_state(opaque)->push(NativeValue::nullv());
+}
+static AmberValue amber_native_ext_make_bool(void *opaque, int value) {
+  return amber_native_ext_state(opaque)->push(
+      NativeValue::boolean(value != 0));
+}
+static AmberValue amber_native_ext_make_int(void *opaque,
+                                            std::int64_t value) {
+  return amber_native_ext_state(opaque)->push(NativeValue::integer(value));
+}
+static AmberValue amber_native_ext_make_float(void *opaque, double value) {
+  return amber_native_ext_state(opaque)->push(NativeValue::floating(value));
+}
+static AmberValue amber_native_ext_make_str(void *opaque, const char *ptr,
+                                            std::size_t len) {
+  return amber_native_ext_state(opaque)->push(NativeValue::heap_string(
+      std::string(ptr == nullptr ? "" : ptr, ptr == nullptr ? 0U : len)));
+}
+static AmberValue amber_native_ext_make_bytes(void *opaque,
+                                              const std::uint8_t *ptr,
+                                              std::size_t len) {
+  const char *bytes =
+      ptr == nullptr ? "" : reinterpret_cast<const char *>(ptr);
+  return amber_native_ext_state(opaque)->push(
+      NativeValue::bytes(std::string(bytes, ptr == nullptr ? 0U : len)));
+}
+static AmberValue amber_native_ext_make_list(void *opaque,
+                                             const AmberValue *items,
+                                             std::size_t count) {
+  AmberNativeExtensionState *state = amber_native_ext_state(opaque);
+  std::vector<NativeValue> values;
+  values.reserve(count);
+  for (std::size_t index = 0; index < count; ++index) {
+    values.push_back(state->resolve(items[index]));
+  }
+  return state->push(NativeValue::list(std::move(values)));
+}
+static AmberValue amber_native_ext_make_handle(void *opaque, const char *tag,
+                                               void *ptr) {
+  AmberNativeExtensionState *state = amber_native_ext_state(opaque);
+  const std::string tag_text = tag == nullptr ? std::string() : tag;
+  const amber::runtime::NativeTypeDescriptor *descriptor =
+      amber::runtime::NativeExtRegistry::global().find_type(tag_text);
+  if (descriptor == nullptr) {
+    state->fail("TypeError",
+                ("unknown native handle tag '" + tag_text + "'").c_str());
+    return state->push(NativeValue::nullv());
+  }
+  auto handle = std::make_shared<amber::runtime::RuntimeForeignHandle>();
+  handle->tag = tag_text;
+  handle->ptr = ptr;
+  handle->ownership = descriptor->ownership;
+  switch (descriptor->ownership) {
+  case amber::runtime::RuntimeForeignHandle::Ownership::Owned: {
+    void (*destroy)(void *, void *) = descriptor->owned_destructor;
+    handle->teardown = [destroy](void *ctx, void *resource) {
+      if (destroy != nullptr) destroy(ctx, resource);
+    };
+    break;
+  }
+  case amber::runtime::RuntimeForeignHandle::Ownership::Collected: {
+    void (*reclaim)(void *) = descriptor->collected_reclaim;
+    handle->teardown = [reclaim](void *, void *resource) {
+      if (reclaim != nullptr) reclaim(resource);
+    };
+    break;
+  }
+  case amber::runtime::RuntimeForeignHandle::Ownership::Borrowed:
+    break;
+  }
+  amber::runtime::Value runtime_value =
+      amber::runtime::Value::foreign_handle(std::move(handle));
+  try {
+    const std::uint32_t class_index =
+        amber_native_bridge_foreign_class_index(runtime_value);
+    return state->push(
+        NativeValue::foreign_handle(std::move(runtime_value), class_index));
+  } catch (const std::exception &error) {
+    state->fail("TypeError", error.what());
+  } catch (...) {
+    state->fail("TypeError", "native handle class is unavailable");
+  }
+  return state->push(NativeValue::nullv());
+}
+static AmberStatus amber_native_ext_fault(void *opaque, const char *name,
+                                          const char *message) {
+  return amber_native_ext_state(opaque)->fail(name, message);
+}
+static AmberStatus amber_native_ext_call_block(void *opaque, AmberValue block,
+                                               const AmberValue *args,
+                                               std::size_t argc,
+                                               AmberValue *out) {
+  AmberNativeExtensionState *state = amber_native_ext_state(opaque);
+  std::vector<NativeValue> block_args;
+  block_args.reserve(argc);
+  for (std::size_t index = 0; index < argc; ++index) {
+    block_args.push_back(state->resolve(args[index]));
+  }
+  try {
+    NativeValue result = amber_native_call_value(
+        state->resolve(block), block_args, {}, NativeValue::nullv());
+    *out = state->push(std::move(result));
+    return AMBER_OK;
+  } catch (const NativeRaised &raised) {
+    state->raised.emplace(raised);
+  } catch (const amber::runtime::RuntimeTaskCancelled &) {
+    state->fail("CancelledError", "task cancelled");
+  } catch (const std::exception &error) {
+    state->fail("RuntimeError", error.what());
+  } catch (...) {
+    state->fail("RuntimeError", "native block callback failed");
+  }
+  return AMBER_ERR;
+}
+static const amber::runtime::AmberExtDirectOps &amber_native_ext_ops() {
+  static const auto ops = [] {
+    amber::runtime::AmberExtDirectOps value;
+    value.is_null = &amber_native_ext_is_null;
+    value.is_bool = &amber_native_ext_is_bool;
+    value.is_int = &amber_native_ext_is_int;
+    value.is_float = &amber_native_ext_is_float;
+    value.is_str = &amber_native_ext_is_str;
+    value.is_bytes = &amber_native_ext_is_bytes;
+    value.is_list = &amber_native_ext_is_list;
+    value.is_handle = &amber_native_ext_is_handle;
+    value.as_bool = &amber_native_ext_as_bool;
+    value.as_int = &amber_native_ext_as_int;
+    value.as_float = &amber_native_ext_as_float;
+    value.str_view = &amber_native_ext_str_view;
+    value.bytes_view = &amber_native_ext_bytes_view;
+    value.list_len = &amber_native_ext_list_len;
+    value.list_at = &amber_native_ext_list_at;
+    value.handle_ptr = &amber_native_ext_handle_ptr;
+    value.make_null = &amber_native_ext_make_null;
+    value.make_bool = &amber_native_ext_make_bool;
+    value.make_int = &amber_native_ext_make_int;
+    value.make_float = &amber_native_ext_make_float;
+    value.make_str = &amber_native_ext_make_str;
+    value.make_bytes = &amber_native_ext_make_bytes;
+    value.make_list = &amber_native_ext_make_list;
+    value.make_handle = &amber_native_ext_make_handle;
+    value.fault = &amber_native_ext_fault;
+    value.call_block = &amber_native_ext_call_block;
+    return value;
+  }();
+  return ops;
+}
+static NativeValue amber_native_extension_invoke_inline(
+    void *fn, bool method, const NativeArgsView &args,
+    const NativeValue &self) {
+  AmberNativeExtensionState state;
+  state.arena.reserve(args.size() + (method ? 2U : 1U));
+  const AmberValue self_handle = method ? state.push(self) : nullptr;
+  std::vector<AmberValue> handles;
+  handles.reserve(args.size());
+  for (const NativeValue &arg : args) handles.push_back(state.push(arg));
+  const amber::runtime::AmberExtDirectCallOutcome outcome =
+      method ? amber::runtime::amber_ext_invoke_direct_method(
+                   amber_native_ext_ops(), &state,
+                   reinterpret_cast<AmberMethodFn>(fn), self_handle,
+                   handles.data(), handles.size())
+             : amber::runtime::amber_ext_invoke_direct_free(
+                   amber_native_ext_ops(), &state,
+                   reinterpret_cast<AmberFreeFn>(fn), handles.data(),
+                   handles.size());
+  if (state.raised.has_value()) throw std::move(*state.raised);
+  if (!state.error_name.empty() || outcome.status != AMBER_OK) {
+    throw NativeRaised{native_named_error(
+        state.error_name.empty() ? "RuntimeError" : state.error_name,
+        state.error_message.empty() ? "native extension call failed"
+                                    : state.error_message)};
+  }
+  return state.resolve(outcome.value);
+}
+static NativeValue amber_native_extension_invoke(
+    const amber::runtime::NativeExtRegistry::ResolvedThunk &thunk,
+    bool method, const NativeArgsView &args, const NativeValue &self) {
+  if (!thunk.blocking || amber::runtime::current_runtime_is_blocking_ffi_thread()) {
+    return amber_native_extension_invoke_inline(thunk.fn, method, args, self);
+  }
+  std::vector<NativeValue> copied_args = args.to_vector();
+  NativeValue copied_self = self;
+  const std::uint64_t strand_id = amber::runtime::current_runtime_strand_id();
+  const std::uint64_t task_id = amber::runtime::tls_runtime_task_id;
+  const std::uint64_t sync_owner_id = amber::runtime::tls_runtime_sync_owner_id;
+  const std::atomic<bool> *cancel_flag =
+      amber::runtime::tls_runtime_task_cancel_flag;
+  const std::shared_ptr<amber::runtime::RuntimeTaskContext> task_context =
+      amber::runtime::tls_runtime_task_context;
+  const void *scheduler_identity =
+      amber::runtime::tls_runtime_scheduler_identity;
+  const std::shared_ptr<amber::runtime::RuntimeTextWriter> stdout_writer =
+      amber::runtime::current_runtime_stdout();
+  const std::shared_ptr<amber::runtime::RuntimeTextWriter> stderr_writer =
+      amber::runtime::current_runtime_stderr();
+  auto completion = std::make_shared<std::promise<NativeValue>>();
+  std::future<NativeValue> result = completion->get_future();
+  amber::runtime::RuntimeBlockingFfiExecutor::instance().submit(
+      [completion, fn = thunk.fn, method,
+       copied_args = std::move(copied_args),
+       copied_self = std::move(copied_self), strand_id, task_id, sync_owner_id,
+       cancel_flag, task_context, scheduler_identity, stdout_writer,
+       stderr_writer]() mutable {
+        amber::runtime::RuntimeStrandScope strand_scope(strand_id);
+        amber::runtime::RuntimeTaskScope task_scope(
+            task_id, cancel_flag, sync_owner_id, task_context,
+            scheduler_identity);
+        amber::runtime::RuntimeOutputScope output_scope(stdout_writer,
+                                                        stderr_writer);
+        try {
+          completion->set_value(amber_native_extension_invoke_inline(
+              fn, method, copied_args, copied_self));
+        } catch (...) {
+          completion->set_exception(std::current_exception());
+        }
+      });
+  return result.get();
+}
+
+)AMBERCPP";
       out << "static NativeValue amber_native_extension_call("
              "std::uint32_t code_id, "
              "const NativeArgsView &args, "
              "const NativeValue &self) {\n";
-      out << "  AmberNativeBridgeGcScope bridge_gc("
-             "amber_native_bridge_world());\n";
-      out << "  std::vector<amber::runtime::Value> extension_args;\n";
-      out << "  extension_args.reserve(args.size());\n";
-      out << "  for (const NativeValue &arg : args) "
-             "extension_args.push_back("
-             "amber_native_bridge_argument(arg));\n";
-      out << "  const amber::runtime::Value extension_self = "
-             "amber_native_bridge_argument(self);\n";
-      out << "  const amber::runtime::ExecutionResult result = "
-             "amber_native_bridge_world().invoke_native_extension("
-             "code_id, extension_args, extension_self, false);\n";
-      out << "  AmberNativeBridgeState &bridge_state = "
-             "amber_native_bridge_state();\n";
-      out << "  amber_native_bridge_apply_runtime_names("
-             "bridge_state.runtime_strings, result.runtime_strings, "
-             "result.runtime_string_offset);\n";
-      out << "  amber_native_bridge_apply_runtime_names("
-             "bridge_state.runtime_symbols, result.runtime_symbols, "
-             "result.runtime_symbol_offset);\n";
-      out << "  if (!result.ok()) {\n";
-      out << "    if (!result.fault.has_value()) throw NativeBailout();\n";
-      out << "    throw NativeRaised{native_named_error("
-             "result.fault->error_name, result.fault->message)};\n";
+      out << "  switch (code_id) {\n";
+      const amber::runtime::RuntimeNativePackageDescriptor
+          native_package_descriptor =
+              amber::runtime::runtime_native_package_descriptor_from_module(
+                  module);
+      for (const amber::runtime::RuntimeNativePackageCodeBindingDescriptor
+               &binding : native_package_descriptor.code_bindings) {
+        if (plan.native_extension_code_ids.find(binding.code_id) ==
+            plan.native_extension_code_ids.end()) {
+          continue;
+        }
+        out << "  case " << binding.code_id << "U: {\n";
+        out << "    static const auto thunk = "
+               "amber::runtime::NativeExtRegistry::global().resolve_thunk("
+            << cpp_octal_string_literal(binding.logical) << ");\n";
+        out << "    if (!thunk.has_value() || thunk->fn == nullptr) "
+               "throw NativeBailout(\"native-extension thunk is unavailable\");\n";
+        out << "    return amber_native_extension_invoke(*thunk, "
+            << (binding.method ? "true" : "false") << ", args, self);\n";
+        out << "  }\n";
+      }
+      out << "  default: throw NativeBailout("
+             "\"native-extension code binding is unavailable\");\n";
       out << "  }\n";
-      out << "  return amber_native_bridge_result(result.value, "
-             "bridge_state.runtime_strings, bridge_state.runtime_symbols);\n";
       out << "}\n\n";
     }
   }

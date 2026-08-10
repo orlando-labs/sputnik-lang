@@ -299,7 +299,7 @@ struct PendingNativeExtensionCall {
   std::mutex mutex;
   bool ready = false;
   bool ok = false;
-  std::uint32_t code_id = 0;
+  std::string logical;
   std::size_t call_pc = 0;
   Value value = Value::null();
   std::string exception_error_name;

@@ -415,6 +415,9 @@ struct RuntimeWorld::Impl {
   std::mutex value_mutex;
   std::recursive_mutex execution_mutex;
   std::unique_ptr<RuntimeNativeBridgeSession> native_bridge_session;
+  std::mutex blocking_native_bridge_mutex;
+  std::vector<std::unique_ptr<RuntimeNativeBridgeSession>>
+      idle_blocking_native_bridge_sessions;
 };
 
 RuntimeWorld::RuntimeWorld(const bytecode::BcModule &module)
@@ -662,28 +665,56 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
                                          {"executor", "blocking_ffi"}}));
     }
 
-    RuntimeVmExecutionContext context;
-    context.state = impl_->state;
-    context.module_id =
-        impl_->package.has_value() ? impl_->package->manifest.root_module : "";
-    context.world_options = &impl_->options;
-    context.capabilities = &impl_->capabilities;
-    context.effects = &impl_->effects;
-    const std::weak_ptr<Impl> weak_impl = impl_;
-    context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
-      if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
-        std::lock_guard<std::recursive_mutex> execution_guard(
-            impl->execution_mutex);
-        impl->record_event(std::move(event));
+    std::unique_ptr<RuntimeNativeBridgeSession> owned_session;
+    {
+      std::lock_guard<std::mutex> pool_guard(
+          impl_->blocking_native_bridge_mutex);
+      if (!impl_->idle_blocking_native_bridge_sessions.empty()) {
+        owned_session = std::move(
+            impl_->idle_blocking_native_bridge_sessions.back());
+        impl_->idle_blocking_native_bridge_sessions.pop_back();
       }
-    };
-    context.native_registry = &impl_->native_registry;
-    context.module_registry = &impl_->module_registry;
-    context.type_registry = &impl_->type_registry;
-    context.dispatch_registry = &impl_->dispatch_registry;
-    context.error_registry = &impl_->error_registry;
-    auto session = std::make_shared<RuntimeNativeBridgeSession>(
-        impl_->module_owner, std::move(context));
+    }
+    const std::weak_ptr<Impl> weak_impl = impl_;
+    if (owned_session == nullptr) {
+      RuntimeVmExecutionContext context;
+      context.state = impl_->state;
+      context.module_id = impl_->package.has_value()
+                              ? impl_->package->manifest.root_module
+                              : "";
+      context.world_options = &impl_->options;
+      context.capabilities = &impl_->capabilities;
+      context.effects = &impl_->effects;
+      context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
+        if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
+          std::lock_guard<std::recursive_mutex> execution_guard(
+              impl->execution_mutex);
+          impl->record_event(std::move(event));
+        }
+      };
+      context.native_registry = &impl_->native_registry;
+      context.module_registry = &impl_->module_registry;
+      context.type_registry = &impl_->type_registry;
+      context.dispatch_registry = &impl_->dispatch_registry;
+      context.error_registry = &impl_->error_registry;
+      owned_session = std::make_unique<RuntimeNativeBridgeSession>(
+          impl_->module_owner, std::move(context));
+    }
+    auto session = std::shared_ptr<RuntimeNativeBridgeSession>(
+        owned_session.release(),
+        [weak_impl](RuntimeNativeBridgeSession *completed) {
+          std::unique_ptr<RuntimeNativeBridgeSession> reclaimed(completed);
+          if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
+            constexpr std::size_t kMaxIdleBlockingNativeBridgeSessions = 32;
+            std::lock_guard<std::mutex> pool_guard(
+                impl->blocking_native_bridge_mutex);
+            if (impl->idle_blocking_native_bridge_sessions.size() <
+                kMaxIdleBlockingNativeBridgeSessions) {
+              impl->idle_blocking_native_bridge_sessions.push_back(
+                  std::move(reclaimed));
+            }
+          }
+        });
     session->synchronize_runtime_names(runtime_strings, runtime_symbols);
 
     auto invoke = [session = std::move(session), code_id, args,

@@ -7,6 +7,7 @@
 
 #include "runtime/amber_ext.h"
 #include "runtime/amber_ext_runtime.h"
+#include "runtime/concurrency.h"
 #include "runtime/io.h"
 #include "runtime/stdlib_registry.h"
 #include "runtime/world.h"
@@ -674,10 +675,22 @@ AmberStatus direct_increment(AmberCtx *cx, const AmberValue *args,
   return AMBER_OK;
 }
 
+AmberStatus blocking_thread_probe(AmberCtx *cx, const AmberValue * /*args*/,
+                                  std::size_t argc, AmberValue *out) {
+  if (argc != 0U) {
+    return amber_fault(cx, "TypeError", "blocking probe expects no arguments");
+  }
+  *out = amber_make_bool(
+      cx, amber::runtime::current_runtime_is_blocking_ffi_thread() ? 1 : 0);
+  return AMBER_OK;
+}
+
 void test_runtime_world_direct_native_extension_call() {
   amber::bytecode::BcModule module;
-  module.strings = {"amber.native.bind:7", "F:test.direct_increment"};
+  module.strings = {"amber.native.bind:7", "F:test.direct_increment",
+                    "amber.native.bind:9", "F:test.blocking_thread_probe"};
   module.attrs.push_back({0, 1});
+  module.attrs.push_back({2, 3});
   amber::bytecode::BcCode code;
   code.code_id = 7;
   code.reg_count = 1;
@@ -685,10 +698,16 @@ void test_runtime_world_direct_native_extension_call() {
   amber::bytecode::BcCode unbound_code;
   unbound_code.code_id = 8;
   module.code_objects.push_back(std::move(unbound_code));
+  amber::bytecode::BcCode blocking_code;
+  blocking_code.code_id = 9;
+  module.code_objects.push_back(std::move(blocking_code));
 
   RuntimeNativePackageDescriptor package;
   package.thunks.push_back(
       {"test.direct_increment", reinterpret_cast<void *>(&direct_increment)});
+  package.thunks.push_back({"test.blocking_thread_probe",
+                            reinterpret_cast<void *>(&blocking_thread_probe),
+                            true});
   NativeExtRegistry::global().register_package(std::move(package));
 
   RuntimeWorld world(module);
@@ -724,6 +743,17 @@ void test_runtime_world_direct_native_extension_call() {
              after_missing.value.as_integer() == 2,
          "persistent native extension session remains reusable after an "
          "unbound code id");
+
+  const amber::runtime::ExecutionResult blocking_probe =
+      world.invoke_native_extension(9);
+  expect(blocking_probe.ok() && blocking_probe.value.is_bool() &&
+             blocking_probe.value.as_bool(),
+         "blocking native extension executes on the blocking FFI executor");
+  const amber::runtime::ExecutionResult reused_blocking_probe =
+      world.invoke_native_extension(9);
+  expect(reused_blocking_probe.ok() && reused_blocking_probe.value.is_bool() &&
+             reused_blocking_probe.value.as_bool(),
+         "blocking native bridge session remains reusable");
 }
 
 } // namespace

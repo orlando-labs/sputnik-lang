@@ -11945,18 +11945,6 @@ private:
     return out;
   }
 
-  // The thunk registered for a foreign-handle send (tag + selector), or
-  // nullptr.
-  void *native_method_thunk(const std::string &tag,
-                            const std::string &selector) const {
-    const std::string *logical =
-        dispatch_registry().native_package_method_binding(tag, selector);
-    if (logical == nullptr) {
-      return nullptr;
-    }
-    return dispatch_registry().native_package_thunk(*logical);
-  }
-
   // Construction of a `native class`: when the resolved `init` is native-bound
   // and a thunk is registered, run it (a constructor thunk has the free shape
   // and returns a freshly built foreign handle) and store the handle in `dst`,
@@ -12001,6 +11989,149 @@ private:
     return nullptr;
   }
 
+  bool try_dispatch_blocking_native_extension(
+      Frame &caller, const std::string &logical, void *fn, bool method,
+      const std::vector<Value> &pos_args, const Value &self, Value *out,
+      bool *faulted, bool *parked) {
+    *faulted = false;
+    *parked = false;
+    if (block_suspension_in_property_arm(caller, "blocking FFI")) {
+      *faulted = true;
+      return true;
+    }
+
+    if (caller.pending_native_extension_call != nullptr) {
+      const std::shared_ptr<PendingNativeExtensionCall> pending =
+          caller.pending_native_extension_call;
+      bool ready = false;
+      bool ok = false;
+      Value value = Value::null();
+      std::string exception_error_name;
+      std::string exception_message;
+      {
+        std::lock_guard<std::mutex> lock(pending->mutex);
+        if (pending->logical != logical || pending->call_pc != caller.pc) {
+          set_fault(caller, "VMError",
+                    "blocking FFI activation does not match the call site");
+          *faulted = true;
+          return true;
+        }
+        ready = pending->ready;
+        if (ready) {
+          ok = pending->ok;
+          value = std::move(pending->value);
+          exception_error_name = pending->exception_error_name;
+          exception_message = pending->exception_message;
+        }
+      }
+      if (!ready) {
+        ParkRequest park;
+        park.kind = ParkRequest::Kind::Ffi;
+        park_request_ = std::move(park);
+        *parked = true;
+        return true;
+      }
+      caller.pending_native_extension_call.reset();
+      blocking_ffi_call_.reset();
+      if (!exception_error_name.empty()) {
+        set_fault(caller, exception_error_name, exception_message);
+        *faulted = true;
+        return true;
+      }
+      if (!ok || fault_.has_value()) {
+        *faulted = true;
+        return true;
+      }
+      *out = std::move(value);
+      return true;
+    }
+
+    auto pending = std::make_shared<PendingNativeExtensionCall>();
+    pending->logical = logical;
+    pending->call_pc = caller.pc;
+    caller.pending_native_extension_call = pending;
+    blocking_ffi_call_ = pending;
+
+    Frame *caller_ptr = &caller;
+    const std::uint64_t strand_id = current_runtime_strand_id();
+    const std::uint64_t task_id = tls_runtime_task_id;
+    const std::uint64_t sync_owner_id = tls_runtime_sync_owner_id;
+    const std::atomic<bool> *cancel_flag = tls_runtime_task_cancel_flag;
+    const std::shared_ptr<RuntimeTaskContext> task_context =
+        tls_runtime_task_context;
+    const void *scheduler_identity = tls_runtime_scheduler_identity;
+    const std::shared_ptr<RuntimeTextWriter> stdout_writer =
+        current_runtime_stdout();
+    const std::shared_ptr<RuntimeTextWriter> stderr_writer =
+        current_runtime_stderr();
+    const std::shared_ptr<RuntimeTaskModule> task = task_module_;
+    ParkRequest park;
+    park.kind = ParkRequest::Kind::Ffi;
+    park.ffi_start =
+        [pending, caller_ptr, fn, method, pos_args, self, strand_id, task_id,
+         sync_owner_id, cancel_flag, task_context, scheduler_identity,
+         stdout_writer, stderr_writer,
+         task](std::shared_ptr<Vm> vm_owner) mutable {
+          RuntimeBlockingFfiExecutor::instance().submit(
+              [pending, caller_ptr, fn, method,
+               pos_args = std::move(pos_args), self = std::move(self),
+               strand_id, task_id, sync_owner_id, cancel_flag, task_context,
+               scheduler_identity, stdout_writer, stderr_writer, task,
+               vm_owner = std::move(vm_owner)]() mutable {
+                RuntimeStrandScope strand_scope(strand_id);
+                RuntimeTaskScope task_scope(task_id, cancel_flag, sync_owner_id,
+                                            task_context, scheduler_identity);
+                RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
+                IoParkGuard io_park_guard(false);
+                bool ok = false;
+                Value value = Value::null();
+                std::string exception_error_name;
+                std::string exception_message;
+                try {
+                  NativeExtCallOutcome outcome =
+                      method ? amber_ext_invoke_method(
+                                   *vm_owner, caller_ptr,
+                                   vm_owner->type_registry()
+                                       .native_package_tags(),
+                                   reinterpret_cast<AmberMethodFn>(fn), self,
+                                   pos_args)
+                             : amber_ext_invoke_free(
+                                   *vm_owner, caller_ptr,
+                                   vm_owner->type_registry()
+                                       .native_package_tags(),
+                                   reinterpret_cast<AmberFreeFn>(fn), pos_args);
+                  ok = outcome.ok;
+                  value = std::move(outcome.value);
+                } catch (const RuntimeTaskCancelled &) {
+                  exception_error_name = "CancelledError";
+                  exception_message = "task cancelled";
+                } catch (const RuntimeTaskFailure &failure) {
+                  exception_error_name = failure.error_name();
+                  exception_message = failure.message();
+                } catch (const std::exception &error) {
+                  exception_error_name = "RuntimeError";
+                  exception_message = error.what();
+                } catch (...) {
+                  exception_error_name = "RuntimeError";
+                  exception_message = "blocking FFI call failed";
+                }
+                {
+                  std::lock_guard<std::mutex> lock(pending->mutex);
+                  pending->ok = ok;
+                  pending->value = std::move(value);
+                  pending->exception_error_name =
+                      std::move(exception_error_name);
+                  pending->exception_message = std::move(exception_message);
+                  pending->ready = true;
+                }
+                task->scheduler().wake_strand(strand_id);
+              });
+        };
+    park_request_ = std::move(park);
+    *parked = true;
+    return true;
+  }
+
   // If `method` is native-bound and a thunk is registered for its logical
   // symbol, bridge the call across the amber_ext.h ABI to that C thunk and
   // report the result in `*out`. Returns true when handled natively (the caller
@@ -12043,148 +12174,10 @@ private:
     const bool blocking =
         dispatch_registry().native_package_thunk_is_blocking(binding->logical);
     if (blocking && allow_park && parkable_ && task_module_ != nullptr) {
-      if (block_suspension_in_property_arm(caller, "blocking FFI")) {
-        *faulted = true;
-        return true;
-      }
-
-      if (caller.pending_native_extension_call != nullptr) {
-        const std::shared_ptr<PendingNativeExtensionCall> pending =
-            caller.pending_native_extension_call;
-        bool ready = false;
-        bool ok = false;
-        Value value = Value::null();
-        std::string exception_error_name;
-        std::string exception_message;
-        {
-          std::lock_guard<std::mutex> lock(pending->mutex);
-          if (pending->code_id != code_id || pending->call_pc != caller.pc) {
-            set_fault(caller, "VMError",
-                      "blocking FFI activation does not match the call site");
-            *faulted = true;
-            return true;
-          }
-          ready = pending->ready;
-          if (ready) {
-            ok = pending->ok;
-            value = std::move(pending->value);
-            exception_error_name = pending->exception_error_name;
-            exception_message = pending->exception_message;
-          }
-        }
-        if (!ready) {
-          ParkRequest park;
-          park.kind = ParkRequest::Kind::Ffi;
-          park_request_ = std::move(park);
-          if (parked != nullptr) {
-            *parked = true;
-          }
-          return true;
-        }
-        caller.pending_native_extension_call.reset();
-        blocking_ffi_call_.reset();
-        if (!exception_error_name.empty()) {
-          set_fault(caller, exception_error_name, exception_message);
-          *faulted = true;
-          return true;
-        }
-        if (!ok || fault_.has_value()) {
-          *faulted = true;
-          return true;
-        }
-        *out = std::move(value);
-        return true;
-      }
-
-      auto pending = std::make_shared<PendingNativeExtensionCall>();
-      pending->code_id = code_id;
-      pending->call_pc = caller.pc;
-      caller.pending_native_extension_call = pending;
-      blocking_ffi_call_ = pending;
-
-      Frame *caller_ptr = &caller;
-      const bool method = binding->method;
-      const std::uint64_t strand_id = current_runtime_strand_id();
-      const std::uint64_t task_id = tls_runtime_task_id;
-      const std::uint64_t sync_owner_id = tls_runtime_sync_owner_id;
-      const std::atomic<bool> *cancel_flag = tls_runtime_task_cancel_flag;
-      const std::shared_ptr<RuntimeTaskContext> task_context =
-          tls_runtime_task_context;
-      const void *scheduler_identity = tls_runtime_scheduler_identity;
-      const std::shared_ptr<RuntimeTextWriter> stdout_writer =
-          current_runtime_stdout();
-      const std::shared_ptr<RuntimeTextWriter> stderr_writer =
-          current_runtime_stderr();
-      const std::shared_ptr<RuntimeTaskModule> task = task_module_;
-      ParkRequest park;
-      park.kind = ParkRequest::Kind::Ffi;
-      park.ffi_start =
-          [pending, caller_ptr, fn, method, pos_args, self, strand_id, task_id,
-           sync_owner_id, cancel_flag, task_context, scheduler_identity,
-           stdout_writer, stderr_writer,
-           task](std::shared_ptr<Vm> vm_owner) mutable {
-            RuntimeBlockingFfiExecutor::instance().submit(
-                [pending, caller_ptr, fn, method,
-                 pos_args = std::move(pos_args), self = std::move(self),
-                 strand_id, task_id, sync_owner_id, cancel_flag, task_context,
-                 scheduler_identity, stdout_writer, stderr_writer, task,
-                 vm_owner = std::move(vm_owner)]() mutable {
-                  RuntimeStrandScope strand_scope(strand_id);
-                  RuntimeTaskScope task_scope(task_id, cancel_flag,
-                                              sync_owner_id, task_context,
-                                              scheduler_identity);
-                  RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
-                  IoParkGuard io_park_guard(false);
-                  bool ok = false;
-                  Value value = Value::null();
-                  std::string exception_error_name;
-                  std::string exception_message;
-                  try {
-                    NativeExtCallOutcome outcome =
-                        method ? amber_ext_invoke_method(
-                                     *vm_owner, caller_ptr,
-                                     vm_owner->type_registry()
-                                         .native_package_tags(),
-                                     reinterpret_cast<AmberMethodFn>(fn), self,
-                                     pos_args)
-                               : amber_ext_invoke_free(
-                                     *vm_owner, caller_ptr,
-                                     vm_owner->type_registry()
-                                         .native_package_tags(),
-                                     reinterpret_cast<AmberFreeFn>(fn),
-                                     pos_args);
-                    ok = outcome.ok;
-                    value = std::move(outcome.value);
-                  } catch (const RuntimeTaskCancelled &) {
-                    exception_error_name = "CancelledError";
-                    exception_message = "task cancelled";
-                  } catch (const RuntimeTaskFailure &failure) {
-                    exception_error_name = failure.error_name();
-                    exception_message = failure.message();
-                  } catch (const std::exception &error) {
-                    exception_error_name = "RuntimeError";
-                    exception_message = error.what();
-                  } catch (...) {
-                    exception_error_name = "RuntimeError";
-                    exception_message = "blocking FFI call failed";
-                  }
-                  {
-                    std::lock_guard<std::mutex> lock(pending->mutex);
-                    pending->ok = ok;
-                    pending->value = std::move(value);
-                    pending->exception_error_name =
-                        std::move(exception_error_name);
-                    pending->exception_message = std::move(exception_message);
-                    pending->ready = true;
-                  }
-                  task->scheduler().wake_strand(strand_id);
-                });
-          };
-      park_request_ = std::move(park);
-      if (parked != nullptr) {
-        *parked = true;
-      }
-      return true;
+      bool ignored_parked = false;
+      return try_dispatch_blocking_native_extension(
+          caller, binding->logical, fn, binding->method, pos_args, self, out,
+          faulted, parked == nullptr ? &ignored_parked : parked);
     }
     NativeExtCallOutcome outcome =
         binding->method
@@ -30204,7 +30197,13 @@ private:
         set_fault(frame, "TypeError", "native handle is null");
         return false;
       }
-      void *fn = native_method_thunk(handle->tag, *selector);
+      const std::string *native_logical =
+          dispatch_registry().native_package_method_binding(handle->tag,
+                                                            *selector);
+      void *fn = native_logical == nullptr
+                     ? nullptr
+                     : dispatch_registry().native_package_thunk(
+                           *native_logical);
       if (fn != nullptr) {
         if (!handle->live) {
           // Rescuable: a use-after-destroy! unwinds to the nearest handler.
@@ -30212,6 +30211,27 @@ private:
                               "native handle `" + handle->tag +
                                   "` used after destroy!");
           return false;
+        }
+        if (native_logical != nullptr && parkable_ && task_module_ != nullptr &&
+            dispatch_registry().native_package_thunk_is_blocking(
+                *native_logical)) {
+          Value native_out = Value::null();
+          bool native_faulted = false;
+          bool native_parked = false;
+          (void)try_dispatch_blocking_native_extension(
+              frame, *native_logical, fn, true, args, receiver, &native_out,
+              &native_faulted, &native_parked);
+          if (native_parked) {
+            return true;
+          }
+          if (native_faulted) {
+            return false;
+          }
+          if (!write_reg(frame, dst, std::move(native_out))) {
+            return false;
+          }
+          ++frame.pc;
+          return true;
         }
         const NativeExtCallOutcome outcome = amber_ext_invoke_method(
             *this, &frame, type_registry().native_package_tags(),

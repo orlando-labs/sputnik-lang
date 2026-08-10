@@ -317,6 +317,7 @@ def run_one(
     port: int,
     stack: str,
     amber_execution: str,
+    amber_pool_size: int,
     sample_seconds: int,
     server_max_requests_per_connection: int | None,
 ) -> Dict[str, Any]:
@@ -324,6 +325,8 @@ def run_one(
         program_args = [
             "--host", "127.0.0.1", "--port", str(port), "--workers", "4"
         ]
+        if stack == "ember":
+            program_args += ["--pool-size", str(amber_pool_size)]
         if stack == "raw" and server_max_requests_per_connection is not None:
             program_args += [
                 "--max-requests-per-connection",
@@ -366,7 +369,16 @@ def run_one(
     else:
         raise RuntimeError(f"unknown server {name}")
 
-    run_dir = BUILD / "runs" / f"{name}-{stack}-{amber_execution}"
+    run_pool_suffix = (
+        f"-pool{amber_pool_size}"
+        if name == "amber" and stack == "ember"
+        else ""
+    )
+    run_dir = (
+        BUILD
+        / "runs"
+        / f"{name}-{stack}-{amber_execution}{run_pool_suffix}"
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     base_url = f"http://127.0.0.1:{port}"
     print(f"\n== {name}: contract smoke + {duration}s measurement ==", flush=True)
@@ -473,6 +485,11 @@ def run_one(
                 "requests_per_second": requests / elapsed,
                 "server_peak_rss_bytes": peak_rss,
                 "contract_smoke_requests": smoke_result["requests"],
+                "amber_pool_size": (
+                    amber_pool_size
+                    if name == "amber" and stack == "ember"
+                    else None
+                ),
                 "sample_profile": str(sample_path) if sampler is not None else None,
                 "server_max_requests_per_connection": (
                     server_max_requests_per_connection
@@ -513,6 +530,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
     rows = payload["results"]
     stack = payload["stack"]
     amber_execution = payload["amber_execution"]
+    amber_pool_size = payload["amber_pool_size"]
     amber_rps = next(row["requests_per_second"] for row in rows if row["server"] == "amber")
     relative = {
         row["server"]: row["requests_per_second"] / amber_rps
@@ -543,8 +561,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "The raw lane keeps its mutex-protected in-memory store. This makes the "
         "framework table include model lifecycle, SQL generation, connection-pool, "
         "and SQLite costs while keeping the database local and deterministic. "
-        "Both framework implementations serialize SQLite-backed actions so lock "
-        "retry policy cannot alter the HTTP contract."
+        f"The Amber pool contains {amber_pool_size} connection(s) for this run."
         if stack == "ember"
         else "All raw benchmark servers use a process-local, mutex-protected "
         "in-memory store so the table compares HTTP routing, JSON/schema handling, "
@@ -564,6 +581,11 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "(`vm-stdlib-send-v1` client bridge)<br>",
         f"Stack: `{stack}`<br>",
         f"Amber execution: `{amber_execution}`<br>",
+        (
+            f"Amber SQLite pool size: `{amber_pool_size}`<br>"
+            if stack == "ember"
+            else ""
+        ),
         f"Load: `{payload['client_count']}` concurrent clients, `{payload['duration_seconds']}` seconds per server, `mixed`, negative suite every 25 iterations.",
         "",
         "| Server | RPS | Requests | Valid | Invalid | Peak server RSS | vs Amber |",
@@ -629,7 +651,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "## Reproduce",
         "",
         "```sh",
-        f"python3 bench/polyglot/run_http_rps.py --stack {stack} --amber-execution {amber_execution} --duration 60 --clients 4 --client {payload['client']['path']}",
+        f"python3 bench/polyglot/run_http_rps.py --stack {stack} --amber-execution {amber_execution} --duration 60 --clients 4 --amber-pool-size {amber_pool_size} --client {payload['client']['path']}",
         "```",
         "",
         f"Machine-readable result: `{payload['json_result']}`.",
@@ -642,6 +664,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--duration", type=int, default=60)
     parser.add_argument("--clients", type=int, default=4)
+    parser.add_argument(
+        "--amber-pool-size",
+        type=int,
+        default=1,
+        help="SQLite pool size for the Amber/Ember workload",
+    )
     parser.add_argument("--port", type=int, default=3340)
     parser.add_argument(
         "--languages",
@@ -676,8 +704,15 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.duration <= 0 or args.clients <= 0 or args.sample_seconds < 0:
-        raise RuntimeError("duration and clients must be positive")
+    if (
+        args.duration <= 0
+        or args.clients <= 0
+        or args.amber_pool_size <= 0
+        or args.sample_seconds < 0
+    ):
+        raise RuntimeError(
+            "duration, clients, and amber-pool-size must be positive"
+        )
     if (
         args.server_max_requests_per_connection is not None
         and args.server_max_requests_per_connection <= 0
@@ -729,6 +764,7 @@ def main() -> None:
             args.port + index,
             args.stack,
             args.amber_execution,
+            args.amber_pool_size,
             args.sample_seconds,
             args.server_max_requests_per_connection,
         )
@@ -737,7 +773,12 @@ def main() -> None:
 
     RESULTS.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
-    result_stem = f"{args.stack}-http-rps-{args.amber_execution}-{stamp}"
+    pool_suffix = (
+        f"-pool{args.amber_pool_size}" if args.stack == "ember" else ""
+    )
+    result_stem = (
+        f"{args.stack}-http-rps-{args.amber_execution}{pool_suffix}-{stamp}"
+    )
     json_path = RESULTS / f"{result_stem}.json"
     markdown_path = (
         args.output.resolve() if args.output else RESULTS / f"{result_stem}.md"
@@ -750,6 +791,7 @@ def main() -> None:
         "host": f"{platform.system()} {platform.release()} / {platform.machine()} / {platform.processor()}",
         "duration_seconds": args.duration,
         "client_count": args.clients,
+        "amber_pool_size": args.amber_pool_size,
         "languages": languages,
         "client": {
             "path": str(paths["client"]),

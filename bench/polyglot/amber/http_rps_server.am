@@ -367,16 +367,17 @@ def arguments():
   parser.arg("--host", default: "127.0.0.1")
   parser.arg("--port", type: Int, default: 3340)
   parser.arg("--workers", type: Int, default: 4)
+  parser.arg("--pool-size", name: "pool_size", type: Int, default: 1)
   parser.parse_or_raise()
 
 def main():
   args = arguments()
+  pool_size = args["pool_size"]
+  raise ArgumentError("--pool-size must be positive") unless pool_size > 0
   database = memory_pool(
     name: "amber_polyglot_http_rps",
-    # A single lease keeps duplicate-SKU and optimistic-lock responses stable
-    # under the shared-memory SQLite writer lock.
-    min_size: 1,
-    max_size: 1,
+    min_size: pool_size,
+    max_size: pool_size,
     checkout_timeout: 1.0,
     idle_timeout: 60.0,
     busy_timeout: 2.0,

@@ -2007,7 +2007,7 @@ bool native_cpp_lookup_const_supported(
       "fs",           "io",           "task",         "SecureRandom",
       "Uuid",         "UUID",
       "Range",        "Time",         "TimePeriod",  "Atomic",
-      "Mutex"};
+      "Channel",      "Mutex"};
   const std::string name =
       native_cpp_desugared_lookup_name(module.symbols[path.items.back()]);
   return supported.find(name) != supported.end() ||
@@ -2760,6 +2760,16 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           kw_count == 0U &&
           ((selector == "new" && pos_count == 0U && no_block) ||
            (selector == "synchronize" && pos_count == 0U && !no_block));
+      const bool channel_send =
+          no_block &&
+          ((selector == "new" && pos_count == 0U && kw_count <= 1U &&
+            kw_allowed({"capacity"})) ||
+           (selector == "send" && pos_count == 1U && kw_count <= 1U &&
+            kw_allowed({"timeout"})) ||
+           (selector == "recv" && pos_count == 0U && kw_count <= 1U &&
+            kw_allowed({"timeout"})) ||
+           ((selector == "close" || selector == "closed?") &&
+            pos_count == 0U && kw_count == 0U));
       const bool io_send =
           kw_count == 0U && no_block &&
           (((selector == "stdout" || selector == "current_stdout" ||
@@ -2927,7 +2937,8 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !atomic_send && !mutex_send &&
-          !io_send && !task_send && !http_send && !amber_send && !result_send &&
+          !channel_send && !io_send && !task_send && !http_send &&
+          !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send) {
         *reason = "unsupported SEND selector '" + selector + "' at pc " +
@@ -2938,7 +2949,8 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !atomic_send && !mutex_send &&
-          !io_send && !task_send && !http_send && !amber_send && !result_send &&
+          !channel_send && !io_send && !task_send && !http_send &&
+          !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send &&
           !map_get_or_set_send && !array_factory_send && !data_path_send &&
@@ -5297,6 +5309,11 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             native_module_expr = "NativeValue::time_period_module()";
           } else if (name == "Atomic") {
             native_module_expr = "NativeValue::atomic_module()";
+          } else if (name == "Channel") {
+            native_module_expr =
+                "NativeValue::runtime_handle(amber::runtime::Value::"
+                "native_type(amber::runtime::RuntimeNativeTypeKind::"
+                "Channel))";
           } else if (name == "Mutex") {
             native_module_expr = "NativeValue::mutex_module()";
           }
@@ -7939,6 +7956,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include <string_view>\n";
   out << "#include <thread>\n";
   out << "#include <unordered_map>\n";
+  out << "#include <unordered_set>\n";
   out << "#include <utility>\n";
   out << "#include <vector>\n\n";
   out << "#if defined(__linux__)\n";
@@ -8422,6 +8440,15 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "http_server_request_snapshot;\n";
   out << "  std::optional<std::vector<std::pair<std::string, std::string>>> "
          "http_header_pairs;\n";
+  out << "};\n";
+  out << "struct AmberNativeChannelPayload final : "
+         "amber::runtime::RuntimeIoValue {\n";
+  out << "  NativeValue value;\n";
+  out << "  explicit AmberNativeChannelPayload(NativeValue payload) "
+         ": value(std::move(payload)) {}\n";
+  out << "  const char *type_name() const override { "
+         "return \"native.ChannelPayload\"; }\n";
+  out << "  bool shareable() const override { return true; }\n";
   out << "};\n";
   out << "static constexpr std::size_t kNativeInlineIvarCapacity = 4U;\n";
   out << "static constexpr std::uint32_t kNativeSuppressedExceptionsIvar = "
@@ -10298,6 +10325,10 @@ static void native_collect_finished_cycles() {
   out << "static NativeValue native_mutex_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, NativeValue block);\n\n";
+  out << "static NativeValue native_channel_send("
+         "const NativeValue &receiver, const std::string &selector, "
+         "const NativeArgsView &args, "
+         "const NativeKeywordArgsView &kwargs, NativeValue block);\n\n";
   out << "static NativeValue native_error_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, NativeValue block);\n\n";
@@ -21513,12 +21544,211 @@ static bool native_http_try_fast_server_response(
   return true;
 }
 
+static bool native_channel_payload_shareable_impl(
+    const NativeValue &value, std::unordered_set<const void *> *visited) {
+  switch (value.tag) {
+  case NativeValue::Tag::Null:
+  case NativeValue::Tag::Bool:
+  case NativeValue::Tag::Integer:
+  case NativeValue::Tag::Float:
+  case NativeValue::Tag::String:
+  case NativeValue::Tag::Symbol:
+  case NativeValue::Tag::Bytes:
+  case NativeValue::Tag::Range:
+  case NativeValue::Tag::FsPath:
+  case NativeValue::Tag::Regexp:
+  case NativeValue::Tag::Uuid:
+  case NativeValue::Tag::Time:
+  case NativeValue::Tag::TimePeriod:
+  case NativeValue::Tag::HeapString:
+  case NativeValue::Tag::ErrorClass:
+    return true;
+  case NativeValue::Tag::List: {
+    const NativeList &list = as_list(value);
+    if (!list.frozen) return false;
+    if (!visited->insert(value.heap_value).second) return true;
+    for (const NativeValue &item : list.items) {
+      if (!native_channel_payload_shareable_impl(item, visited)) return false;
+    }
+    return true;
+  }
+  case NativeValue::Tag::Tuple: {
+    if (!visited->insert(value.heap_value).second) return true;
+    for (const NativeValue &item : as_tuple(value).items) {
+      if (!native_channel_payload_shareable_impl(item, visited)) return false;
+    }
+    return true;
+  }
+  case NativeValue::Tag::Set: {
+    const NativeSet &set = as_set(value);
+    if (!set.frozen) return false;
+    if (!visited->insert(value.heap_value).second) return true;
+    for (const NativeValue &item : set.items) {
+      if (!native_channel_payload_shareable_impl(item, visited)) return false;
+    }
+    return true;
+  }
+  case NativeValue::Tag::Map: {
+    const NativeMap &map = as_map(value);
+    if (!map.frozen) return false;
+    if (!visited->insert(value.heap_value).second) return true;
+    for (const auto &entry : map.entries) {
+      if (!native_channel_payload_shareable_impl(entry.first, visited) ||
+          !native_channel_payload_shareable_impl(entry.second, visited)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+static bool native_channel_payload_shareable(const NativeValue &value) {
+  std::unordered_set<const void *> visited;
+  return native_channel_payload_shareable_impl(value, &visited);
+}
+
+static std::chrono::milliseconds native_channel_timeout(
+    const NativeKeywordArgsView &kwargs) {
+  if (kwargs.empty()) return std::chrono::milliseconds::max();
+  if (kwargs.size() != 1U || kwargs.begin()->name != "timeout") {
+    throw NativeBailout();
+  }
+  const NativeValue &value = kwargs.begin()->value;
+  if (value.tag == NativeValue::Tag::Integer && value.scalar_value >= 0) {
+    return std::chrono::milliseconds(value.scalar_value);
+  }
+  if (value.tag != NativeValue::Tag::Float ||
+      !std::isfinite(value.float_value) || value.float_value < 0.0) {
+    throw NativeRaised{native_named_error(
+        "TypeError", "duration must be Integer milliseconds or Float seconds")};
+  }
+  const double milliseconds = value.float_value * 1000.0;
+  if (milliseconds >=
+      static_cast<double>(std::numeric_limits<std::int64_t>::max())) {
+    return std::chrono::milliseconds::max();
+  }
+  return std::chrono::milliseconds(
+      static_cast<std::int64_t>(milliseconds));
+}
+
+static NativeValue native_channel_received_value(
+    const amber::runtime::Value &value) {
+  if (value.is_io_value()) {
+    const auto payload = std::dynamic_pointer_cast<AmberNativeChannelPayload>(
+        value.as_io_value());
+    if (payload != nullptr) return payload->value;
+  }
+  throw NativeRaised{native_named_error(
+      "NativeCodeError", "native channel received an unsupported payload")};
+}
+
+static NativeValue native_channel_send(
+    const NativeValue &receiver, const std::string &selector,
+    const NativeArgsView &args, const NativeKeywordArgsView &kwargs,
+    NativeValue block) {
+  if (block.tag != NativeValue::Tag::Null ||
+      receiver.tag != NativeValue::Tag::RuntimeHandle) {
+    throw NativeBailout();
+  }
+  const amber::runtime::Value &runtime_receiver =
+      as_native_runtime_handle(receiver)->value;
+  if (runtime_receiver.is_native_type() &&
+      runtime_receiver.as_native_type().kind ==
+          amber::runtime::RuntimeNativeTypeKind::Channel) {
+    if (selector != "new" || !args.empty() || kwargs.size() > 1U) {
+      throw NativeBailout();
+    }
+    std::size_t capacity = 0U;
+    if (!kwargs.empty()) {
+      const NativeCallKeyword &keyword = *kwargs.begin();
+      if (keyword.name != "capacity" ||
+          keyword.value.tag != NativeValue::Tag::Integer ||
+          keyword.value.scalar_value < 0) {
+        throw NativeRaised{native_named_error(
+            "TypeError", "capacity must be a non-negative Integer")};
+      }
+      capacity = static_cast<std::size_t>(keyword.value.scalar_value);
+    }
+    return NativeValue::runtime_handle(amber::runtime::Value::channel(
+        std::make_shared<amber::runtime::RuntimeChannel>(capacity)));
+  }
+  if (!runtime_receiver.is_channel()) throw NativeBailout();
+  const std::shared_ptr<amber::runtime::RuntimeChannel> channel =
+      runtime_receiver.as_channel();
+  if (channel == nullptr) {
+    throw NativeRaised{native_named_error("TypeError", "channel is null")};
+  }
+  if (selector == "close" && args.empty() && kwargs.empty()) {
+    native_commit_effect();
+    return NativeValue::boolean(channel->close());
+  }
+  if (selector == "closed?" && args.empty() && kwargs.empty()) {
+    return NativeValue::boolean(channel->closed());
+  }
+  const std::chrono::milliseconds timeout = native_channel_timeout(kwargs);
+  if (selector == "send" && args.size() == 1U) {
+    const NativeValue &payload = *args.begin();
+    if (!native_channel_payload_shareable(payload)) {
+      throw NativeRaised{native_named_error(
+          "IsolationError", "channel payload must be shareable")};
+    }
+    const amber::runtime::Value runtime_payload =
+        amber::runtime::Value::io_value(
+            std::make_shared<AmberNativeChannelPayload>(payload));
+    native_commit_effect();
+    amber::runtime::RuntimeChannelResult sent;
+    {
+      NativeCycleApplicationLockScope application_lock_scope;
+      NativeCycleSuspension suspension;
+      sent = channel->send(runtime_payload, timeout);
+      suspension.resume();
+    }
+    if (!sent.ok) {
+      throw NativeRaised{native_named_error(
+          sent.error_name.empty() ? "ChannelError" : sent.error_name,
+          sent.message.empty() ? "channel send failed" : sent.message)};
+    }
+    return NativeValue::boolean(sent.sent);
+  }
+  if (selector == "recv" && args.empty()) {
+    native_commit_effect();
+    amber::runtime::RuntimeChannelResult received;
+    {
+      NativeCycleApplicationLockScope application_lock_scope;
+      NativeCycleSuspension suspension;
+      received = channel->recv(timeout);
+      suspension.resume();
+    }
+    if (!received.ok) {
+      throw NativeRaised{native_named_error(
+          received.error_name.empty() ? "ChannelError" : received.error_name,
+          received.message.empty() ? "channel recv failed" : received.message)};
+    }
+    return native_channel_received_value(received.value);
+  }
+  throw NativeBailout();
+}
+
 )AMBERCPP";
   out << "static NativeValue native_http_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
          "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
+  out << "  if (receiver.tag == NativeValue::Tag::RuntimeHandle) {\n"
+         "    const amber::runtime::Value &runtime_receiver = "
+         "as_native_runtime_handle(receiver)->value;\n"
+         "    if (runtime_receiver.is_channel() || "
+         "(runtime_receiver.is_native_type() && "
+         "runtime_receiver.as_native_type().kind == "
+         "amber::runtime::RuntimeNativeTypeKind::Channel)) {\n"
+         "      return native_channel_send(receiver, selector, args, "
+         "kwargs, block);\n"
+         "    }\n"
+         "  }\n";
   if (plan.uses_native_http_server_runtime ||
       plan.uses_native_stdlib_bridge) {
     out << "  NativeValue fast_result;\n";

@@ -654,6 +654,9 @@ test: build
 	$(BUILD_DIR)/amberc build corpus/run/task_mutex_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel-build.json
 	$(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel.out
 	grep -q '^0$$' $(BUILD_DIR)/task-mutex-parallel.out
+	$(BUILD_DIR)/amberc build corpus/run/native_channel_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-channel-parallel > $(BUILD_DIR)/native-channel-parallel-build.json
+	$(BUILD_DIR)/native-channel-parallel > $(BUILD_DIR)/native-channel-parallel.out
+	grep -q '^42$$' $(BUILD_DIR)/native-channel-parallel.out
 	$(BUILD_DIR)/amberc build corpus/run/native_no_gil_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel-build.json
 	$(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel.out
 	grep -q '^2$$' $(BUILD_DIR)/native-no-gil-parallel.out

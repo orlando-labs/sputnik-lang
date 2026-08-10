@@ -1578,6 +1578,26 @@ void test_std017_source_level_task_sync_stack_compiles_and_runs() {
   expect_bool(values->items[3], true, "source-level Channel.closed? result");
 }
 
+void test_std017_source_level_task_module_is_stable_across_spawn() {
+  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+      "import task\n"
+      "root = task\n"
+      "same_vm = task == root\n"
+      "child = task.spawn:\n"
+      "  task == root\n"
+      "[same_vm, child.wait()]\n");
+
+  expect(exec.ok(), "source-level task module identity should execute");
+  expect(exec.value.is_list() && exec.value.as_list() != nullptr,
+         "source-level task module identity result should be a list");
+  const std::vector<amber::runtime::Value> &items = exec.value.as_list()->items;
+  expect(items.size() == 2, "source-level task module identity result shape");
+  expect_bool(items[0], true,
+              "repeated task lookup in one VM should reuse the module");
+  expect_bool(items[1], true,
+              "spawned VM should resolve task to its owning scheduler");
+}
+
 void test_std017_source_level_flow_and_threaded_collection_compile_and_run() {
   const amber::runtime::ExecutionResult exec = execute_source_or_die(
       "from task.flow import Flow, ThreadedCollection\n"
@@ -2284,6 +2304,7 @@ int main() {
   test_std016_threaded_collection_combination_and_permutation();
   test_std016_threaded_collection_failure_and_isolation();
   test_std017_source_level_task_sync_stack_compiles_and_runs();
+  test_std017_source_level_task_module_is_stable_across_spawn();
   test_std017_source_level_flow_and_threaded_collection_compile_and_run();
   test_std018_task_local_basic_nested_exception_and_sleep();
   test_std018_task_local_spawn_inheritance_and_isolation();

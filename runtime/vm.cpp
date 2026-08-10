@@ -1948,6 +1948,23 @@ private:
     return *error_registry_;
   }
 
+  std::shared_ptr<RuntimeTaskModule> task_runtime_module() {
+    // Scheduler-driven VMs must resolve the `task` prelude binding to the
+    // scheduler that owns their current strand. Apart from preserving task
+    // identity across parent/child VMs, this is what lets task.sleep park the
+    // owning scheduler without constructing an unrelated worker pool.
+    if (task_module_ != nullptr) {
+      return task_module_;
+    }
+    // Direct/top-level VMs have no owning scheduler. Keep one lazy module for
+    // the VM lifetime instead of creating and tearing down a hardware-sized
+    // RuntimeScheduler for every LOOKUP_CONST `task` instruction.
+    if (prelude_task_module_ == nullptr) {
+      prelude_task_module_ = std::make_shared<RuntimeTaskModule>();
+    }
+    return prelude_task_module_;
+  }
+
   const NativeRegistry *child_native_registry() const {
     return native_registry_ == owned_native_registry_.get() ? nullptr
                                                             : native_registry_;
@@ -6622,7 +6639,7 @@ private:
       case RuntimeBindingKind::NativeFunction:
         return Value::native_function(binding->native_function);
       case RuntimeBindingKind::TaskModule:
-        return Value::task_module(std::make_shared<RuntimeTaskModule>());
+        return Value::task_module(task_runtime_module());
       case RuntimeBindingKind::FlowModule:
         return Value::flow_module(std::make_shared<RuntimeFlowModule>());
       }
@@ -32768,6 +32785,9 @@ private:
   // the same scheduler so request reads and response writes can independently
   // park without pinning a worker.
   std::shared_ptr<RuntimeTaskModule> task_module_;
+  // Direct/top-level VMs do not have an owning scheduler, but the `task`
+  // prelude binding is still a stable module constant for the VM lifetime.
+  std::shared_ptr<RuntimeTaskModule> prelude_task_module_;
   std::optional<ParkRequest> park_request_;
   // Set when this Vm executes inside a property arm of an outer Vm (nested
   // executions inherit the non-suspendable dynamic extent).

@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <future>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -640,6 +641,97 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
   if (impl_ == nullptr || impl_->module == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
+  const RuntimeNativePackageCodeBindingDescriptor *binding =
+      impl_->dispatch_registry.native_package_code_binding(code_id);
+  const bool blocking =
+      binding != nullptr &&
+      impl_->dispatch_registry.native_package_thunk_is_blocking(
+          binding->logical);
+  if (blocking) {
+    std::vector<std::string> runtime_strings;
+    std::vector<std::string> runtime_symbols;
+    {
+      std::lock_guard<std::recursive_mutex> execution_guard(
+          impl_->execution_mutex);
+      impl_->state->initialize_for_module(*impl_->module);
+      runtime_strings = impl_->runtime_strings;
+      runtime_symbols = impl_->runtime_symbols;
+      impl_->record_event(replay::make_event(
+          "native_extension.started", {{"code_id", std::to_string(code_id)},
+                                         {"executor", "blocking_ffi"}}));
+    }
+
+    RuntimeVmExecutionContext context;
+    context.state = impl_->state;
+    context.module_id =
+        impl_->package.has_value() ? impl_->package->manifest.root_module : "";
+    context.world_options = &impl_->options;
+    context.capabilities = &impl_->capabilities;
+    context.effects = &impl_->effects;
+    const std::weak_ptr<Impl> weak_impl = impl_;
+    context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
+      if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
+        std::lock_guard<std::recursive_mutex> execution_guard(
+            impl->execution_mutex);
+        impl->record_event(std::move(event));
+      }
+    };
+    context.native_registry = &impl_->native_registry;
+    context.module_registry = &impl_->module_registry;
+    context.type_registry = &impl_->type_registry;
+    context.dispatch_registry = &impl_->dispatch_registry;
+    context.error_registry = &impl_->error_registry;
+    auto session = std::make_shared<RuntimeNativeBridgeSession>(
+        impl_->module_owner, std::move(context));
+    session->synchronize_runtime_names(runtime_strings, runtime_symbols);
+
+    auto invoke = [session = std::move(session), code_id, args,
+                   self = std::move(self)]() mutable -> ExecutionResult {
+      try {
+        return session->invoke_extension(code_id, args, std::move(self));
+      } catch (const RuntimeTaskFailure &failure) {
+        return {Value::null(), Fault{failure.error_name(), failure.message(),
+                                    0, 0}};
+      } catch (const std::exception &error) {
+        return {Value::null(), Fault{"RuntimeError", error.what(), 0, 0}};
+      } catch (...) {
+        return {Value::null(), Fault{"RuntimeError",
+                                     "blocking FFI call failed", 0, 0}};
+      }
+    };
+    ExecutionResult result;
+    if (current_runtime_is_blocking_ffi_thread()) {
+      // Nested blocking FFI (for example from an Amber callback invoked by a
+      // C library) is already off the scheduler/bridge. Run inline to avoid a
+      // fixed-pool submit-and-wait deadlock.
+      result = invoke();
+    } else {
+      auto completion = std::make_shared<std::promise<ExecutionResult>>();
+      std::future<ExecutionResult> result_future = completion->get_future();
+      RuntimeBlockingFfiExecutor::instance().submit(
+          [completion, invoke = std::move(invoke)]() mutable {
+            completion->set_value(invoke());
+          });
+      result = result_future.get();
+    }
+    {
+      std::lock_guard<std::recursive_mutex> execution_guard(
+          impl_->execution_mutex);
+      if (!result.runtime_strings.empty()) {
+        impl_->runtime_strings = result.runtime_strings;
+      }
+      if (!result.runtime_symbols.empty()) {
+        impl_->runtime_symbols = result.runtime_symbols;
+      }
+      impl_->publish_native_bridge_runtime_names(result, include_runtime_names);
+      impl_->record_event(replay::make_event(
+          result.ok() ? "native_extension.completed"
+                      : "native_extension.failed",
+          {{"code_id", std::to_string(code_id)},
+           {"executor", "blocking_ffi"}}));
+    }
+    return result;
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);

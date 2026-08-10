@@ -427,18 +427,19 @@ Value unwrap_watch_value(const Value &value) {
 
 namespace {
 
-// What a task driver's parked step loop is waiting for. Timer = task.sleep
-// (resume after a delay and continue past the suspension point). Io = a
-// blocking socket op parked via wait_fd (resume on reactor
-// readiness/deadline/cancel and retry the op, so the Send's PC is NOT
-// advanced).
+class Vm;
+
+// What a task driver's parked step loop is waiting for. Timer = task.sleep;
+// Io = reactor readiness; Ffi = completion of a thunk running on the blocking
+// executor. Io and Ffi retry the Send, so its PC is not advanced before park.
 struct ParkRequest {
-  enum class Kind { Timer, Io };
+  enum class Kind { Timer, Io, Ffi };
   Kind kind = Kind::Timer;
   std::chrono::milliseconds wake_after{0};
   int fd = -1;
   ReactorInterest interest = ReactorInterest::Read;
   std::optional<std::chrono::steady_clock::time_point> deadline;
+  std::function<void(std::shared_ptr<Vm>)> ffi_start;
 };
 
 // RAII: enable cooperative IO parking for the dynamic extent of one blocking io
@@ -12011,9 +12012,11 @@ private:
                                      const bytecode::BcMethod &method,
                                      const std::vector<Value> &pos_args,
                                      const Value &self, Value *out,
-                                     bool *faulted) {
+                                     bool *faulted, bool *parked = nullptr,
+                                     bool allow_park = false) {
     return try_dispatch_native_extension_code(caller, method.entry_code_id,
-                                              pos_args, self, out, faulted);
+                                              pos_args, self, out, faulted,
+                                              parked, allow_park);
   }
 
   // Same dispatch keyed directly on an entry code object. RuntimeWorld's
@@ -12022,8 +12025,12 @@ private:
   bool try_dispatch_native_extension_code(Frame &caller, std::uint32_t code_id,
                                           const std::vector<Value> &pos_args,
                                           const Value &self, Value *out,
-                                          bool *faulted) {
+                                          bool *faulted, bool *parked = nullptr,
+                                          bool allow_park = false) {
     *faulted = false;
+    if (parked != nullptr) {
+      *parked = false;
+    }
     const RuntimeNativePackageCodeBindingDescriptor *binding =
         dispatch_registry().native_package_code_binding(code_id);
     if (binding == nullptr) {
@@ -12032,6 +12039,152 @@ private:
     void *fn = dispatch_registry().native_package_thunk(binding->logical);
     if (fn == nullptr) {
       return false; // bytecode build: fall back to the Amber body.
+    }
+    const bool blocking =
+        dispatch_registry().native_package_thunk_is_blocking(binding->logical);
+    if (blocking && allow_park && parkable_ && task_module_ != nullptr) {
+      if (block_suspension_in_property_arm(caller, "blocking FFI")) {
+        *faulted = true;
+        return true;
+      }
+
+      if (caller.pending_native_extension_call != nullptr) {
+        const std::shared_ptr<PendingNativeExtensionCall> pending =
+            caller.pending_native_extension_call;
+        bool ready = false;
+        bool ok = false;
+        Value value = Value::null();
+        std::string exception_error_name;
+        std::string exception_message;
+        {
+          std::lock_guard<std::mutex> lock(pending->mutex);
+          if (pending->code_id != code_id || pending->call_pc != caller.pc) {
+            set_fault(caller, "VMError",
+                      "blocking FFI activation does not match the call site");
+            *faulted = true;
+            return true;
+          }
+          ready = pending->ready;
+          if (ready) {
+            ok = pending->ok;
+            value = std::move(pending->value);
+            exception_error_name = pending->exception_error_name;
+            exception_message = pending->exception_message;
+          }
+        }
+        if (!ready) {
+          ParkRequest park;
+          park.kind = ParkRequest::Kind::Ffi;
+          park_request_ = std::move(park);
+          if (parked != nullptr) {
+            *parked = true;
+          }
+          return true;
+        }
+        caller.pending_native_extension_call.reset();
+        blocking_ffi_call_.reset();
+        if (!exception_error_name.empty()) {
+          set_fault(caller, exception_error_name, exception_message);
+          *faulted = true;
+          return true;
+        }
+        if (!ok || fault_.has_value()) {
+          *faulted = true;
+          return true;
+        }
+        *out = std::move(value);
+        return true;
+      }
+
+      auto pending = std::make_shared<PendingNativeExtensionCall>();
+      pending->code_id = code_id;
+      pending->call_pc = caller.pc;
+      caller.pending_native_extension_call = pending;
+      blocking_ffi_call_ = pending;
+
+      Frame *caller_ptr = &caller;
+      const bool method = binding->method;
+      const std::uint64_t strand_id = current_runtime_strand_id();
+      const std::uint64_t task_id = tls_runtime_task_id;
+      const std::uint64_t sync_owner_id = tls_runtime_sync_owner_id;
+      const std::atomic<bool> *cancel_flag = tls_runtime_task_cancel_flag;
+      const std::shared_ptr<RuntimeTaskContext> task_context =
+          tls_runtime_task_context;
+      const void *scheduler_identity = tls_runtime_scheduler_identity;
+      const std::shared_ptr<RuntimeTextWriter> stdout_writer =
+          current_runtime_stdout();
+      const std::shared_ptr<RuntimeTextWriter> stderr_writer =
+          current_runtime_stderr();
+      const std::shared_ptr<RuntimeTaskModule> task = task_module_;
+      ParkRequest park;
+      park.kind = ParkRequest::Kind::Ffi;
+      park.ffi_start =
+          [pending, caller_ptr, fn, method, pos_args, self, strand_id, task_id,
+           sync_owner_id, cancel_flag, task_context, scheduler_identity,
+           stdout_writer, stderr_writer,
+           task](std::shared_ptr<Vm> vm_owner) mutable {
+            RuntimeBlockingFfiExecutor::instance().submit(
+                [pending, caller_ptr, fn, method,
+                 pos_args = std::move(pos_args), self = std::move(self),
+                 strand_id, task_id, sync_owner_id, cancel_flag, task_context,
+                 scheduler_identity, stdout_writer, stderr_writer, task,
+                 vm_owner = std::move(vm_owner)]() mutable {
+                  RuntimeStrandScope strand_scope(strand_id);
+                  RuntimeTaskScope task_scope(task_id, cancel_flag,
+                                              sync_owner_id, task_context,
+                                              scheduler_identity);
+                  RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
+                  IoParkGuard io_park_guard(false);
+                  bool ok = false;
+                  Value value = Value::null();
+                  std::string exception_error_name;
+                  std::string exception_message;
+                  try {
+                    NativeExtCallOutcome outcome =
+                        method ? amber_ext_invoke_method(
+                                     *vm_owner, caller_ptr,
+                                     vm_owner->type_registry()
+                                         .native_package_tags(),
+                                     reinterpret_cast<AmberMethodFn>(fn), self,
+                                     pos_args)
+                               : amber_ext_invoke_free(
+                                     *vm_owner, caller_ptr,
+                                     vm_owner->type_registry()
+                                         .native_package_tags(),
+                                     reinterpret_cast<AmberFreeFn>(fn),
+                                     pos_args);
+                    ok = outcome.ok;
+                    value = std::move(outcome.value);
+                  } catch (const RuntimeTaskCancelled &) {
+                    exception_error_name = "CancelledError";
+                    exception_message = "task cancelled";
+                  } catch (const RuntimeTaskFailure &failure) {
+                    exception_error_name = failure.error_name();
+                    exception_message = failure.message();
+                  } catch (const std::exception &error) {
+                    exception_error_name = "RuntimeError";
+                    exception_message = error.what();
+                  } catch (...) {
+                    exception_error_name = "RuntimeError";
+                    exception_message = "blocking FFI call failed";
+                  }
+                  {
+                    std::lock_guard<std::mutex> lock(pending->mutex);
+                    pending->ok = ok;
+                    pending->value = std::move(value);
+                    pending->exception_error_name =
+                        std::move(exception_error_name);
+                    pending->exception_message = std::move(exception_message);
+                    pending->ready = true;
+                  }
+                  task->scheduler().wake_strand(strand_id);
+                });
+          };
+      park_request_ = std::move(park);
+      if (parked != nullptr) {
+        *parked = true;
+      }
+      return true;
     }
     NativeExtCallOutcome outcome =
         binding->method
@@ -12743,8 +12896,13 @@ private:
     {
       Value native_out = Value::null();
       bool native_faulted = false;
+      bool native_parked = false;
       if (try_dispatch_native_extension(caller, method, pos_args, self,
-                                        &native_out, &native_faulted)) {
+                                        &native_out, &native_faulted,
+                                        &native_parked, true)) {
+        if (native_parked) {
+          return true;
+        }
         if (native_faulted) {
           return false;
         }
@@ -13913,6 +14071,7 @@ private:
             completed->last_completed_regs_.clear();
             completed->last_completed_initialized_.clear();
             completed->park_request_.reset();
+            completed->blocking_ffi_call_.reset();
             // These caches may contain unique request bodies or generated
             // response strings. Retain execution caches, not request data.
             completed->shared_string_text_cache_.clear();
@@ -13949,6 +14108,19 @@ private:
                   template_state->inherited_stderr]() mutable -> Value {
         RuntimeOutputScope output_scope(inherited_stdout, inherited_stderr);
         vm->park_request_.reset();
+        if (vm->blocking_ffi_call_ != nullptr) {
+          bool ready = false;
+          {
+            std::lock_guard<std::mutex> lock(vm->blocking_ffi_call_->mutex);
+            ready = vm->blocking_ffi_call_->ready;
+          }
+          if (!ready) {
+            if (task->scheduler().park_current(std::nullopt)) {
+              runtime_mark_task_parked();
+            }
+            return Value::null();
+          }
+        }
         while (vm->fault_ == std::nullopt && !vm->park_request_.has_value() &&
                !vm->frames_.empty()) {
           vm->step();
@@ -13964,7 +14136,7 @@ private:
             if (task->scheduler().park_current(req.wake_after)) {
               runtime_mark_task_parked();
             }
-          } else {
+          } else if (req.kind == ParkRequest::Kind::Io) {
             // Io park: park the strand with no timer (external wake), then
             // register reactor interest whose completion wakes it. Order
             // matters: park_current() sets park_pending FIRST, so a reactor
@@ -13978,7 +14150,16 @@ private:
                   tls_runtime_task_cancel_flag,
                   [task, self_id](ReactorOutcome) {
                     task->scheduler().wake_strand(self_id);
-                  });
+                });
+            }
+          } else {
+            // Park before submitting so even an immediately completing thunk
+            // cannot lose its wake-up.
+            if (task->scheduler().park_current(std::nullopt)) {
+              runtime_mark_task_parked();
+              if (req.ffi_start) {
+                req.ffi_start(vm);
+              }
             }
           }
           return Value::null();
@@ -32789,6 +32970,7 @@ private:
   // prelude binding is still a stable module constant for the VM lifetime.
   std::shared_ptr<RuntimeTaskModule> prelude_task_module_;
   std::optional<ParkRequest> park_request_;
+  std::shared_ptr<PendingNativeExtensionCall> blocking_ffi_call_;
   // Set when this Vm executes inside a property arm of an outer Vm (nested
   // executions inherit the non-suspendable dynamic extent).
   std::optional<std::string> inherited_no_suspend_label_;

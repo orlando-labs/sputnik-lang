@@ -292,6 +292,20 @@ struct PreservedRegister {
   Value value = Value::null();
 };
 
+// Result hand-off for a native extension thunk executing on the blocking FFI
+// executor. The owning VM is quiescent while `ready` is false; the mutex is the
+// publication boundary between the executor and the resumed scheduler strand.
+struct PendingNativeExtensionCall {
+  std::mutex mutex;
+  bool ready = false;
+  bool ok = false;
+  std::uint32_t code_id = 0;
+  std::size_t call_pc = 0;
+  Value value = Value::null();
+  std::string exception_error_name;
+  std::string exception_message;
+};
+
 struct Frame {
   const bytecode::BcCode *code = nullptr;
   const QuickCode *quick_code = nullptr;
@@ -327,6 +341,7 @@ struct Frame {
   // Dynamic runtime scope cleanup (currently TaskLocal.with). The cleanup is
   // kept on the resumable frame so it survives cooperative park/migration.
   std::function<void()> scope_exit;
+  std::shared_ptr<PendingNativeExtensionCall> pending_native_extension_call;
   FlatRegMap<PreparedSeqState> prepared_seq_regs;
   FlatRegMap<PreparedMapState> prepared_map_regs;
   FlatRegMap<Value> pending_pattern_bindings;

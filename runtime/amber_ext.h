@@ -106,6 +106,11 @@ AmberStatus amber_call_block(AmberCtx *cx, AmberValue block,
                              const AmberValue *args, size_t argc,
                              AmberValue *out);
 
+/* True when the logical Amber task executing this thunk has been cancelled.
+ * Blocking thunks should poll this at bounded intervals and return a
+ * CancelledError fault instead of retaining an executor thread indefinitely. */
+int amber_task_cancelled(AmberCtx *cx);
+
 /* ---- thunk and lifetime function signatures --------------------------- */
 /* Free function / constructor: `(args) -> out`. */
 typedef AmberStatus (*AmberFreeFn)(AmberCtx *cx, const AmberValue *args,

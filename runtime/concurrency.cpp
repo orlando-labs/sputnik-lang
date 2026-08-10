@@ -29,6 +29,102 @@
 
 namespace amber::runtime {
 
+namespace {
+thread_local bool tls_runtime_blocking_ffi_thread = false;
+}
+
+bool current_runtime_is_blocking_ffi_thread() {
+  return tls_runtime_blocking_ffi_thread;
+}
+
+class RuntimeBlockingFfiExecutor::Impl {
+public:
+  Impl() {
+    const std::size_t hardware =
+        std::max<std::size_t>(1U, std::thread::hardware_concurrency());
+    const std::size_t worker_count =
+        std::max<std::size_t>(4U, std::min<std::size_t>(32U, hardware * 2U));
+    workers_.reserve(worker_count);
+    for (std::size_t index = 0; index < worker_count; ++index) {
+      workers_.emplace_back([this]() { worker_loop(); });
+    }
+  }
+
+  ~Impl() {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stopping_ = true;
+    }
+    ready_.notify_all();
+    for (std::thread &worker : workers_) {
+      if (worker.joinable()) {
+        worker.join();
+      }
+    }
+  }
+
+  void submit(std::function<void()> function) {
+    if (!function) {
+      return;
+    }
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (stopping_) {
+        throw RuntimeTaskFailure("RuntimeError",
+                                 "blocking FFI executor is shutting down");
+      }
+      queue_.push_back(std::move(function));
+    }
+    ready_.notify_one();
+  }
+
+private:
+  void worker_loop() {
+    while (true) {
+      std::function<void()> function;
+      {
+        std::unique_lock<std::mutex> lock(mutex_);
+        ready_.wait(lock, [this]() { return stopping_ || !queue_.empty(); });
+        if (stopping_ && queue_.empty()) {
+          return;
+        }
+        function = std::move(queue_.front());
+        queue_.pop_front();
+      }
+      try {
+        tls_runtime_blocking_ffi_thread = true;
+        function();
+      } catch (...) {
+        // Submitted jobs own their completion/error channel. An exception must
+        // never terminate an executor worker or the process.
+      }
+      tls_runtime_blocking_ffi_thread = false;
+    }
+  }
+
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  std::deque<std::function<void()>> queue_;
+  std::vector<std::thread> workers_;
+  bool stopping_ = false;
+};
+
+RuntimeBlockingFfiExecutor &RuntimeBlockingFfiExecutor::instance() {
+  // Deliberately leaked: process shutdown may still run collected native
+  // handle finalizers after ordinary static destruction has begun.
+  static auto *executor = new RuntimeBlockingFfiExecutor();
+  return *executor;
+}
+
+RuntimeBlockingFfiExecutor::RuntimeBlockingFfiExecutor()
+    : impl_(std::make_unique<Impl>()) {}
+
+RuntimeBlockingFfiExecutor::~RuntimeBlockingFfiExecutor() = default;
+
+void RuntimeBlockingFfiExecutor::submit(std::function<void()> function) {
+  impl_->submit(std::move(function));
+}
+
 struct RuntimeTaskContext::State {
   struct ScopeRestore {
     std::uint64_t token = 0;

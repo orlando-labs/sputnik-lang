@@ -945,7 +945,7 @@ void test_dispatch_registry_imports_native_package_bindings() {
 void test_runtime_native_package_descriptor() {
   RuntimeNativePackageDescriptor descriptor;
   int marker = 0;
-  descriptor.thunks.push_back({"pkg.fn", &marker});
+  descriptor.thunks.push_back({"pkg.fn", &marker, true});
   descriptor.code_bindings.push_back({7, false, "pkg.free"});
   descriptor.method_bindings.push_back({"pkg.Handle", "bump!", "pkg.bump"});
 
@@ -965,6 +965,8 @@ void test_runtime_native_package_descriptor() {
 
   expect(dispatch.native_package_thunk("pkg.fn") == &marker,
          "native package descriptor registers thunks");
+  expect(dispatch.native_package_thunk_is_blocking("pkg.fn"),
+         "native package descriptor preserves blocking thunk metadata");
   const RuntimeNativePackageCodeBindingDescriptor *code_binding =
       dispatch.native_package_code_binding(7);
   expect(code_binding != nullptr && !code_binding->method &&

@@ -510,6 +510,7 @@ std::string canonical_manifest_text(const PackageManifest &manifest) {
     emit_array("defines", native.defines);
     emit_array("cxxflags", native.cxxflags);
     emit_array("link_libraries", native.link_libraries);
+    emit_array("blocking_symbols", native.blocking_symbols);
     out << prefix << ".symbol.count=" << native.symbols.size() << "\n";
     for (std::size_t j = 0; j < native.symbols.size(); ++j) {
       out << prefix << ".symbol." << j
@@ -620,6 +621,7 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
     emit_array("defines", native.defines);
     emit_array("cxxflags", native.cxxflags);
     emit_array("link_libraries", native.link_libraries);
+    emit_array("blocking_symbols", native.blocking_symbols);
     out << prefix << ".symbol.count=" << native.symbols.size() << "\n";
     for (std::size_t j = 0; j < native.symbols.size(); ++j) {
       out << prefix << ".symbol." << j
@@ -1118,6 +1120,8 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
         array_target = &current_native->cxxflags;
       } else if (key == "link_libraries") {
         array_target = &current_native->link_libraries;
+      } else if (key == "blocking_symbols") {
+        array_target = &current_native->blocking_symbols;
       }
       if (array_target == nullptr) {
         result.diagnostics.push_back(diagnostic(
@@ -1385,6 +1389,8 @@ std::string manifest_to_json(const PackageManifest &manifest) {
     json_string_array(native.cxxflags);
     out << ",\"link_libraries\":";
     json_string_array(native.link_libraries);
+    out << ",\"blocking_symbols\":";
+    json_string_array(native.blocking_symbols);
     out << ",\"symbols\":[";
     for (std::size_t j = 0; j < native.symbols.size(); ++j) {
       if (j != 0U) {
@@ -1789,6 +1795,14 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
       result.diagnostics.push_back(diagnostic(
           "PackageParseError",
           "package artifact native extension is incomplete", path));
+      return result;
+    }
+    if (values.find(prefix + "blocking_symbols.count") != values.end() &&
+        !read_string_array(prefix, "blocking_symbols",
+                           &extension.blocking_symbols)) {
+      result.diagnostics.push_back(diagnostic(
+          "PackageParseError",
+          "package artifact blocking FFI symbol list is incomplete", path));
       return result;
     }
     if (values.find(prefix + "capabilities.count") != values.end()) {

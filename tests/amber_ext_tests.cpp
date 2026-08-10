@@ -610,7 +610,7 @@ void test_native_extension_runtime_contributions() {
   NativeExtRegistry extension_registry;
   RuntimeNativePackageDescriptor package;
   int marker = 0;
-  package.thunks.push_back({"pkg.fn", &marker});
+  package.thunks.push_back({"pkg.fn", &marker, true});
   package.code_bindings.push_back({7, false, "pkg.fn"});
   package.method_bindings.push_back({"pkg.Handle", "bump!", "pkg.fn"});
 
@@ -634,6 +634,8 @@ void test_native_extension_runtime_contributions() {
 
   expect(dispatch.native_package_thunk("pkg.fn") == &marker,
          "native extension contributor imports thunks");
+  expect(dispatch.native_package_thunk_is_blocking("pkg.fn"),
+         "native extension contributor imports blocking thunk metadata");
   const auto *code_binding = dispatch.native_package_code_binding(7);
   expect(code_binding != nullptr && !code_binding->method &&
              code_binding->logical == "pkg.fn",

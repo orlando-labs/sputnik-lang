@@ -7632,6 +7632,17 @@ std::set<std::string> manifest_native_logicals(
   return out;
 }
 
+std::set<std::string> manifest_blocking_native_logicals(
+    const std::vector<amber::pkg::PackageNativeExtension> &native_extensions) {
+  std::set<std::string> out;
+  for (const amber::pkg::PackageNativeExtension &extension :
+       native_extensions) {
+    out.insert(extension.blocking_symbols.begin(),
+               extension.blocking_symbols.end());
+  }
+  return out;
+}
+
 std::vector<std::string> direct_native_symbols(
     const amber::bytecode::BcModule &module,
     const std::vector<amber::pkg::PackageNativeExtension> &native_extensions) {
@@ -23669,6 +23680,8 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
     };
     const std::vector<std::string> direct_symbols =
         direct_native_symbols(module, native_extensions);
+    const std::set<std::string> blocking_symbols =
+        manifest_blocking_native_logicals(native_extensions);
     for (const amber::pkg::PackageNativeExtension &extension :
          native_extensions) {
       for (const amber::pkg::PackageNativeSymbol &symbol : extension.symbols) {
@@ -23682,7 +23695,9 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
     out << "  amber::runtime::RuntimeNativePackageDescriptor package;\n";
     for (const std::string &symbol : direct_symbols) {
       out << "  package.thunks.push_back({\"" << cpp_string(symbol)
-          << "\", reinterpret_cast<void *>(&" << symbol << ")});\n";
+          << "\", reinterpret_cast<void *>(&" << symbol << "), "
+          << (blocking_symbols.count(symbol) != 0U ? "true" : "false")
+          << "});\n";
     }
     std::unordered_map<std::string, std::string> logical_to_symbol;
     for (const amber::pkg::PackageNativeExtension &extension :
@@ -23690,7 +23705,10 @@ AmberNativeBridgeRequestStateScope::~AmberNativeBridgeRequestStateScope() {
       for (const amber::pkg::PackageNativeSymbol &symbol : extension.symbols) {
         logical_to_symbol[symbol.logical] = symbol.symbol;
         out << "  package.thunks.push_back({\"" << cpp_string(symbol.logical)
-            << "\", reinterpret_cast<void *>(&" << symbol.symbol << ")});\n";
+            << "\", reinterpret_cast<void *>(&" << symbol.symbol << "), "
+            << (blocking_symbols.count(symbol.logical) != 0U ? "true"
+                                                              : "false")
+            << "});\n";
       }
       for (const amber::pkg::PackageNativeType &type : extension.types) {
         out << "  {\n";
@@ -26876,6 +26894,10 @@ std::string native_extension_cache_key(
       append_native_cache_atom(&material, "link-library");
       append_native_cache_atom(&material, library);
     }
+    for (const std::string &logical : extension.blocking_symbols) {
+      append_native_cache_atom(&material, "blocking-symbol");
+      append_native_cache_atom(&material, logical);
+    }
     for (const amber::pkg::PackageNativeSymbol &symbol : extension.symbols) {
       append_native_cache_atom(&material, "symbol");
       append_native_cache_atom(&material, symbol.logical);
@@ -27098,6 +27120,8 @@ void compile_and_load_native_extensions(
   }
 
   amber::runtime::RuntimeNativePackageDescriptor package;
+  const std::set<std::string> blocking_symbols =
+      manifest_blocking_native_logicals(extensions);
   std::unordered_map<std::string, std::string> logical_to_symbol;
   std::set<std::string> registered_logicals;
   for (const amber::pkg::PackageNativeExtension &extension : extensions) {
@@ -27106,14 +27130,16 @@ void compile_and_load_native_extensions(
       if (registered_logicals.insert(symbol.logical).second) {
         package.thunks.push_back(
             {symbol.logical,
-             dynamic_symbol(handle, symbol.symbol, library_path)});
+             dynamic_symbol(handle, symbol.symbol, library_path),
+             blocking_symbols.count(symbol.logical) != 0U});
       }
     }
   }
   for (const std::string &symbol : direct_native_symbols(module, extensions)) {
     if (registered_logicals.insert(symbol).second) {
       package.thunks.push_back(
-          {symbol, dynamic_symbol(handle, symbol, library_path)});
+          {symbol, dynamic_symbol(handle, symbol, library_path),
+           blocking_symbols.count(symbol) != 0U});
     }
   }
 

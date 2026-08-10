@@ -23,6 +23,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -744,6 +745,7 @@ struct RuntimeIoValueHandlerDescriptor {
 struct RuntimeNativePackageThunkDescriptor {
   std::string logical;
   void *fn = nullptr;
+  bool blocking = false;
 };
 
 struct RuntimeNativePackageErrorDescriptor {
@@ -813,8 +815,10 @@ public:
   std::optional<RuntimeIoValueHandlerDescriptor>
   io_value_handler(const std::string &type_name) const;
 
-  void register_native_package_thunk(std::string logical, void *fn);
+  void register_native_package_thunk(std::string logical, void *fn,
+                                     bool blocking = false);
   void *native_package_thunk(const std::string &logical) const;
+  bool native_package_thunk_is_blocking(const std::string &logical) const;
 
   void register_native_package_code_binding(std::uint32_t code_id, bool method,
                                             std::string logical);
@@ -843,6 +847,7 @@ private:
   std::unordered_map<std::string, RuntimeIoValueHandlerDescriptor>
       io_value_handlers_;
   std::unordered_map<std::string, void *> native_package_thunks_;
+  std::unordered_set<std::string> blocking_native_package_thunks_;
   std::unordered_map<std::uint32_t, RuntimeNativePackageCodeBindingDescriptor>
       native_package_code_bindings_;
   std::unordered_map<std::string, std::string> native_package_method_bindings_;

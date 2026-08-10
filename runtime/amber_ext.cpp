@@ -323,6 +323,11 @@ AmberStatus amber_call_block(AmberCtx *cx, AmberValue block,
   return AMBER_ERR; // a fault/throw has already been recorded on the frame.
 }
 
+int amber_task_cancelled(AmberCtx *cx) {
+  (void)cx;
+  return amber::runtime::current_runtime_task_cancel_requested() ? 1 : 0;
+}
+
 uint32_t amber_ext_abi_version(void) { return AMBER_EXT_ABI_VERSION; }
 
 } // extern "C"
@@ -341,7 +346,7 @@ void NativeExtRegistry::register_thunk(const std::string &logical, void *fn) {
     found->fn = fn;
     return;
   }
-  descriptor_.thunks.push_back({logical, fn});
+  descriptor_.thunks.push_back({logical, fn, false});
 }
 void NativeExtRegistry::register_type(NativeTypeDescriptor descriptor) {
   const auto found = std::find_if(
@@ -361,7 +366,17 @@ void NativeExtRegistry::register_error(NativeExtErrorDescriptor descriptor) {
 void NativeExtRegistry::register_package(
     RuntimeNativePackageDescriptor descriptor) {
   for (const RuntimeNativePackageThunkDescriptor &thunk : descriptor.thunks) {
-    register_thunk(thunk.logical, thunk.fn);
+    const auto found = std::find_if(
+        descriptor_.thunks.begin(), descriptor_.thunks.end(),
+        [&](const RuntimeNativePackageThunkDescriptor &registered) {
+          return registered.logical == thunk.logical;
+        });
+    if (found != descriptor_.thunks.end()) {
+      found->fn = thunk.fn;
+      found->blocking = thunk.blocking;
+    } else {
+      descriptor_.thunks.push_back(thunk);
+    }
   }
   for (NativeTypeDescriptor &type : descriptor.types) {
     register_type(std::move(type));
@@ -396,7 +411,8 @@ void NativeExtRegistry::contribute_to(
 void NativeExtRegistry::register_thunks(
     RuntimeDispatchRegistry &dispatch) const {
   for (const RuntimeNativePackageThunkDescriptor &thunk : descriptor_.thunks) {
-    dispatch.register_native_package_thunk(thunk.logical, thunk.fn);
+    dispatch.register_native_package_thunk(thunk.logical, thunk.fn,
+                                           thunk.blocking);
   }
 }
 void NativeExtRegistry::register_types(RuntimeTypeRegistry &types) const {

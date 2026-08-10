@@ -64,6 +64,11 @@ struct PackageNativeExtension {
   std::vector<std::string> defines;
   std::vector<std::string> cxxflags;
   std::vector<std::string> link_libraries;
+  // Logical thunk names whose implementation may block the calling OS thread.
+  // The VM parks its strand and dispatches these calls through the blocking
+  // FFI executor; generated native code invokes them outside the world bridge
+  // lock.
+  std::vector<std::string> blocking_symbols;
   std::vector<PackageNativeSymbol> symbols;
   std::vector<PackageNativeType> types;
   std::vector<PackageNativeError> errors;

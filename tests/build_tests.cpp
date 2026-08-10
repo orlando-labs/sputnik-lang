@@ -78,6 +78,7 @@ void test_yaml_manifest_parses_and_normalizes() {
       "  - name: tiny\n"
       "    language: c\n"
       "    sources: [native/tiny.c]\n"
+      "    blocking_symbols: [tiny.wait]\n"
       "    symbols:\n"
       "      - logical: tiny.answer\n"
       "        symbol: tiny_answer\n";
@@ -104,6 +105,9 @@ void test_yaml_manifest_parses_and_normalizes() {
              extension.symbols[0].logical == "tiny.answer" &&
              extension.symbols[0].symbol == "tiny_answer",
          "YAML native symbols should parse");
+  expect(extension.blocking_symbols.size() == 1 &&
+             extension.blocking_symbols[0] == "tiny.wait",
+         "YAML blocking native symbols should parse");
 
   const std::string obsolete =
       "schema: amber.build.v1\n"
@@ -162,6 +166,7 @@ void test_native_extensions_parse_and_gate() {
       "\"native_extensions\":[{"
       "\"name\":\"blake3\",\"language\":\"c\","
       "\"sources\":[\"native/blake3.c\"],"
+      "\"blocking_symbols\":[\"blake3.wait\"],"
       "\"symbols\":[{\"logical\":\"blake3.hash\","
       "\"symbol\":\"amber_blake3_hash\"}],"
       "\"types\":[{\"amber\":\"crypto.blake3.Hasher\",\"tag\":\"blake3.Hasher\","
@@ -181,6 +186,9 @@ void test_native_extensions_parse_and_gate() {
   expect(extension.sources.size() == 1 &&
              extension.sources[0] == "native/blake3.c",
          "native extension sources");
+  expect(extension.blocking_symbols.size() == 1 &&
+             extension.blocking_symbols[0] == "blake3.wait",
+         "native extension blocking symbols");
   expect(extension.symbols.size() == 1 &&
              extension.symbols[0].symbol == "amber_blake3_hash",
          "native extension symbol map");

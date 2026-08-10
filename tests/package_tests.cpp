@@ -213,6 +213,7 @@ void test_native_extension_manifest() {
       "sources = [\"native/blake3.c\", \"native/amber_blake3.c\"]\n"
       "include_dirs = [\"native/include\"]\n"
       "cxxflags = [\"-O3\"]\n"
+      "blocking_symbols = [\"blake3.wait\"]\n"
       "\n"
       "[native.symbols]\n"
       "\"blake3.hash\" = \"amber_blake3_hash\"\n"
@@ -242,6 +243,9 @@ void test_native_extension_manifest() {
   expect(ext.include_dirs.size() == 1 && ext.cxxflags.size() == 1 &&
              ext.cxxflags[0] == "-O3",
          "native include_dirs/cxxflags arrays");
+  expect(ext.blocking_symbols.size() == 1 &&
+             ext.blocking_symbols[0] == "blake3.wait",
+         "native blocking symbols array");
   expect(ext.symbols.size() == 2 && ext.symbols[0].logical == "blake3.hash" &&
              ext.symbols[0].symbol == "amber_blake3_hash",
          "symbol map unquotes the logical key");
@@ -258,6 +262,8 @@ void test_native_extension_manifest() {
   const std::string json = amber::pkg::manifest_to_json(parsed.manifest);
   expect(json.find("\"native_extensions\"") != std::string::npos &&
              json.find("amber_blake3_hash") != std::string::npos &&
+             json.find("\"blocking_symbols\":[\"blake3.wait\"]") !=
+                 std::string::npos &&
              json.find("\"tag\":\"blake3.Hasher\"") != std::string::npos &&
              json.find("\"name\":\"crypto.blake3.HashError\"") !=
                  std::string::npos,

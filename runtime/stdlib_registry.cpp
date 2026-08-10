@@ -132,7 +132,13 @@ RuntimeDispatchRegistry::io_value_handler(const std::string &type_name) const {
 }
 
 void RuntimeDispatchRegistry::register_native_package_thunk(std::string logical,
-                                                            void *fn) {
+                                                            void *fn,
+                                                            bool blocking) {
+  if (blocking) {
+    blocking_native_package_thunks_.insert(logical);
+  } else {
+    blocking_native_package_thunks_.erase(logical);
+  }
   native_package_thunks_[std::move(logical)] = fn;
 }
 
@@ -140,6 +146,12 @@ void *RuntimeDispatchRegistry::native_package_thunk(
     const std::string &logical) const {
   const auto it = native_package_thunks_.find(logical);
   return it == native_package_thunks_.end() ? nullptr : it->second;
+}
+
+bool RuntimeDispatchRegistry::native_package_thunk_is_blocking(
+    const std::string &logical) const {
+  return blocking_native_package_thunks_.find(logical) !=
+         blocking_native_package_thunks_.end();
 }
 
 void RuntimeDispatchRegistry::register_native_package_code_binding(
@@ -497,7 +509,8 @@ void register_runtime_native_package_descriptor(
     RuntimeErrorRegistry &errors,
     const RuntimeNativePackageDescriptor &descriptor) {
   for (const RuntimeNativePackageThunkDescriptor &thunk : descriptor.thunks) {
-    dispatch.register_native_package_thunk(thunk.logical, thunk.fn);
+    dispatch.register_native_package_thunk(thunk.logical, thunk.fn,
+                                           thunk.blocking);
   }
   for (const RuntimeNativePackageCodeBindingDescriptor &binding :
        descriptor.code_bindings) {

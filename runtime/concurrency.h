@@ -51,6 +51,7 @@ std::uint64_t current_runtime_strand_id();
 std::uint64_t current_runtime_task_id();
 bool current_runtime_task_cancel_requested();
 bool current_runtime_task_sync_active();
+bool current_runtime_is_blocking_ffi_thread();
 
 class RuntimeTaskFailure : public std::exception {
 public:
@@ -93,6 +94,28 @@ public:
 
 private:
   std::uint64_t previous_strand_id_ = 0;
+};
+
+// Process-wide executor for foreign calls that may block an OS thread. VM
+// strands park before submitting work here, so scheduler workers remain
+// available. Fully-native callers may synchronously wait for completion, but
+// the foreign call still runs outside RuntimeWorld's serialized bridge.
+class RuntimeBlockingFfiExecutor {
+public:
+  static RuntimeBlockingFfiExecutor &instance();
+
+  RuntimeBlockingFfiExecutor(const RuntimeBlockingFfiExecutor &) = delete;
+  RuntimeBlockingFfiExecutor &
+  operator=(const RuntimeBlockingFfiExecutor &) = delete;
+
+  void submit(std::function<void()> function);
+
+private:
+  RuntimeBlockingFfiExecutor();
+  ~RuntimeBlockingFfiExecutor();
+
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 enum class RuntimeStrandState {

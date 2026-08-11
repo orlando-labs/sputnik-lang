@@ -4631,8 +4631,9 @@ private:
 
       std::uint32_t site_flags = 0;
       std::uint32_t site_id = 0;
-      if (quick_operand_u32(insn, operand_index++, &site_id) &&
-          site_id < code.call_site_table.size()) {
+      const bool has_site_id =
+          quick_operand_u32(insn, operand_index++, &site_id);
+      if (has_site_id && site_id < code.call_site_table.size()) {
         site_flags = code.call_site_table[site_id].flags;
       }
       // Property-style calls (`value.count`, `value.to_str`) are the normal
@@ -4747,6 +4748,16 @@ private:
         } else if (collection_selector == "first") {
           out.quick_opcode = QuickOpcode::SendSeqFirst;
         }
+      }
+      // A warmed ordinary nullary send can bypass the full scalar/property
+      // dispatcher and its empty args/keywords vectors. The first execution
+      // still falls back and populates the ordinary inline cache; only a
+      // validated cache hit is handled by this quick opcode.
+      if (out.quick_opcode == QuickOpcode::Fallback && pos_count == 0U &&
+          has_site_id && site_id < code.call_site_table.size()) {
+        out.quick_opcode = QuickOpcode::SendCached0;
+        c = selector_id;
+        imm = static_cast<std::int64_t>(site_id);
       }
       break;
     }
@@ -30022,6 +30033,105 @@ private:
                : FastSendStatus::Faulted;
   }
 
+  FastSendStatus step_quick_cached_zero_send(Frame &frame,
+                                             const QuickInsn &quick) {
+    if (quick.imm < 0 || quick.c >= runtime_symbols_.size()) {
+      return FastSendStatus::NotHandled;
+    }
+    const Value receiver = read_reg(frame, quick.b);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+
+    std::uint32_t class_index = 0;
+    std::uint32_t dispatch_flags = 0;
+    if (receiver.is_instance_object()) {
+      const IntrusivePtr<InstanceValue> instance = receiver.as_instance_object();
+      if (instance == nullptr || instance_is_native_range(instance) ||
+          value_is_lazy_seq_instance(receiver)) {
+        return FastSendStatus::NotHandled;
+      }
+      class_index = instance->class_index;
+      dispatch_flags = kMethodFlagInstance;
+    } else if (receiver.is_class_object()) {
+      class_index = receiver.as_class_object().class_index;
+      dispatch_flags = kMethodFlagClass;
+    } else {
+      return FastSendStatus::NotHandled;
+    }
+    if (!ensure_lifecycle_access(frame, receiver)) {
+      return FastSendStatus::Faulted;
+    }
+
+    const std::uint32_t site_id = static_cast<std::uint32_t>(quick.imm);
+    const std::uint32_t site_flags = call_site_flags(frame, site_id);
+    const bool property_access =
+        (site_flags & bytecode::kCallSiteFlagPropertyAccess) != 0U;
+    if ((site_flags & bytecode::kCallSiteFlagPropertyAssignment) != 0U) {
+      return FastSendStatus::NotHandled;
+    }
+    static const std::vector<Value> no_args;
+    static const std::vector<std::pair<std::uint32_t, Value>> no_keywords;
+    const Value no_block = Value::null();
+    const CallCacheEntry *entry = probe_call_cache_entry(
+        frame, site_id, class_index, dispatch_flags, quick.c, 0U, no_keywords,
+        no_block);
+    if (entry == nullptr) {
+      return FastSendStatus::NotHandled;
+    }
+
+    const bytecode::BcMethod &method = entry->method;
+    const std::string &selector = runtime_symbols_[quick.c];
+    if (property_access) {
+      const FastSendStatus attr_status = step_cached_attr_reader(
+          frame, quick.a, receiver, site_id, *entry);
+      if (attr_status == FastSendStatus::Faulted) {
+        return FastSendStatus::Faulted;
+      }
+      if (attr_status == FastSendStatus::Matched) {
+        ++frame.pc;
+        return FastSendStatus::Matched;
+      }
+      if ((method.flags & kMethodFlagPropertySetter) != 0U) {
+        set_fault(frame, "WriteOnlyPropertyError",
+                  "cannot read write-only property `" + selector + "`");
+        return FastSendStatus::Faulted;
+      }
+      if ((method.flags & kMethodFlagPropertyGetter) != 0U) {
+        return invoke_method(frame, method, no_args, no_keywords, receiver,
+                             no_block, quick.a, std::nullopt,
+                             "property getter `" + selector + "`")
+                   ? FastSendStatus::Matched
+                   : FastSendStatus::Faulted;
+      }
+      if (!method.params.empty() || !method.default_thunk_ids.empty()) {
+        set_fault(frame, "ArgumentError",
+                  "method `" + selector +
+                      "` is not bare-callable: its signature is not "
+                      "syntactically nullary; use `" +
+                      selector + "(...)`");
+        return FastSendStatus::Faulted;
+      }
+    } else {
+      if ((method.flags & kMethodFlagPropertyGetter) != 0U) {
+        set_fault(frame, "TypeError",
+                  "property `" + selector + "` is not a method; use `" +
+                      selector + "` or `" + selector +
+                      ".()` if the property value is callable");
+        return FastSendStatus::Faulted;
+      }
+      if ((method.flags & kMethodFlagPropertySetter) != 0U) {
+        set_fault(frame, "TypeError",
+                  "property setter requires assignment syntax");
+        return FastSendStatus::Faulted;
+      }
+    }
+    return invoke_method(frame, method, no_args, no_keywords, receiver, no_block,
+                         quick.a)
+               ? FastSendStatus::Matched
+               : FastSendStatus::Faulted;
+  }
+
   bool step_send(Frame &frame, const Instruction &insn, bool dynamic_selector,
                  bool expanded = false) {
     std::uint32_t dst = 0;
@@ -31276,6 +31386,19 @@ private:
         }
         if (status == FastSendStatus::Matched) {
           ++frame.pc;
+          return;
+        }
+        break;
+      }
+      case QuickOpcode::SendCached0: {
+        const FastSendStatus status =
+            step_quick_cached_zero_send(frame, *quick);
+        if (status == FastSendStatus::Faulted) {
+          return;
+        }
+        if (status == FastSendStatus::Matched) {
+          // The helper either completed an attr read or invoked a method; both
+          // paths own the caller PC transition.
           return;
         }
         break;

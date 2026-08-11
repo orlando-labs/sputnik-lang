@@ -203,6 +203,7 @@ enum class QuickOpcode : std::uint8_t {
   SendSeqAll,
   SendSeqAny,
   SendSeqNone,
+  SendCached0,
   LoadIvar,
   StoreIvar,
 };

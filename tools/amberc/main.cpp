@@ -3387,6 +3387,29 @@ std::set<std::uint32_t> native_cpp_code_local_capture_slots(
   return slots;
 }
 
+bool native_cpp_code_may_own_nonlocal_return_target(
+    const amber::bytecode::BcModule &module,
+    const amber::bytecode::BcCode &code) {
+  for (const amber::bytecode::Instruction &instruction : code.instructions) {
+    if (instruction.opcode != amber::bytecode::Opcode::MakeClosure) {
+      continue;
+    }
+    std::uint32_t code_id = 0;
+    if (!operand_u32_value(instruction, 1U, &code_id)) {
+      continue;
+    }
+    const amber::bytecode::BcCode *created_code =
+        native_code_by_id(module, code_id);
+    if (created_code != nullptr &&
+        created_code->kind == amber::bytecode::CodeKind::Block &&
+        (created_code->flags &
+         amber::bytecode::kCodeFlagNonlocalReturnBlock) != 0U) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::optional<std::uint32_t> native_cpp_direct_chars_each_block_at_pc(
     const amber::bytecode::BcModule &module,
     const amber::bytecode::BcCode &owner,
@@ -4518,6 +4541,11 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               return handler.handler_code_id == code.code_id;
             });
       });
+  const bool may_own_nonlocal_return_target =
+      native_cpp_code_may_own_nonlocal_return_target(module, code);
+  const bool needs_handler_frame = is_handler_code;
+  const bool needs_outer_try =
+      needs_handler_frame || may_own_nonlocal_return_target;
   const bool uses_scalar_lanes =
       !uses_local_capture_cells && !owns_handlers && !is_handler_code;
   std::map<std::size_t, std::size_t> user_send_call_site_index;
@@ -4706,9 +4734,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     const std::uint32_t rest_index =
         code.flags >> amber::bytecode::kCodeRestParamIndexShift;
     out << "  if (args.size() < " << rest_index
-        << "U) throw NativeRaised{native_named_error("
+        << "U) native_raise(native_named_error("
            "\"ArgumentError\", \"block received too few positional "
-           "arguments\")};\n";
+           "arguments\"));\n";
     out << "  for (std::size_t arg_index = 0; arg_index < " << rest_index
         << "U; ++arg_index) {\n";
     if (uses_local_capture_cells) {
@@ -4740,8 +4768,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     }
     out << "  }\n";
   }
-  out << "  if (handler_seed != nullptr) "
-         "native_seed_handler_frame(frame, *handler_seed);\n";
+  if (needs_handler_frame) {
+    out << "  if (handler_seed != nullptr) "
+           "native_seed_handler_frame(frame, *handler_seed);\n";
+  }
   if (uses_scalar_lanes) {
     for (std::uint32_t reg = 0; reg < code.reg_count; ++reg) {
       if (int_lane_used[reg]) {
@@ -4756,8 +4786,10 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     }
   }
   if (code.instructions.empty()) {
-    out << "  if (handler_seed != nullptr) "
-           "native_merge_handler_frame(*handler_seed, frame);\n";
+    if (needs_handler_frame) {
+      out << "  if (handler_seed != nullptr) "
+             "native_merge_handler_frame(*handler_seed, frame);\n";
+    }
     out << "  return NativeValue::nullv();\n";
     out << "}\n\n";
     return out.str();
@@ -4814,10 +4846,12 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     if (pc + 1U < code.instructions.size()) {
       emit_goto_pc(pc + 1U, from);
     } else {
-      out << "  throw NativeBailout();\n";
+      out << "  native_bailout();\n";
     }
   };
-  out << "  try {\n";
+  if (needs_outer_try) {
+    out << "  try {\n";
+  }
   if (owns_handlers) {
     out << "  frame.pc = 0U;\n";
     out << "  std::optional<NativeRaised> pending_exception;\n";
@@ -4912,7 +4946,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     }
     case Opcode::RequireBlock:
       out << "  if (frame.block.tag == NativeValue::Tag::Null) "
-             "throw NativeBailout();\n";
+             "native_bailout();\n";
       emit_next(pc, next_scalar_state);
       break;
     case Opcode::LoadIvar: {
@@ -5068,7 +5102,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           out << "    native_set_spread_append(items, "
               << read_reg_expr(value_reg) << ");\n";
         } else {
-          out << "    throw NativeBailout();\n";
+          out << "    native_bailout();\n";
         }
       }
       write_reg_stmt(dst, "native_set_from_items(std::move(items))", "    ");
@@ -5163,7 +5197,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               << read_reg_expr(value_reg) << ", " << (strict ? "true" : "false")
               << ");\n";
         } else {
-          out << "    throw NativeBailout();\n";
+          out << "    native_bailout();\n";
         }
       }
       write_reg_stmt(
@@ -5345,7 +5379,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       } else if (!native_module_expr.empty()) {
         write_reg_stmt(dst, native_module_expr);
       } else {
-        out << "  throw NativeBailout();\n";
+        out << "  native_bailout();\n";
       }
       emit_next(pc, next_scalar_state);
       break;
@@ -5611,7 +5645,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               : read_reg_expr(static_cast<std::uint32_t>(
                     instruction.operands[operand_index].value));
       out << "  if (!native_value_is_user_receiver("
-          << read_reg_expr(receiver) << ")) throw NativeBailout();\n";
+          << read_reg_expr(receiver) << ")) native_bailout();\n";
       write_reg_stmt(dst, "native_user_send(" + read_reg_expr(receiver) +
                               ", native_symbol_text(" +
                               std::to_string(selector_id) +
@@ -6022,13 +6056,13 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                 ", " + read_reg_expr(arg) + ")");
       } else if (selector == "<<") {
         out << "  if (as_int(" << read_reg_expr(arg) << ") < 0 || as_int("
-            << read_reg_expr(arg) << ") >= 64) throw NativeBailout();\n";
+            << read_reg_expr(arg) << ") >= 64) native_bailout();\n";
         write_reg_stmt(dst, "NativeValue::integer(profile_shl_int64(as_int(" +
                                 read_reg_expr(recv) + "), as_int(" +
                                 read_reg_expr(arg) + ")))");
       } else if (selector == ">>") {
         out << "  if (as_int(" << read_reg_expr(arg) << ") < 0 || as_int("
-            << read_reg_expr(arg) << ") >= 64) throw NativeBailout();\n";
+            << read_reg_expr(arg) << ") >= 64) native_bailout();\n";
         write_reg_stmt(dst, "NativeValue::integer(shr_int64(as_int(" +
                                 read_reg_expr(recv) + "), as_int(" +
                                 read_reg_expr(arg) + ")))");
@@ -6135,7 +6169,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                 read_reg_expr(arg) + ")");
       } else if (selector == "each") {
         if (!has_block) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else if (direct_chars_each_block_code_id.has_value()) {
           out << "  {\n";
           out << "    NativeClosure *invocation = as_closure("
@@ -6177,7 +6211,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                  selector == "transform_keys" ||
                  selector == "transform_values") {
         if (!has_block) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_reg_stmt(
               dst, "native_sequence_higher_order(" + read_reg_expr(recv) +
@@ -6196,7 +6230,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                      ", " + selector_expr + ")");
       } else if (selector == "reduce") {
         if (!has_block) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_reg_stmt(
               dst, "native_sequence_reduce(" + read_reg_expr(recv) + ", " +
@@ -6511,7 +6545,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                      (selector == "pretty_generate" ? "true" : "false") + ")");
       } else if (selector == "stream_parse_file") {
         if (!has_block) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_reg_stmt(
               dst, "native_json_stream_parse_file(" + read_reg_expr(arg) +
@@ -6746,12 +6780,12 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                   lhs_value + "), as_int(" + rhs_value + ")))");
         } else if (instruction.opcode == Opcode::IShl) {
           out << "  if (as_int(" << rhs_value << ") < 0 || as_int(" << rhs_value
-              << ") >= 64) throw NativeBailout();\n";
+              << ") >= 64) native_bailout();\n";
           write_reg_stmt(dst, "NativeValue::integer(profile_shl_int64(as_int(" +
                                   lhs_value + "), as_int(" + rhs_value + ")))");
         } else {
           out << "  if (as_int(" << rhs_value << ") < 0 || as_int(" << rhs_value
-              << ") >= 64) throw NativeBailout();\n";
+              << ") >= 64) native_bailout();\n";
           write_reg_stmt(dst, "NativeValue::integer(shr_int64(as_int(" +
                                   lhs_value + "), as_int(" + rhs_value + ")))");
         }
@@ -6792,14 +6826,14 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         } else if (instruction.opcode == Opcode::IMul) {
           write_float_reg_stmt(dst, lhs_double + " * " + rhs_double);
         } else if (instruction.opcode == Opcode::IDiv) {
-          out << "  if (" << rhs_double << " == 0.0) throw NativeBailout();\n";
+          out << "  if (" << rhs_double << " == 0.0) native_bailout();\n";
           write_float_reg_stmt(dst, lhs_double + " / " + rhs_double);
         } else if (instruction.opcode == Opcode::IMod) {
-          out << "  if (" << rhs_double << " == 0.0) throw NativeBailout();\n";
+          out << "  if (" << rhs_double << " == 0.0) native_bailout();\n";
           write_float_reg_stmt(dst, "floor_mod_double_native(" + lhs_double +
                                         ", " + rhs_double + ")");
         } else {
-          out << "  if (" << rhs_double << " == 0.0) throw NativeBailout();\n";
+          out << "  if (" << rhs_double << " == 0.0) native_bailout();\n";
           write_float_reg_stmt(dst, "std::floor(" + lhs_double + " / " +
                                         rhs_double + ")");
         }
@@ -6816,7 +6850,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
         write_int_reg_stmt(dst, "profile_div_int64(" + lhs_int + ", " +
                                     rhs_int + ")");
       } else if (instruction.opcode == Opcode::IMod) {
-        out << "  if (" << rhs_int << " == 0) throw NativeBailout();\n";
+        out << "  if (" << rhs_int << " == 0) native_bailout();\n";
         write_int_reg_stmt(dst,
                            "floor_mod_int64(" + lhs_int + ", " + rhs_int + ")");
       } else if (instruction.opcode == Opcode::IFloorDiv) {
@@ -6833,12 +6867,12 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                            "bit_xor_int64(" + lhs_int + ", " + rhs_int + ")");
       } else if (instruction.opcode == Opcode::IShl) {
         out << "  if (" << rhs_int << " < 0 || " << rhs_int
-            << " >= 64) throw NativeBailout();\n";
+            << " >= 64) native_bailout();\n";
         write_int_reg_stmt(dst, "profile_shl_int64(" + lhs_int + ", " +
                                     rhs_int + ")");
       } else if (instruction.opcode == Opcode::IShr) {
         out << "  if (" << rhs_int << " < 0 || " << rhs_int
-            << " >= 64) throw NativeBailout();\n";
+            << " >= 64) native_bailout();\n";
         write_int_reg_stmt(dst, "shr_int64(" + lhs_int + ", " + rhs_int + ")");
       } else {
         write_fallback();
@@ -6930,14 +6964,14 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                   lhs_value + "), " + rhs_int + "))");
         } else if (instruction.opcode == Opcode::IShlK) {
           if (rhs < 0 || rhs >= 64) {
-            out << "  throw NativeBailout();\n";
+            out << "  native_bailout();\n";
           } else {
             write_reg_stmt(dst,
                            "NativeValue::integer(profile_shl_int64(as_int(" +
                                lhs_value + "), " + rhs_int + "))");
           }
         } else if (rhs < 0 || rhs >= 64) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_reg_stmt(dst, "NativeValue::integer(shr_int64(as_int(" +
                                   lhs_value + "), " + rhs_int + "))");
@@ -6980,19 +7014,19 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
           write_float_reg_stmt(dst, lhs_double + " * " + rhs_double);
         } else if (instruction.opcode == Opcode::IDivK) {
           if (rhs == 0) {
-            out << "  throw NativeBailout();\n";
+            out << "  native_bailout();\n";
           } else {
             write_float_reg_stmt(dst, lhs_double + " / " + rhs_double);
           }
         } else if (instruction.opcode == Opcode::IModK) {
           if (rhs == 0) {
-            out << "  throw NativeBailout();\n";
+            out << "  native_bailout();\n";
           } else {
             write_float_reg_stmt(dst, "floor_mod_double_native(" + lhs_double +
                                           ", " + rhs_double + ")");
           }
         } else if (rhs == 0) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_float_reg_stmt(dst, "std::floor(" + lhs_double + " / " +
                                         rhs_double + ")");
@@ -7011,7 +7045,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                     rhs_int + ")");
       } else if (instruction.opcode == Opcode::IModK) {
         if (rhs == 0) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_int_reg_stmt(dst, "floor_mod_int64(" + lhs_int + ", " +
                                       rhs_int + ")");
@@ -7030,14 +7064,14 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                            "bit_xor_int64(" + lhs_int + ", " + rhs_int + ")");
       } else if (instruction.opcode == Opcode::IShlK) {
         if (rhs < 0 || rhs >= 64) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_int_reg_stmt(dst, "profile_shl_int64(" + lhs_int + ", " +
                                       rhs_int + ")");
         }
       } else if (instruction.opcode == Opcode::IShrK) {
         if (rhs < 0 || rhs >= 64) {
-          out << "  throw NativeBailout();\n";
+          out << "  native_bailout();\n";
         } else {
           write_int_reg_stmt(dst,
                              "shr_int64(" + lhs_int + ", " + rhs_int + ")");
@@ -7078,8 +7112,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       if (instruction.operands[0].value == 0) {
         emit_next(pc, next_scalar_state);
       } else {
-        out << "  throw NativeRaised{native_named_error("
-               "\"MatchError\", \"pattern match failed\")};\n";
+        out << "  native_raise(native_named_error("
+               "\"MatchError\", \"pattern match failed\"));\n";
       }
       break;
     case Opcode::Jump: {
@@ -7125,15 +7159,15 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       if (uses_scalar_lanes &&
           scalar_kind(src, pc_scalar_state) == NativeScalarKind::Unknown) {
         out << "  NativeValue return_value_" << pc
-            << " = handler_seed == nullptr ? std::move(frame.regs["
-            << physical_reg(src) << "]) : frame.regs[" << physical_reg(src)
-            << "];\n";
+            << " = std::move(frame.regs[" << physical_reg(src) << "]);\n";
       } else {
         out << "  NativeValue return_value_" << pc << " = "
             << read_reg_expr(src) << ";\n";
       }
-      out << "  if (handler_seed != nullptr) "
-             "native_merge_handler_frame(*handler_seed, frame);\n";
+      if (needs_handler_frame) {
+        out << "  if (handler_seed != nullptr) "
+               "native_merge_handler_frame(*handler_seed, frame);\n";
+      }
       out << "  return return_value_" << pc << ";\n";
       break;
     }
@@ -7143,9 +7177,9 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       out << "  if (frame.nonlocal_return_target == nullptr || "
              "!frame.nonlocal_return_target->active.load("
              "std::memory_order_acquire)) "
-             "throw NativeRaised{native_named_error("
+             "native_raise(native_named_error("
              "\"LocalJumpError\", \"unexpected return from an expired "
-             "block\")};\n";
+             "block\"));\n";
       out << "  throw NativeNonlocalReturn{"
              "frame.nonlocal_return_target, "
           << read_reg_expr(src) << "};\n";
@@ -7154,17 +7188,17 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     case Opcode::Raise: {
       std::uint32_t src = 0;
       operand_u32_value(instruction, 0, &src);
-      out << "  throw NativeRaised{" << read_reg_expr(src) << "};\n";
+      out << "  native_raise(" << read_reg_expr(src) << ");\n";
       break;
     }
     default:
-      out << "  throw NativeBailout();\n";
+      out << "  native_bailout();\n";
       break;
     }
     out << (owns_handlers ? "      }\n" : "  }\n");
   }
   if (owns_handlers) {
-    out << "      default: throw NativeBailout();\n";
+    out << "      default: native_bailout();\n";
     out << "      }\n";
     out << "    } catch (const NativeRaised &raised) {\n";
     std::vector<amber::bytecode::HandlerEntry> handlers = code.handler_table;
@@ -7224,26 +7258,29 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     out << "    }\n";
     out << "  }\n";
   } else {
-    out << "  throw NativeBailout();\n";
+    out << "  native_bailout();\n";
   }
-  out << "  } catch (NativeNonlocalReturn &signal) {\n";
-  out << "    if (handler_seed != nullptr) "
-         "native_merge_handler_frame(*handler_seed, frame);\n";
-  out << "    if (frame.owns_nonlocal_return_target && "
-         "frame.nonlocal_return_target == signal.target) "
-         "return std::move(signal.value);\n";
-  out << "    throw;\n";
-  out << "  } catch (const NativeBailout &bailout) {\n";
-  out << "    if (handler_seed != nullptr) "
-         "native_merge_handler_frame(*handler_seed, frame);\n";
-  out << "    throw NativeBailout(\"pc\" + std::to_string(frame.pc) + "
-         "\": \" + bailout.what());\n";
-  out << "  } catch (...) {\n";
-  out << "    if (handler_seed != nullptr) "
-         "native_merge_handler_frame(*handler_seed, frame);\n";
-  out << "    throw;\n";
-  out << "  }\n";
-  out << "  throw NativeBailout(\"fell through native code\");\n";
+  if (needs_outer_try) {
+    if (may_own_nonlocal_return_target) {
+      out << "  } catch (NativeNonlocalReturn &signal) {\n";
+      if (needs_handler_frame) {
+        out << "    if (handler_seed != nullptr) "
+               "native_merge_handler_frame(*handler_seed, frame);\n";
+      }
+      out << "    if (frame.owns_nonlocal_return_target && "
+             "frame.nonlocal_return_target == signal.target) "
+             "return std::move(signal.value);\n";
+      out << "    throw;\n";
+    }
+    if (needs_handler_frame) {
+      out << "  } catch (...) {\n";
+      out << "    if (handler_seed != nullptr) "
+             "native_merge_handler_frame(*handler_seed, frame);\n";
+      out << "    throw;\n";
+    }
+    out << "  }\n";
+  }
+  out << "  native_bailout(\"fell through native code\");\n";
   out << "}\n\n";
   return out.str();
 }
@@ -7985,8 +8022,10 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#if defined(__GNUC__) || defined(__clang__)\n";
   out << "#define AMBER_NATIVE_ALWAYS_INLINE inline "
          "__attribute__((always_inline))\n";
+  out << "#define AMBER_NATIVE_COLD __attribute__((cold, noinline))\n";
   out << "#else\n";
   out << "#define AMBER_NATIVE_ALWAYS_INLINE inline\n";
+  out << "#define AMBER_NATIVE_COLD\n";
   out << "#endif\n\n";
   out << emit_embedded_bytecode_cpp(artifact.bytes);
   out << emit_module_strings_cpp(module);
@@ -7999,6 +8038,13 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  const char *what() const noexcept override { "
          "return message.c_str(); }\n";
   out << "};\n\n";
+  out << "[[noreturn]] static AMBER_NATIVE_COLD void native_bailout() {\n";
+  out << "  throw NativeBailout();\n";
+  out << "}\n";
+  out << "[[noreturn]] static AMBER_NATIVE_COLD void "
+         "native_bailout(std::string detail) {\n";
+  out << "  throw NativeBailout(std::move(detail));\n";
+  out << "}\n\n";
   out << "static std::atomic<bool> native_effect_committed{false};\n";
   out << "static void native_commit_effect() {\n";
   out << "  native_effect_committed.store(true, std::memory_order_release);\n";
@@ -8279,6 +8325,10 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "struct NativeNonlocalReturn { "
          "std::shared_ptr<NativeNonlocalReturnTarget> target; "
          "NativeValue value; };\n\n";
+  out << "[[noreturn]] static AMBER_NATIVE_COLD void "
+         "native_raise(NativeValue exception) {\n";
+  out << "  throw NativeRaised{std::move(exception)};\n";
+  out << "}\n\n";
   // Every refcounted payload starts with its rc so retain/release can use a
   // uniform header instead of a per-type switch on the hot path.
   out << "struct NativeRcHeader {\n";

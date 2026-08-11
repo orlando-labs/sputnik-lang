@@ -508,6 +508,9 @@ test: build
 	$(BUILD_DIR)/amberc build tests/fixtures/native_scalar_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-scalar-core-build.json
 	awk '/compact native frame:/ { if ($$5 > $$8) reduced = 1 } END { exit reduced ? 0 : 1 }' $(BUILD_DIR)/native-scalar-core.native.cpp
+	! grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-scalar-core.native.cpp
+	! grep -q '^  } catch (NativeNonlocalReturn &signal)' $(BUILD_DIR)/native-scalar-core.native.cpp
+	grep -q 'static AMBER_NATIVE_COLD void native_bailout' $(BUILD_DIR)/native-scalar-core.native.cpp
 	$(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core.out
 	grep -q '^12$$' $(BUILD_DIR)/native-scalar-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_scalar_core/main.am > $(BUILD_DIR)/native-scalar-core.dump
@@ -626,6 +629,7 @@ test: build
 	grep -q '^87$$' $(BUILD_DIR)/native-object-state.out
 	$(BUILD_DIR)/amberc build corpus/run/native_exception_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-exception-state-build.json
+	grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	$(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state.out
 	grep -q '^74$$' $(BUILD_DIR)/native-exception-state.out
 	$(BUILD_DIR)/amberc build corpus/run/native_io_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state-build.json

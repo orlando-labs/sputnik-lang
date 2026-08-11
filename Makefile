@@ -534,6 +534,7 @@ test: build
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q 'NativeClosure \*invocation = as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
 	! grep -q 'NativeClosure invocation = \*as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
+	test "$$(grep -c 'native_append_trace_frame(raised' $(BUILD_DIR)/native-sequence-core.native.cpp)" -eq 2
 	$(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core.out
 	grep -q '^26$$' $(BUILD_DIR)/native-sequence-core.out
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_sequence_core/main.am > $(BUILD_DIR)/native-sequence-core.dump
@@ -632,6 +633,7 @@ test: build
 	grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	grep -q 'static constexpr NativeTraceLocationRecord kNativeTraceLocations' $(BUILD_DIR)/native-exception-state.native.cpp
 	grep -q 'static AMBER_NATIVE_COLD NativeTraceFrame native_trace_frame' $(BUILD_DIR)/native-exception-state.native.cpp
+	test "$$(grep -c 'native_append_trace_frame(raised' $(BUILD_DIR)/native-exception-state.native.cpp)" -eq 1
 	$(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state.out
 	grep -q '^74$$' $(BUILD_DIR)/native-exception-state.out
 	$(BUILD_DIR)/amberc build corpus/run/native_io_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state-build.json

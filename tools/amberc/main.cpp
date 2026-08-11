@@ -4574,6 +4574,16 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
   const bool may_own_nonlocal_return_target =
       native_cpp_code_may_own_nonlocal_return_target(module, code);
   const bool needs_handler_frame = is_handler_code;
+  // Most bodies export their final PC through NativeFrame and let the shared
+  // dispatcher append the trace frame. Handler bodies still need a local
+  // catch to merge frame state before unwinding, while direct chars.each
+  // blocks keep local tracing because that fast path bypasses the dispatcher.
+  const bool traces_locally =
+      direct_chars_each_block_code_ids.find(code.code_id) !=
+      direct_chars_each_block_code_ids.end();
+  const bool catches_native_raised = traces_locally || needs_handler_frame;
+  const bool needs_outer_try =
+      catches_native_raised || may_own_nonlocal_return_target;
   const bool uses_pattern_bindings = std::any_of(
       code.instructions.begin(), code.instructions.end(),
       [](const amber::bytecode::Instruction &instruction) {
@@ -4731,13 +4741,13 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     return "truthy(" + boxed_reg_expr(reg, state) + ")";
   };
   out << "static ";
-  if (direct_chars_each_block_code_ids.find(code.code_id) !=
-      direct_chars_each_block_code_ids.end()) {
+  if (traces_locally) {
     out << "AMBER_NATIVE_ALWAYS_INLINE ";
   }
   out << "NativeValue " << fn
       << "(const NativeArgsView &args, "
-         "NativeClosure *current_closure, NativeHandlerSeed *handler_seed) {\n";
+         "NativeClosure *current_closure, NativeHandlerSeed *handler_seed, "
+         "std::uint32_t *trace_pc) {\n";
   if (!user_send_call_site_index.empty()) {
     out << "  static std::array<NativeUserCallSiteCache, "
         << user_send_call_site_index.size() << "> user_call_sites{};\n";
@@ -4751,16 +4761,18 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
     out << "  std::array<NativeCell *, " << code.reg_count
         << "> local_cells{};\n";
     out << "  NativeFrame frame(regs.data(), local_cells.data(), regs.size(), "
-           "current_closure);\n";
+           "current_closure, trace_pc);\n";
   } else {
     out << "  NativeFrame frame(regs.data(), nullptr, regs.size(), "
-           "current_closure);\n";
+           "current_closure, trace_pc);\n";
   }
   if (uses_pattern_bindings) {
     out << "  std::unordered_map<std::uint32_t, NativeValue> "
            "pending_pattern_bindings;\n";
   }
-  out << "  try {\n";
+  if (needs_outer_try) {
+    out << "  try {\n";
+  }
   if ((code.kind == amber::bytecode::CodeKind::Block &&
        (code.flags & amber::bytecode::kCodeFlagNonlocalReturnBlock) != 0U) ||
       code.kind == amber::bytecode::CodeKind::Ensure ||
@@ -4832,20 +4844,19 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
       }
     }
   }
-  if (code.instructions.empty()) {
-    if (needs_handler_frame) {
-      out << "  if (handler_seed != nullptr) "
-             "native_merge_handler_frame(*handler_seed, frame);\n";
+  const auto emit_outer_catches = [&]() {
+    if (catches_native_raised) {
+      out << "  } catch (NativeRaised &raised) {\n";
+      if (needs_handler_frame) {
+        out << "    if (handler_seed != nullptr) "
+               "native_merge_handler_frame(*handler_seed, frame);\n";
+      }
+      if (traces_locally) {
+        out << "    native_append_trace_frame(raised, " << code.code_id
+            << "U, frame.pc);\n";
+      }
+      out << "    throw;\n";
     }
-    out << "  return NativeValue::nullv();\n";
-    out << "  } catch (NativeRaised &raised) {\n";
-    if (needs_handler_frame) {
-      out << "    if (handler_seed != nullptr) "
-             "native_merge_handler_frame(*handler_seed, frame);\n";
-    }
-    out << "    native_append_trace_frame(raised, " << code.code_id
-        << "U, frame.pc);\n";
-    out << "    throw;\n";
     if (may_own_nonlocal_return_target) {
       out << "  } catch (NativeNonlocalReturn &signal) {\n";
       if (needs_handler_frame) {
@@ -4863,7 +4874,17 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
              "native_merge_handler_frame(*handler_seed, frame);\n";
       out << "    throw;\n";
     }
-    out << "  }\n";
+    if (needs_outer_try) {
+      out << "  }\n";
+    }
+  };
+  if (code.instructions.empty()) {
+    if (needs_handler_frame) {
+      out << "  if (handler_seed != nullptr) "
+             "native_merge_handler_frame(*handler_seed, frame);\n";
+    }
+    out << "  return NativeValue::nullv();\n";
+    emit_outer_catches();
     out << "}\n\n";
     return out.str();
   }
@@ -6277,7 +6298,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
               << ", [&](NativeValue item) {\n";
           out << "          (void)"
               << native_cpp_function_name(*direct_chars_each_block_code_id)
-              << "({std::move(item)}, invocation, nullptr);\n";
+              << "({std::move(item)}, invocation, nullptr, nullptr);\n";
           out << "          if ((++direct_each_iterations & 255U) == 0U) "
                  "native_cycle_checkpoint_if_due();\n";
           out << "          return true;\n";
@@ -7483,32 +7504,7 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
   } else {
     out << "  native_bailout();\n";
   }
-  out << "  } catch (NativeRaised &raised) {\n";
-  if (needs_handler_frame) {
-    out << "    if (handler_seed != nullptr) "
-           "native_merge_handler_frame(*handler_seed, frame);\n";
-  }
-  out << "    native_append_trace_frame(raised, " << code.code_id
-      << "U, frame.pc);\n";
-  out << "    throw;\n";
-  if (may_own_nonlocal_return_target) {
-    out << "  } catch (NativeNonlocalReturn &signal) {\n";
-    if (needs_handler_frame) {
-      out << "    if (handler_seed != nullptr) "
-             "native_merge_handler_frame(*handler_seed, frame);\n";
-    }
-    out << "    if (frame.owns_nonlocal_return_target && "
-           "frame.nonlocal_return_target == signal.target) "
-           "return std::move(signal.value);\n";
-    out << "    throw;\n";
-  }
-  if (needs_handler_frame) {
-    out << "  } catch (...) {\n";
-    out << "    if (handler_seed != nullptr) "
-           "native_merge_handler_frame(*handler_seed, frame);\n";
-    out << "    throw;\n";
-  }
-  out << "  }\n";
+  emit_outer_catches();
   out << "  native_bailout(\"fell through native code\");\n";
   out << "}\n\n";
   return out.str();
@@ -10468,16 +10464,20 @@ static void native_collect_finished_cycles() {
          "nonlocal_return_target;\n";
   out << "  bool owns_nonlocal_return_target = false;\n";
   out << "  std::uint32_t pc = 0;\n";
+  out << "  std::uint32_t *trace_pc = nullptr;\n";
   out << "  NativeFrame(NativeValue *frame_regs, NativeCell **frame_cells, "
-         "std::size_t frame_reg_count, NativeClosure *current)\n";
+         "std::size_t frame_reg_count, NativeClosure *current, "
+         "std::uint32_t *current_trace_pc)\n";
   out << "      : regs(frame_regs), local_cells(frame_cells), "
-         "reg_count(frame_reg_count), closure(current) {\n";
+         "reg_count(frame_reg_count), closure(current), "
+         "trace_pc(current_trace_pc) {\n";
   out << "    if (closure != nullptr) {\n";
   out << "      self = closure->self;\n";
   out << "      block = closure->block;\n";
   out << "    }\n";
   out << "  }\n";
   out << "  ~NativeFrame() {\n";
+  out << "    if (trace_pc != nullptr) *trace_pc = pc;\n";
   out << "    if (owns_nonlocal_return_target && "
          "nonlocal_return_target != nullptr) "
          "nonlocal_return_target->active.store(false, "
@@ -19885,6 +19885,10 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   const std::set<std::uint32_t> direct_chars_each_block_code_ids =
       native_cpp_direct_chars_each_block_code_ids(module,
                                                   plan.native_code_ids);
+  out << "static AMBER_NATIVE_COLD void native_append_trace_frame("
+         "NativeRaised &raised, std::uint32_t code_id, "
+         "std::uint32_t pc);\n";
+  out << "static bool native_trace_at_dispatch(std::uint32_t code_id);\n";
   for (std::uint32_t code_id : plan.native_code_ids) {
     out << "static ";
     if (direct_chars_each_block_code_ids.find(code_id) !=
@@ -19894,7 +19898,8 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "NativeValue " << native_cpp_function_name(code_id)
         << "(const NativeArgsView &args, "
            "NativeClosure *current_closure, "
-           "NativeHandlerSeed *handler_seed);\n";
+           "NativeHandlerSeed *handler_seed, "
+           "std::uint32_t *trace_pc);\n";
   }
   if (!plan.vm_callable_code_ids.empty()) {
     out << "static NativeValue amber_vm_fallback_call(std::uint32_t code_id, "
@@ -19916,12 +19921,13 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << "  AmberNativeBridgeRequestStateScope bridge_state_scope("
            "cycle_boundary);\n";
   }
+  out << "  std::uint32_t trace_pc = 0U;\n";
   out << "  try {\n";
   out << "  switch (code_id) {\n";
   for (std::uint32_t code_id : plan.native_code_ids) {
     out << "  case " << code_id << ": return "
         << native_cpp_function_name(code_id)
-        << "(args, current_closure, handler_seed);\n";
+        << "(args, current_closure, handler_seed, &trace_pc);\n";
   }
   for (std::uint32_t code_id : plan.native_extension_code_ids) {
     out << "  case " << code_id << ": return amber_native_extension_call("
@@ -19942,6 +19948,10 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  default: throw NativeBailout("
          "\"native dispatch has no code c\" + std::to_string(code_id));\n";
   out << "  }\n";
+  out << "  } catch (NativeRaised &raised) {\n";
+  out << "    if (native_trace_at_dispatch(code_id)) "
+         "native_append_trace_frame(raised, code_id, trace_pc);\n";
+  out << "    throw;\n";
   out << "  } catch (const NativeBailout &bailout) {\n";
   out << "    throw NativeBailout(\"c\" + std::to_string(code_id) + "
          "\": \" + bailout.what());\n";
@@ -23421,6 +23431,14 @@ static std::string native_named_callable_type_name(
         << "U, " << code.tail_line << "U},\n";
   }
   out << "};\n";
+  out << "static bool native_trace_at_dispatch(std::uint32_t code_id) {\n";
+  for (std::uint32_t code_id : direct_chars_each_block_code_ids) {
+    out << "  if (code_id == " << code_id << "U) return false;\n";
+  }
+  out << "  return code_id < sizeof(kNativeTraceCodes) / "
+         "sizeof(kNativeTraceCodes[0]) && "
+         "kNativeTraceCodes[code_id].location_offset != 0U;\n";
+  out << "}\n";
   out << "static AMBER_NATIVE_COLD NativeTraceFrame native_trace_frame("
          "std::uint32_t code_id, std::uint32_t pc) {\n";
   out << "  NativeTraceFrame frame; frame.code_id = code_id; frame.pc = pc;\n";

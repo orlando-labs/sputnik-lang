@@ -2441,7 +2441,7 @@ RuntimeDispatchCacheStats RuntimeWorld::dispatch_cache_stats() const {
     return stats;
   }
   stats.call_cache_entries =
-      static_cast<std::uint64_t>(impl_->state->call_caches.size());
+      impl_->state->call_cache_entry_count;
   stats.call_cache_hits = impl_->state->call_cache_hits;
   stats.call_cache_misses = impl_->state->call_cache_misses;
   stats.call_cache_updates = impl_->state->call_cache_updates;

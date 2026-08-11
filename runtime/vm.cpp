@@ -11004,14 +11004,81 @@ private:
     return shape;
   }
 
-  std::unordered_map<std::uint64_t, CallCacheEntry> &call_caches() {
-    return isolate_inline_caches_ ? isolated_call_caches_
-                                  : state_->call_caches;
+  CallCacheEntry *call_cache_entry(const Frame &frame, std::uint32_t site_id) {
+    if (isolate_inline_caches_) {
+      const auto found =
+          isolated_call_caches_.find(inline_cache_key(frame, site_id));
+      return found == isolated_call_caches_.end() ? nullptr : &found->second;
+    }
+    if (frame.code == nullptr ||
+        frame.code->code_id >= state_->call_caches.size()) {
+      return nullptr;
+    }
+    auto &sites = state_->call_caches[frame.code->code_id];
+    if (site_id >= sites.size()) {
+      return nullptr;
+    }
+    return sites[site_id].get();
   }
 
-  std::unordered_map<std::uint64_t, IvarCacheEntry> &ivar_caches() {
-    return isolate_inline_caches_ ? isolated_ivar_caches_
-                                  : state_->ivar_caches;
+  void store_call_cache_entry(const Frame &frame, std::uint32_t site_id,
+                              CallCacheEntry entry) {
+    if (isolate_inline_caches_) {
+      isolated_call_caches_[inline_cache_key(frame, site_id)] =
+          std::move(entry);
+      return;
+    }
+    if (frame.code == nullptr ||
+        frame.code->code_id >= state_->call_caches.size()) {
+      return;
+    }
+    auto &sites = state_->call_caches[frame.code->code_id];
+    if (site_id >= sites.size()) {
+      // RuntimeWorld also accepts programmatically constructed modules used by
+      // embedders/tests; those may carry a SEND site operand without a
+      // serialized call-site table. Keep that compatibility off the verified
+      // bytecode hot path.
+      sites.resize(static_cast<std::size_t>(site_id) + 1U);
+    }
+    if (sites[site_id] == nullptr) {
+      ++state_->call_cache_entry_count;
+    }
+    sites[site_id] = std::make_shared<CallCacheEntry>(std::move(entry));
+  }
+
+  IvarCacheEntry *ivar_cache_entry(const Frame &frame, std::uint32_t site_id) {
+    if (isolate_inline_caches_) {
+      const auto found =
+          isolated_ivar_caches_.find(inline_cache_key(frame, site_id));
+      return found == isolated_ivar_caches_.end() ? nullptr : &found->second;
+    }
+    if (frame.code == nullptr ||
+        frame.code->code_id >= state_->ivar_caches.size()) {
+      return nullptr;
+    }
+    auto &sites = state_->ivar_caches[frame.code->code_id];
+    if (site_id >= sites.size()) {
+      return nullptr;
+    }
+    return sites[site_id].get();
+  }
+
+  void store_ivar_cache_entry(const Frame &frame, std::uint32_t site_id,
+                              IvarCacheEntry entry) {
+    if (isolate_inline_caches_) {
+      isolated_ivar_caches_[inline_cache_key(frame, site_id)] =
+          std::move(entry);
+      return;
+    }
+    if (frame.code == nullptr ||
+        frame.code->code_id >= state_->ivar_caches.size()) {
+      return;
+    }
+    auto &sites = state_->ivar_caches[frame.code->code_id];
+    if (site_id >= sites.size()) {
+      sites.resize(static_cast<std::size_t>(site_id) + 1U);
+    }
+    sites[site_id] = std::make_shared<IvarCacheEntry>(std::move(entry));
   }
 
   void record_call_cache_hit() {
@@ -11038,13 +11105,12 @@ private:
       std::uint32_t selector_symbol_id, std::uint32_t positional_count,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
       const Value &block) {
-    auto &cache = call_caches();
-    const auto found = cache.find(inline_cache_key(frame, site_id));
-    if (found == cache.end()) {
+    const CallCacheEntry *cached = call_cache_entry(frame, site_id);
+    if (cached == nullptr) {
       record_call_cache_miss();
       return nullptr;
     }
-    const CallCacheEntry &entry = found->second;
+    const CallCacheEntry &entry = *cached;
     if (!entry.valid || entry.receiver_class_index != receiver_class_index ||
         entry.dispatch_flags != dispatch_flags ||
         entry.selector_symbol_id != selector_symbol_id ||
@@ -11069,13 +11135,12 @@ private:
       const Frame &frame, std::uint32_t site_id,
       std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
       std::uint32_t selector_symbol_id, std::uint32_t positional_count) {
-    auto &cache = call_caches();
-    const auto found = cache.find(inline_cache_key(frame, site_id));
-    if (found == cache.end()) {
+    const CallCacheEntry *cached = call_cache_entry(frame, site_id);
+    if (cached == nullptr) {
       record_call_cache_miss();
       return nullptr;
     }
-    const CallCacheEntry &entry = found->second;
+    const CallCacheEntry &entry = *cached;
     if (!entry.valid || entry.receiver_class_index != receiver_class_index ||
         entry.dispatch_flags != dispatch_flags ||
         entry.selector_symbol_id != selector_symbol_id ||
@@ -11156,7 +11221,7 @@ private:
     entry.world_epoch = state_->world_epoch;
     entry.method = method;
     entry.attr_reader_ivar_symbol_id = attr_reader_ivar_symbol_id(method);
-    call_caches()[inline_cache_key(frame, site_id)] = entry;
+    store_call_cache_entry(frame, site_id, std::move(entry));
     record_call_cache_update();
   }
 
@@ -11164,12 +11229,11 @@ private:
                                                 std::uint32_t site_id,
                                                 const InstanceValue &instance,
                                                 std::uint32_t symbol_id) {
-    auto &cache = ivar_caches();
-    const auto found = cache.find(inline_cache_key(frame, site_id));
-    if (found == cache.end()) {
+    const IvarCacheEntry *cached = ivar_cache_entry(frame, site_id);
+    if (cached == nullptr) {
       return std::nullopt;
     }
-    const IvarCacheEntry &entry = found->second;
+    const IvarCacheEntry &entry = *cached;
     const std::shared_ptr<const ShapeDescriptor> shape = instance.header.shape;
     if (shape == nullptr || shape->dead) {
       return std::nullopt;
@@ -11197,7 +11261,7 @@ private:
     entry.shape_id = shape->shape_id;
     entry.shape_version = shape->shape_version;
     entry.slot_index = slot_index;
-    ivar_caches()[inline_cache_key(frame, site_id)] = std::move(entry);
+    store_ivar_cache_entry(frame, site_id, std::move(entry));
   }
 
   bool has_optional_reg(std::int64_t raw) const {

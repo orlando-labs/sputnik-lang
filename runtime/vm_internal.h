@@ -475,11 +475,17 @@ struct RuntimeState {
   bool dependency_capture_active = false;
   RuntimeDependencySet dependency_capture;
   std::unordered_map<std::string, std::size_t> dependency_capture_index;
-  std::unordered_map<std::uint64_t, CallCacheEntry> call_caches;
+  // Bytecode cache sites are immutable and dense within each code object.
+  // Address shared inline caches directly by [code_id][site_id] instead of
+  // hashing that pair on every SEND/ivar access. Entries stay indirect so an
+  // untouched site costs one pointer rather than a full BcMethod-sized slot;
+  // shared_ptr also keeps RuntimeState's hot-reload copy operation valid.
+  std::vector<std::vector<std::shared_ptr<CallCacheEntry>>> call_caches;
+  std::uint64_t call_cache_entry_count = 0;
   std::uint64_t call_cache_hits = 0;
   std::uint64_t call_cache_misses = 0;
   std::uint64_t call_cache_updates = 0;
-  std::unordered_map<std::uint64_t, IvarCacheEntry> ivar_caches;
+  std::vector<std::vector<std::shared_ptr<IvarCacheEntry>>> ivar_caches;
   // Path constants and the bytecode class table are immutable for the
   // lifetime of a RuntimeState. Resolve class references once when the module
   // is installed instead of rebuilding path strings and linearly scanning all
@@ -721,6 +727,22 @@ struct RuntimeState {
     }
   }
 
+  void initialize_inline_cache_layout(const bytecode::BcModule &module) {
+    std::uint32_t max_code_id = 0;
+    for (const bytecode::BcCode &code : module.code_objects) {
+      max_code_id = std::max(max_code_id, code.code_id);
+    }
+    call_caches.clear();
+    ivar_caches.clear();
+    call_caches.resize(static_cast<std::size_t>(max_code_id) + 1U);
+    ivar_caches.resize(static_cast<std::size_t>(max_code_id) + 1U);
+    for (const bytecode::BcCode &code : module.code_objects) {
+      call_caches[code.code_id].resize(code.call_site_table.size());
+      ivar_caches[code.code_id].resize(code.ivar_site_table.size());
+    }
+    call_cache_entry_count = 0;
+  }
+
   void initialize_for_module(const bytecode::BcModule &module) {
     if (dead_shape == nullptr) {
       dead_shape = std::make_shared<ShapeDescriptor>();
@@ -737,6 +759,7 @@ struct RuntimeState {
     if (owners_initialized) {
       return;
     }
+    initialize_inline_cache_layout(module);
     resolve_class_refs_for_module(module);
     for (const bytecode::BcMethod &method : module.methods) {
       for (std::uint32_t i = 0; i < method.params.size(); ++i) {
@@ -932,8 +955,7 @@ struct RuntimeState {
     }
 
     owners_initialized = true;
-    call_caches.clear();
-    ivar_caches.clear();
+    initialize_inline_cache_layout(module);
     module_init_completed = false;
     module_bindings.clear();
     ++world_epoch;

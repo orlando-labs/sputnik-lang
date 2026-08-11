@@ -198,11 +198,10 @@ void test_w13_comments_ranges_and_numbers() {
                 TokenKind::Integer, TokenKind::Float, TokenKind::Float,
                 TokenKind::Newline, TokenKind::Eof});
 
-  amber::lexer::LexResult glued_hash = lex_raw("foo#bar\n");
-  if (glued_hash.ok()) {
-    std::cerr << "lexer test failed: glued # must not start a comment\n";
-    std::exit(1);
-  }
+  expect_kinds("glued hash is an unbound-reference separator token",
+               "foo#bar\n",
+               {TokenKind::Identifier, TokenKind::Hash,
+                TokenKind::Identifier, TokenKind::Newline, TokenKind::Eof});
 
   amber::lexer::LexResult bad_number = lex_raw("1__0\n");
   if (bad_number.ok()) {

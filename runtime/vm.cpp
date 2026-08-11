@@ -1085,6 +1085,16 @@ public:
         error_registry_(error_registry),
         macro_block_executor_(std::move(macro_block_executor)) {
     state_->initialize_for_module(module_);
+    for (std::uint32_t class_index = 0;
+         class_index < module_.classes.size(); ++class_index) {
+      const std::uint32_t symbol_id =
+          module_.classes[class_index].class_name_sym_id;
+      if (symbol_id < module_.symbols.size() &&
+          module_.symbols[symbol_id] == "Range") {
+        range_class_index_ = class_index;
+        break;
+      }
+    }
     resolve_numeric_policy();
     if (native_registry_ == nullptr) {
       // Direct VM entry points are not attached to a RuntimeWorld, so they keep
@@ -9095,9 +9105,8 @@ private:
     if (instance_is_native_range(instance)) {
       return true;
     }
-    const std::optional<std::string> class_name =
-        class_name_for_index(instance->class_index);
-    return class_name.has_value() && *class_name == "Range";
+    return range_class_index_.has_value() &&
+           instance->class_index == *range_class_index_;
   }
 
   static bool io_value_type_name_is(const Value &value,
@@ -27519,30 +27528,38 @@ private:
         if (!require_arity(1) || !require_no_block()) {
           return SendStatus::Faulted;
         }
-        bool keyset_is_valid = false;
+        std::optional<std::vector<Value>> keyset_items;
         if (args[0].is_tuple() || args[0].is_list()) {
           bool keyset_source_was_tuple = false;
-          const std::optional<std::vector<Value>> keyset_items =
+          keyset_items =
               extract_sequence_items(frame, args[0], &keyset_source_was_tuple);
           if (fault_.has_value()) {
             return SendStatus::Faulted;
           }
-          keyset_is_valid = keyset_items.has_value();
           if (keyset_items.has_value()) {
             for (const Value &item : *keyset_items) {
               if (!item.is_symbol()) {
-                keyset_is_valid = false;
+                keyset_items.reset();
                 break;
               }
             }
           }
         }
-        if (!keyset_is_valid) {
+        if (!keyset_items.has_value()) {
           set_fault(frame, "TypeError",
                     "deconstruct_keys expects Symbol tuple/list keyset");
           return SendStatus::Faulted;
         }
-        *out = receiver;
+        std::vector<MapEntry> selected;
+        selected.reserve(keyset_items->size());
+        for (const Value &key : *keyset_items) {
+          const MapEntry *entry =
+              map_value_find_entry(*map, key, map_lookup_key_id(key));
+          if (entry != nullptr) {
+            selected.push_back(*entry);
+          }
+        }
+        *out = make_symbol_map_value(std::move(selected), false, map->strict);
         return SendStatus::Matched;
       }
       if (collection_selector == "keys") {
@@ -27814,31 +27831,46 @@ private:
           if (!require_arity(1) || !require_no_block()) {
             return SendStatus::Faulted;
           }
-          bool keyset_is_valid = false;
+          std::optional<std::vector<Value>> keyset_items;
           if (args[0].is_tuple() || args[0].is_list()) {
             bool keyset_source_was_tuple = false;
-            const std::optional<std::vector<Value>> keyset_items =
+            keyset_items =
                 extract_sequence_items(frame, args[0],
                                        &keyset_source_was_tuple);
             if (fault_.has_value()) {
               return SendStatus::Faulted;
             }
-            keyset_is_valid = keyset_items.has_value();
             if (keyset_items.has_value()) {
               for (const Value &item : *keyset_items) {
                 if (!item.is_symbol()) {
-                  keyset_is_valid = false;
+                  keyset_items.reset();
                   break;
                 }
               }
             }
           }
-          if (!keyset_is_valid) {
+          if (!keyset_items.has_value()) {
             set_fault(frame, "TypeError",
                       "deconstruct_keys expects Symbol tuple/list keyset");
             return SendStatus::Faulted;
           }
-          *out = receiver;
+          std::vector<MapEntry> selected;
+          selected.reserve(keyset_items->size());
+          for (const Value &key : *keyset_items) {
+            const std::optional<std::uint32_t> lookup_id =
+                map_lookup_key_id(key);
+            const auto found =
+                std::find_if(extracted->begin(), extracted->end(),
+                             [&](const MapEntry &entry) {
+                               return map_entry_key_equivalent(
+                                   entry, key, lookup_id, source_strict);
+                             });
+            if (found != extracted->end()) {
+              selected.push_back(*found);
+            }
+          }
+          *out = make_symbol_map_value(std::move(selected), false,
+                                       source_strict);
           return SendStatus::Matched;
         }
         if (collection_selector == "keys") {
@@ -30297,15 +30329,21 @@ private:
     // Ordinary user instances/classes cannot match the scalar/native stdlib
     // dispatcher. Sending them through that very large selector/type chain
     // before probing the class call cache made every Ember model/controller
-    // method pay a full failed builtin dispatch. Native Range and LazySeq are
-    // represented as instances for compatibility, so keep those on the scalar
-    // path; all other class-backed receivers go directly to method dispatch.
+    // method pay a full failed builtin dispatch. Range (both the native marker
+    // and the legacy class-backed representation) and LazySeq are represented
+    // as instances for compatibility, so keep those on the scalar path; all
+    // other class-backed receivers go directly to method dispatch.
     bool receiver_uses_class_dispatch = receiver.is_class_object();
     if (receiver.is_instance_object()) {
       const IntrusivePtr<InstanceValue> instance =
           receiver.as_instance_object();
+      const bool is_range =
+          instance != nullptr &&
+          (instance_is_native_range(instance) ||
+           (range_class_index_.has_value() &&
+            instance->class_index == *range_class_index_));
       receiver_uses_class_dispatch =
-          instance != nullptr && !instance_is_native_range(instance) &&
+          instance != nullptr && !is_range &&
           !value_is_lazy_seq_instance(receiver);
     }
     if (receiver_uses_class_dispatch &&
@@ -32938,6 +32976,11 @@ private:
   std::vector<std::string> runtime_symbols_;
   std::size_t initial_string_count_ = 0;
   std::size_t initial_symbol_count_ = 0;
+  // A hand-built/runtime-compatibility Range can still use a normal class
+  // index rather than kNativeSyntheticClassIndex. Resolve that index once so
+  // the request hot path pays only an optional + integer comparison instead
+  // of a class-name lookup for every ordinary user instance send.
+  std::optional<std::uint32_t> range_class_index_;
   // O(1) interning indices over runtime_strings_ / runtime_symbols_, folded
   // lazily (see fold_string_index/fold_symbol_index) so they stay consistent
   // when the tables are appended to outside intern. The string index stores

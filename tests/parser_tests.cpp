@@ -387,6 +387,10 @@ void test_callable_references() {
   amber::parser::ParseResult called = parse_raw("&handler()\n");
   expect(has_diagnostic(called, "AMB_CALLABLE_REF_TARGET"),
          "callable ref rejects an immediate call target");
+
+  amber::parser::ParseResult orphan_hash = parse_raw("foo#bar\n");
+  expect(!orphan_hash.ok(),
+         "hash separator is rejected outside an unbound callable reference");
 }
 
 void test_safe_nav_and_index() {

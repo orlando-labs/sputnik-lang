@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -440,6 +441,23 @@ struct RuntimeState {
   // `has_any_shaped_params` keeps the common case to a single bool check.
   bool has_any_shaped_params = false;
   std::unordered_set<std::uint32_t> codes_needing_param_shaping;
+  // Code ids are stable for one immutable module image, but RuntimeState can
+  // survive a package hot reload and serve both old and replacement images
+  // during the swap. Cache a separate id-indexed view per owned image. Holding
+  // the shared module as the key also keeps every pointer in the view valid.
+  using CodeIndex = std::vector<const bytecode::BcCode *>;
+  struct CodeIndexCache {
+    std::mutex mutex;
+    std::map<std::shared_ptr<const bytecode::BcModule>,
+             std::shared_ptr<const CodeIndex>,
+             std::owner_less<std::shared_ptr<const bytecode::BcModule>>>
+        indices;
+  };
+  // RuntimeState is copied while preparing a hot-reload replacement. Sharing
+  // the complete cache (not only its mutex) makes that copy a race-free pointer
+  // copy even while another task constructs a VM for the current image.
+  std::shared_ptr<CodeIndexCache> code_index_cache =
+      std::make_shared<CodeIndexCache>();
   bool world_frozen = false;
   std::uint64_t world_epoch = 1;
   // Notebook/watch bookkeeping is shared by task-local Vm instances. It is
@@ -773,6 +791,26 @@ struct RuntimeState {
       }
     }
     owners_initialized = true;
+  }
+
+  std::shared_ptr<const CodeIndex> code_index_for_module(
+      const std::shared_ptr<const bytecode::BcModule> &module) {
+    std::lock_guard<std::mutex> lock(code_index_cache->mutex);
+    const auto found = code_index_cache->indices.find(module);
+    if (found != code_index_cache->indices.end()) {
+      return found->second;
+    }
+    std::uint32_t max_code_id = 0;
+    for (const bytecode::BcCode &code : module->code_objects) {
+      max_code_id = std::max(max_code_id, code.code_id);
+    }
+    auto index = std::make_shared<CodeIndex>(
+        static_cast<std::size_t>(max_code_id) + 1U, nullptr);
+    for (const bytecode::BcCode &code : module->code_objects) {
+      (*index)[code.code_id] = &code;
+    }
+    code_index_cache->indices.emplace(module, index);
+    return index;
   }
 
   std::shared_ptr<const ShapeDescriptor>

@@ -1084,6 +1084,7 @@ public:
         type_registry_(type_registry), dispatch_registry_(dispatch_registry),
         error_registry_(error_registry),
         macro_block_executor_(std::move(macro_block_executor)) {
+    code_by_id_ = state_->code_index_for_module(module_owner_);
     state_->initialize_for_module(module_);
     for (std::uint32_t class_index = 0;
          class_index < module_.classes.size(); ++class_index) {
@@ -1730,7 +1731,7 @@ public:
       return with_runtime_names(
           fail("UnsupportedProfileError", numeric_profile_error_, code_id, 0));
     }
-    const BcCode *entry = find_code(module_, code_id);
+    const BcCode *entry = lookup_code(code_id);
     if (entry == nullptr) {
       return with_runtime_names(fail("VMError", "unknown code id", code_id, 0));
     }
@@ -1832,7 +1833,7 @@ public:
       root_task_context_ = RuntimeTaskContext::create();
     }
     RuntimeTaskContextScope task_context_scope(root_task_context_, true, true);
-    const BcCode *entry = find_code(module_, code_id);
+    const BcCode *entry = lookup_code(code_id);
     if (entry == nullptr) {
       return with_runtime_names(
           fail("VMError", "unknown native-extension code id", code_id, 0));
@@ -2709,7 +2710,7 @@ private:
       set_fault(frame, "TypeError", "closure value is null");
       return std::nullopt;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     if (code == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return std::nullopt;
@@ -2801,7 +2802,7 @@ private:
     if (closure == nullptr) {
       return FastCallStatus::NotHandled;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     if (code == nullptr || code->kind != CodeKind::Block ||
         !code->capture_layout.empty() || !code->handler_table.empty() ||
         (code->flags & bytecode::kCodeFlagNonlocalReturnBlock) != 0U ||
@@ -3228,7 +3229,7 @@ private:
       set_fault(frame, "TypeError", "closure value is null");
       return result;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     if (code == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return result;
@@ -3300,7 +3301,7 @@ private:
       set_fault(frame, "TypeError", "closure value is null");
       return result;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     if (code == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return result;
@@ -3427,7 +3428,7 @@ private:
       set_fault(frame, "TypeError", "closure value is null");
       return result;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     if (code == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return result;
@@ -4986,7 +4987,7 @@ private:
     if (closure == nullptr) {
       return false;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     return code != nullptr && direct_closure_kind_for(*code) == expected;
   }
 
@@ -5152,7 +5153,7 @@ private:
       if (mix_capture.is_closure()) {
         const IntrusivePtr<ClosureValue> mix_closure = mix_capture.as_closure();
         if (mix_closure != nullptr) {
-          mix_code = find_code(module_, mix_closure->code_id);
+          mix_code = lookup_code(mix_closure->code_id);
         }
       }
       std::int64_t add_constant = 17;
@@ -5303,6 +5304,13 @@ private:
     }
     return state_->codes_needing_param_shaping.find(code_id) !=
            state_->codes_needing_param_shaping.end();
+  }
+
+  const BcCode *lookup_code(std::uint32_t code_id) const {
+    if (code_by_id_ == nullptr || code_id >= code_by_id_->size()) {
+      return nullptr;
+    }
+    return (*code_by_id_)[code_id];
   }
 
   // Binds a `**name` keyword-rest parameter to an empty frozen Map on the
@@ -5836,7 +5844,7 @@ private:
       set_fault(frame, "TypeError", "closure value is null");
       return FastCallStatus::Faulted;
     }
-    const BcCode *code = find_code(module_, closure->code_id);
+    const BcCode *code = lookup_code(closure->code_id);
     if (code == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return FastCallStatus::Faulted;
@@ -11052,7 +11060,7 @@ private:
     if ((method.flags & kMethodFlagAttrReader) == 0U) {
       return std::nullopt;
     }
-    const BcCode *code = find_code(module_, method.entry_code_id);
+    const BcCode *code = lookup_code(method.entry_code_id);
     if (code == nullptr || code->instructions.size() != 4U) {
       return std::nullopt;
     }
@@ -11894,7 +11902,7 @@ private:
                       const std::vector<std::uint8_t> &initialized,
                       const Value &self, const Value &block) {
     NestedExecution out;
-    const BcCode *entry = find_code(module_, code_id);
+    const BcCode *entry = lookup_code(code_id);
     if (entry == nullptr) {
       out.fault = Fault{"VMError", "unknown nested code id", code_id, 0};
       return out;
@@ -12225,7 +12233,7 @@ private:
                            &slots)) {
       return std::nullopt;
     }
-    const BcCode *code = find_code(module_, method.entry_code_id);
+    const BcCode *code = lookup_code(method.entry_code_id);
     if (code == nullptr) {
       set_fault(caller, "VMError", "method entry code id is unknown");
       return std::nullopt;
@@ -12614,7 +12622,7 @@ private:
         set_fault(frame, "TypeError", "closure value is null");
         return false;
       }
-      const BcCode *code = find_code(module_, closure->code_id);
+      const BcCode *code = lookup_code(closure->code_id);
       if (code == nullptr) {
         set_fault(frame, "VMError", "closure code id is unknown");
         return false;
@@ -12916,10 +12924,48 @@ private:
         return true;
       }
     }
-    const BcCode *code = find_code(module_, method.entry_code_id);
+    const BcCode *code = lookup_code(method.entry_code_id);
     if (code == nullptr) {
       set_fault(caller, "VMError", "method entry code id is unknown");
       return false;
+    }
+
+    // The overwhelmingly common method shape is an exact positional call with
+    // no defaults, rest/keyword/block parameters, or clauses. The general
+    // binder below copies the signature and allocates two vectors before
+    // copying every argument into the callee. Bind this proven-simple case
+    // straight into its pooled frame. Calls with a mismatched arity deliberately
+    // stay on the general path so their precise legacy diagnostics are unchanged.
+    if (method.clause_table.empty() &&
+        !code_needs_param_shaping(method.entry_code_id) && kw_args.empty()) {
+      std::optional<std::size_t> param_count;
+      if (!method.params.empty()) {
+        param_count = method.params.size();
+      } else if (method.signature_blob_id < module_.const_pool.size()) {
+        const Constant &signature = module_.const_pool[method.signature_blob_id];
+        if (signature.kind == ConstantKind::Path) {
+          param_count = signature.items.size();
+        }
+      }
+      if (param_count.has_value() && pos_args.size() == *param_count) {
+        const std::uint32_t call_pc = static_cast<std::uint32_t>(caller.pc);
+        ++caller.pc;
+        caller.active_call_pc = call_pc;
+        static const std::vector<Value> no_captures;
+        push_frame_from_args(*code, pos_args.data(), pos_args.size(), no_captures,
+                             std::move(self), std::move(block),
+                             caller_result_reg);
+        Frame &callee = frames_.back();
+        callee.return_override = std::move(return_override);
+        if (!no_suspend_label.empty()) {
+          callee.no_suspend_extent = true;
+          callee.no_suspend_label = no_suspend_label;
+        }
+        if (!validate_named_callable_params(callee, method.params)) {
+          return false;
+        }
+        return apply_auto_assigns(callee, method, *code);
+      }
     }
 
     std::vector<bytecode::MethodParamEntry> params;
@@ -13606,7 +13652,7 @@ private:
 
     if (handler_frame_index.has_value()) {
       const BcCode *handler_code =
-          find_code(module_, handler->handler_code_id);
+          lookup_code(handler->handler_code_id);
       if (handler_code == nullptr) {
         set_fault(returning_frame, "VMError", "handler code id is unknown");
         return false;
@@ -13665,7 +13711,7 @@ private:
       return false;
     }
 
-    const BcCode *handler_code = find_code(module_, handler->handler_code_id);
+    const BcCode *handler_code = lookup_code(handler->handler_code_id);
     if (handler_code == nullptr) {
       set_fault(raising_frame, "VMError", "handler code id is unknown");
       return false;
@@ -13764,7 +13810,7 @@ private:
 
       if (kind == kHandlerKindEnsure) {
         const BcCode *handler_code =
-            find_code(module_, handler->handler_code_id);
+            lookup_code(handler->handler_code_id);
         if (handler_code == nullptr) {
           set_fault(target, "VMError", "handler code id is unknown");
           return false;
@@ -13997,7 +14043,7 @@ private:
       return std::nullopt;
     }
 
-    if (find_code(module_, closure->code_id) == nullptr) {
+    if (lookup_code(closure->code_id) == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return std::nullopt;
     }
@@ -32010,7 +32056,7 @@ private:
       auto closure = make_closure_value();
       closure->code_id = code_id;
       closure->self = frame.self;
-      const BcCode *closure_code = find_code(module_, code_id);
+      const BcCode *closure_code = lookup_code(code_id);
       if (closure_code == nullptr) {
         set_fault(frame, "VMError", "closure code id is unknown");
         return;
@@ -32119,7 +32165,7 @@ private:
           set_fault(frame, "TypeError", "closure value is null");
           return;
         }
-        const BcCode *code = find_code(module_, closure->code_id);
+        const BcCode *code = lookup_code(closure->code_id);
         if (code == nullptr) {
           set_fault(frame, "VMError", "closure code id is unknown");
           return;
@@ -32972,6 +33018,7 @@ private:
   // their append-only runtime name tables private.
   std::shared_ptr<const BcModule> module_owner_;
   const BcModule &module_;
+  std::shared_ptr<const RuntimeState::CodeIndex> code_by_id_;
   std::vector<std::string> runtime_strings_;
   std::vector<std::string> runtime_symbols_;
   std::size_t initial_string_count_ = 0;

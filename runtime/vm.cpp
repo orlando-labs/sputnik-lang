@@ -4749,15 +4749,23 @@ private:
           out.quick_opcode = QuickOpcode::SendSeqFirst;
         }
       }
-      // A warmed ordinary nullary send can bypass the full scalar/property
-      // dispatcher and its empty args/keywords vectors. The first execution
-      // still falls back and populates the ordinary inline cache; only a
-      // validated cache hit is handled by this quick opcode.
-      if (out.quick_opcode == QuickOpcode::Fallback && pos_count == 0U &&
-          has_site_id && site_id < code.call_site_table.size()) {
-        out.quick_opcode = QuickOpcode::SendCached0;
-        c = selector_id;
-        imm = static_cast<std::int64_t>(site_id);
+      // A warmed ordinary fixed-arity send can bypass the full
+      // scalar/property dispatcher and its temporary args/keywords vectors.
+      // The first execution still falls back and populates the ordinary
+      // inline cache; only a validated cache hit is handled by these opcodes.
+      if (out.quick_opcode == QuickOpcode::Fallback && has_site_id &&
+          site_id < code.call_site_table.size()) {
+        if (pos_count == 0U) {
+          out.quick_opcode = QuickOpcode::SendCached0;
+          c = selector_id;
+          imm = static_cast<std::int64_t>(site_id);
+        } else if (pos_count == 1U) {
+          out.quick_opcode = QuickOpcode::SendCached1;
+          // c already contains the sole argument register. The call-site
+          // table owns the selector id as well as flags, so imm only needs the
+          // site id and QuickInsn does not grow for this specialization.
+          imm = static_cast<std::int64_t>(site_id);
+        }
       }
       break;
     }
@@ -11054,6 +11062,36 @@ private:
     return &entry;
   }
 
+  // Quickened ordinary sends have neither keywords nor a block. Avoid
+  // materializing a canonical keyword vector and a null Value merely to
+  // validate those two invariant parts of the cache key.
+  const CallCacheEntry *probe_plain_call_cache_entry(
+      const Frame &frame, std::uint32_t site_id,
+      std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
+      std::uint32_t selector_symbol_id, std::uint32_t positional_count) {
+    auto &cache = call_caches();
+    const auto found = cache.find(inline_cache_key(frame, site_id));
+    if (found == cache.end()) {
+      record_call_cache_miss();
+      return nullptr;
+    }
+    const CallCacheEntry &entry = found->second;
+    if (!entry.valid || entry.receiver_class_index != receiver_class_index ||
+        entry.dispatch_flags != dispatch_flags ||
+        entry.selector_symbol_id != selector_symbol_id ||
+        entry.positional_count != positional_count ||
+        !entry.keyword_shape.empty() || entry.has_block ||
+        entry.world_epoch != state_->world_epoch ||
+        receiver_class_index >= state_->classes.size() ||
+        entry.method_version !=
+            state_->classes[receiver_class_index].method_version) {
+      record_call_cache_miss();
+      return nullptr;
+    }
+    record_call_cache_hit();
+    return &entry;
+  }
+
   const bytecode::BcMethod *probe_call_cache(
       const Frame &frame, std::uint32_t site_id,
       std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
@@ -12906,6 +12944,53 @@ private:
     return complete_invoke_result(caller, caller_result_reg, std::move(value));
   }
 
+  FastSendStatus invoke_simple_method_from_args(
+      Frame &caller, const bytecode::BcMethod &method, const BcCode &code,
+      const Value *pos_args, std::size_t pos_count, Value &self, Value &block,
+      std::optional<std::uint32_t> caller_result_reg,
+      std::optional<Value> &return_override,
+      const std::string &no_suspend_label) {
+    // The overwhelmingly common method shape is an exact positional call with
+    // no defaults, rest/keyword/block parameters, or clauses. Bind this
+    // proven-simple case straight into its pooled frame. Calls with a
+    // mismatched arity deliberately stay on the general path so their precise
+    // legacy diagnostics are unchanged.
+    if (method.clause_table.empty() &&
+        !code_needs_param_shaping(method.entry_code_id)) {
+      std::optional<std::size_t> param_count;
+      if (!method.params.empty()) {
+        param_count = method.params.size();
+      } else if (method.signature_blob_id < module_.const_pool.size()) {
+        const Constant &signature = module_.const_pool[method.signature_blob_id];
+        if (signature.kind == ConstantKind::Path) {
+          param_count = signature.items.size();
+        }
+      }
+      if (param_count.has_value() && pos_count == *param_count) {
+        const std::uint32_t call_pc = static_cast<std::uint32_t>(caller.pc);
+        ++caller.pc;
+        caller.active_call_pc = call_pc;
+        static const std::vector<Value> no_captures;
+        push_frame_from_args(code, pos_args, pos_count, no_captures,
+                             std::move(self), std::move(block),
+                             caller_result_reg);
+        Frame &callee = frames_.back();
+        callee.return_override = std::move(return_override);
+        if (!no_suspend_label.empty()) {
+          callee.no_suspend_extent = true;
+          callee.no_suspend_label = no_suspend_label;
+        }
+        if (!validate_named_callable_params(callee, method.params)) {
+          return FastSendStatus::Faulted;
+        }
+        return apply_auto_assigns(callee, method, code)
+                   ? FastSendStatus::Matched
+                   : FastSendStatus::Faulted;
+      }
+    }
+    return FastSendStatus::NotHandled;
+  }
+
   bool
   invoke_method(Frame &caller, const bytecode::BcMethod &method,
                 const std::vector<Value> &pos_args,
@@ -12941,41 +13026,12 @@ private:
       return false;
     }
 
-    // The overwhelmingly common method shape is an exact positional call with
-    // no defaults, rest/keyword/block parameters, or clauses. The general
-    // binder below copies the signature and allocates two vectors before
-    // copying every argument into the callee. Bind this proven-simple case
-    // straight into its pooled frame. Calls with a mismatched arity deliberately
-    // stay on the general path so their precise legacy diagnostics are unchanged.
-    if (method.clause_table.empty() &&
-        !code_needs_param_shaping(method.entry_code_id) && kw_args.empty()) {
-      std::optional<std::size_t> param_count;
-      if (!method.params.empty()) {
-        param_count = method.params.size();
-      } else if (method.signature_blob_id < module_.const_pool.size()) {
-        const Constant &signature = module_.const_pool[method.signature_blob_id];
-        if (signature.kind == ConstantKind::Path) {
-          param_count = signature.items.size();
-        }
-      }
-      if (param_count.has_value() && pos_args.size() == *param_count) {
-        const std::uint32_t call_pc = static_cast<std::uint32_t>(caller.pc);
-        ++caller.pc;
-        caller.active_call_pc = call_pc;
-        static const std::vector<Value> no_captures;
-        push_frame_from_args(*code, pos_args.data(), pos_args.size(), no_captures,
-                             std::move(self), std::move(block),
-                             caller_result_reg);
-        Frame &callee = frames_.back();
-        callee.return_override = std::move(return_override);
-        if (!no_suspend_label.empty()) {
-          callee.no_suspend_extent = true;
-          callee.no_suspend_label = no_suspend_label;
-        }
-        if (!validate_named_callable_params(callee, method.params)) {
-          return false;
-        }
-        return apply_auto_assigns(callee, method, *code);
+    if (kw_args.empty()) {
+      const FastSendStatus simple_status = invoke_simple_method_from_args(
+          caller, method, *code, pos_args.data(), pos_args.size(), self, block,
+          caller_result_reg, return_override, no_suspend_label);
+      if (simple_status != FastSendStatus::NotHandled) {
+        return simple_status == FastSendStatus::Matched;
       }
     }
 
@@ -30073,9 +30129,8 @@ private:
     static const std::vector<Value> no_args;
     static const std::vector<std::pair<std::uint32_t, Value>> no_keywords;
     const Value no_block = Value::null();
-    const CallCacheEntry *entry = probe_call_cache_entry(
-        frame, site_id, class_index, dispatch_flags, quick.c, 0U, no_keywords,
-        no_block);
+    const CallCacheEntry *entry = probe_plain_call_cache_entry(
+        frame, site_id, class_index, dispatch_flags, quick.c, 0U);
     if (entry == nullptr) {
       return FastSendStatus::NotHandled;
     }
@@ -30130,6 +30185,98 @@ private:
                          quick.a)
                ? FastSendStatus::Matched
                : FastSendStatus::Faulted;
+  }
+
+  FastSendStatus step_quick_cached_one_send(Frame &frame,
+                                            const QuickInsn &quick) {
+    if (quick.imm < 0 || frame.code == nullptr) {
+      return FastSendStatus::NotHandled;
+    }
+    const std::uint32_t site_id = static_cast<std::uint32_t>(quick.imm);
+    if (site_id >= frame.code->call_site_table.size()) {
+      return FastSendStatus::NotHandled;
+    }
+    const bytecode::CacheSiteEntry &site = frame.code->call_site_table[site_id];
+    if (site.symbol_id >= runtime_symbols_.size()) {
+      return FastSendStatus::NotHandled;
+    }
+
+    // Match the generic SEND's observable register-read order: positional
+    // arguments are decoded before the receiver.
+    Value argument = read_reg(frame, quick.c);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+    Value receiver = read_reg(frame, quick.b);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+
+    std::uint32_t class_index = 0;
+    std::uint32_t dispatch_flags = 0;
+    if (receiver.is_instance_object()) {
+      const IntrusivePtr<InstanceValue> instance = receiver.as_instance_object();
+      if (instance == nullptr || instance_is_native_range(instance) ||
+          value_is_lazy_seq_instance(receiver)) {
+        return FastSendStatus::NotHandled;
+      }
+      class_index = instance->class_index;
+      dispatch_flags = kMethodFlagInstance;
+    } else if (receiver.is_class_object()) {
+      class_index = receiver.as_class_object().class_index;
+      dispatch_flags = kMethodFlagClass;
+    } else {
+      return FastSendStatus::NotHandled;
+    }
+    if (!ensure_lifecycle_access(frame, receiver)) {
+      return FastSendStatus::Faulted;
+    }
+
+    const std::uint32_t site_flags = site.flags;
+    if ((site_flags & (bytecode::kCallSiteFlagPropertyAccess |
+                       bytecode::kCallSiteFlagPropertyAssignment)) != 0U) {
+      return FastSendStatus::NotHandled;
+    }
+    const CallCacheEntry *entry = probe_plain_call_cache_entry(
+        frame, site_id, class_index, dispatch_flags, site.symbol_id, 1U);
+    if (entry == nullptr) {
+      return FastSendStatus::NotHandled;
+    }
+    const bytecode::BcMethod &method = entry->method;
+    const std::string &selector = runtime_symbols_[site.symbol_id];
+    if ((method.flags & kMethodFlagPropertyGetter) != 0U) {
+      set_fault(frame, "TypeError",
+                "property `" + selector + "` is not a method; use `" +
+                    selector + "` or `" + selector +
+                    ".()` if the property value is callable");
+      return FastSendStatus::Faulted;
+    }
+    if ((method.flags & kMethodFlagPropertySetter) != 0U) {
+      set_fault(frame, "TypeError",
+                "property setter requires assignment syntax");
+      return FastSendStatus::Faulted;
+    }
+
+    // A registered native thunk owns parking and ABI marshalling. Let the
+    // generic path handle it; a native declaration without a loaded thunk may
+    // still execute its Amber fallback body through the simple path below.
+    const RuntimeNativePackageCodeBindingDescriptor *binding =
+        dispatch_registry().native_package_code_binding(method.entry_code_id);
+    if (binding != nullptr &&
+        dispatch_registry().native_package_thunk(binding->logical) != nullptr) {
+      return FastSendStatus::NotHandled;
+    }
+
+    const BcCode *code = lookup_code(method.entry_code_id);
+    if (code == nullptr) {
+      set_fault(frame, "VMError", "method entry code id is unknown");
+      return FastSendStatus::Faulted;
+    }
+    Value no_block = Value::null();
+    std::optional<Value> no_override;
+    return invoke_simple_method_from_args(
+        frame, method, *code, &argument, 1U, receiver, no_block, quick.a,
+        no_override, {});
   }
 
   bool step_send(Frame &frame, const Instruction &insn, bool dynamic_selector,
@@ -31399,6 +31546,18 @@ private:
         if (status == FastSendStatus::Matched) {
           // The helper either completed an attr read or invoked a method; both
           // paths own the caller PC transition.
+          return;
+        }
+        break;
+      }
+      case QuickOpcode::SendCached1: {
+        const FastSendStatus status =
+            step_quick_cached_one_send(frame, *quick);
+        if (status == FastSendStatus::Faulted) {
+          return;
+        }
+        if (status == FastSendStatus::Matched) {
+          // The direct simple-method path owns the caller PC transition.
           return;
         }
         break;

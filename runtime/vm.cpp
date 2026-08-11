@@ -11234,13 +11234,12 @@ private:
       return std::nullopt;
     }
     const IvarCacheEntry &entry = *cached;
-    const std::shared_ptr<const ShapeDescriptor> shape = instance.header.shape;
+    const ShapeDescriptor *shape = instance.header.shape.get();
     if (shape == nullptr || shape->dead) {
       return std::nullopt;
     }
     if (!entry.valid || entry.receiver_class_index != instance.class_index ||
-        entry.symbol_id != symbol_id || entry.shape_id != shape->shape_id ||
-        entry.shape_version != shape->shape_version ||
+        entry.symbol_id != symbol_id || entry.shape != shape ||
         entry.slot_index >= instance.ivar_storage.size()) {
       return std::nullopt;
     }
@@ -11250,7 +11249,7 @@ private:
   void update_ivar_cache(const Frame &frame, std::uint32_t site_id,
                          const InstanceValue &instance, std::uint32_t symbol_id,
                          std::uint32_t slot_index) {
-    const std::shared_ptr<const ShapeDescriptor> shape = instance.header.shape;
+    const ShapeDescriptor *shape = instance.header.shape.get();
     if (shape == nullptr || shape->dead) {
       return;
     }
@@ -11258,8 +11257,7 @@ private:
     entry.valid = true;
     entry.receiver_class_index = instance.class_index;
     entry.symbol_id = symbol_id;
-    entry.shape_id = shape->shape_id;
-    entry.shape_version = shape->shape_version;
+    entry.shape = shape;
     entry.slot_index = slot_index;
     store_ivar_cache_entry(frame, site_id, std::move(entry));
   }

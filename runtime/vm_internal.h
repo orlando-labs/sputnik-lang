@@ -106,8 +106,10 @@ struct IvarCacheEntry {
   bool valid = false;
   std::uint32_t receiver_class_index = 0;
   std::uint32_t symbol_id = 0;
-  std::uint64_t shape_id = 0;
-  std::uint64_t shape_version = 0;
+  // Shape descriptors are immutable and owned by the live instance plus the
+  // runtime's root/transition graph. Pointer identity is therefore the exact
+  // cache guard and avoids retaining/releasing a shared_ptr on every probe.
+  const ShapeDescriptor *shape = nullptr;
   std::uint32_t slot_index = 0;
 };
 

@@ -630,6 +630,8 @@ test: build
 	$(BUILD_DIR)/amberc build corpus/run/native_exception_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-exception-state.native.cpp
+	grep -q 'static constexpr NativeTraceLocationRecord kNativeTraceLocations' $(BUILD_DIR)/native-exception-state.native.cpp
+	grep -q 'static AMBER_NATIVE_COLD NativeTraceFrame native_trace_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	$(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state.out
 	grep -q '^74$$' $(BUILD_DIR)/native-exception-state.out
 	$(BUILD_DIR)/amberc build corpus/run/native_io_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state-build.json

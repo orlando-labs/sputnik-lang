@@ -23301,22 +23301,56 @@ static std::string native_named_callable_type_name(
   out << "  }\n";
   out << "  return native_value_equal(matcher, value);\n";
   out << "}\n\n";
-  out << "static NativeTraceFrame native_trace_frame("
-         "std::uint32_t code_id, std::uint32_t pc) {\n";
-  out << "  NativeTraceFrame frame; frame.code_id = code_id; frame.pc = pc;\n";
-  out << "  switch (code_id) {\n";
+  // Source locations used to be emitted as a giant switch containing one or
+  // more branches per span and line-table entry. Large package graphs made
+  // that cold diagnostic helper one of the biggest machine-code functions in
+  // the executable. Resolve the verifier-owned metadata at build time into a
+  // dense per-PC table instead: native frames only ever report an instruction
+  // PC, so traceback construction becomes two bounds checks and one record
+  // load without changing file/line/column selection.
+  struct EmittedNativeTraceLocation {
+    std::uint32_t file_index = 0;
+    std::uint32_t line = 0;
+    std::uint32_t column = 0;
+  };
+  struct EmittedNativeTraceCode {
+    std::uint32_t location_offset = 0;
+    std::uint32_t location_count = 0;
+    std::uint32_t tail_line = 0;
+  };
+  std::vector<std::string> native_trace_files = {""};
+  std::unordered_map<std::string, std::uint32_t> native_trace_file_indices;
+  native_trace_file_indices.emplace("", 0U);
+  std::vector<EmittedNativeTraceLocation> native_trace_locations(1U);
+  std::uint32_t max_native_trace_code_id = 0;
+  for (std::uint32_t code_id : plan.native_code_ids) {
+    max_native_trace_code_id = std::max(max_native_trace_code_id, code_id);
+  }
+  std::vector<EmittedNativeTraceCode> native_trace_codes(
+      static_cast<std::size_t>(max_native_trace_code_id) + 1U);
+  const auto native_trace_file_index = [&](const std::string &file) {
+    const auto found = native_trace_file_indices.find(file);
+    if (found != native_trace_file_indices.end()) {
+      return found->second;
+    }
+    const std::uint32_t index =
+        static_cast<std::uint32_t>(native_trace_files.size());
+    native_trace_files.push_back(file);
+    native_trace_file_indices.emplace(file, index);
+    return index;
+  };
   for (const amber::bytecode::BcCode &code : module.code_objects) {
     if (plan.native_code_ids.find(code.code_id) == plan.native_code_ids.end()) {
       continue;
     }
-    out << "  case " << code.code_id << "U:\n";
-    for (const amber::bytecode::SourceSpanEntry &entry : code.source_spans) {
-      out << "    if (pc >= " << entry.pc_from << "U && pc < "
-          << entry.pc_to << "U) { frame.file = native_hex_to_string(\""
-          << string_to_hex_text(entry.span.file) << "\"); frame.line = "
-          << entry.span.start.line << "U; frame.column = "
-          << entry.span.start.col << "U; return frame; }\n";
-    }
+    EmittedNativeTraceCode &emitted = native_trace_codes[code.code_id];
+    emitted.location_offset =
+        static_cast<std::uint32_t>(native_trace_locations.size());
+    emitted.location_count =
+        static_cast<std::uint32_t>(code.instructions.size());
+    std::vector<EmittedNativeTraceLocation> locations(
+        code.instructions.size());
+
     std::vector<amber::bytecode::LineEntry> lines;
     for (const amber::bytecode::LineEntry &entry : module.line_table) {
       if (entry.code_id == code.code_id) {
@@ -23328,16 +23362,82 @@ static std::string native_named_callable_type_name(
                         const amber::bytecode::LineEntry &rhs) {
                        return lhs.pc < rhs.pc;
                      });
-    for (const amber::bytecode::LineEntry &entry : lines) {
-      out << "    if (pc >= " << entry.pc << "U) frame.line = "
-          << entry.line << "U;\n";
+    std::size_t line_index = 0;
+    std::uint32_t current_line = 0;
+    for (std::size_t pc = 0; pc < locations.size(); ++pc) {
+      while (line_index < lines.size() && pc >= lines[line_index].pc) {
+        current_line = lines[line_index].line;
+        ++line_index;
+      }
+      locations[pc].line = current_line;
     }
-    out << "    return frame;\n";
+    while (line_index < lines.size() &&
+           code.instructions.size() >= lines[line_index].pc) {
+      current_line = lines[line_index].line;
+      ++line_index;
+    }
+    emitted.tail_line = current_line;
+
+    // Earlier source-span entries win in the legacy branch chain. Populate in
+    // reverse order so overlapping metadata retains that exact precedence.
+    for (auto span = code.source_spans.rbegin();
+         span != code.source_spans.rend(); ++span) {
+      const std::size_t from =
+          std::min<std::size_t>(span->pc_from, locations.size());
+      const std::size_t to =
+          std::min<std::size_t>(span->pc_to, locations.size());
+      const std::uint32_t file_index =
+          native_trace_file_index(span->span.file);
+      for (std::size_t pc = from; pc < to; ++pc) {
+        locations[pc] = {
+            file_index, static_cast<std::uint32_t>(span->span.start.line),
+            static_cast<std::uint32_t>(span->span.start.col)};
+      }
+    }
+    native_trace_locations.insert(native_trace_locations.end(),
+                                  locations.begin(), locations.end());
   }
-  out << "  default: return frame;\n";
-  out << "  }\n";
+
+  out << "struct NativeTraceLocationRecord { std::uint32_t file_index; "
+         "std::uint32_t line; std::uint32_t column; };\n";
+  out << "struct NativeTraceCodeRecord { std::uint32_t location_offset; "
+         "std::uint32_t location_count; std::uint32_t tail_line; };\n";
+  out << "static constexpr std::string_view kNativeTraceFiles[] = {\n";
+  for (const std::string &file : native_trace_files) {
+    out << "  std::string_view(" << cpp_octal_string_literal(file) << ", "
+        << file.size() << "U),\n";
+  }
+  out << "};\n";
+  out << "static constexpr NativeTraceLocationRecord "
+         "kNativeTraceLocations[] = {\n";
+  for (const EmittedNativeTraceLocation &location : native_trace_locations) {
+    out << "  {" << location.file_index << "U, " << location.line << "U, "
+        << location.column << "U},\n";
+  }
+  out << "};\n";
+  out << "static constexpr NativeTraceCodeRecord kNativeTraceCodes[] = {\n";
+  for (const EmittedNativeTraceCode &code : native_trace_codes) {
+    out << "  {" << code.location_offset << "U, " << code.location_count
+        << "U, " << code.tail_line << "U},\n";
+  }
+  out << "};\n";
+  out << "static AMBER_NATIVE_COLD NativeTraceFrame native_trace_frame("
+         "std::uint32_t code_id, std::uint32_t pc) {\n";
+  out << "  NativeTraceFrame frame; frame.code_id = code_id; frame.pc = pc;\n";
+  out << "  if (code_id >= sizeof(kNativeTraceCodes) / "
+         "sizeof(kNativeTraceCodes[0])) return frame;\n";
+  out << "  const NativeTraceCodeRecord &code = kNativeTraceCodes[code_id];\n";
+  out << "  if (pc >= code.location_count) { frame.line = code.tail_line; "
+         "return frame; }\n";
+  out << "  const NativeTraceLocationRecord &location = "
+         "kNativeTraceLocations[code.location_offset + pc];\n";
+  out << "  if (location.file_index != 0U) { const std::string_view file = "
+         "kNativeTraceFiles[location.file_index]; "
+         "frame.file.assign(file.data(), file.size()); }\n";
+  out << "  frame.line = location.line; frame.column = location.column;\n";
+  out << "  return frame;\n";
   out << "}\n\n";
-  out << "static void native_append_trace_frame("
+  out << "static AMBER_NATIVE_COLD void native_append_trace_frame("
          "NativeRaised &raised, std::uint32_t code_id, std::uint32_t pc) {\n";
   out << "  raised.trace.push_back(native_trace_frame(code_id, pc));\n";
   out << "}\n\n";

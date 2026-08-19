@@ -4283,6 +4283,31 @@ void test_synchronous_collection_block_control_flow() {
   expect(caught.ok() && caught.value.is_integer() &&
              caught.value.as_integer() == 9,
          "throw inside quick all? reaches the enclosing catch");
+
+  const amber::runtime::ExecutionResult map_nonlocal_return =
+      execute_emitted_init(
+          "def find_map_value(values):\n"
+          "  values.each |key, value|:\n"
+          "    return value if key == :second\n"
+          "  0\n"
+          "\n"
+          "find_map_value({first: 3, second: 8})\n");
+  expect(map_nonlocal_return.ok() &&
+             map_nonlocal_return.value.is_integer() &&
+             map_nonlocal_return.value.as_integer() == 8,
+         "return inside quick Map#each exits the enclosing function");
+
+  const amber::runtime::ExecutionResult rescued_map =
+      execute_emitted_init(
+          "try:\n"
+          "  {first: 1, second: 2}.map |key, value|:\n"
+          "    raise key.to_str if value == 2\n"
+          "    value\n"
+          "rescue |error|:\n"
+          "  11\n");
+  expect(rescued_map.ok() && rescued_map.value.is_integer() &&
+             rescued_map.value.as_integer() == 11,
+         "raise inside quick Map#map reaches the enclosing rescue");
 }
 
 void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {

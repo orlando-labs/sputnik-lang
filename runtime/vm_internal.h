@@ -337,6 +337,12 @@ struct Frame {
   // the caller to reserve a bytecode register. It is never retained past the
   // surrounding C++ call.
   std::optional<Value> *direct_return_sink = nullptr;
+  // Collection intrinsics invoke the same closure once per item. When this
+  // sink is present, a normal return hands the cleaned activation back to the
+  // intrinsic instead of cycling it through the per-code pool. Nested calls,
+  // exceptional unwinds, and non-local returns continue to use the ordinary
+  // frame lifecycle.
+  std::unique_ptr<Frame> *direct_return_frame_sink = nullptr;
   std::optional<std::uint32_t> active_call_pc;
   std::optional<Value> return_override;
   bool merge_registers_to_caller = false;
@@ -353,6 +359,30 @@ struct Frame {
   FlatRegMap<PreparedSeqState> prepared_seq_regs;
   FlatRegMap<PreparedMapState> prepared_map_regs;
   FlatRegMap<Value> pending_pattern_bindings;
+};
+
+// A collection loop owns one of these for the duration of repeated block
+// calls. The callback keeps this helper independent of Vm's private layout
+// while still returning its retained activation to the ordinary frame pool on
+// every exit path.
+struct PreparedBlockCall {
+  using RecycleFn = void (*)(void *, std::unique_ptr<Frame>);
+
+  void *recycle_context = nullptr;
+  RecycleFn recycle = nullptr;
+  IntrusivePtr<ClosureValue> closure;
+  const bytecode::BcCode *code = nullptr;
+  std::size_t arg_count = 0;
+  std::unique_ptr<Frame> frame;
+
+  PreparedBlockCall() = default;
+  PreparedBlockCall(const PreparedBlockCall &) = delete;
+  PreparedBlockCall &operator=(const PreparedBlockCall &) = delete;
+  ~PreparedBlockCall() {
+    if (frame != nullptr && recycle != nullptr) {
+      recycle(recycle_context, std::move(frame));
+    }
+  }
 };
 
 // Active frames live at stable addresses. A Frame owns several register

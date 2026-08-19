@@ -2691,9 +2691,9 @@ private:
     return copied;
   }
 
-  std::optional<Value>
-  call_block_to_value(const Frame &frame, const Value &block,
-                      const Value *args, std::size_t arg_count) {
+  std::optional<Value> call_block_to_value(
+      const Frame &frame, const Value &block, const Value *args,
+      std::size_t arg_count, PreparedBlockCall *prepared) {
     if (block.is_null()) {
       set_fault(frame, "TypeError", "builtin collection SEND requires block");
       return std::nullopt;
@@ -2705,17 +2705,37 @@ private:
     if (!ensure_lifecycle_access(frame, block)) {
       return std::nullopt;
     }
-    const IntrusivePtr<ClosureValue> closure = block.as_closure();
+    const IntrusivePtr<ClosureValue> closure =
+        prepared != nullptr && prepared->closure != nullptr
+            ? prepared->closure
+            : block.as_closure();
     if (closure == nullptr) {
       set_fault(frame, "TypeError", "closure value is null");
       return std::nullopt;
     }
-    const BcCode *code = lookup_code(closure->code_id);
+    const BcCode *code = prepared != nullptr && prepared->code != nullptr
+                             ? prepared->code
+                             : lookup_code(closure->code_id);
     if (code == nullptr) {
       set_fault(frame, "VMError", "closure code id is unknown");
       return std::nullopt;
     }
-    if (!ensure_closure_arity(frame, *code, arg_count)) {
+    if ((prepared == nullptr || prepared->code == nullptr) &&
+        !ensure_closure_arity(frame, *code, arg_count)) {
+      return std::nullopt;
+    }
+
+    if (prepared != nullptr && prepared->code == nullptr) {
+      prepared->recycle_context = this;
+      prepared->recycle = [](void *context,
+                             std::unique_ptr<Frame> reusable) {
+        static_cast<Vm *>(context)->recycle_frame(std::move(reusable));
+      };
+      prepared->closure = closure;
+      prepared->code = code;
+      prepared->arg_count = arg_count;
+    } else if (prepared != nullptr && prepared->arg_count != arg_count) {
+      set_fault(frame, "VMError", "prepared block argument count changed");
       return std::nullopt;
     }
 
@@ -2728,11 +2748,54 @@ private:
     const Frame *caller_frame =
         caller_depth == 0U ? nullptr : &frames_.back();
     std::optional<Value> result;
-    push_frame_from_args(*code, args, arg_count, closure->captures,
-                         closure->self, Value::null(), std::nullopt,
-                         closure->nonlocal_return_target);
+    if (prepared == nullptr) {
+      push_frame_from_args(*code, args, arg_count, closure->captures,
+                           closure->self, Value::null(), std::nullopt,
+                           closure->nonlocal_return_target);
+    } else {
+      if (prepared->frame == nullptr) {
+        prepared->frame = acquire_frame(*code);
+        initialize_nonlocal_return_target(
+            *prepared->frame, *code, closure->nonlocal_return_target);
+        prepared->frame->captures = closure->captures;
+        prepared->frame->self = closure->self;
+      }
+      Frame &block_frame = *prepared->frame;
+      const std::optional<std::uint32_t> rest_index =
+          rest_param_index_for_code(code->code_id);
+      const std::size_t fixed_count =
+          rest_index.has_value()
+              ? std::min<std::size_t>(*rest_index, arg_count)
+              : arg_count;
+      for (std::size_t i = 0;
+           i < fixed_count && i < block_frame.regs.size(); ++i) {
+        block_frame.regs[i] = args[i];
+        block_frame.initialized[i] = 1U;
+        sync_integer_reg_from_value(block_frame,
+                                    static_cast<std::uint32_t>(i),
+                                    block_frame.regs[i]);
+      }
+      if (rest_index.has_value() &&
+          static_cast<std::size_t>(*rest_index) < block_frame.regs.size()) {
+        const std::size_t k = *rest_index;
+        std::vector<Value> rest_items;
+        if (arg_count > k) {
+          rest_items.assign(args + k, args + arg_count);
+        }
+        block_frame.regs[k] = make_tuple_value(std::move(rest_items));
+        block_frame.initialized[k] = 1U;
+        sync_integer_reg_from_value(block_frame,
+                                    static_cast<std::uint32_t>(k),
+                                    block_frame.regs[k]);
+      }
+      seed_empty_kw_rest(block_frame, code->code_id);
+      frames_.push_back(std::move(prepared->frame));
+    }
     Frame *root_block = &frames_[caller_depth];
     root_block->direct_return_sink = &result;
+    if (prepared != nullptr) {
+      root_block->direct_return_frame_sink = &prepared->frame;
+    }
 
     try {
       // Stop when the root block returns normally or when dynamic control
@@ -2770,6 +2833,12 @@ private:
     return std::move(*result);
   }
 
+  std::optional<Value>
+  call_block_to_value(const Frame &frame, const Value &block,
+                      const Value *args, std::size_t arg_count) {
+    return call_block_to_value(frame, block, args, arg_count, nullptr);
+  }
+
   std::optional<Value> call_block_to_value(const Frame &frame,
                                            const Value &block,
                                            const std::vector<Value> &args) {
@@ -2780,6 +2849,13 @@ private:
                                            const Value &block,
                                            std::initializer_list<Value> args) {
     return call_block_to_value(frame, block, args.begin(), args.size());
+  }
+
+  std::optional<Value> call_prepared_block_to_value(
+      const Frame &frame, const Value &block,
+      std::initializer_list<Value> args, PreparedBlockCall *prepared) {
+    return call_block_to_value(frame, block, args.begin(), args.size(),
+                               prepared);
   }
 
   // `text.chars.all? |char|: "...".contains?(char)` is a common validation
@@ -5608,6 +5684,41 @@ private:
     return frame;
   }
 
+  void reset_frame_for_direct_block_reuse(Frame &frame) {
+    frame.pc = 0;
+    const std::size_t initialized_count =
+        std::min(frame.regs.size(), frame.initialized.size());
+    for (std::size_t index = 0; index < initialized_count; ++index) {
+      if (frame.initialized[index] != 0U) {
+        frame.regs[index] = Value::null();
+      }
+    }
+    std::fill(frame.initialized.begin(), frame.initialized.end(), 0U);
+    std::fill(frame.int_valid.begin(), frame.int_valid.end(), 0U);
+    // code/quick_code, captures, self, and the inherited non-local-return
+    // target describe the closure rather than a single invocation. Retaining
+    // them is the point of this path; every per-call field is reset below.
+    frame.block = Value::null();
+    frame.last_result = Value::null();
+    frame.no_suspend_extent = false;
+    frame.no_suspend_label.clear();
+    frame.caller_result_reg.reset();
+    frame.direct_return_sink = nullptr;
+    frame.direct_return_frame_sink = nullptr;
+    frame.active_call_pc.reset();
+    frame.return_override.reset();
+    frame.merge_registers_to_caller = false;
+    frame.pending_exception_on_return.reset();
+    frame.pending_throw_on_return.reset();
+    frame.pending_nonlocal_return_on_return.reset();
+    frame.preserved_registers_on_return.clear();
+    frame.scope_exit = {};
+    frame.pending_native_extension_call.reset();
+    frame.prepared_seq_regs.clear();
+    frame.prepared_map_regs.clear();
+    frame.pending_pattern_bindings.clear();
+  }
+
   void recycle_frame(std::unique_ptr<Frame> frame) {
     if (frame == nullptr || frame->code == nullptr) {
       return;
@@ -5639,6 +5750,7 @@ private:
     frame->no_suspend_label.clear();
     frame->caller_result_reg.reset();
     frame->direct_return_sink = nullptr;
+    frame->direct_return_frame_sink = nullptr;
     frame->active_call_pc.reset();
     frame->return_override.reset();
     frame->merge_registers_to_caller = false;
@@ -5649,6 +5761,7 @@ private:
     frame->owns_nonlocal_return_target = false;
     frame->preserved_registers_on_return.clear();
     frame->scope_exit = {};
+    frame->pending_native_extension_call.reset();
     frame->prepared_seq_regs.clear();
     frame->prepared_map_regs.clear();
     frame->pending_pattern_bindings.clear();
@@ -13679,6 +13792,8 @@ private:
     const BcCode *completed_code = frame.code;
     const std::optional<std::uint32_t> caller_reg = frame.caller_result_reg;
     std::optional<Value> *direct_return_sink = frame.direct_return_sink;
+    std::unique_ptr<Frame> *direct_return_frame_sink =
+        frame.direct_return_frame_sink;
     const std::optional<Value> pending_exception =
         frame.pending_exception_on_return;
     const std::optional<PendingThrow> pending_throw =
@@ -13749,7 +13864,16 @@ private:
     }
     if (direct_return_sink != nullptr) {
       *direct_return_sink = std::move(value);
-      recycle_frame(std::move(completed_owner));
+      // The collection loop will immediately invoke this exact closure again.
+      // Preserve its immutable activation context and register buffers, while
+      // clearing every value that belongs to the completed invocation.
+      if (direct_return_frame_sink != nullptr &&
+          !completed_frame.owns_nonlocal_return_target) {
+        reset_frame_for_direct_block_reuse(completed_frame);
+        *direct_return_frame_sink = std::move(completed_owner);
+      } else {
+        recycle_frame(std::move(completed_owner));
+      }
       return;
     }
     if (!caller_reg.has_value() || !write_reg(caller, *caller_reg, value)) {
@@ -29941,6 +30065,49 @@ private:
     if (!ensure_lifecycle_access(frame, receiver)) {
       return FastSendStatus::Faulted;
     }
+
+    // Map#each/#map use the same bytecode send shape as sequence iteration,
+    // but pass key and value separately. Handle them here so the hottest
+    // strong-params/ORM loops avoid re-entering the generic scalar dispatcher.
+    // Keep snapshot semantics identical to the generic Map implementation.
+    if (receiver.is_map() &&
+        (opcode == QuickOpcode::SendSeqEach ||
+         opcode == QuickOpcode::SendSeqMap)) {
+      const IntrusivePtr<MapValue> map = receiver.as_map();
+      if (map == nullptr) {
+        set_fault(frame, "TypeError", "map value is null");
+        return FastSendStatus::Faulted;
+      }
+      const std::vector<MapEntry> entries = map->entries;
+      std::vector<Value> mapped;
+      if (opcode == QuickOpcode::SendSeqMap) {
+        mapped.reserve(entries.size());
+      }
+      PreparedBlockCall prepared;
+      for (const MapEntry &entry : entries) {
+        const std::optional<Value> result = call_prepared_block_to_value(
+            frame, block, {entry.key, entry.value}, &prepared);
+        if (!result.has_value()) {
+          return FastSendStatus::Faulted;
+        }
+        if (!ensure_lifecycle_access(frame, receiver)) {
+          return FastSendStatus::Faulted;
+        }
+        if (opcode == QuickOpcode::SendSeqMap) {
+          mapped.push_back(*result);
+        }
+      }
+      if (opcode == QuickOpcode::SendSeqEach) {
+        return write_reg_fast_plain(frame, dst, receiver)
+                   ? FastSendStatus::Matched
+                   : FastSendStatus::Faulted;
+      }
+      return write_reg_fast_plain(frame, dst,
+                                  make_list_value(std::move(mapped)))
+                 ? FastSendStatus::Matched
+                 : FastSendStatus::Faulted;
+    }
+
     const std::vector<Value> *items_view =
         sequence_items_view(frame, receiver);
     if (fault_.has_value()) {
@@ -30012,9 +30179,10 @@ private:
       mapped.reserve(items.size());
     }
 
+    PreparedBlockCall prepared;
     for (const Value &item : items) {
-      const std::optional<Value> result =
-          call_block_to_value(frame, block, {item});
+      const std::optional<Value> result = call_prepared_block_to_value(
+          frame, block, {item}, &prepared);
       if (!result.has_value()) {
         return FastSendStatus::Faulted;
       }

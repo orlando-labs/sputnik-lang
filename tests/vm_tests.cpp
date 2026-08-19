@@ -2509,6 +2509,47 @@ void test_bare_nullary_member_implicit_call() {
          "bare class-side access should implicitly call nullary class method");
 }
 
+void test_quick_result_nullary_sends() {
+  const amber::runtime::ExecutionResult accessors = execute_emitted_init(
+      "ok = Ok(41)\n"
+      "err = Err(7)\n"
+      "if ok.ok?() and ok.ok? and not ok.err?() and err.err?() and "
+      "err.error? and ok.value() == 41 and ok.value == 41 and "
+      "err.error() == 7 and err.error == 7:\n"
+      "  42\n"
+      "else:\n"
+      "  0\n");
+  expect(accessors.ok(), "quick Result accessor execution failed");
+  expect(accessors.value.is_integer() && accessors.value.as_integer() == 42,
+         "quick Result accessors should preserve bare and explicit semantics");
+
+  const amber::runtime::ExecutionResult value_fault =
+      execute_emitted_init("Err(7).value()\n");
+  expect(!value_fault.ok() && value_fault.fault.has_value() &&
+             value_fault.fault->error_name == "ValueError",
+         "quick Result.value on Err should preserve ValueError");
+
+  const amber::runtime::ExecutionResult error_fault =
+      execute_emitted_init("Ok(7).error\n");
+  expect(!error_fault.ok() && error_fault.fault.has_value() &&
+             error_fault.fault->error_name == "ValueError",
+         "quick Result.error on Ok should preserve ValueError");
+
+  const amber::runtime::ExecutionResult fallback = execute_emitted_init(
+      "class ResultLike:\n"
+      "  def ok?(): true\n"
+      "  def value(): 20\n"
+      "  def error(): 22\n"
+      "probe = ResultLike()\n"
+      "if probe.ok?() and probe.value() == 20 and probe.error == 22:\n"
+      "  42\n"
+      "else:\n"
+      "  0\n");
+  expect(fallback.ok(), "Result quick-send user-method fallback failed");
+  expect(fallback.value.is_integer() && fallback.value.as_integer() == 42,
+         "Result selector quickening must retain ordinary method dispatch");
+}
+
 void test_bare_non_nullary_member_rejected() {
   const amber::bytecode::EmitResult emit_result =
       emit_ok("class Box:\n"
@@ -11148,6 +11189,7 @@ int main() {
   test_execute_emitted_block_send();
   test_execute_emitted_properties();
   test_bare_nullary_member_implicit_call();
+  test_quick_result_nullary_sends();
   test_bare_non_nullary_member_rejected();
   test_implicit_self_bare_identifier_dispatch();
   test_property_called_as_method_rejected();

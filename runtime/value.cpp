@@ -699,6 +699,12 @@ std::shared_ptr<ResultValue> Value::as_result() const {
   return std::get<std::shared_ptr<ResultValue>>(payload);
 }
 
+const ResultValue *Value::result_ptr() const {
+  const auto *result =
+      std::get_if<std::shared_ptr<ResultValue>>(&payload);
+  return result != nullptr ? result->get() : nullptr;
+}
+
 std::shared_ptr<RuntimeArgParserValue> Value::as_arg_parser() const {
   return std::get<std::shared_ptr<RuntimeArgParserValue>>(payload);
 }
@@ -1003,6 +1009,13 @@ AMBER_VALUE_HEAP_KINDS(X)
   }
 AMBER_VALUE_TAIL_KINDS(X)
 #undef X
+
+const ResultValue *Value::result_ptr() const {
+  if (!is_result()) {
+    return nullptr;
+  }
+  return static_cast<const ResultValue *>(u_.tail->ptr.get());
+}
 
 std::uint32_t Value::kind_index() const {
   if (tag_ == ValueTag::Tail && u_.tail != nullptr) {

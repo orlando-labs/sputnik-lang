@@ -4739,7 +4739,16 @@ private:
           out.quick_opcode = QuickOpcode::SendSeqFirst;
         }
       } else {
-        if (selector == "to_str") {
+        const bool can_quicken_result =
+            has_site_id && site_id < code.call_site_table.size();
+        if (can_quicken_result && selector == "ok?") {
+          out.quick_opcode = QuickOpcode::SendResultOk;
+        } else if (can_quicken_result &&
+                   (selector == "err?" || selector == "error?")) {
+          out.quick_opcode = QuickOpcode::SendResultErr;
+        } else if (can_quicken_result && selector == "or_raise") {
+          out.quick_opcode = QuickOpcode::SendResultOrRaise;
+        } else if (selector == "to_str") {
           out.quick_opcode = QuickOpcode::SendIntToStr;
         } else if (selector == "length" || selector == "size") {
           out.quick_opcode = QuickOpcode::SendLength;
@@ -4747,6 +4756,14 @@ private:
           out.quick_opcode = QuickOpcode::SendSeqCount;
         } else if (collection_selector == "first") {
           out.quick_opcode = QuickOpcode::SendSeqFirst;
+        }
+        if (out.quick_opcode == QuickOpcode::SendResultOk ||
+            out.quick_opcode == QuickOpcode::SendResultErr ||
+            out.quick_opcode == QuickOpcode::SendResultOrRaise) {
+          // Result guards also retain the ordinary cached-send metadata so a
+          // user class with the same selector does not lose its warmed path.
+          c = selector_id;
+          imm = static_cast<std::int64_t>(site_id);
         }
       }
       // A warmed ordinary fixed-arity send can bypass the full
@@ -25044,7 +25061,7 @@ private:
     }
 
     if (receiver.is_result()) {
-      const std::shared_ptr<ResultValue> result = receiver.as_result();
+      const ResultValue *result = receiver.result_ptr();
       if (result == nullptr) {
         set_fault(frame, "VMError", "result value is null");
         return SendStatus::Faulted;
@@ -30151,34 +30168,10 @@ private:
                : FastSendStatus::Faulted;
   }
 
-  FastSendStatus step_quick_cached_zero_send(Frame &frame,
-                                             const QuickInsn &quick) {
+  FastSendStatus step_quick_cached_zero_send_with_receiver(
+      Frame &frame, const QuickInsn &quick, Value receiver) {
     if (quick.imm < 0 || quick.c >= runtime_symbols_.size()) {
       return FastSendStatus::NotHandled;
-    }
-    const Value receiver = read_reg(frame, quick.b);
-    if (fault_.has_value()) {
-      return FastSendStatus::Faulted;
-    }
-
-    std::uint32_t class_index = 0;
-    std::uint32_t dispatch_flags = 0;
-    if (receiver.is_instance_object()) {
-      const IntrusivePtr<InstanceValue> instance = receiver.as_instance_object();
-      if (instance == nullptr || instance_is_native_range(instance) ||
-          value_is_lazy_seq_instance(receiver)) {
-        return FastSendStatus::NotHandled;
-      }
-      class_index = instance->class_index;
-      dispatch_flags = kMethodFlagInstance;
-    } else if (receiver.is_class_object()) {
-      class_index = receiver.as_class_object().class_index;
-      dispatch_flags = kMethodFlagClass;
-    } else {
-      return FastSendStatus::NotHandled;
-    }
-    if (!ensure_lifecycle_access(frame, receiver)) {
-      return FastSendStatus::Faulted;
     }
 
     const std::uint32_t site_id = static_cast<std::uint32_t>(quick.imm);
@@ -30191,6 +30184,73 @@ private:
     static const std::vector<Value> no_args;
     static const std::vector<std::pair<std::uint32_t, Value>> no_keywords;
     const Value no_block = Value::null();
+
+    std::uint32_t class_index = 0;
+    std::uint32_t dispatch_flags = 0;
+    if (receiver.is_instance_object()) {
+      const IntrusivePtr<InstanceValue> instance = receiver.as_instance_object();
+      if (instance == nullptr) {
+        return FastSendStatus::NotHandled;
+      }
+      if (instance_is_native_range(instance) ||
+          value_is_lazy_seq_instance(receiver)) {
+        class_index = std::numeric_limits<std::uint32_t>::max();
+      } else {
+        class_index = instance->class_index;
+        dispatch_flags = kMethodFlagInstance;
+      }
+    } else if (receiver.is_class_object()) {
+      class_index = receiver.as_class_object().class_index;
+      dispatch_flags = kMethodFlagClass;
+    } else {
+      class_index = std::numeric_limits<std::uint32_t>::max();
+    }
+
+    // SendCached0 used to reject every builtin receiver and let the generic
+    // SEND decode the same instruction and read the same register again. For
+    // scalar/tail/collection receivers, dispatch the already-decoded nullary
+    // send immediately. Ordinary instances/classes retain the warmed method
+    // cache path below.
+    if (class_index == std::numeric_limits<std::uint32_t>::max()) {
+      const std::string &selector = runtime_symbols_[quick.c];
+      // Native module/type sends have a pre-scalar layer in step_send: a
+      // dotted native error name used as a method constructs the error even
+      // with zero arguments, while property access returns its class object.
+      // Scalar dispatch alone cannot recover that call-site distinction.
+      if (receiver.is_native_type()) {
+        return FastSendStatus::NotHandled;
+      }
+      // Bare conversion aliases have precedence over same-named collection
+      // methods (`pairs.map` converts to Map; it is not `map` without a
+      // block). Preserve that property-only dispatch layer in the generic
+      // SEND rather than letting scalar dispatch report an arity error.
+      if (property_access &&
+          conversion_target_for_alias(selector).has_value()) {
+        return FastSendStatus::NotHandled;
+      }
+      Value result = Value::null();
+      const SendStatus status = try_apply_scalar_send(
+          frame, receiver, selector, no_args, no_block, no_keywords, &result);
+      if (status == SendStatus::Faulted) {
+        return FastSendStatus::Faulted;
+      }
+      if (park_request_.has_value() &&
+          park_request_->kind == ParkRequest::Kind::Io) {
+        return FastSendStatus::Matched;
+      }
+      if (status == SendStatus::Matched) {
+        if (!write_reg_fast_plain(frame, quick.a, std::move(result))) {
+          return FastSendStatus::Faulted;
+        }
+        ++frame.pc;
+        return FastSendStatus::Matched;
+      }
+      return FastSendStatus::NotHandled;
+    }
+    if (!ensure_lifecycle_access(frame, receiver)) {
+      return FastSendStatus::Faulted;
+    }
+
     const CallCacheEntry *entry = probe_plain_call_cache_entry(
         frame, site_id, class_index, dispatch_flags, quick.c, 0U);
     if (entry == nullptr) {
@@ -30247,6 +30307,57 @@ private:
                          quick.a)
                ? FastSendStatus::Matched
                : FastSendStatus::Faulted;
+  }
+
+  FastSendStatus step_quick_cached_zero_send(Frame &frame,
+                                             const QuickInsn &quick) {
+    Value receiver = read_reg(frame, quick.b);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+    return step_quick_cached_zero_send_with_receiver(
+        frame, quick, std::move(receiver));
+  }
+
+  FastSendStatus step_quick_result_send(Frame &frame, QuickOpcode opcode,
+                                        const QuickInsn &quick) {
+    Value receiver = read_reg(frame, quick.b);
+    if (fault_.has_value()) {
+      return FastSendStatus::Faulted;
+    }
+    if (!receiver.is_result()) {
+      // Predicate names are legal user methods too. Keep their ordinary
+      // warmed cache/scalar path and reuse this register read.
+      return step_quick_cached_zero_send_with_receiver(
+          frame, quick, std::move(receiver));
+    }
+    const ResultValue *result = receiver.result_ptr();
+    if (result == nullptr) {
+      set_fault(frame, "VMError", "result value is null");
+      return FastSendStatus::Faulted;
+    }
+    const auto write_and_advance = [&](Value value) {
+      if (!write_reg_fast_plain(frame, quick.a, std::move(value))) {
+        return FastSendStatus::Faulted;
+      }
+      ++frame.pc;
+      return FastSendStatus::Matched;
+    };
+
+    switch (opcode) {
+    case QuickOpcode::SendResultOk:
+      return write_and_advance(Value::boolean(result->is_ok));
+    case QuickOpcode::SendResultErr:
+      return write_and_advance(Value::boolean(!result->is_ok));
+    case QuickOpcode::SendResultOrRaise:
+      if (!result->is_ok) {
+        raise_value(frame, result->payload);
+        return FastSendStatus::Faulted;
+      }
+      return write_and_advance(result->payload);
+    default:
+      return FastSendStatus::NotHandled;
+    }
   }
 
   FastSendStatus step_quick_cached_one_send(Frame &frame,
@@ -31595,6 +31706,21 @@ private:
         }
         if (status == FastSendStatus::Matched) {
           ++frame.pc;
+          return;
+        }
+        break;
+      }
+      case QuickOpcode::SendResultOk:
+      case QuickOpcode::SendResultErr:
+      case QuickOpcode::SendResultOrRaise: {
+        const FastSendStatus status = step_quick_result_send(
+            frame, quick->quick_opcode, *quick);
+        if (status == FastSendStatus::Faulted) {
+          return;
+        }
+        if (status == FastSendStatus::Matched) {
+          // Direct Result access and the guarded ordinary-send fallback both
+          // own their caller PC transition.
           return;
         }
         break;

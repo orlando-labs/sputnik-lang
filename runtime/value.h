@@ -611,6 +611,7 @@ struct Value {
   std::shared_ptr<RuntimeWatchCell> as_watch_cell() const;
   std::shared_ptr<RuntimeWatchHandle> as_watch_handle() const;
   std::shared_ptr<ResultValue> as_result() const;
+  const ResultValue *result_ptr() const;
   std::shared_ptr<RuntimeArgParserValue> as_arg_parser() const;
   std::shared_ptr<RuntimeUuidValue> as_uuid() const;
   std::shared_ptr<RuntimeRegexpPatternValue> as_regexp_pattern() const;
@@ -826,6 +827,7 @@ struct Value {
   std::shared_ptr<RuntimeWatchCell> as_watch_cell() const;
   std::shared_ptr<RuntimeWatchHandle> as_watch_handle() const;
   std::shared_ptr<ResultValue> as_result() const;
+  const ResultValue *result_ptr() const;
   std::shared_ptr<RuntimeArgParserValue> as_arg_parser() const;
   std::shared_ptr<RuntimeUuidValue> as_uuid() const;
   std::shared_ptr<RuntimeRegexpPatternValue> as_regexp_pattern() const;

@@ -24,10 +24,11 @@ compile time is not included in the measured run. The runner still builds fresh
 `amber-built`, that row is the native executable from `amberc build`, not
 `amberbc_run`.
 
-Run:
+Run (the defaults are five measured repeats, one unmeasured warmup, and a
+deterministic balanced rotation of implementation order):
 
 ```sh
-python3 bench/polyglot/run_benchmark.py --repeats 3
+python3 bench/polyglot/run_benchmark.py --repeats 5 --warmups 1 --order-seed 0
 python3 bench/polyglot/run_benchmark.py --workload calls-collections --repeats 5
 python3 bench/polyglot/run_benchmark.py --workload sha-digest --repeats 3
 python3 bench/polyglot/run_benchmark.py --workload json --repeats 3
@@ -38,6 +39,14 @@ python3 bench/polyglot/run_benchmark.py --workload uuid --repeats 3
 python3 bench/polyglot/run_benchmark.py --workload string-ops --repeats 3
 python3 bench/polyglot/run_benchmark.py --workload map-words --repeats 3
 ```
+
+Each run writes a timestamped JSON provenance envelope and a Markdown report
+to `bench/polyglot/results/`. The envelope contains every raw sample, measured
+order, mean/median/standard deviation/CV/95% confidence interval, paired
+throughput ratios, host and tool versions, Git commit and tracked-dirty state,
+source-tree hash, and hashes of the exact executables. `AMBER_BENCH_RUBY` can
+pin Ruby explicitly; otherwise the newest discoverable RVM Ruby is preferred
+over the system Ruby.
 
 The HTTP RPS benchmark is a separate server-side comparison. It uses one
 explicitly pinned Amber client from the sibling Ember checkout, built with
@@ -55,8 +64,9 @@ for 60 seconds:
 
 ```sh
 python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4 \
-  --languages amber --refresh-client-pin
-python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4
+  --repeats 5 --order-seed 0 --languages amber --refresh-client-pin
+python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4 \
+  --repeats 5 --order-seed 0
 ```
 
 The raw lane is deliberately framework-free in every language and is the VM /
@@ -64,7 +74,8 @@ HTTP-runtime optimization target. The complete Ember request pipeline remains
 a separate lane:
 
 ```sh
-python3 bench/polyglot/run_http_rps.py --stack ember --duration 60 --clients 4
+python3 bench/polyglot/run_http_rps.py --stack ember --duration 60 --clients 4 \
+  --repeats 5 --order-seed 0
 ```
 
 This framework lane compares the complete Ember pipeline with Rails API 8 on
@@ -73,15 +84,19 @@ Both framework servers persist the catalog with ORM models over a shared
 process-local SQLite `:memory:` database, so the timed table includes model
 lifecycle, SQL generation, pooling, and SQLite execution without an external
 database. They serialize SQLite-backed actions to keep lock-retry policy from
-changing the common HTTP contract. Set `AMBER_BENCH_RUBY` when Rails and Puma
-are installed under a Ruby that is not discoverable through RVM or `PATH`.
+changing the common HTTP contract. Rails request whitelisting uses Rails 8
+Strong Parameters (`expect` for replacement payloads and `permit` for PATCH),
+with the same strict unknown-field contract as Ember. Set `AMBER_BENCH_RUBY`
+when Rails and Puma are installed under a Ruby that is not discoverable through
+RVM or `PATH`.
 The HTTP runner writes machine-readable JSON and a Markdown comparison table
 to `bench/polyglot/results/`. Amber server builds require VM-independent full
 native coverage; the Amber load-generator client remains a separately reported
 native-body-covered HTTP-client bridge.
 
-The script prints mean/best wall-clock time and peak RSS reported by a small
-Python measurement helper via `resource.getrusage(RUSAGE_CHILDREN)`. It also
+The micro runner prints median/mean wall-clock time, dispersion, and peak RSS
+reported by a small Python measurement helper via
+`resource.getrusage(RUSAGE_CHILDREN)`. It also
 validates that every implementation returns the same checksum for the selected
 workload:
 

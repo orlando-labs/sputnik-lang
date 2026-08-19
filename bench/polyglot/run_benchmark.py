@@ -1,13 +1,25 @@
 #!/usr/bin/env python3
 import argparse
 from dataclasses import dataclass
+import datetime as dt
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+
+from benchmark_support import (
+    balanced_orders,
+    file_provenance,
+    git_provenance,
+    host_provenance,
+    relevant_environment,
+    summary_stats,
+    tree_provenance,
+)
 
 
 @dataclass(frozen=True)
@@ -239,11 +251,27 @@ def choose_rust() -> Optional[str]:
     return shutil.which("rustc")
 
 
+def choose_ruby() -> str:
+    override = os.environ.get("AMBER_BENCH_RUBY")
+    candidates = [Path(override).expanduser()] if override else []
+    candidates += sorted(
+        (Path.home() / ".rvm" / "rubies").glob("ruby-*/bin/ruby"),
+        reverse=True,
+    )
+    system = shutil.which("ruby")
+    if system:
+        candidates.append(Path(system))
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate.resolve())
+    raise RuntimeError(
+        "ruby was not found; set AMBER_BENCH_RUBY to a Ruby executable"
+    )
+
+
 def ensure_amber_tools(root: Path) -> None:
-    amberc = root / "build" / "amberc"
-    iamber = root / "build" / "iamber"
-    if amberc.exists() and iamber.exists():
-        return
+    # Let make verify source timestamps even when both tools already exist.
+    # A merely present iamber may predate the VM changes being benchmarked.
     run_command(["make", "build/amberc", "build/iamber"], root, capture=False)
 
 
@@ -542,6 +570,8 @@ def aggregate(
         for sample in good
         if sample["peak_rss_mb"] is not None
     ]
+    timing = summary_stats(elapsed)
+    rss = summary_stats(rss_values)
     return {
         "name": name,
         "command": [str(part) for part in command],
@@ -549,9 +579,14 @@ def aggregate(
         "runs": len(good),
         "checksum": checksums[0] if checksums else "",
         "elapsed_s": elapsed,
-        "mean_s": sum(elapsed) / len(elapsed),
-        "best_s": min(elapsed),
-        "peak_rss_mb": max(rss_values) if rss_values else None,
+        "timing_s": timing,
+        "rss_mb": rss,
+        "mean_s": timing["mean"],
+        "median_s": timing["median"],
+        "stdev_s": timing["stdev"],
+        "cv_percent": timing["cv_percent"],
+        "best_s": timing["min"],
+        "peak_rss_mb": rss["max"],
     }
 
 
@@ -564,7 +599,12 @@ def unavailable_result(name: str, reason: str) -> dict:
         "runs": 0,
         "checksum": "",
         "elapsed_s": [],
+        "timing_s": summary_stats([]),
+        "rss_mb": summary_stats([]),
         "mean_s": None,
+        "median_s": None,
+        "stdev_s": None,
+        "cv_percent": None,
         "best_s": None,
         "peak_rss_mb": None,
     }
@@ -572,10 +612,11 @@ def unavailable_result(name: str, reason: str) -> dict:
 
 def print_table(results: list[dict]) -> None:
     print(
-        f"{'program':<19} {'runs':>4} {'mean_s':>10} "
-        f"{'best_s':>10} {'peak_rss_mb':>12} {'checksum':>18}"
+        f"{'program':<19} {'runs':>4} {'median_s':>10} {'mean_s':>10} "
+        f"{'stdev_s':>10} {'cv_%':>8} {'best_s':>10} "
+        f"{'peak_rss_mb':>12} {'checksum':>18}"
     )
-    print("-" * 82)
+    print("-" * 124)
     for result in results:
         mean_s = (
             f"{result['mean_s']:.4f}"
@@ -587,6 +628,21 @@ def print_table(results: list[dict]) -> None:
             if result["best_s"] is not None
             else "n/a"
         )
+        median_s = (
+            f"{result['median_s']:.4f}"
+            if result["median_s"] is not None
+            else "n/a"
+        )
+        stdev_s = (
+            f"{result['stdev_s']:.4f}"
+            if result["stdev_s"] is not None
+            else "n/a"
+        )
+        cv = (
+            f"{result['cv_percent']:.2f}"
+            if result["cv_percent"] is not None
+            else "n/a"
+        )
         rss = (
             f"{result['peak_rss_mb']:.1f}"
             if result["peak_rss_mb"] is not None
@@ -595,16 +651,210 @@ def print_table(results: list[dict]) -> None:
         checksum = result["checksum"] or result.get("error", "n/a")
         print(
             f"{result['name']:<19} {result['runs']:>4} "
-            f"{mean_s:>10} {best_s:>10} "
+            f"{median_s:>10} {mean_s:>10} {stdev_s:>10} "
+            f"{cv:>8} {best_s:>10} "
             f"{rss:>12} {checksum:>18}"
         )
+
+
+def micro_comparisons(
+    samples_by_name: dict[str, list[dict]], program_names: list[str]
+) -> list[dict]:
+    comparisons = []
+    for baseline in ("amber-interpreted", "amber-built"):
+        baseline_samples = samples_by_name.get(baseline, [])
+        if not baseline_samples:
+            continue
+        baseline_by_repeat = {
+            sample["repeat_index"]: sample["elapsed_s"]
+            for sample in baseline_samples
+        }
+        for name in program_names:
+            if name == baseline or name not in samples_by_name:
+                continue
+            ratios = []
+            for sample in samples_by_name[name]:
+                baseline_elapsed = baseline_by_repeat.get(sample["repeat_index"])
+                if baseline_elapsed is None or sample["elapsed_s"] <= 0.0:
+                    continue
+                ratios.append(baseline_elapsed / sample["elapsed_s"])
+            comparisons.append(
+                {
+                    "baseline": baseline,
+                    "program": name,
+                    "paired_throughput_ratio": summary_stats(ratios),
+                }
+            )
+    return comparisons
+
+
+def version_line(command: list[object], root: Path) -> Optional[str]:
+    try:
+        completed = subprocess.run(
+            [str(part) for part in command],
+            cwd=str(root),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=10.0,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    return lines[0] if lines else None
+
+
+def micro_provenance(
+    root: Path,
+    build_dir: Path,
+    workload: Workload,
+    programs: list[tuple[str, list[object]]],
+    cxx: str,
+    go: Optional[str],
+    rust: Optional[str],
+    ruby: str,
+) -> dict:
+    artifacts = {
+        "amberc": file_provenance(root / "build/amberc"),
+        "iamber": file_provenance(root / "build/iamber"),
+    }
+    for name, command in programs:
+        for part in command:
+            path = Path(str(part))
+            if path.is_file():
+                artifacts[f"{name}:{path.name}"] = file_provenance(path)
+    sources = [
+        root / "bench/polyglot/run_benchmark.py",
+        root / "bench/polyglot/benchmark_support.py",
+        root / "bench/polyglot/amber/amber.build.json",
+        root / "bench/polyglot/amber/src" / workload.amber_source,
+        root / "bench/polyglot/python" / workload.python_source,
+        root / "bench/polyglot/ruby" / workload.ruby_source,
+        root / "bench/polyglot/cpp" / workload.cpp_source,
+        root / "bench/polyglot/go" / workload.go_source,
+        root / "bench/polyglot/rust" / workload.rust_source,
+    ]
+    return {
+        "host": host_provenance(),
+        "repositories": {"amber": git_provenance(root)},
+        "artifacts": artifacts,
+        "source_tree": tree_provenance(sources, relative_to=root),
+        "build_dir": str(build_dir.resolve()),
+        "versions": {
+            "amberc": version_line([root / "build/amberc", "--version"], root),
+            "python": platform.python_version(),
+            "ruby": version_line([ruby, "--version"], root),
+            "cxx": version_line([cxx, "--version"], root),
+            "go": version_line([go, "version"], root) if go else None,
+            "rust": version_line([rust, "--version"], root) if rust else None,
+        },
+        "environment": relevant_environment(
+            ["CXX", "CC", "RUSTFLAGS", "GOFLAGS", "AMBER_BENCH_RUBY"]
+        ),
+        "argv": sys.argv,
+    }
+
+
+def markdown_report(payload: dict) -> str:
+    comparisons = {
+        (row["baseline"], row["program"]): row
+        for row in payload["paired_comparisons"]
+    }
+    lines = [
+        f"# Polyglot microbenchmark: {payload['workload']}",
+        "",
+        f"Date: `{payload['timestamp']}`<br>",
+        f"Host: `{payload['provenance']['host']['platform']}`<br>",
+        f"Repeats: `{payload['repeats']}` measured, `{payload['warmups']}` warmup; balanced rotation seed `{payload['order_seed']}`.",
+        "",
+        "| Program | Median, s | Mean, s | Stdev | CV | Mean 95% CI | Peak RSS | vs Amber VM | vs Amber native |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in payload["results"]:
+        if not row["available"]:
+            lines.append(
+                f"| {row['name']} | n/a | n/a | n/a | n/a | n/a | n/a | n/a | n/a |"
+            )
+            continue
+        timing = row["timing_s"]
+        vm = comparisons.get(("amber-interpreted", row["name"]))
+        native = comparisons.get(("amber-built", row["name"]))
+        vm_text = (
+            "1.000×"
+            if row["name"] == "amber-interpreted"
+            else (
+                f"{vm['paired_throughput_ratio']['median']:.3f}×"
+                if vm is not None
+                else "n/a"
+            )
+        )
+        native_text = (
+            "1.000×"
+            if row["name"] == "amber-built"
+            else (
+                f"{native['paired_throughput_ratio']['median']:.3f}×"
+                if native is not None
+                else "n/a"
+            )
+        )
+        lines.append(
+            "| {name} | {median:.6f} | {mean:.6f} | {stdev:.6f} | {cv:.2f}% | {low:.6f}…{high:.6f} | {rss:.1f} MiB | {vm} | {native} |".format(
+                name=row["name"],
+                median=timing["median"],
+                mean=timing["mean"],
+                stdev=timing["stdev"],
+                cv=timing["cv_percent"],
+                low=timing["ci95_mean_low"],
+                high=timing["ci95_mean_high"],
+                rss=row["peak_rss_mb"],
+                vm=vm_text,
+                native=native_text,
+            )
+        )
+    lines += ["", "## Measured run order", ""]
+    for index, order in enumerate(payload["run_orders"], start=1):
+        lines.append(f"- repeat {index}: `{' → '.join(order)}`")
+    lines += ["", "## Provenance", ""]
+    provenance = payload["provenance"]
+    repository = provenance["repositories"]["amber"]
+    dirty = "dirty" if repository.get("tracked_dirty") else "clean"
+    lines.append(
+        f"- Amber: `{repository.get('commit')}` ({dirty}, `{repository['path']}`)"
+    )
+    for name, artifact in provenance["artifacts"].items():
+        lines.append(
+            f"- {name}: SHA-256 `{artifact['sha256']}`, {artifact['size_bytes']} bytes (`{artifact['path']}`)"
+        )
+    lines.append(
+        f"- benchmark source tree: SHA-256 `{provenance['source_tree']['sha256']}` over {provenance['source_tree']['file_count']} files"
+    )
+    lines += [
+        "",
+        f"Machine-readable result: `{payload['json_result']}`.",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run the Amber/Python/Ruby/C++/Go/Rust polyglot benchmark."
     )
-    parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--repeats", type=int, default=5)
+    parser.add_argument(
+        "--warmups",
+        type=int,
+        default=1,
+        help="unmeasured process runs per program before the measured series",
+    )
+    parser.add_argument(
+        "--order-seed",
+        type=int,
+        default=0,
+        help="deterministic seed for balanced program-order rotation",
+    )
     parser.add_argument(
         "--workload",
         choices=sorted(WORKLOADS.keys()),
@@ -628,9 +878,17 @@ def main() -> int:
         default=None,
         help="write raw aggregate results to this JSON file",
     )
+    parser.add_argument(
+        "--markdown-out",
+        type=Path,
+        default=None,
+        help="write a Markdown statistical report",
+    )
     args = parser.parse_args()
     if args.repeats < 1:
         raise RuntimeError("--repeats must be at least 1")
+    if args.warmups < 0:
+        raise RuntimeError("--warmups must be non-negative")
 
     root = repo_root()
     workload = WORKLOADS[args.workload]
@@ -681,9 +939,7 @@ def main() -> int:
         else:
             rust_binary = compile_rust_program(root, build_dir, rust, workload)
 
-    ruby = shutil.which("ruby")
-    if ruby is None:
-        raise RuntimeError("ruby was not found in PATH")
+    ruby = choose_ruby()
 
     programs = [
         (
@@ -722,26 +978,95 @@ def main() -> int:
     if rust_unavailable_reason is None:
         programs.append(("rust", [rust_binary]))
 
-    results = []
-    for name, command in programs:
-        samples = [measure(command, root) for _ in range(args.repeats)]
-        results.append(
-            aggregate(name, command, samples, workload.expected_checksum)
+    program_map = {name: command for name, command in programs}
+    program_names = [name for name, _command in programs]
+    warmup_orders = (
+        balanced_orders(program_names, args.warmups, args.order_seed + 1)
+        if args.warmups
+        else []
+    )
+    for warmup_index, order in enumerate(warmup_orders):
+        print(
+            f"warmup {warmup_index + 1}/{args.warmups}: "
+            + " -> ".join(order),
+            flush=True,
         )
+        for name in order:
+            sample = measure(program_map[name], root)
+            aggregate(
+                name,
+                program_map[name],
+                [sample],
+                workload.expected_checksum,
+            )
+
+    run_orders = balanced_orders(program_names, args.repeats, args.order_seed)
+    samples_by_name = {name: [] for name in program_names}
+    for repeat_index, order in enumerate(run_orders):
+        print(
+            f"repeat {repeat_index + 1}/{args.repeats}: "
+            + " -> ".join(order),
+            flush=True,
+        )
+        for order_position, name in enumerate(order):
+            sample = measure(program_map[name], root)
+            sample["repeat_index"] = repeat_index + 1
+            sample["order_position"] = order_position + 1
+            samples_by_name[name].append(sample)
+
+    results = [
+        aggregate(
+            name,
+            command,
+            samples_by_name[name],
+            workload.expected_checksum,
+        )
+        for name, command in programs
+    ]
     if go_unavailable_reason is not None:
         results.append(unavailable_result("go", go_unavailable_reason))
     if rust_unavailable_reason is not None:
         results.append(unavailable_result("rust", rust_unavailable_reason))
 
-    print_table(results)
-    default_json = (
-        build_dir / "results.json"
-        if workload.name == "arithmetic"
-        else build_dir / f"{workload.name}.results.json"
+    comparisons = micro_comparisons(samples_by_name, program_names)
+    provenance = micro_provenance(
+        root, build_dir, workload, programs, cxx, go, rust, ruby
     )
-    json_out = args.json_out or default_json
-    json_out.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
+    results_dir = root / "bench/polyglot/results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    default_stem = f"micro-{workload.name}-r{args.repeats}-{stamp}"
+    json_out = (args.json_out or (results_dir / f"{default_stem}.json")).resolve()
+    markdown_out = (
+        args.markdown_out or (results_dir / f"{default_stem}.md")
+    ).resolve()
+    try:
+        json_result = str(json_out.relative_to(root))
+    except ValueError:
+        json_result = str(json_out)
+    payload = {
+        "schema": "amber.polyglot.micro.v2",
+        "timestamp": dt.datetime.now().astimezone().isoformat(),
+        "workload": workload.name,
+        "expected_checksum": workload.expected_checksum,
+        "repeats": args.repeats,
+        "warmups": args.warmups,
+        "order_seed": args.order_seed,
+        "warmup_orders": warmup_orders,
+        "run_orders": run_orders,
+        "provenance": provenance,
+        "samples": samples_by_name,
+        "results": results,
+        "paired_comparisons": comparisons,
+        "json_result": json_result,
+    }
+    print_table(results)
+    json_out.parent.mkdir(parents=True, exist_ok=True)
+    json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    markdown_out.parent.mkdir(parents=True, exist_ok=True)
+    markdown_out.write_text(markdown_report(payload), encoding="utf-8")
     print(f"\nWrote JSON results to {json_out}")
+    print(f"Wrote Markdown report to {markdown_out}")
     return 0
 
 

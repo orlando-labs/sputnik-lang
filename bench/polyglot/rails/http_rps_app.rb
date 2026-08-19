@@ -175,6 +175,13 @@ class ItemsController < ActionController::API
     sku name description category status price_cents currency stock_count
     weight_grams manufacturer country_code barcode color size rating_milli
   ].freeze
+  METADATA_FIELDS = %w[source batch fragile].freeze
+  PARAM_FILTER = [
+    :sku, :name, :description, :category, :status, :price_cents, :currency,
+    :stock_count, :weight_grams, :active, :manufacturer, :country_code,
+    :barcode, :color, :size, :rating_milli,
+    { tags: [], metadata: %i[source batch fragile] }
+  ].freeze
 
   before_action :require_integer_id, only: %i[show update patch destroy]
   around_action :with_catalog_lock
@@ -187,7 +194,7 @@ class ItemsController < ActionController::API
     unknown = request.query_parameters.keys - ["status"]
     return problem(400, "invalid_parameters") unless unknown.empty?
 
-    status = request.query_parameters["status"]
+    status = params.permit(:status)[:status]
     return validation_problem("status") if status && !CatalogContract::STATUSES.include?(status)
 
     relation = CatalogItem.all
@@ -273,13 +280,24 @@ class ItemsController < ActionController::API
     return problem(415, "unsupported_media_type") unless request.media_type == "application/json"
 
     begin
-      document = JSON.parse(request.raw_post)
-    rescue JSON::ParserError
+      document = params
+      raw_item = document[:item]
+      return problem(400, "invalid_document") unless raw_item.is_a?(ActionController::Parameters)
+      return problem(400, "invalid_parameters") unless raw_item.keys.all? { |key| CatalogContract::ALLOWED_FIELDS[key] }
+      raw_metadata = raw_item[:metadata]
+      if raw_metadata.is_a?(ActionController::Parameters)
+        return problem(400, "invalid_parameters") unless raw_metadata.keys.all? { |key| METADATA_FIELDS.include?(key) }
+      end
+      item = if patch
+        raw_item.permit(*PARAM_FILTER).to_h
+      else
+        document.expect(item: PARAM_FILTER).to_h
+      end
+    rescue ActionDispatch::Http::Parameters::ParseError
       return problem(400, "invalid_json")
+    rescue ActionController::ParameterMissing, ActionController::UnpermittedParameters
+      return problem(400, "invalid_parameters")
     end
-    return problem(400, "invalid_document") unless document.is_a?(Hash)
-
-    item = document["item"]
     error = CatalogContract.schema_error(item, patch: patch)
     return problem(400, "invalid_parameters") if error
 

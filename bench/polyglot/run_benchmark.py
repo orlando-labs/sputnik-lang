@@ -850,6 +850,14 @@ def main() -> int:
         help="unmeasured process runs per program before the measured series",
     )
     parser.add_argument(
+        "--continue-on-program-error",
+        action="store_true",
+        help=(
+            "record a program that fails warmup as unavailable and continue "
+            "measuring the remaining implementations"
+        ),
+    )
+    parser.add_argument(
         "--order-seed",
         type=int,
         default=0,
@@ -889,6 +897,10 @@ def main() -> int:
         raise RuntimeError("--repeats must be at least 1")
     if args.warmups < 0:
         raise RuntimeError("--warmups must be non-negative")
+    if args.continue_on_program_error and args.warmups < 1:
+        raise RuntimeError(
+            "--continue-on-program-error requires at least one warmup"
+        )
 
     root = repo_root()
     workload = WORKLOADS[args.workload]
@@ -941,7 +953,7 @@ def main() -> int:
 
     ruby = choose_ruby()
 
-    programs = [
+    all_programs = [
         (
             "amber-interpreted",
             [
@@ -974,17 +986,18 @@ def main() -> int:
         ("cpp", [cpp_binary]),
     ]
     if go_unavailable_reason is None:
-        programs.append(("go", [go_binary]))
+        all_programs.append(("go", [go_binary]))
     if rust_unavailable_reason is None:
-        programs.append(("rust", [rust_binary]))
+        all_programs.append(("rust", [rust_binary]))
 
-    program_map = {name: command for name, command in programs}
-    program_names = [name for name, _command in programs]
+    program_map = {name: command for name, command in all_programs}
+    initial_program_names = [name for name, _command in all_programs]
     warmup_orders = (
-        balanced_orders(program_names, args.warmups, args.order_seed + 1)
+        balanced_orders(initial_program_names, args.warmups, args.order_seed + 1)
         if args.warmups
         else []
     )
+    program_errors = {}
     for warmup_index, order in enumerate(warmup_orders):
         print(
             f"warmup {warmup_index + 1}/{args.warmups}: "
@@ -992,13 +1005,28 @@ def main() -> int:
             flush=True,
         )
         for name in order:
-            sample = measure(program_map[name], root)
-            aggregate(
-                name,
-                program_map[name],
-                [sample],
-                workload.expected_checksum,
-            )
+            if name in program_errors:
+                continue
+            try:
+                sample = measure(program_map[name], root)
+                aggregate(
+                    name,
+                    program_map[name],
+                    [sample],
+                    workload.expected_checksum,
+                )
+            except RuntimeError as error:
+                if not args.continue_on_program_error:
+                    raise
+                program_errors[name] = str(error)
+                print(f"marking {name} unavailable: {error}", flush=True)
+
+    programs = [
+        (name, command)
+        for name, command in all_programs
+        if name not in program_errors
+    ]
+    program_names = [name for name, _command in programs]
 
     run_orders = balanced_orders(program_names, args.repeats, args.order_seed)
     samples_by_name = {name: [] for name in program_names}
@@ -1014,23 +1042,40 @@ def main() -> int:
             sample["order_position"] = order_position + 1
             samples_by_name[name].append(sample)
 
-    results = [
-        aggregate(
+    results_by_name = {
+        name: aggregate(
             name,
             command,
             samples_by_name[name],
             workload.expected_checksum,
         )
         for name, command in programs
-    ]
+    }
     if go_unavailable_reason is not None:
-        results.append(unavailable_result("go", go_unavailable_reason))
+        results_by_name["go"] = unavailable_result(
+            "go", go_unavailable_reason
+        )
     if rust_unavailable_reason is not None:
-        results.append(unavailable_result("rust", rust_unavailable_reason))
+        results_by_name["rust"] = unavailable_result(
+            "rust", rust_unavailable_reason
+        )
+    for name in initial_program_names:
+        if name in program_errors:
+            results_by_name[name] = unavailable_result(
+                name, program_errors[name]
+            )
+    results = [
+        results_by_name[name]
+        for name in (
+            "amber-interpreted", "amber-built", "python", "ruby",
+            "cpp", "go", "rust",
+        )
+        if name in results_by_name
+    ]
 
     comparisons = micro_comparisons(samples_by_name, program_names)
     provenance = micro_provenance(
-        root, build_dir, workload, programs, cxx, go, rust, ruby
+        root, build_dir, workload, all_programs, cxx, go, rust, ruby
     )
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
     results_dir = root / "bench/polyglot/results"
@@ -1054,6 +1099,7 @@ def main() -> int:
         "order_seed": args.order_seed,
         "warmup_orders": warmup_orders,
         "run_orders": run_orders,
+        "program_errors": program_errors,
         "provenance": provenance,
         "samples": samples_by_name,
         "results": results,

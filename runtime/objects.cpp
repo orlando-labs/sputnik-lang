@@ -698,35 +698,39 @@ map_value_find_entry_index(const MapValue &map, const Value &lookup_key,
   // nameable entry is indexed, the key cannot be present. Falling through to
   // exact comparison here turns an ordinary missing-key lookup into O(n),
   // which is especially costly for parameter/hash-heavy request paths.
-  if (!map.strict && map_key_is_nameable(lookup_key) &&
-      !lookup_id.has_value() && map.name_index_complete) {
-    return std::nullopt;
-  }
-  if (!map.strict && lookup_id.has_value() && map_key_is_nameable(lookup_key)) {
-    if (!map.name_index.empty()) {
-      const auto found = map.name_index.find(*lookup_id);
-      if (found != map.name_index.end() && found->second < map.entries.size()) {
-        const MapEntry &entry = map.entries[found->second];
-        if (map_entry_key_equivalent(entry, lookup_key, lookup_id,
-                                     map.strict)) {
-          return found->second;
-        }
-      }
+  if (!map.strict && map_key_is_nameable(lookup_key)) {
+    if (!lookup_id.has_value()) {
       if (map.name_index_complete) {
         return std::nullopt;
       }
-    }
-    const std::optional<std::size_t> inline_index =
-        map_value_find_inline_name_index(map, *lookup_id);
-    if (inline_index.has_value()) {
-      const MapEntry &entry = map.entries[*inline_index];
-      if (map_entry_key_equivalent(entry, lookup_key, lookup_id, map.strict)) {
-        return inline_index;
+    } else {
+      if (!map.name_index.empty()) {
+        const auto found = map.name_index.find(*lookup_id);
+        if (found != map.name_index.end() &&
+            found->second < map.entries.size()) {
+          const MapEntry &entry = map.entries[found->second];
+          if (map_entry_key_equivalent(entry, lookup_key, lookup_id,
+                                       map.strict)) {
+            return found->second;
+          }
+        }
+        if (map.name_index_complete) {
+          return std::nullopt;
+        }
       }
-    }
-    if (map.entries.size() <= kMapInlineNameIndexCapacity &&
-        map.name_index_complete) {
-      return std::nullopt;
+      const std::optional<std::size_t> inline_index =
+          map_value_find_inline_name_index(map, *lookup_id);
+      if (inline_index.has_value()) {
+        const MapEntry &entry = map.entries[*inline_index];
+        if (map_entry_key_equivalent(entry, lookup_key, lookup_id,
+                                     map.strict)) {
+          return inline_index;
+        }
+      }
+      if (map.entries.size() <= kMapInlineNameIndexCapacity &&
+          map.name_index_complete) {
+        return std::nullopt;
+      }
     }
   }
   for (std::size_t i = 0; i < map.entries.size(); ++i) {

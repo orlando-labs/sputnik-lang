@@ -8,6 +8,11 @@ mode remain identical.
 
 ## Repository state
 
+- Current optimization endpoint: `7d0d0c9 Keep indexed map hits on one key
+  check` (clean for the final follow-up reports).
+- Follow-up commits covered by this handoff:
+  `dca2d4a Fix native UUID inspect dispatch`,
+  `efded10 Avoid linear scans for indexed map misses`, and `7d0d0c9`.
 - Benchmark/provenance harness: `534e17d Make polyglot benchmarks reproducible`.
 - Partial-report support used for the broken UUID native lane:
   `0d0d6fa Allow partial polyglot benchmark reports`.
@@ -74,7 +79,7 @@ binary with the SQLite extension embedded, SHA-256
 `9c43d159b7bf6a56d87bdab24ede6d634fc6b0c63572277b88f1e9cf94db5bc8`,
 size 11,930,856 bytes.
 
-## Microbenchmark baseline
+## Pre-optimization microbenchmark baseline
 
 Median wall time in milliseconds; lower is better.
 
@@ -96,27 +101,68 @@ Every per-workload JSON/Markdown report is named
 `results/micro-<workload>-r5-2026-08-19-*` and contains the complete CI and
 provenance envelope.
 
-## Known defects and prior findings
+## UUID and map-words follow-up
 
-1. The UUID native workload currently terminates with
-   `NativeCodeError: c2: native bailout`. The failing executable SHA-256 is
-   `7f8aeaed609c84ee9b6c34c290960c64a232143485ca87a16f0068541786dba5`.
-   Generated code routes the overlapping nullary selector `Uuid#inspect` to
-   `native_regexp_send` instead of `native_uuid_nullary`. The VM checksum is
-   correct (`1040000`). See
-   `results/micro-uuid-r5-2026-08-19-215421-+0300.{json,md}`.
-2. `map-words` is the strongest VM-specific anomaly: VM/native is `16.80x`,
-   VM/Ruby is about `10.08x`, and VM/Python is about `7.14x`. This points to a
-   repeated map/string/iteration mechanism rather than universal VM slowness.
-3. Framework-heavy code amplifies the backend gap: Ember native/VM is `3.659x`
-   while raw native/VM is `1.600x`. This is consistent with, but does not yet
-   prove, a shared map/string/dynamic-send bottleneck between `map-words` and
-   request parameters, controller data, ORM attributes, and row mapping.
-4. A prior native profile attributed 1,318 samples (3.83% of active
+| Workload | Amber VM, ms | Amber native, ms | VM/native | State |
+|---|---:|---:|---:|---|
+| uuid | 33.844 | 11.535 | 2.918x | native bailout fixed |
+| map-words | 25.715 | 9.110 | 2.823x | indexed miss scan fixed |
+
+Reports with clean provenance:
+
+- `results/micro-uuid-r5-2026-08-20-112147-+0300.{json,md}` at `dca2d4a`.
+- `results/micro-map-words-r5-2026-08-20-120042-+0300.{json,md}` at
+  `7d0d0c9`.
+
+For `map-words`, a saved-executable, 15-pair alternating A/B measured
+`0.147163 s` before and `0.025683 s` after, a median `5.746x` speedup with the
+same checksum (`235174`). The clean five-run result is `25.715 ms` (CV 1.20%)
+versus the original `146.629 ms`: `82.5%` less wall time. The VM is now only
+`1.19x` slower than Python and `1.68x` slower than Ruby on this workload,
+instead of `7.14x` and `10.08x`.
+
+## Resolved defects and profiling findings
+
+1. UUID native was a code-generation dispatch bug, not UUID algorithm cost.
+   The overlapping nullary selector `inspect` was routed to
+   `native_regexp_send` before receiver type dispatch. `dca2d4a` dispatches a
+   Uuid receiver to `native_uuid_nullary`, makes the fixture require full
+   native coverage, and restores the complete matrix. The native workload is
+   now approximately equal to Go (`11.535` vs `11.643 ms`) and faster than
+   Rust (`18.210 ms`).
+2. The `map-words` anomaly was an O(n) negative lookup in an otherwise indexed
+   ordinary Map. Dynamic missing Str probes correctly had no canonical symbol
+   id, and a complete name index therefore proved absence, but
+   `map_value_find_entry_index` still scanned every entry using exact equality.
+   In the pre-fix 10-second VM profile, `map_value_find_entry` owned
+   `8,206/8,555` samples (`95.9%`), including `7,713` in the linear comparison
+   loop. `efded10` returns immediately when the canonical index is complete;
+   `7d0d0c9` ensures successful indexed hits still perform only one key-shape
+   check. A checked-in 2500x diagnostic twin is
+   `bench/polyglot/amber/profile/map_words_vm_profile.am`.
+3. The post-fix map profile disproves continued linear-scan dominance:
+   `map_value_find_entry` fell to `191/7,748` samples (`2.47%`). Canonical-name
+   hash lookup is now visible (`607/7,748` samples in the quick map lookup
+   branch), but it is a much smaller, separate optimization candidate.
+4. The suspected link to low Ember VM RPS was tested and rejected. In the
+   fresh 10-second Ember VM profile, `map_value_find_entry` did not reach the
+   flat-profile reporting threshold of five top-of-stack samples. The
+   unsampled five-pair follow-up at `7d0d0c9` measured Amber `1,700.51 RPS`,
+   Rails `1,888.29 RPS`, and paired Rails/Amber `1.107x` (mean-ratio 95% CI
+   `1.094...1.119x`). The original paired median was `1.110x`. Thus the large
+   microbenchmark win is real, but it does not explain or materially improve
+   Ember request throughput. See
+   `results/ember-http-rps-vm-pool1-r5-2026-08-20-115325-+0300.{json,md}`.
+5. The first map patch performed the key-shape check twice on successful hits.
+   A clean intermediate run at `efded10` measured paired Rails/Amber `1.125x`.
+   After folding hit and miss handling under one check (`7d0d0c9`), it returned
+   to `1.107x`. This is why the final form, rather than `efded10` alone, is the
+   optimization endpoint.
+6. A prior native profile attributed 1,318 samples (3.83% of active
    Ember/native time) to `NativeClosure` construction/destruction in
    `string.chars.each`. Commit `f940d2d` borrowed the already rooted closure;
    an exact-binary A/B measured `+0.646%` Ember/native. It was real but small.
-5. SQLite blocking calls already run through the Blocking FFI executor. Waiting
+7. SQLite blocking calls already run through the Blocking FFI executor. Waiting
    inside the C extension while holding the bridge lock was rejected because a
    C library callback into Amber may need to park a strand. Pool size 1 is the
    fairness baseline for serialized in-memory SQLite; increasing the pool is a
@@ -124,7 +170,7 @@ provenance envelope.
 
 ## Interpretation and next profiling gates
 
-The current data rejects two overly broad explanations:
+The current data rejects three overly broad explanations:
 
 - The VM is not universally slower than dynamic competitors: it beats Python
   on calls/collections, JSON, secure-random, time-flow, and UUID, and is close
@@ -132,21 +178,42 @@ The current data rejects two overly broad explanations:
 - Fully native is not a weak optimization: it is `+60%` on raw HTTP and
   `+266%` on Ember. The much larger Ember uplift means VM execution of
   framework-heavy semantics is a first-class problem.
+- Large ordinary-map misses are not the Ember bottleneck. They were nearly the
+  entire `map-words` VM profile, are now fixed, and were absent from the Ember
+  flat profile. Do not use the `5.746x` micro result to predict framework RPS.
 
-The next optimization must pass these gates:
+The current Ember VM flat top-of-stack profile (diagnostic, sampled while under
+load) is broad rather than dominated by one map operation. Excluding parked
+thread primitives, leading entries include `Vm::step` (991), allocator malloc
+(335), free (252), `memcmp` (226), `try_apply_scalar_send` (200), frame recycle
+(177), `Value` destruction (169), watch-value unwrap/write-register (128 each),
+and generic `step_send` (125). These counts are the starting hypotheses, not
+exclusive percentages: `/usr/bin/sample` includes many parked scheduler,
+reactor, SQLite-executor, and listener threads.
 
-1. Fix UUID dispatch and restore a complete native microbenchmark matrix.
-2. Sample `map-words` VM with symbols and attribute time to opcode/selector,
-   hash lookup, map allocation/copying, string tokenization, closure call, and
-   refcount/destruction categories.
-3. Sample the unchanged Ember VM workload and test whether the leading
-   `map-words` category also dominates request parameters, controller hashes,
-   ORM attribute maps, SQL bind maps, or row materialization.
-4. Only optimize a shared mechanism if both profiles support it. Otherwise
-   treat `map-words` as a microbenchmark-specific VM issue and continue the
-   Ember phase decomposition: routing, parameter/schema handling, controller,
-   model validation, ORM query construction, row mapping, SQLite executor, and
-   JSON response generation.
+Raw local samples used for the summary are
+`/private/tmp/amber-map-words-vm.sample.txt`,
+`/private/tmp/amber-map-words-vm-post.sample.txt`, and
+`bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-20-114155-+0300/repeat-01-position-01-amber/server.sample.txt`.
+They are diagnostic build artifacts and are not required to trust or reproduce
+the statistical reports.
+
+The next optimization must therefore pass these gates:
+
+1. Re-profile the unchanged Ember VM workload with active samples separated
+   from accept/reactor/scheduler/Blocking-FFI waits. Attribute active time to
+   dispatch, method argument shaping, Value copy/destruction, frame lifecycle,
+   allocation, JSON, ORM row materialization, and SQLite bridge categories.
+2. Phase-decompose one request into routing, parameter/schema handling,
+   controller, validation, ORM query construction, row mapping, executor/SQL,
+   and JSON response generation. A top-level flat profile alone cannot assign
+   framework ownership to the generic VM functions above.
+3. Prefer a candidate that removes repeated work per dynamic send or per Value
+   lifetime across several phases. `try_apply_scalar_send`, `step_send`, frame
+   recycling, and Value destruction/copying are currently stronger shared
+   hypotheses than map lookup.
+4. Keep the negative map lookup fast path, but only pursue its remaining
+   canonical-name hash cost if a future real workload profile supports it.
 5. Validate changes with saved exact binaries, paired order-rotated repeats,
    and both raw and Ember lanes. A faster microbenchmark alone is insufficient.
 
@@ -164,5 +231,10 @@ python3 bench/polyglot/run_http_rps.py --stack raw \
 python3 bench/polyglot/run_http_rps.py --stack ember \
   --amber-execution vm --duration 30 --clients 4 --repeats 5 \
   --order-seed 0 --amber-pool-size 1 --languages amber,rails
-```
 
+# Diagnostic only; profiling changes throughput and must not be compared to
+# the unprofiled statistical series.
+python3 bench/polyglot/run_http_rps.py --stack ember \
+  --amber-execution vm --duration 15 --clients 4 --repeats 1 \
+  --amber-pool-size 1 --languages amber --sample-seconds 10 --skip-build
+```

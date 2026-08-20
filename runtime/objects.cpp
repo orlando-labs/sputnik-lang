@@ -693,6 +693,15 @@ void map_value_clear_entries(MapValue *map) {
 std::optional<std::size_t>
 map_value_find_entry_index(const MapValue &map, const Value &lookup_key,
                            std::optional<std::uint32_t> lookup_id) {
+  // VM callers resolve Str lookups against the same canonical name pool used
+  // to build the index. If that pool has no id for the probe and every
+  // nameable entry is indexed, the key cannot be present. Falling through to
+  // exact comparison here turns an ordinary missing-key lookup into O(n),
+  // which is especially costly for parameter/hash-heavy request paths.
+  if (!map.strict && map_key_is_nameable(lookup_key) &&
+      !lookup_id.has_value() && map.name_index_complete) {
+    return std::nullopt;
+  }
   if (!map.strict && lookup_id.has_value() && map_key_is_nameable(lookup_key)) {
     if (!map.name_index.empty()) {
       const auto found = map.name_index.find(*lookup_id);

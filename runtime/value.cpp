@@ -232,7 +232,7 @@ Value make_result_value(bool is_ok, Value payload) {
 }
 
 #ifndef AMBER_VALUE_REPR_TAGGED
-// ==== Variant Value method bodies (default 24-byte representation) =========
+// ==== Variant Value method bodies (legacy 24-byte representation) ==========
 Value Value::null() { return {std::monostate{}}; }
 
 Value Value::boolean(bool value) { return {value}; }
@@ -613,6 +613,33 @@ IntrusivePtr<MapValue> Value::as_map() const {
   return std::get<IntrusivePtr<MapValue>>(payload);
 }
 
+const ObjHeader *Value::heap_header_if() const {
+  if (const auto *value = std::get_if<IntrusivePtr<ClosureValue>>(&payload)) {
+    return *value == nullptr ? nullptr : &(*value)->header;
+  }
+  if (const auto *value =
+          std::get_if<IntrusivePtr<InstanceValue>>(&payload)) {
+    return *value == nullptr ? nullptr : &(*value)->header;
+  }
+  if (const auto *value = std::get_if<IntrusivePtr<ListValue>>(&payload)) {
+    return *value == nullptr ? nullptr : &(*value)->header;
+  }
+  if (const auto *value = std::get_if<IntrusivePtr<TupleValue>>(&payload)) {
+    return *value == nullptr ? nullptr : &(*value)->header;
+  }
+  if (const auto *value = std::get_if<IntrusivePtr<SetValue>>(&payload)) {
+    return *value == nullptr ? nullptr : &(*value)->header;
+  }
+  if (const auto *value = std::get_if<IntrusivePtr<MapValue>>(&payload)) {
+    return *value == nullptr ? nullptr : &(*value)->header;
+  }
+  return nullptr;
+}
+
+ObjHeader *Value::mutable_heap_header_if() const {
+  return const_cast<ObjHeader *>(heap_header_if());
+}
+
 NativeTypeValue Value::as_native_type() const {
   return std::get<NativeTypeValue>(payload);
 }
@@ -757,7 +784,7 @@ const std::int64_t *Value::integer_if() const {
 }
 
 #else // AMBER_VALUE_REPR_TAGGED
-// ==== Tagged Value method bodies (PLAN Phase 4 prototype, 16-byte rep) =====
+// ==== Tagged Value method bodies (default 16-byte representation) ===========
 
 // Refcounted box for the cold tail kinds. One heap allocation per tail value;
 // the concrete shared_ptr is type-erased through shared_ptr<void> so its
@@ -1015,6 +1042,16 @@ const ResultValue *Value::result_ptr() const {
     return nullptr;
   }
   return static_cast<const ResultValue *>(u_.tail->ptr.get());
+}
+
+const ObjHeader *Value::heap_header_if() const {
+  return tag_ >= ValueTag::Closure && tag_ <= ValueTag::Map ? u_.obj
+                                                            : nullptr;
+}
+
+ObjHeader *Value::mutable_heap_header_if() const {
+  return tag_ >= ValueTag::Closure && tag_ <= ValueTag::Map ? u_.obj
+                                                            : nullptr;
 }
 
 std::uint32_t Value::kind_index() const {

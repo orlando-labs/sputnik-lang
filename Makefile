@@ -86,19 +86,19 @@ endif
 # -----------------------------------------------------------------------------
 
 # --- Value representation selection ------------------------------------------
-# VALUE_REPR selects the runtime `Value` storage (PLAN Phase 4 value-repr
-# prototype). Flavors:
-#   variant  (default) -- 24-byte std::variant Value, today's behaviour.
-#   tagged             -- 16-byte tagged-union Value (prototype). Immediates and
+# VALUE_REPR selects the runtime `Value` storage. Flavors:
+#   tagged  (default)  -- 16-byte tagged-union Value. Immediates and
 #                         the six ObjHeader heap kinds are stored inline; the
 #                         ~15 cold tail types (BigInt/error/task/io/...) are
 #                         boxed behind a refcounted TailBox (+1 alloc per tail
 #                         value, all cold paths). Defines AMBER_VALUE_REPR_TAGGED.
-# A/B a tagged interpreter against the default with:
-#   make build/iamber VALUE_REPR=tagged
+#   variant            -- legacy 24-byte std::variant Value, retained for
+#                         compatibility A/Bs during the tagged migration.
+# A/B the legacy representation against the default with:
+#   make BUILD_DIR=build-variant build-variant/iamber VALUE_REPR=variant
 # (do not mix object files across reps -- rebuild from clean or use a fresh
 # BUILD_DIR, since the flag changes sizeof(Value) ABI-wide).
-VALUE_REPR ?= variant
+VALUE_REPR ?= tagged
 ifeq ($(VALUE_REPR),variant)
 # default storage; no macro needed
 else ifeq ($(VALUE_REPR),tagged)

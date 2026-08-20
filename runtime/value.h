@@ -391,8 +391,8 @@ struct RuntimeForeignHandle {
 };
 
 // The runtime `Value` has two interchangeable storage representations selected
-// at build time by the VALUE_REPR Makefile flag (PLAN Phase 4 value-repr
-// prototype). Both expose an identical public API -- the factories, `is_X()`
+// at build time by the VALUE_REPR Makefile flag. Both expose an identical
+// public API -- the factories, `is_X()`
 // predicates, and `as_X()` accessors below -- so the VM is source-compatible
 // across either; only the storage and the method bodies (in value.cpp) differ.
 // The three call sites that previously read the variant directly now go through
@@ -622,6 +622,12 @@ struct Value {
   std::shared_ptr<RuntimeTimeZoneValue> as_time_zone() const;
   std::shared_ptr<RuntimeTimePeriodValue> as_time_period() const;
 
+  // Direct access for lifecycle and heap bookkeeping. This avoids materializing
+  // a temporary IntrusivePtr (and its retain/release pair) merely to inspect an
+  // ObjHeader. Non-ObjHeader Value kinds return nullptr.
+  const ObjHeader *heap_header_if() const;
+  ObjHeader *mutable_heap_header_if() const;
+
   // Representation-agnostic helpers (see the doc comment above): a distinct
   // value per active alternative, and a pointer to the inline integer payload
   // (or nullptr). Replace the three former direct-variant call sites.
@@ -631,7 +637,7 @@ struct Value {
 static_assert(sizeof(Value) == 24,
               "variant Value is expected to be 24 bytes on this platform");
 #else
-// ---- Tagged representation (PLAN Phase 4 prototype, 16 bytes) -------------
+// ---- Tagged representation (default, 16 bytes) -----------------------------
 // Immediates and the six ObjHeader heap kinds live inline in an 8-byte union;
 // the cold tail kinds are boxed behind a refcounted ValueTailBox (one extra
 // allocation + indirection per tail value). Copy/move/destroy manage the
@@ -837,6 +843,9 @@ struct Value {
   std::shared_ptr<RuntimeTimeValue> as_time() const;
   std::shared_ptr<RuntimeTimeZoneValue> as_time_zone() const;
   std::shared_ptr<RuntimeTimePeriodValue> as_time_period() const;
+
+  const ObjHeader *heap_header_if() const;
+  ObjHeader *mutable_heap_header_if() const;
 
   std::uint32_t kind_index() const;
   const std::int64_t *integer_if() const;

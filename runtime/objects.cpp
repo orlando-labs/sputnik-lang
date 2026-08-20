@@ -126,64 +126,15 @@ MapEntry::MapEntry(Value entry_key, Value entry_value)
       key(std::move(entry_key)), value(std::move(entry_value)) {}
 
 bool value_has_heap_payload_tag(const Value &value) {
-  return value.is_closure() || value.is_instance_object() || value.is_list() ||
-         value.is_tuple() || value.is_set() || value.is_map();
+  return value.heap_header_if() != nullptr;
 }
 
 const ObjHeader *heap_header_from_value(const Value &value) {
-  if (value.is_closure()) {
-    const IntrusivePtr<ClosureValue> object = value.as_closure();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_instance_object()) {
-    const IntrusivePtr<InstanceValue> object = value.as_instance_object();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_list()) {
-    const IntrusivePtr<ListValue> object = value.as_list();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_tuple()) {
-    const IntrusivePtr<TupleValue> object = value.as_tuple();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_set()) {
-    const IntrusivePtr<SetValue> object = value.as_set();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_map()) {
-    const IntrusivePtr<MapValue> object = value.as_map();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  return nullptr;
+  return value.heap_header_if();
 }
 
 ObjHeader *mutable_heap_header_from_value(const Value &value) {
-  if (value.is_closure()) {
-    const IntrusivePtr<ClosureValue> object = value.as_closure();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_instance_object()) {
-    const IntrusivePtr<InstanceValue> object = value.as_instance_object();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_list()) {
-    const IntrusivePtr<ListValue> object = value.as_list();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_tuple()) {
-    const IntrusivePtr<TupleValue> object = value.as_tuple();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_set()) {
-    const IntrusivePtr<SetValue> object = value.as_set();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  if (value.is_map()) {
-    const IntrusivePtr<MapValue> object = value.as_map();
-    return object == nullptr ? nullptr : &object->header;
-  }
-  return nullptr;
+  return value.mutable_heap_header_if();
 }
 
 bool header_is_deallocated(const ObjHeader &header) {

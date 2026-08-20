@@ -703,7 +703,7 @@ test: build
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/secure-random-native-int-build.json
 	$(BUILD_DIR)/secure-random-native-int > $(BUILD_DIR)/secure-random-native-int.out
 	grep -q '^42$$' $(BUILD_DIR)/secure-random-native-int.out
-	$(BUILD_DIR)/amberc build tests/fixtures/uuid_native/main.am --entry main-only --grant random.secure -o $(BUILD_DIR)/uuid-native > $(BUILD_DIR)/uuid-native-build.json
+	$(BUILD_DIR)/amberc build tests/fixtures/uuid_native/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/uuid-native > $(BUILD_DIR)/uuid-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/uuid-native-build.json
 	$(BUILD_DIR)/uuid-native > $(BUILD_DIR)/uuid-native.out
 	grep -q '^42$$' $(BUILD_DIR)/uuid-native.out

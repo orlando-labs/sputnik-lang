@@ -6233,6 +6233,15 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                                   "? native_bytes_new(" +
                                   read_reg_expr(arg) + ") : " + regexp_send +
                                   ")");
+        } else if (selector == "inspect") {
+          // `inspect` is shared by Regexp and Uuid. Eligibility is deliberately
+          // receiver-agnostic, so preserve the runtime tag dispatch here rather
+          // than routing every non-user receiver through Regexp.
+          write_reg_stmt(dst, "(" + read_reg_expr(recv) +
+                                  ".tag == NativeValue::Tag::Uuid "
+                                  "? native_uuid_nullary(" +
+                                  read_reg_expr(recv) + ", \"inspect\") : " +
+                                  regexp_send + ")");
         } else {
           write_reg_stmt(dst, regexp_send);
         }

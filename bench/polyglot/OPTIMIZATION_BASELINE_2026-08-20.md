@@ -1,4 +1,4 @@
-# Amber performance optimization baseline — 2026-08-20
+# Amber performance optimization baseline — updated 2026-08-21
 
 This document is the handoff point for a new optimization session. It records
 the exact benchmark protocol, current results, known defects, and the next
@@ -8,8 +8,12 @@ mode remain identical.
 
 ## Repository state
 
-- Current optimization endpoint: `7d0d0c9 Keep indexed map hits on one key
-  check` (clean for the final follow-up reports).
+- Current optimization endpoint: `58b3600 Make tagged Value the default runtime
+  representation` (clean for all 2026-08-21 statistical reports).
+- The endpoint changes the default runtime `Value` from the 24-byte
+  `std::variant` representation to the already equivalence-tested 16-byte
+  tagged representation. `VALUE_REPR=variant` remains available as the exact
+  legacy A/B control.
 - Follow-up commits covered by this handoff:
   `dca2d4a Fix native UUID inspect dispatch`,
   `efded10 Avoid linear scans for indexed map misses`, and `7d0d0c9`.
@@ -216,6 +220,136 @@ The next optimization must therefore pass these gates:
    canonical-name hash cost if a future real workload profile supports it.
 5. Validate changes with saved exact binaries, paired order-rotated repeats,
    and both raw and Ember lanes. A faster microbenchmark alone is insufficient.
+
+## 2026-08-21 optimization: tagged Value as the default
+
+Commit `58b3600` completed the migration that the earlier representation A/B
+had already recommended. Besides selecting `VALUE_REPR=tagged` by default, it
+adds representation-independent direct `ObjHeader` access. The legacy runtime
+therefore no longer copies an `IntrusivePtr` just to discover a heap header,
+and the tagged runtime performs the same operation as a tag-range test plus a
+pointer load. The separate `VALUE_REPR=variant` build remains supported and
+was compiled and smoke-tested after the change.
+
+The saved-binary Ember/VM gate used identical 4-client, pool-1, 15-second,
+three-repeat commands on the same machine:
+
+| Exact binary | Median RPS | Delta from legacy |
+|---|---:|---:|
+| legacy 24-byte variant | 1,828.76 | — |
+| tagged before direct `ObjHeader` accessor | 1,911.94 | +4.548% |
+| final tagged + direct accessor | 1,962.05 | **+7.288%** |
+
+This is a sequential same-day exact-binary gate, not a single alternating
+paired series. The final result is also 2.621% above the first tagged build.
+The old executables were saved as
+`/private/tmp/amberc-variant-before-tagged-default` and
+`/private/tmp/iamber-variant-before-tagged-default` for this gate.
+
+Compiler binary size improved as a second, independent consequence:
+
+| Binary | Legacy variant | Tagged default | Change |
+|---|---:|---:|---:|
+| `amberc` | 9,880,872 B | 9,010,296 B | -8.811% |
+| `iamber` | 8,415,032 B | 7,544,504 B | -10.345% |
+
+### Current statistical HTTP matrix
+
+Every row below is an unprofiled five-repeat series with 30-second samples,
+four clients, a contract warmup before each timed sample, and balanced rotation
+seed `20260821`. All Amber rows use clean `58b3600`; Ember is clean `9e603ddf`,
+amber-orm is clean `438be219`, sqlite3-amber is clean `bb62e533`. The same
+pinned client SHA `f1a35a83...` drives every server.
+
+| Lane | Amber median RPS | Competitor medians | Paired interpretation |
+|---|---:|---|---|
+| raw / VM | 21,584.94 | Go 38,795.11; Rust 38,933.78; Python 12,634.20 | Go 1.800x; Rust 1.823x; Python 0.585x |
+| raw / native | 33,730.67 | Go 38,886.48; Rust 39,147.09; Python 12,654.26 | Go 1.152x; Rust 1.161x; Python 0.376x |
+| Ember / VM / pool 1 | 1,967.90 | Rails 1,991.74 | Rails 1.011x (+1.08% paired); median-RPS gap 1.21% |
+| Ember / native / pool 1 | 6,595.67 | Rails 1,992.70 | Rails 0.303x; Amber 3.310x by medians |
+
+Derived ratios across separate series (not paired): raw native/VM is 1.563x;
+Ember native/VM is 3.352x. Against the original 2026-08-19 Ember/VM median of
+1,788 RPS, the current 1,967.90 RPS is +10.06%; the exact saved-binary gate
+attributes +7.288% to this representation change alone. The original Rails
+median (1,989) and current Rails median (1,991.74) are stable, whereas the
+intermediate 2026-08-20 Rails series was lower, so the paired ratios and exact
+binary gate are safer than comparing that intermediate absolute RPS.
+
+Reports:
+
+- `results/raw-http-rps-vm-tagged-default-r5-2026-08-21.md`
+  (`raw-http-rps-vm-r5-2026-08-21-005921-+0300.json`).
+- `results/raw-http-rps-native-tagged-default-r5-2026-08-21.md`
+  (`raw-http-rps-native-r5-2026-08-21-011016-+0300.json`).
+- `results/ember-http-rps-vm-pool1-tagged-default-r5-2026-08-21.md`
+  (`ember-http-rps-vm-pool1-r5-2026-08-21-012036-+0300.json`).
+- `results/ember-http-rps-native-pool1-tagged-default-r5-2026-08-21.md`
+  (`ember-http-rps-native-pool1-r5-2026-08-21-012710-+0300.json`).
+
+### Current complete microbenchmark matrix
+
+Median wall time in milliseconds; lower is better. These are fresh clean
+`58b3600` five-repeat runs with two warmups and seed `20260821`. Every checksum
+matched.
+
+| Workload | Amber VM | Amber native | Python | Ruby | C++ | Go | Rust |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| arithmetic | 185.043 | 6.234 | 192.859 | 73.866 | 4.188 | 6.071 | 4.070 |
+| calls-collections | 15.305 | 8.802 | 21.889 | 10.350 | 2.145 | 2.685 | 2.275 |
+| codecs | 36.973 | 9.062 | 24.372 | 16.179 | 5.308 | 3.685 | 4.503 |
+| json | 34.793 | 14.583 | 41.293 | 18.650 | 4.014 | 14.241 | 5.379 |
+| map-words | 27.310 | 8.661 | 19.977 | 14.336 | 3.381 | 4.483 | 4.815 |
+| secure-random | 22.651 | 9.018 | 48.487 | 22.703 | 5.774 | 5.840 | 16.609 |
+| sha-digest | 42.891 | 14.241 | 21.527 | 42.020 | 11.983 | 4.386 | 11.396 |
+| string-ops | 24.894 | 7.591 | 15.323 | 13.802 | 3.688 | 3.784 | 4.473 |
+| time-flow | 105.242 | 10.606 | 244.249 | 62.611 | 2.929 | 5.067 | 3.100 |
+| uuid | 33.789 | 11.034 | 85.043 | 46.418 | 6.840 | 10.691 | 17.314 |
+
+The rendered and machine-readable reports are
+`results/micro-<workload>-tagged-default-r5-2026-08-21.{md,json}`.
+
+### Pre/post profile and next largest area
+
+The diagnostic Ember/VM samples used the same workload, but profiler overhead
+makes their sampled RPS unsuitable for comparison with the table above. Their
+flat totals are similar enough for hotspot-shape comparison (245,537 pre and
+248,954 post entries as emitted by `/usr/bin/sample`). Before migration,
+`std::__variant` leaves account for 1,951 top counts and the profile also shows
+`Value::~Value` 164, heap add/release 422, `Vm::step` 877, malloc 314, and free
+232. After migration, variant leaves are exactly zero and heap-header helpers
+fall from 91 to 15, confirming that both intended dispatch layers disappeared.
+
+The post profile exposes the next shared architectural cost instead of hiding
+it behind variant visitation: `Value::release_payload` 1,064,
+`Value` copy construction 402, assignments 256, destruction 236,
+`is_watch_cell` 221, `Vm::step` 924, malloc 378, and free 319. Thus the next
+large optimization area is tagged-Value ownership traffic across VM register,
+argument, return, frame, and watch-cell paths. It should be attacked by tracing
+which transfers can borrow or move rather than by merely forcing these methods
+inline; correctness depends on roots surviving calls, suspension, rescue, and
+frame recycling.
+
+Raw samples and rendered one-run diagnostic reports:
+
+- pre: `build/http-rps/runs/ember-vm-r1-2026-08-21-002018-+0300/repeat-01-position-01-amber/server.sample.txt`;
+- post: `build/http-rps/runs/ember-vm-r1-2026-08-21-013345-+0300/repeat-01-position-01-amber/server.sample.txt`;
+- post diagnostic: `results/ember-vm-tagged-post-profile-r1-2026-08-21.md`
+  and `ember-http-rps-vm-pool1-r1-2026-08-21-013345-+0300.json`.
+
+### Correctness gates
+
+- `vm_tests`, `stdlib_collections_tests`, and `stdlib_task_tests`: pass.
+- Full Amber corpus: 214 passed, 0 failed.
+- Legacy `VALUE_REPR=variant`: separate compiler build and smoke test pass.
+- Targeted full-native UUID: 3/3 direct-native code objects, full coverage,
+  no fallback, expected output 42.
+- Raw native HTTP: 61/61 direct-native, no bridge/fallback.
+- Ember native HTTP: 2048/2048 direct-native, no bridge/fallback; cached SQLite
+  extension reused.
+- The current full backend-equivalence script contains 146 cold full-runtime
+  native links. It was stopped rather than letting hours of compilation skew
+  the statistical runs; do not claim that complete gate for this commit.
 
 ## Reproduction commands
 

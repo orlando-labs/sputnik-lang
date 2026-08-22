@@ -611,6 +611,96 @@ Reports and machine-readable samples:
   native servers are 1,580,488 and 11,881,464 bytes. All four sizes are exactly
   unchanged from `2301e12`.
 
+## 2026-08-22 optimization: reset recycled VM values directly
+
+Commit `d5ca4c7 Reset recycled VM values directly` is the current endpoint.
+The post-watch profile attributed 355 flat samples to `Value` move assignment,
+with frame recycling its largest caller. Both ordinary frame recycling and the
+direct-block-reuse reset path previously cleared every initialized register via
+`value = Value::null()`. In the tagged representation that expands into the
+null factory, move assignment, payload release, and temporary destruction even
+when the slot already contains an unboxed-integer null placeholder.
+
+`Value::reset()` now performs the same payload release and establishes the null
+invariant directly. The legacy variant representation implements the identical
+API with `variant::emplace<monostate>()`. Recycled register slots plus `self`,
+`block`, and `last_result` use the direct reset; capture vectors and all object
+graphs are still released before a frame enters its pool.
+
+### Exact-binary gates
+
+The pre-change interpreter is
+`/private/tmp/iamber-before-borrowed-reg-fast-path`, SHA-256
+`1d10facd6f20376eebce510e59b84e1b2913bae5981a677d79c32d024b00d221`.
+The accepted interpreter is SHA-256
+`d62a627645426f095791e86bd2d94a6903c4cc23239b707e2eb3a2b7077ed29d`.
+All gates used balanced old/new order and matching checksums.
+
+| Gate | Repeats per binary | Old median | New median | Time delta |
+|---|---:|---:|---:|---:|
+| calls/collections process workload | 240 | 12.615 ms | 12.565 ms | **-0.393%** |
+| 500,000 eight-argument VM calls | 60 | 218.467 ms | 205.786 ms | **-5.805%** |
+
+The synthetic gate deliberately isolates frame acquisition/recycling; both
+series had CV below 0.8%. It confirms the mechanism and the upper-bound effect
+when frame cleanup dominates. The ordinary polyglot workload establishes a
+smaller positive end-to-end effect.
+
+Before selecting this scope, a broader borrowed-register experiment was
+rejected. Borrowing across many quick handlers regressed calls/collections by
+3.573%; restoring the common `read_reg` path reduced that regression to
+0.871%. A jump-only scope measured -0.330% time, while adding cached/ivar
+borrows was neutral (-0.088%). Those edits are not present in `d5ca4c7`; the
+result is a useful warning that removing retain/release pairs can still lose to
+code layout, register pressure, and added branches.
+
+### Complete current microbenchmark matrix
+
+Five measured runs, two warmups, balanced seed 20260822. Times are median
+milliseconds; lower is better. `VM delta` compares with the immediately
+preceding `watch-fast` series. This is a same-day cross-series comparison, not
+the causal patch gate: native moved by 4--8% in several rows even though the
+patch only changes VM frames, demonstrating material host drift.
+
+| Workload | Amber VM | VM delta | VM CV | Amber native |
+|---|---:|---:|---:|---:|
+| arithmetic | 162.432 | -5.66% | 3.12% | 5.550 |
+| calls-collections | 12.968 | -3.73% | 1.40% | 8.305 |
+| codecs | 34.635 | -1.90% | 0.97% | 8.448 |
+| json | 31.118 | -2.86% | 4.11% | 14.971 |
+| map-words | 24.102 | -5.58% | 3.18% | 7.957 |
+| secure-random | 20.884 | -2.79% | 1.00% | 8.375 |
+| sha-digest | 39.723 | -0.18% | 2.03% | 13.454 |
+| string-ops | 23.181 | -1.52% | 2.27% | 7.481 |
+| time-flow | 93.758 | +1.67% | 0.66% | 9.937 |
+| uuid | 30.988 | +0.25% | 1.75% | 10.437 |
+
+Reports are
+`results/micro-<workload>-frame-reset-r5-2026-08-22.{json,md}`. All workload
+checksums matched.
+
+### Correctness, size, and unavailable measurements
+
+- Tagged `vm_tests` and `stdlib_collections_tests`: pass.
+- Corpus available inside the current sandbox: 212 passed. The two remaining
+  cases, `net_socket_handoff_to_task` and `net_tcp_loopback`, fail only because
+  local `listen` is denied. `stdlib_task_tests` reaches the same sandbox denial
+  in its cooperative socket-read case.
+- Separate legacy `VALUE_REPR=variant` interpreter build and
+  calls/collections checksum `2047795430`: pass.
+- `amberc` is 9,010,664 bytes and `iamber` is 7,544,872 bytes: +128 bytes each
+  versus `124cefc`. Native artifacts are unaffected by this VM-only change.
+- The current environment denied both elevated loopback servers and macOS
+  process inspection. Therefore an Ember/VM old/new/old HTTP gate and a
+  post-change `sample` profile could not be collected in this continuation.
+  The preceding `watch-fast` HTTP matrix remains the latest authoritative
+  framework comparison; do not replace it with process-microbenchmark deltas.
+
+The first action when elevated local execution is available is an exact saved-
+binary Ember/VM old/new/old gate followed by a post-change profile. Confirm that
+`Value::operator=(Value&&)` loses its `recycle_frame` samples; then reassess the
+remaining destructor/copy traffic before returning to borrowed register reads.
+
 ## Reproduction commands
 
 ```sh

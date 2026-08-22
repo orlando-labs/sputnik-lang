@@ -490,6 +490,8 @@ struct Value {
 
   Payload payload;
 
+  void reset() noexcept;
+
   static Value null();
   static Value boolean(bool value);
   static Value integer(std::int64_t value);
@@ -711,6 +713,8 @@ struct Value {
   Value &operator=(const Value &other) noexcept;
   Value &operator=(Value &&other) noexcept;
   ~Value();
+
+  void reset() noexcept;
 
   static Value null();
   static Value boolean(bool value);

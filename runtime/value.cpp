@@ -233,6 +233,8 @@ Value make_result_value(bool is_ok, Value payload) {
 
 #ifndef AMBER_VALUE_REPR_TAGGED
 // ==== Variant Value method bodies (legacy 24-byte representation) ==========
+void Value::reset() noexcept { payload.emplace<std::monostate>(); }
+
 Value Value::null() { return {std::monostate{}}; }
 
 Value Value::boolean(bool value) { return {value}; }
@@ -858,6 +860,12 @@ Value &Value::operator=(Value &&other) noexcept {
 }
 
 Value::~Value() { release_payload(tag_, u_); }
+
+void Value::reset() noexcept {
+  release_payload(tag_, u_);
+  tag_ = ValueTag::Null;
+  u_.i = 0;
+}
 
 Value Value::make_tail(ValueTailKind kind, std::shared_ptr<void> ptr) {
   Value v;

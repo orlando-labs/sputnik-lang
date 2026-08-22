@@ -5694,7 +5694,7 @@ private:
         std::min(frame.regs.size(), frame.initialized.size());
     for (std::size_t index = 0; index < initialized_count; ++index) {
       if (frame.initialized[index] != 0U) {
-        frame.regs[index] = Value::null();
+        frame.regs[index].reset();
       }
     }
     std::fill(frame.initialized.begin(), frame.initialized.end(), 0U);
@@ -5703,8 +5703,8 @@ private:
     // code/quick_code, captures, self, and the inherited non-local-return
     // target describe the closure rather than a single invocation. Retaining
     // them is the point of this path; every per-call field is reset below.
-    frame.block = Value::null();
-    frame.last_result = Value::null();
+    frame.block.reset();
+    frame.last_result.reset();
     frame.no_suspend_extent = false;
     frame.no_suspend_label.clear();
     frame.caller_result_reg.reset();
@@ -5742,16 +5742,16 @@ private:
         std::min(frame->regs.size(), frame->initialized.size());
     for (std::size_t index = 0; index < initialized_count; ++index) {
       if (frame->initialized[index] != 0U) {
-        frame->regs[index] = Value::null();
+        frame->regs[index].reset();
       }
     }
     std::fill(frame->initialized.begin(), frame->initialized.end(), 0U);
     std::fill(frame->int_valid.begin(), frame->int_valid.end(), 0U);
     frame->has_watch_registers = false;
     frame->captures.clear();
-    frame->self = Value::null();
-    frame->block = Value::null();
-    frame->last_result = Value::null();
+    frame->self.reset();
+    frame->block.reset();
+    frame->last_result.reset();
     frame->no_suspend_extent = false;
     frame->no_suspend_label.clear();
     frame->caller_result_reg.reset();

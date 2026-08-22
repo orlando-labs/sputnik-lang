@@ -1,4 +1,4 @@
-# Amber performance optimization baseline — updated 2026-08-21
+# Amber performance optimization baseline — updated 2026-08-22
 
 This document is the handoff point for a new optimization session. It records
 the exact benchmark protocol, current results, known defects, and the next
@@ -8,12 +8,11 @@ mode remain identical.
 
 ## Repository state
 
-- Current optimization endpoint: `58b3600 Make tagged Value the default runtime
-  representation` (clean for all 2026-08-21 statistical reports).
-- The endpoint changes the default runtime `Value` from the 24-byte
-  `std::variant` representation to the already equivalence-tested 16-byte
-  tagged representation. `VALUE_REPR=variant` remains available as the exact
-  legacy A/B control.
+- Current optimization endpoint: `2301e12 Defer tagged heap kind dispatch
+  until final release` (clean for all 2026-08-22 statistical reports).
+- The endpoint retains the 16-byte tagged `Value` selected by `58b3600`, but
+  removes the six-kind concrete-object switch from every non-final heap-value
+  drop. `VALUE_REPR=variant` remains available as the exact legacy A/B control.
 - Follow-up commits covered by this handoff:
   `dca2d4a Fix native UUID inspect dispatch`,
   `efded10 Avoid linear scans for indexed map misses`, and `7d0d0c9`.
@@ -351,20 +350,155 @@ Raw samples and rendered one-run diagnostic reports:
   native links. It was stopped rather than letting hours of compilation skew
   the statistical runs; do not claim that complete gate for this commit.
 
+## 2026-08-22 optimization: dispatch only on final heap release
+
+The tagged representation initially recovered `Closure`/`Instance`/`List`/
+`Tuple`/`Set`/`Map` from `ObjHeader::kind` before every reference decrement.
+Most decrements are non-final, so this paid a six-way switch only to perform a
+single atomic `fetch_sub`. Commit `2301e12` adds
+`runtime_heap_release_header`: it decrements first and returns immediately when
+the reference remains live. Concrete-type dispatch and the deleter selection
+now run only for `refcount == 1`. Unmanaged `make_intrusive` objects and
+RuntimeHeap-owned objects retain their original final-release behavior.
+
+### Exact-binary A/B
+
+The pre-change compiler and REPL were saved before editing. Three unprofiled
+4-client, pool-1, 15-second Ember/VM series were run old -> new -> old to check
+both directions of machine drift:
+
+| Position | Exact binary | Median RPS | CV |
+|---|---|---:|---:|
+| A1 | pre-change `amberc` | 1,764.77 | 0.59% |
+| B | optimized `amberc` | 1,841.86 | 0.64% |
+| A2 | pre-change `amberc` | 1,765.27 | 0.40% |
+
+The optimized binary is **+4.368%** against A1 and **+4.338%** against A2.
+The saved control is `/private/tmp/amberc-before-header-release`, SHA-256
+`2b7bd0d1...`; the optimized binary is SHA-256 `af29d072...`. The runner marks
+the A/B repository dirty because the binaries deliberately bracketed the
+uncommitted patch; binary hashes and the reversed old/new/old order are the
+provenance for this gate.
+
+### Post-change profile
+
+The comparable 10-second sampled Ember/VM profile changes the targeted flat
+top as follows:
+
+| Symbol/category | Before | After |
+|---|---:|---:|
+| `Value::release_payload` | 1,064 | 0 |
+| `runtime_heap_release_header` | 0 | 174 |
+| typed `runtime_heap_release<T>` | 237 | 69 |
+| `Value::~Value` | 236 | 677 |
+| `Value` copy constructor | 402 | 390 |
+| `Value` assignment operators | 256 | 445 |
+| `Value::is_watch_cell` | 221 | 217 |
+| `Vm::step` | 924 | 997 |
+
+The destructor now contains the inlined tag classification that used to be
+charged to `release_payload`, so its larger isolated count is expected. The
+important structural result is that the 1,064-count common helper disappears
+and the replacement header-release helper has only 174 top counts; source
+inspection confirms that its type switch executes only on final release.
+Profiler throughput
+(`1,775.76 RPS`) is diagnostic only and must not be compared with unprofiled
+RPS. Raw sample:
+`build/http-rps/runs/ember-vm-r1-2026-08-22-123219-+0300/repeat-01-position-01-amber/server.sample.txt`.
+Rendered report:
+`results/ember-vm-header-release-post-profile-r1-2026-08-22.md`.
+
+The next broad target is no longer concrete heap-kind dispatch. It is the
+remaining `Value` copy/move/destructor traffic plus unconditional watch-cell
+probing on ordinary VM registers. Any borrow/move optimization must preserve
+roots across calls, suspension, rescue/ensure, direct block reuse, and frame
+recycling; a frame-level no-watch fast path is a safer first experiment than
+borrowing arbitrary register values through a potentially suspending send.
+
+### Complete current microbenchmark matrix
+
+Median wall time in milliseconds; lower is better. All rows are clean
+`2301e12`, five measured runs, two warmups, balanced seed `20260822`, and
+matching checksums. `VM delta` and `native delta` compare with the clean
+`58b3600` series from 2026-08-21; negative is faster.
+
+| Workload | Amber VM | VM delta | Amber native | Native delta | Python | Ruby | C++ | Go | Rust |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| arithmetic | 168.820 | -8.77% | 5.994 | -3.85% | 187.051 | 69.961 | 4.036 | 5.845 | 4.005 |
+| calls-collections | 13.690 | -10.55% | 8.843 | +0.47% | 21.923 | 10.527 | 2.107 | 2.759 | 2.259 |
+| codecs | 35.647 | -3.59% | 8.970 | -1.02% | 24.418 | 16.135 | 5.310 | 3.818 | 4.518 |
+| json | 31.942 | -8.19% | 14.473 | -0.75% | 40.962 | 18.549 | 3.916 | 13.945 | 5.125 |
+| map-words | 25.263 | -7.50% | 8.262 | -4.61% | 20.090 | 14.020 | 3.186 | 4.387 | 4.587 |
+| secure-random | 21.886 | -3.38% | 8.948 | -0.78% | 48.130 | 22.581 | 5.985 | 5.835 | 15.769 |
+| sha-digest | 40.640 | -5.25% | 14.232 | -0.06% | 21.613 | 41.276 | 11.738 | 4.417 | 11.048 |
+| string-ops | 23.918 | -3.92% | 7.381 | -2.77% | 15.033 | 13.378 | 3.701 | 3.741 | 4.584 |
+| time-flow | 96.768 | -8.05% | 10.695 | +0.84% | 239.943 | 61.117 | 3.059 | 5.149 | 2.944 |
+| uuid | 31.785 | -5.93% | 10.749 | -2.58% | 84.171 | 46.899 | 6.701 | 10.632 | 16.516 |
+
+Every VM workload improved; the largest reductions are calls/collections
+10.55%, arithmetic 8.77%, JSON 8.19%, and time-flow 8.05%. Native movements
+are smaller and include both signs. These inter-day deltas are descriptive and
+also contain host-speed drift; the old/new/old gate above is the causal
+measurement for this patch. Reports:
+`results/micro-<workload>-header-release-r5-2026-08-22.{md,json}`.
+
+### Complete current HTTP matrix
+
+These are clean `2301e12`, unprofiled five-repeat, 30-second, four-client
+series with contract smoke before every sample and balanced seed `20260822`.
+
+| Lane | Amber median RPS | CV | Competitor medians | Paired interpretation |
+|---|---:|---:|---|---|
+| raw / VM | 22,310.20 | 1.00% | Go 39,458.78; Rust 39,596.97; Python 11,892.47 | Go 1.788x; Rust 1.776x; Python 0.534x |
+| raw / native | 33,775.35 | 0.52% | Go 39,492.94; Rust 39,543.64; Python 11,927.97 | Go 1.166x; Rust 1.171x; Python 0.355x |
+| Ember / VM / pool 1 | 1,958.40 | 0.36% | Rails 1,833.15 | Rails 0.935x; Amber is 1.068x by medians |
+| Ember / native / pool 1 | 6,171.63 | 0.26% | Rails 1,837.19 | Rails 0.298x; Amber is 3.359x by medians |
+
+Raw/VM is +3.360% versus the preceding clean median, while raw/native is
++0.132% (neutral). Current cross-series native/VM ratios are 1.514x raw and
+3.151x Ember. Do not interpret the inter-day framework deltas as patch effect:
+the current Ember/VM median is -0.483% versus 2026-08-21 and Ember/native is
+-6.429%, but Rails simultaneously moved from approximately 1,992 to 1,833--
+1,837 RPS. The same-day old/new/old gate above isolates the +4.34% VM effect;
+the current Rails comparison states today's competitive position only.
+
+Reports:
+
+- `results/raw-http-rps-vm-header-release-r5-2026-08-22.md`
+  (`raw-http-rps-vm-r5-2026-08-22-124413-+0300.json`).
+- `results/raw-http-rps-native-header-release-r5-2026-08-22.md`
+  (`raw-http-rps-native-r5-2026-08-22-125512-+0300.json`).
+- `results/ember-http-rps-vm-pool1-header-release-r5-2026-08-22.md`
+  (`ember-http-rps-vm-pool1-r5-2026-08-22-130531-+0300.json`).
+- `results/ember-http-rps-native-pool1-header-release-r5-2026-08-22.md`
+  (`ember-http-rps-native-pool1-r5-2026-08-22-131206-+0300.json`).
+
+### Correctness and size
+
+- `vm_tests`, `stdlib_collections_tests`, and `stdlib_task_tests`: pass.
+- Full corpus: 214 passed, 0 failed.
+- Separate legacy `VALUE_REPR=variant` compiler build and calls/collections
+  smoke checksum `2047795430`: pass.
+- Raw native: 61/61 direct-native; Ember native: 2048/2048 direct-native;
+  both have full body coverage and zero VM fallback/runtime bridge.
+- `amberc` is 9,010,536 bytes and `iamber` is 7,544,744 bytes: +240 bytes each
+  versus `58b3600`. Raw and Ember native servers are 1,580,488 and 11,881,464
+  bytes respectively: 16 bytes smaller each than the preceding endpoint.
+
 ## Reproduction commands
 
 ```sh
 python3 bench/polyglot/run_benchmark.py --workload <name> \
-  --repeats 5 --warmups 1 --order-seed 0 \
+  --repeats 5 --warmups 2 --order-seed 20260822 \
   --build-dir /private/tmp/amber-polyglot-fresh-<commit>
 
 python3 bench/polyglot/run_http_rps.py --stack raw \
   --amber-execution vm --duration 30 --clients 4 --repeats 5 \
-  --order-seed 0 --languages amber,go,rust,python
+  --order-seed 20260822 --languages amber,go,rust,python
 
 python3 bench/polyglot/run_http_rps.py --stack ember \
   --amber-execution vm --duration 30 --clients 4 --repeats 5 \
-  --order-seed 0 --amber-pool-size 1 --languages amber,rails
+  --order-seed 20260822 --amber-pool-size 1 --languages amber,rails
 
 # Diagnostic only; profiling changes throughput and must not be compared to
 # the unprofiled statistical series.

@@ -5299,6 +5299,7 @@ private:
     frame.initialized.assign(code.reg_count, 0U);
     frame.int64_regs.assign(code.reg_count, 0);
     frame.int_valid.assign(code.reg_count, 0U);
+    frame.has_watch_registers = false;
   }
 
   void ensure_integer_sidecar_size(Frame &frame) {
@@ -5341,7 +5342,7 @@ private:
     if (frame.initialized.size() < frame.regs.size()) {
       frame.initialized.resize(frame.regs.size(), 0U);
     }
-    if (frame.regs[reg].is_watch_cell()) {
+    if (frame.has_watch_registers && frame.regs[reg].is_watch_cell()) {
       invalidate_integer_reg(frame, reg);
       return true;
     }
@@ -5357,7 +5358,7 @@ private:
       if (frame.int_valid[i] == 0U) {
         continue;
       }
-      if (frame.regs[i].is_watch_cell()) {
+      if (frame.has_watch_registers && frame.regs[i].is_watch_cell()) {
         frame.int_valid[i] = 0U;
         continue;
       }
@@ -5665,6 +5666,9 @@ private:
     frame->code = &code;
     frame->quick_code = &quick_code_for(code);
     frame->pc = 0;
+    // Recycled frames establish this invariant before entering the pool; set
+    // it defensively for newly allocated and differently sized frames too.
+    frame->has_watch_registers = false;
     if (frame->regs.size() != code.reg_count) {
       frame->regs.assign(code.reg_count, Value::null());
     }
@@ -5695,6 +5699,7 @@ private:
     }
     std::fill(frame.initialized.begin(), frame.initialized.end(), 0U);
     std::fill(frame.int_valid.begin(), frame.int_valid.end(), 0U);
+    frame.has_watch_registers = false;
     // code/quick_code, captures, self, and the inherited non-local-return
     // target describe the closure rather than a single invocation. Retaining
     // them is the point of this path; every per-call field is reset below.
@@ -5742,6 +5747,7 @@ private:
     }
     std::fill(frame->initialized.begin(), frame->initialized.end(), 0U);
     std::fill(frame->int_valid.begin(), frame->int_valid.end(), 0U);
+    frame->has_watch_registers = false;
     frame->captures.clear();
     frame->self = Value::null();
     frame->block = Value::null();
@@ -6151,7 +6157,8 @@ private:
     if (frame.initialized.size() < frame.regs.size()) {
       frame.initialized.resize(frame.regs.size(), 0U);
     }
-    if ((frame.initialized[reg] != 0U && frame.regs[reg].is_watch_cell()) ||
+    if ((frame.has_watch_registers && frame.initialized[reg] != 0U &&
+         frame.regs[reg].is_watch_cell()) ||
         !frame.prepared_seq_regs.empty() || !frame.prepared_map_regs.empty() ||
         !frame.pending_pattern_bindings.empty()) {
       return write_reg(frame, reg, Value::integer(value));
@@ -6171,7 +6178,8 @@ private:
     if (frame.initialized.size() < frame.regs.size()) {
       frame.initialized.resize(frame.regs.size(), 0U);
     }
-    if ((frame.initialized[reg] != 0U && frame.regs[reg].is_watch_cell()) ||
+    if ((frame.has_watch_registers && frame.initialized[reg] != 0U &&
+         frame.regs[reg].is_watch_cell()) ||
         !frame.prepared_seq_regs.empty() || !frame.prepared_map_regs.empty() ||
         !frame.pending_pattern_bindings.empty()) {
       return write_reg(frame, reg, std::move(value));
@@ -6959,7 +6967,9 @@ private:
     if (!materialize_integer_reg_if_needed(frame, reg)) {
       return Value::null();
     }
-    return unwrap_watch_value_for_read(frame.regs[reg]);
+    return frame.has_watch_registers
+               ? unwrap_watch_value_for_read(frame.regs[reg])
+               : frame.regs[reg];
   }
 
   void record_watch_cell_dependency(const RuntimeWatchCellSnapshot &snapshot) {
@@ -7143,7 +7153,8 @@ private:
     if (frame.initialized.size() < frame.regs.size()) {
       frame.initialized.resize(frame.regs.size(), 0U);
     }
-    if (frame.initialized[reg] != 0U && frame.regs[reg].is_watch_cell()) {
+    if (frame.has_watch_registers && frame.initialized[reg] != 0U &&
+        frame.regs[reg].is_watch_cell()) {
       invalidate_integer_reg(frame, reg);
       const std::shared_ptr<RuntimeWatchCell> cell =
           frame.regs[reg].as_watch_cell();
@@ -7200,6 +7211,7 @@ private:
         seed.has_value() ? std::move(*seed) : frame.regs[slot], target_name);
     frame.regs[slot] = Value::watch_cell(cell);
     frame.initialized[slot] = 1U;
+    frame.has_watch_registers = true;
     invalidate_integer_reg(frame, slot);
     return cell;
   }
@@ -12164,6 +12176,9 @@ private:
       nested_frame.initialized[i] =
           i < initialized.size() ? initialized[i] : 1U;
       if (nested_frame.initialized[i] != 0U) {
+        if (nested_frame.regs[i].is_watch_cell()) {
+          nested_frame.has_watch_registers = true;
+        }
         sync_integer_reg_from_value(nested_frame, static_cast<std::uint32_t>(i),
                                     nested_frame.regs[i]);
       } else {
@@ -13651,6 +13666,10 @@ private:
 
   bool merge_frame_registers(Frame &caller, Frame &completed) {
     materialize_integer_regs(completed);
+    // Conservative propagation is sufficient: watched slots are never
+    // overwritten, while a stale true only selects the legacy checked path.
+    caller.has_watch_registers =
+        caller.has_watch_registers || completed.has_watch_registers;
     const std::size_t count =
         std::min(caller.regs.size(), completed.regs.size());
     if (caller.initialized.size() < caller.regs.size()) {
@@ -13734,6 +13753,7 @@ private:
     materialize_integer_regs(target);
     std::unique_ptr<Frame> handler_owner = acquire_frame(handler_code);
     Frame &handler = *handler_owner;
+    handler.has_watch_registers = target.has_watch_registers;
     const std::size_t count = std::min(handler.regs.size(), target.regs.size());
     for (std::size_t index = 0; index < count; ++index) {
       const bool initialized =

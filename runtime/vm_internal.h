@@ -322,6 +322,12 @@ struct Frame {
   std::vector<std::uint8_t> initialized;
   std::vector<std::int64_t> int64_regs;
   std::vector<std::uint8_t> int_valid;
+  // Kernel.watch is rare, but every ordinary register read/write used to
+  // inspect the Value tail kind in case its slot held a watch cell. The flag
+  // is conservative: false proves that no register is a cell; true may remain
+  // set until the frame is cleared. Creation and bulk frame-copy paths raise
+  // it explicitly.
+  bool has_watch_registers = false;
   std::vector<Value> captures;
   Value self = Value::null();
   Value block = Value::null();

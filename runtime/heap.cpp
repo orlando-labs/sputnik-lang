@@ -1657,7 +1657,48 @@ namespace {
 template <class T> void heap_object_deleter(void *ptr) noexcept {
   delete static_cast<T *>(ptr);
 }
+
+template <class T> void drop_last_heap_object(ObjHeader *header) noexcept {
+  T *obj = reinterpret_cast<T *>(header);
+  if (header->heap == nullptr) {
+    // Unmanaged object (make_intrusive): no RuntimeHeap, just delete it.
+    delete obj;
+    return;
+  }
+  // Keep the heap alive across the free. If this is its last object, the
+  // RuntimeHeap::Impl destructor must run after release_intrusive returns.
+  std::shared_ptr<void> keepalive = header->heap;
+  RuntimeHeap::drop_object(obj, &heap_object_deleter<T>, *header);
+}
 } // namespace
+
+void runtime_heap_release_header(ObjHeader *header) noexcept {
+  if (header->ref_count.fetch_sub(1, std::memory_order_acq_rel) != 1) {
+    return;
+  }
+  // Tagged Values know only the header. Recover the concrete deleter on the
+  // rare final-reference path instead of paying this switch on every drop.
+  switch (header->kind) {
+  case HeapObjectKind::Closure:
+    drop_last_heap_object<ClosureValue>(header);
+    break;
+  case HeapObjectKind::Instance:
+    drop_last_heap_object<InstanceValue>(header);
+    break;
+  case HeapObjectKind::List:
+    drop_last_heap_object<ListValue>(header);
+    break;
+  case HeapObjectKind::Tuple:
+    drop_last_heap_object<TupleValue>(header);
+    break;
+  case HeapObjectKind::Set:
+    drop_last_heap_object<SetValue>(header);
+    break;
+  case HeapObjectKind::Map:
+    drop_last_heap_object<MapValue>(header);
+    break;
+  }
+}
 
 template <class T> void runtime_heap_add_ref(T *obj) noexcept {
   obj->header.ref_count.fetch_add(1, std::memory_order_relaxed);

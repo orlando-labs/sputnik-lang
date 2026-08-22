@@ -79,6 +79,11 @@ class RuntimeWatchHandle;
 // sites, just like std::shared_ptr does.
 template <class T> void runtime_heap_add_ref(T *obj) noexcept;
 template <class T> void runtime_heap_release(T *obj) noexcept;
+// Tagged Value stores only ObjHeader*. Its common drop path must not dispatch
+// on the concrete heap kind before it knows that the reference is the last
+// one. The implementation decrements first and performs the type switch only
+// on final release.
+void runtime_heap_release_header(ObjHeader *header) noexcept;
 
 template <class T> class IntrusivePtr {
 public:

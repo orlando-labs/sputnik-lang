@@ -798,34 +798,6 @@ struct ValueTailBox {
       : kind(k), ptr(std::move(p)) {}
 };
 
-namespace {
-// Drop one reference to an ObjHeader-bearing heap object. The concrete type is
-// recovered from header.kind so the right destructor runs; this reuses the
-// typed runtime_heap_release, keeping all RuntimeHeap bookkeeping intact.
-void release_tagged_heap_object(ObjHeader *header) noexcept {
-  switch (header->kind) {
-  case HeapObjectKind::Closure:
-    runtime_heap_release(reinterpret_cast<ClosureValue *>(header));
-    break;
-  case HeapObjectKind::Instance:
-    runtime_heap_release(reinterpret_cast<InstanceValue *>(header));
-    break;
-  case HeapObjectKind::List:
-    runtime_heap_release(reinterpret_cast<ListValue *>(header));
-    break;
-  case HeapObjectKind::Tuple:
-    runtime_heap_release(reinterpret_cast<TupleValue *>(header));
-    break;
-  case HeapObjectKind::Set:
-    runtime_heap_release(reinterpret_cast<SetValue *>(header));
-    break;
-  case HeapObjectKind::Map:
-    runtime_heap_release(reinterpret_cast<MapValue *>(header));
-    break;
-  }
-}
-} // namespace
-
 void Value::retain_payload(ValueTag tag, const Storage &storage) noexcept {
   if (tag >= ValueTag::Closure && tag <= ValueTag::Map) {
     if (storage.obj != nullptr) {
@@ -841,7 +813,7 @@ void Value::retain_payload(ValueTag tag, const Storage &storage) noexcept {
 void Value::release_payload(ValueTag tag, Storage &storage) noexcept {
   if (tag >= ValueTag::Closure && tag <= ValueTag::Map) {
     if (storage.obj != nullptr) {
-      release_tagged_heap_object(storage.obj);
+      runtime_heap_release_header(storage.obj);
     }
   } else if (tag == ValueTag::Tail) {
     if (storage.tail != nullptr &&

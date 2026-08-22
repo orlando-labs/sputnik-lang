@@ -8,20 +8,23 @@ mode remain identical.
 
 ## Repository state
 
-- Current optimization endpoint: `2301e12 Defer tagged heap kind dispatch
-  until final release` (clean for all 2026-08-22 statistical reports).
-- The endpoint retains the 16-byte tagged `Value` selected by `58b3600`, but
-  removes the six-kind concrete-object switch from every non-final heap-value
-  drop. `VALUE_REPR=variant` remains available as the exact legacy A/B control.
+- Current optimization endpoint: `124cefc Skip watch probes in plain VM
+  frames` (clean for the latest complete 2026-08-22 statistical reports).
+- The endpoint retains the 16-byte tagged `Value` selected by `58b3600` and the
+  final-release fast path from `2301e12`, then adds a conservative per-frame
+  watch-cell flag so ordinary VM register traffic does not inspect the `Value`
+  tail kind. `VALUE_REPR=variant` remains available as the exact legacy A/B
+  control.
 - Follow-up commits covered by this handoff:
   `dca2d4a Fix native UUID inspect dispatch`,
   `efded10 Avoid linear scans for indexed map misses`, and `7d0d0c9`.
 - Benchmark/provenance harness: `534e17d Make polyglot benchmarks reproducible`.
 - Partial-report support used for the broken UUID native lane:
   `0d0d6fa Allow partial polyglot benchmark reports`.
-- The first nine microbenchmarks were measured from clean `534e17d`; UUID and
-  all HTTP series were measured from clean `0d0d6fa`. The second commit only
-  changes failure reporting, not workload semantics or execution.
+- The original baseline series below came from `534e17d`/`0d0d6fa`. The latest
+  complete microbenchmark and HTTP matrices were measured from clean
+  `124cefc`; the historical commits only changed reporting and remain listed
+  so the older rows can be reproduced.
 - Ember: clean `9e603ddf933999c70e4b40ae9daa6d879fb8bc3a`.
 - amber-orm: clean `438be2194399fcb84680d0fdb6d9d9e927f9a981`.
 - sqlite3-amber: clean `bb62e533bb6096702fbbe36dd0a9a15813ed28eb`.
@@ -35,12 +38,14 @@ mode remain identical.
 
 ## Statistical protocol
 
-Microbenchmarks use five measured fresh-process runs, one unmeasured warmup,
-and deterministic cyclic order rotation (`--order-seed 0`). Results contain
-all raw samples, mean, median, sample standard deviation, CV, Student-t 95%
+The latest microbenchmarks use five measured fresh-process runs, two unmeasured
+warmups, and deterministic cyclic order rotation (`--order-seed 20260822`).
+Results contain all raw samples, mean, median, sample standard deviation, CV,
+Student-t 95%
 confidence interval for the mean, exact commands, executable hashes, source
-tree hashes, tool versions, and Git tracked-dirty state. The fresh build root
-was `/private/tmp/amber-polyglot-fresh-534e17d`.
+tree hashes, tool versions, and Git tracked-dirty state. The latest fresh build
+root was `/private/tmp/amber-polyglot-124cefc`; the original baseline used the
+older protocol recorded in its own result files.
 
 HTTP benchmarks use five paired repeats, 30 seconds per server, four concurrent
 clients, a fresh server process plus the complete 76-request contract smoke
@@ -484,6 +489,127 @@ Reports:
 - `amberc` is 9,010,536 bytes and `iamber` is 7,544,744 bytes: +240 bytes each
   versus `58b3600`. Raw and Ember native servers are 1,580,488 and 11,881,464
   bytes respectively: 16 bytes smaller each than the preceding endpoint.
+
+## 2026-08-22 optimization: skip watch probes in plain VM frames
+
+Commit `124cefc Skip watch probes in plain VM frames` is the current endpoint.
+`Kernel.watch` storage cells are rare, but prior to this change every ordinary
+VM register read, write, and integer-sidecar materialization called
+`Value::is_watch_cell()`. A `Frame::has_watch_registers` flag now proves the
+common negative case once for the whole frame. Creating local watched storage
+raises it explicitly; nested execution, register merge, and handler-frame
+copies propagate it conservatively; all new, reset, and recycled frames clear
+it. A stale `true` can only retain the old checked path, while `false` proves
+that direct register access is safe.
+
+### Exact-binary A/B
+
+The gate used the same pinned client SHA, 4 clients, pool 1, 15-second samples,
+three repeats per phase, and the saved old compiler on both sides of the new
+compiler (`old / new / old`). The old compiler was
+`/private/tmp/amberc-before-watch-reg-fast-path`, SHA-256
+`af29d072531fd9aa0f50123dd2d21a7402ddf584a53157b28151a3ec5de200df`;
+the accepted compiler is SHA-256
+`4e71d30bc8e2c0fa6296eecbfce099b853c69004b5ba0f634364ef27b4a14d0e`.
+
+| Phase | Ember/VM median RPS | Mean RPS | CV |
+|---|---:|---:|---:|
+| old flank 1 | 1,983.81 | 1,982.84 | 1.119% |
+| new | 1,993.27 | 1,993.09 | 0.464% |
+| old flank 2 | 1,960.28 | 1,958.21 | 0.739% |
+
+The mean of the two old-flank medians is 1,972.05 RPS, so the accepted result
+is **+1.076%**. Using phase means gives **+1.145%**. Raw result files are
+`ember-http-rps-vm-pool1-r3-2026-08-22-192802-+0300.json`,
+`...-192858-+0300.json`, and `...-192955-+0300.json`.
+
+### Post-change profile
+
+The diagnostic profile is
+`bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-22-193147-+0300/`
+`repeat-01-position-01-amber/server.sample.txt`; its unprofiled RPS must not be
+compared with statistical runs. Relative to the preceding profile at
+`ember-vm-r1-2026-08-22-123219-+0300`, top-of-stack samples changed as follows:
+
+| Symbol | Before | After | Delta |
+|---|---:|---:|---:|
+| `Vm::unwrap_watch_value_for_read` | 49 | 5 | -89.8% |
+| `Value::is_watch_cell` | 217 | 109 | -49.8% |
+| `Vm::step` | 997 | 986 | -1.1% |
+
+The remaining watch checks come from captures and generic unwrap paths rather
+than ordinary frame reads. The new largest flat VM areas are `Vm::step` (986),
+`Value::~Value` (734), `Value` copy construction (415), move assignment (355),
+allocator/free paths, and scalar send dispatch (204). The next optimization
+should therefore target register-value ownership traffic or a broader
+instruction/send specialization; further watch-specific work is no longer a
+large enough target.
+
+### Complete current microbenchmark matrix
+
+Five measured runs, two warmups, seed 20260822. Times are median milliseconds;
+lower is better.
+
+| Workload | Amber VM | Amber native | Python | Ruby | C++ | Go | Rust |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| arithmetic | 172.183 | 5.788 | 185.743 | 69.138 | 4.002 | 5.880 | 3.978 |
+| calls-collections | 13.470 | 8.718 | 21.685 | 10.437 | 2.153 | 2.868 | 2.227 |
+| codecs | 35.307 | 9.057 | 24.470 | 16.194 | 5.356 | 3.641 | 4.488 |
+| json | 32.035 | 14.821 | 41.580 | 18.513 | 4.000 | 13.905 | 5.266 |
+| map-words | 25.527 | 8.642 | 19.964 | 13.903 | 3.332 | 4.490 | 4.655 |
+| secure-random | 21.483 | 8.814 | 47.470 | 22.372 | 5.821 | 5.736 | 15.633 |
+| sha-digest | 39.796 | 14.035 | 21.308 | 41.054 | 11.824 | 4.426 | 11.279 |
+| string-ops | 23.539 | 7.140 | 15.172 | 13.359 | 3.703 | 3.866 | 4.611 |
+| time-flow | 92.221 | 10.339 | 239.914 | 60.921 | 2.945 | 4.986 | 3.031 |
+| uuid | 30.912 | 10.672 | 83.612 | 46.812 | 6.548 | 10.525 | 16.338 |
+
+Against the immediately preceding `header-release` medians, Amber VM improved
+on seven workloads: calls/collections +1.63%, codecs +0.96%, secure-random
++1.88%, SHA digest +2.12%, string ops +1.61%, time-flow +4.93%, and UUID +2.82%.
+JSON was neutral (-0.29%); map-words (-1.04%, current CV 3.10%) and arithmetic
+(-1.95%, current CV 2.53%) do not show a broad regression signal.
+
+Reports are `results/micro-<workload>-watch-fast-r5-2026-08-22.{json,md}`.
+
+### Complete current HTTP matrix
+
+Five paired/rotated repeats, 30 seconds, 4 clients, pool 1, no profiling.
+
+| Lane | Amber median RPS | CV | Competitor median RPS | Current relation |
+|---|---:|---:|---:|---|
+| raw / VM | 22,281.32 | 0.585% | Go 39,453.00; Rust 39,429.92; Python 11,913.19 | native/VM reported below |
+| raw / native | 33,726.55 | 0.216% | Go 39,456.15; Rust 39,550.38; Python 11,940.35 | native/VM 1.514x |
+| Ember / VM / pool 1 | 1,972.23 | 0.764% | Rails 1,834.15 | Amber 1.075x; +7.53% |
+| Ember / native / pool 1 | 6,183.11 | 0.135% | Rails 1,837.84 | Amber 3.364x |
+
+Compared with the preceding clean matrix, raw/VM is -0.129%, raw/native is
+-0.144%, Ember/VM is **+0.706%**, and Ember/native is +0.186%. Rails stayed
+effectively fixed in the VM comparison (1,833.15 to 1,834.15 RPS), so the
+framework VM gain is not a competitor drift artifact. Current native/VM ratios
+are 1.514x raw and 3.135x Ember.
+
+Reports and machine-readable samples:
+
+- `results/raw-http-rps-vm-watch-fast-r5-2026-08-22.md`
+  (`raw-http-rps-vm-r5-2026-08-22-194442-+0300.json`).
+- `results/raw-http-rps-native-watch-fast-r5-2026-08-22.md`
+  (`raw-http-rps-native-r5-2026-08-22-195539-+0300.json`).
+- `results/ember-http-rps-vm-pool1-watch-fast-r5-2026-08-22.md`
+  (`ember-http-rps-vm-pool1-r5-2026-08-22-200559-+0300.json`).
+- `results/ember-http-rps-native-pool1-watch-fast-r5-2026-08-22.md`
+  (`ember-http-rps-native-pool1-r5-2026-08-22-201234-+0300.json`).
+
+### Correctness and size
+
+- `vm_tests`, `stdlib_collections_tests`, and `stdlib_task_tests`: pass.
+- Full corpus: 214 passed, 0 failed.
+- Separate legacy `VALUE_REPR=variant` compiler build and calls/collections
+  checksum `2047795430`: pass.
+- Raw native remains 61/61 direct-native; Ember native remains 2048/2048;
+  both have full body coverage and zero VM fallback/runtime bridge.
+- `amberc` is 9,010,536 bytes and `iamber` is 7,544,744 bytes; raw and Ember
+  native servers are 1,580,488 and 11,881,464 bytes. All four sizes are exactly
+  unchanged from `2301e12`.
 
 ## Reproduction commands
 

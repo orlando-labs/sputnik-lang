@@ -122,10 +122,42 @@ void test_case_bang_and_last_value() {
 }
 
 void test_identifier_forms() {
-  expect_kinds("identifier forms", "active? clear! _tmp __cache _1 $_\n",
+  expect_kinds("identifier forms",
+               "active? clear! _tmp __cache _1 $_ $it $it1 $it2\n",
                {TokenKind::Identifier, TokenKind::Identifier,
                 TokenKind::Identifier, TokenKind::Identifier,
                 TokenKind::Placeholder, TokenKind::LastValue,
+                TokenKind::Placeholder, TokenKind::Placeholder,
+                TokenKind::Placeholder,
+                TokenKind::Newline, TokenKind::Eof});
+
+  const std::vector<Token> aliases = lex_ok("$it $it1 $it12\n");
+  if (aliases[0].lexeme != "$it" || aliases[1].lexeme != "$it1" ||
+      aliases[2].lexeme != "$it12") {
+    std::cerr << "lexer test failed: placeholder aliases preserve lexemes\n";
+    std::exit(1);
+  }
+
+  for (const std::string &invalid :
+       {"$it0\n", "$it01\n", "$item\n", "$it_1\n", "$it2x\n",
+        "$it?\n", "$it!\n", "$it1?\n", "$it?[0]\n", "$itя\n", "$it1é\n"}) {
+    if (lex_raw(invalid).ok()) {
+      std::cerr << "lexer test failed: invalid placeholder alias accepted: "
+                << invalid;
+      std::exit(1);
+    }
+  }
+
+  expect_kinds("placeholder alias followed by inequality", "$it!=0\n",
+               {TokenKind::Placeholder, TokenKind::BangEqual,
+                TokenKind::Integer, TokenKind::Newline, TokenKind::Eof});
+  expect_kinds("placeholder alias followed by regexp operator",
+               "$it1!~pattern\n",
+               {TokenKind::Placeholder, TokenKind::BangTilde,
+                TokenKind::Identifier, TokenKind::Newline, TokenKind::Eof});
+  expect_kinds("placeholder alias followed by optional index", "$it2[?0]\n",
+               {TokenKind::Placeholder, TokenKind::LBracket,
+                TokenKind::Question, TokenKind::Integer, TokenKind::RBracket,
                 TokenKind::Newline, TokenKind::Eof});
 }
 

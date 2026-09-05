@@ -1,0 +1,6 @@
+{
+  "schema": "amber.run.v1",
+  "entry": "probe",
+  "status": "ok",
+  "value": "[29, [3, 6], [21, 43], [7, null], [false, true], [\"value=1\", \"value=2\"]]"
+}

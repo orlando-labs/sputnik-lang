@@ -285,8 +285,38 @@ LexResult Lexer::lex() {
       if (!at_end() && current() == '_') {
         advance();
         emit(TokenKind::LastValue, start, "$_");
+      } else if (!at_end() && current() == 'i' && peek() == 't') {
+        advance();
+        advance();
+        while (!at_end() && is_digit(current())) {
+          advance();
+        }
+
+        const std::string text =
+            source_.substr(start.offset, position().offset - start.offset);
+        const bool has_index = text.size() > 3;
+        const bool valid_index = !has_index || text[3] != '0';
+        // '!=' and '!~' are operators, not identifier suffixes.
+        const bool invalid_suffix =
+            current() == '?' ||
+            (current() == '!' && peek() != '=' && peek() != '~');
+        const bool valid_boundary =
+            at_end() || (!is_identifier_part_at(index_) && !invalid_suffix);
+        if (valid_index && valid_boundary) {
+          emit(TokenKind::Placeholder, start, text);
+        } else {
+          while (!at_end() &&
+                 (is_identifier_part_at(index_) || current() == '?' ||
+                  current() == '!')) {
+            advance();
+          }
+          error(start,
+                "invalid block placeholder; expected '$it' or '$itN' with "
+                "N starting at 1");
+        }
       } else {
-        error(start, "unexpected '$'; only '$_' is reserved in Amber v1");
+        error(start,
+              "unexpected '$'; expected '$_', '$it', or '$itN' in Amber");
       }
       break;
     case ';':

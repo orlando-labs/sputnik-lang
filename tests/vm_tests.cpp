@@ -4115,6 +4115,21 @@ void test_execute_emitted_block_map_suffixes() {
   expect(implicit.ok(), "implicit placeholder map block should execute");
   expect_integer_list(implicit.value, {2, 4}, "implicit placeholder map block");
 
+  const amber::runtime::ExecutionResult it_alias =
+      execute_emitted_init("[1,2].map: $it * 2\n");
+  expect(it_alias.ok(), "$it placeholder map block should execute");
+  expect_integer_list(it_alias.value, {2, 4}, "$it placeholder map block");
+
+  const amber::runtime::ExecutionResult indexed_it_alias =
+      execute_emitted_init("def invoke(&blk):\n"
+                           "  blk(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)\n"
+                           "invoke(): $it1 + $it2 + $it3 + $it4 + $it5 + "
+                           "$it6 + $it7 + $it8 + $it9 + $it10 * 10\n");
+  expect(indexed_it_alias.ok(), "$itN placeholder block should execute");
+  expect(indexed_it_alias.value.is_integer() &&
+             indexed_it_alias.value.as_integer() == 145,
+         "$it1 through $it10 preserve numeric positional argument order");
+
   const amber::runtime::ExecutionResult explicit_param =
       execute_emitted_init("[1,2].map |x|: x * 2\n");
   expect(explicit_param.ok(), "explicit param map block should execute");

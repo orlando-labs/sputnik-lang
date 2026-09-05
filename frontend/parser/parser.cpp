@@ -42,6 +42,16 @@ bool is_declaration_boundary(lexer::TokenKind kind) {
          kind == lexer::TokenKind::Dedent || kind == lexer::TokenKind::Eof;
 }
 
+std::string canonical_placeholder_name(const std::string &lexeme) {
+  if (lexeme == "$it") {
+    return "_1";
+  }
+  if (lexeme.rfind("$it", 0) == 0) {
+    return "_" + lexeme.substr(3);
+  }
+  return lexeme;
+}
+
 bool is_keyword_spread_start(const lexer::Token &first,
                              const lexer::Token &second) {
   (void)second;
@@ -3691,7 +3701,7 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
   }
   if (token.kind == lexer::TokenKind::Placeholder) {
     auto expr = ast::make_expr("AstPlaceholder", token.span);
-    expr->string_field("name", token.lexeme);
+    expr->string_field("name", canonical_placeholder_name(token.lexeme));
     return expr;
   }
   if (token.kind == lexer::TokenKind::LastValue) {

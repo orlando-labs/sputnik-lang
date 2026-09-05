@@ -6,6 +6,7 @@
 #include <map>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <utility>
 
 namespace amber::hir {
@@ -3093,7 +3094,14 @@ private:
       }
       std::sort(placeholders.begin(), placeholders.end(),
                 [](const binder::Binding *left, const binder::Binding *right) {
-                  return left->name < right->name;
+                  const std::string_view left_index(left->name.data() + 1,
+                                                    left->name.size() - 1);
+                  const std::string_view right_index(right->name.data() + 1,
+                                                     right->name.size() - 1);
+                  if (left_index.size() != right_index.size()) {
+                    return left_index.size() < right_index.size();
+                  }
+                  return left_index < right_index;
                 });
       for (const binder::Binding *binding : placeholders) {
         auto param = make_node("HParam", binding->span);

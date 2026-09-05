@@ -50,8 +50,9 @@ visitation. This lets `export value` resolve even when `value = ...` appears
 later in the source while preserving source-order module init execution.
 
 `$_` is represented as a read-only `last_value` binding per lexical scope.
-Implicit block placeholders `_1.._N` are represented as read-only `placeholder`
-bindings in the block suffix scope. Sparse placeholder numbering and mixing
+Implicit block placeholders `$it`/`$it1..$itN` and the compatible `_1.._N`
+spellings are normalized to one read-only `placeholder` binding per positional
+index in the block suffix scope. Sparse placeholder numbering and mixing
 implicit placeholders with explicit block params produce canonical diagnostics.
 
 Binder negative corpus cases use `phase: "bind-diag"` and compare the canonical

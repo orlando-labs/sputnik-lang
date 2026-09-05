@@ -328,6 +328,22 @@ void test_implicit_block_placeholders() {
   expect(second != nullptr && second->kind == "placeholder", "_2 binding");
   expect(has_resolved_reference(graph, "_1", first->id), "_1 resolves");
   expect(has_resolved_reference(graph, "_2", second->id), "_2 resolves");
+
+  amber::binder::BindResult aliases =
+      bind_ok("def combine(xs):\n"
+              "  xs.map: _1 + $it + $it1 + $it2\n");
+  const amber::binder::Scope *alias_block =
+      scope_by_kind_owner(aliases.graph, "block", "block_suffix");
+  expect(alias_block != nullptr, "placeholder alias block scope exists");
+  const amber::binder::Binding *alias_first =
+      binding_in_scope(aliases.graph, *alias_block, "_1");
+  const amber::binder::Binding *alias_second =
+      binding_in_scope(aliases.graph, *alias_block, "_2");
+  expect(alias_first != nullptr && alias_second != nullptr,
+         "$it aliases share canonical numbered bindings");
+  expect(binding_in_scope(aliases.graph, *alias_block, "$it") == nullptr &&
+             binding_in_scope(aliases.graph, *alias_block, "$it1") == nullptr,
+         "$it aliases do not create duplicate bindings");
 }
 
 void test_assignment_to_import_alias_is_error() {
@@ -349,6 +365,25 @@ void test_placeholder_diagnostics() {
                                               "  xs.map: _2\n");
   expect(!sparse.ok(), "sparse placeholders rejected");
   expect_diagnostic_code(sparse, "E1006");
+
+  amber::binder::BindResult alias_mixed = bind_any("def f(xs):\n"
+                                                   "  xs.map |x|: $it\n");
+  expect(!alias_mixed.ok(), "explicit block params reject $it aliases");
+  expect_diagnostic_code(alias_mixed, "E1005");
+
+  amber::binder::BindResult alias_sparse = bind_any("def f(xs):\n"
+                                                    "  xs.map: $it2\n");
+  expect(!alias_sparse.ok(), "sparse $it aliases rejected");
+  expect_diagnostic_code(alias_sparse, "E1006");
+
+  amber::binder::BindResult nested_explicit =
+      bind_any("def f(xs):\n"
+               "  xs.map:\n"
+               "    outer = $it\n"
+               "    xs.map |x|: $it\n");
+  expect(!nested_explicit.ok(),
+         "$it cannot skip an explicit inner block to reference an outer block");
+  expect_diagnostic_code(nested_explicit, "E1005");
 }
 
 void test_duplicate_binding_diagnostics() {

@@ -81,6 +81,23 @@ bool bool_field(const Expr &expr, const std::string &name) {
   std::exit(1);
 }
 
+void collect_placeholder_names(const Expr &expr,
+                               std::vector<std::string> *names) {
+  if (expr.kind == "AstPlaceholder") {
+    names->push_back(string_field(expr, "name"));
+  }
+  for (const amber::ast::NodeField &field : expr.node_fields) {
+    if (field.value != nullptr) {
+      collect_placeholder_names(*field.value, names);
+    }
+  }
+  for (const amber::ast::ListField &field : expr.list_fields) {
+    for (const std::unique_ptr<Expr> &value : field.values) {
+      collect_placeholder_names(*value, names);
+    }
+  }
+}
+
 const amber::ast::ListField &list_field(const Expr &expr,
                                         const std::string &name) {
   for (const amber::ast::ListField &field : expr.list_fields) {
@@ -446,6 +463,15 @@ void test_inline_block_chain_boundary() {
   expect(bool_field(*tails.values[2], "chain_boundary"),
          "uniq continues outer chain");
   expect(tails.values[3]->kind == "AstTailCall", "uniq call tail");
+}
+
+void test_it_placeholder_aliases() {
+  std::unique_ptr<Expr> expr =
+      parse_ok("numbers.reduce 0: $it + $it1 + $it2\n");
+  std::vector<std::string> names;
+  collect_placeholder_names(*expr, &names);
+  expect(names == std::vector<std::string>({"_1", "_1", "_2"}),
+         "$it aliases normalize to numbered placeholder names");
 }
 
 void test_indented_block_suffix_body() {
@@ -2086,6 +2112,7 @@ int main() {
   test_safe_nav_and_index();
   test_optional_bracket_access();
   test_inline_block_chain_boundary();
+  test_it_placeholder_aliases();
   test_indented_block_suffix_body();
   test_indented_postfix_continuation();
   test_indented_boolean_continuation();

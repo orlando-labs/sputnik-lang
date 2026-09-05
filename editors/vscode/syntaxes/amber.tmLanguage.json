@@ -443,7 +443,7 @@
         },
         {
           "name": "variable.parameter.placeholder.amber",
-          "match": "(?<![\\p{L}\\p{N}_])_[0-9]+(?![\\p{L}\\p{N}_])"
+          "match": "(?<![\\p{L}\\p{N}_])(?:_[0-9]+(?![\\p{L}\\p{N}_])|\\$it(?:[1-9][0-9]*)?(?![\\p{L}\\p{N}_?]|!(?![=~])))"
         },
         {
           "name": "variable.language.self.amber",

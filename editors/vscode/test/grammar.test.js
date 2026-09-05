@@ -239,7 +239,7 @@ async function main() {
       "state = :ready",
       "call(mode::fast)",
       "last = $_",
-      "items.map: _1 + _2",
+      "items.map: $it + $it1 + $it2 + _1 + _2",
       "case value:",
       " when _:",
       "  null",
@@ -266,10 +266,53 @@ async function main() {
   assertScope(
     literals,
     4,
+    "$it",
+    "variable.parameter.placeholder.amber",
+  );
+  assertScope(
+    literals,
+    4,
+    "$it1",
+    "variable.parameter.placeholder.amber",
+  );
+  assertScope(
+    literals,
+    4,
+    "$it2",
+    "variable.parameter.placeholder.amber",
+  );
+  assertScope(
+    literals,
+    4,
     "_1",
     "variable.parameter.placeholder.amber",
   );
   assertScope(literals, 6, "_", "variable.language.wildcard.amber");
+
+  const placeholderOperators = tokenize(
+    grammar,
+    "$it!=0\n$it1!~pattern\n$it2[?0]",
+  );
+  for (const [line, alias] of ["$it", "$it1", "$it2"].entries()) {
+    assertScope(
+      placeholderOperators,
+      line,
+      alias,
+      "variable.parameter.placeholder.amber",
+    );
+  }
+  for (const invalid of [
+    "$it0", "$it01", "$item", "$it_1", "$it2x",
+    "$it?", "$it!", "$it1?", "$it?[0]", "$itя", "$it1é",
+  ]) {
+    const [{ tokens }] = tokenize(grammar, invalid);
+    assert.ok(
+      tokens.every(
+        (token) => !token.scopes.includes("variable.parameter.placeholder.amber"),
+      ),
+      `${invalid} must not be highlighted as a placeholder`,
+    );
+  }
 
   const operators = tokenize(
     grammar,

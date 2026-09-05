@@ -25,6 +25,8 @@ lowered into ordinary call/member nodes:
   call/member segment they bind to;
 - inline block suffixes store `AstBlock.body` as a single expression node, while
   indented block suffixes store `AstBlock.body` as a statement list;
+- `AstPlaceholder.name` uses canonical `_N` names: the parser maps `$it` and
+  `$it1` to `_1`, and `$itN` to `_N`; the span still covers the original spelling;
 - `AstTailDotMember.chain_boundary = true` marks a `CHAIN_DOT` continuation
   after a one-line block suffix.
 

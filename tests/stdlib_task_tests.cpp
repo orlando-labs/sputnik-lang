@@ -1378,6 +1378,8 @@ void test_std016_threaded_collection_iteration_and_transforms() {
       });
   expect(each.ok && !each.failed, "threaded each should complete successfully");
   expect(sum.get() == 10, "threaded each should visit every item once");
+  expect_integer_values(each.values, {1, 2, 3, 4},
+                        "threaded each should return original items in order");
 
   const amber::runtime::RuntimeThreadedCollectionStats stats = threaded.stats();
   expect(stats.operations == 6 && stats.map_operations == 1 &&
@@ -1641,6 +1643,45 @@ void test_std017_source_level_flow_and_threaded_collection_compile_and_run() {
   expect_integer_list_values(values->items[7].as_list()->items,
                              {{1, 2}, {1, 3}, {2, 3}},
                              "source-level threaded combination");
+}
+
+void test_std017_source_level_threaded_each_matches_sequential_each() {
+  for (const int workers : {1, 5}) {
+    for (const std::string policy : {"atomic", "chunks", "items"}) {
+      const std::string options =
+          "(" + std::to_string(workers) + ", scatter: :" + policy + ")";
+      const amber::runtime::ExecutionResult exec = execute_source_or_die(
+          "serial = [3, 1, 4, 1, 5].each: _1 * 10\n"
+          "threaded = [3, 1, 4, 1, 5].threaded" + options +
+          ".each: _1 * 10\n"
+          "serial_times = 10.times.each: $it + 100\n"
+          "threaded_times = 10.times.threaded" + options +
+          ".each: $it + 100\n"
+          "empty = [].threaded" + options + ".each: 1 / 0\n"
+          "parallel = [3, 1, 4, 1, 5].parallel" + options +
+          ".each: null\n"
+          "[serial, threaded, serial_times, threaded_times, empty, parallel]\n");
+
+      const std::string context = "source-level threaded each " + options;
+      expect(exec.ok(), context + " should execute");
+      expect(exec.value.is_list() && exec.value.as_list() != nullptr,
+             context + " result should be a list");
+      const auto &items = exec.value.as_list()->items;
+      expect(items.size() == 6, context + " result shape");
+      expect_integer_list_value(items[0], {3, 1, 4, 1, 5},
+                                context + " sequential each original items");
+      expect_integer_list_value(items[1], {3, 1, 4, 1, 5},
+                                context + " threaded each original items");
+      expect_integer_list_value(items[2], {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+                                context + " sequential times indices");
+      expect_integer_list_value(items[3], {0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+                                context + " threaded times indices");
+      expect_integer_list_value(items[4], {},
+                                context + " empty each must skip the block");
+      expect_integer_list_value(items[5], {3, 1, 4, 1, 5},
+                                context + " parallel each original items");
+    }
+  }
 }
 
 void test_std018_task_local_basic_nested_exception_and_sleep() {
@@ -2306,6 +2347,7 @@ int main() {
   test_std017_source_level_task_sync_stack_compiles_and_runs();
   test_std017_source_level_task_module_is_stable_across_spawn();
   test_std017_source_level_flow_and_threaded_collection_compile_and_run();
+  test_std017_source_level_threaded_each_matches_sequential_each();
   test_std018_task_local_basic_nested_exception_and_sleep();
   test_std018_task_local_spawn_inheritance_and_isolation();
   test_std018_task_local_distinct_tasks_and_parallel_stress();

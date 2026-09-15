@@ -4798,7 +4798,7 @@ public:
         items_,
         [function](const Value &value, std::size_t index) {
           function(value, index);
-          return Value::null();
+          return value;
         },
         options_);
     record([&](RuntimeThreadedCollectionStats *stats) {

@@ -231,7 +231,9 @@ Current implemented slice:
   `flat_map`, `combination(count)`, and `permutation(count)` for future
   `[...].threaded(workers)` lowering; checked mode validates inputs and worker
   results with `IsolationError`, unchecked mode delegates responsibility to the
-  caller, flow failure policies are preserved, and `stdlib_task_tests` covers
+  caller, `each` discards block results and returns the original items in input
+  order by default, matching sequential `each`; flow failure policies are
+  preserved, and `stdlib_task_tests` covers
   ordered transforms, generated rows, failure collection, and isolation edges;
 - `W8.4` conformance gate in `tools/ambertest` with deterministic fixture
   discovery, focused mismatch rendering, phase aliases for

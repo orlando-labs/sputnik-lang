@@ -7,14 +7,169 @@
 #include <algorithm>
 #include <array>
 #include <future>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <sstream>
 #include <utility>
+#include <unordered_map>
+#include <unordered_set>
 
 namespace amber::runtime {
 
 namespace {
+
+// RuntimeState addresses code and inline-cache data by [code_id]. Images may
+// use sparse ids, so permit a bounded sparse range instead of requiring dense
+// ids. This keeps validation from allowing an image to request an unbounded
+// allocation before the swap is committed.
+constexpr std::uint32_t kMaxRuntimeCodeId = 1U << 20;
+
+std::string notebook_dependency_key(const RuntimeDependency &dependency) {
+  switch (dependency.kind) {
+  case RuntimeDependencyKind::Binding:
+    return "binding:" + std::to_string(dependency.cell_id);
+  case RuntimeDependencyKind::Ivar:
+    return "ivar:" + std::to_string(dependency.object_id) + ":" +
+           dependency.field_name;
+  case RuntimeDependencyKind::Object:
+    return "object:" + std::to_string(dependency.object_id);
+  }
+  return {};
+}
+
+bool notebook_dependency_is_newer(const RuntimeDependency &candidate,
+                                  const RuntimeDependency &current) {
+  if (candidate.object_revision != current.object_revision) {
+    return candidate.object_revision > current.object_revision;
+  }
+  if (candidate.revision != current.revision) {
+    return candidate.revision > current.revision;
+  }
+  if (candidate.target_name != current.target_name) {
+    return candidate.target_name > current.target_name;
+  }
+  return candidate.field_name > current.field_name;
+}
+
+// RuntimeState's legacy capture is shared world state.  Notebook execution
+// needs a run-local sink as well so an explicit request cannot clobber a
+// caller-owned begin/end capture (or be clobbered by a re-entrant callback).
+class NotebookDependencyCollector {
+public:
+  NotebookDependencyCollector(std::uint64_t consumer_cell_id,
+                              RuntimeWatchStreamIdentity source) {
+    capture_.notebook_cell_id = consumer_cell_id;
+    capture_.source = source;
+  }
+
+  void record(const RuntimeDependency &dependency) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!open_) {
+      return;
+    }
+    const std::string key = notebook_dependency_key(dependency);
+    if (key.empty()) {
+      return;
+    }
+    const auto found = indices_.find(key);
+    if (found == indices_.end()) {
+      indices_.emplace(key, capture_.dependencies.size());
+      capture_.dependencies.push_back(dependency);
+      return;
+    }
+    if (notebook_dependency_is_newer(dependency,
+                                     capture_.dependencies[found->second])) {
+      capture_.dependencies[found->second] = dependency;
+    }
+  }
+
+  void close() noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    open_ = false;
+  }
+
+  RuntimeDependencySet take() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    open_ = false;
+    std::sort(capture_.dependencies.begin(), capture_.dependencies.end(),
+              [](const RuntimeDependency &left,
+                 const RuntimeDependency &right) {
+                const int left_kind = static_cast<int>(left.kind);
+                const int right_kind = static_cast<int>(right.kind);
+                if (left_kind != right_kind) {
+                  return left_kind < right_kind;
+                }
+                if (left.cell_id != right.cell_id) {
+                  return left.cell_id < right.cell_id;
+                }
+                if (left.object_id != right.object_id) {
+                  return left.object_id < right.object_id;
+                }
+                if (left.field_name != right.field_name) {
+                  return left.field_name < right.field_name;
+                }
+                if (left.target_name != right.target_name) {
+                  return left.target_name < right.target_name;
+                }
+                if (left.revision != right.revision) {
+                  return left.revision < right.revision;
+                }
+                return left.object_revision < right.object_revision;
+              });
+    return std::move(capture_);
+  }
+
+private:
+  mutable std::mutex mutex_;
+  RuntimeDependencySet capture_;
+  std::unordered_map<std::string, std::size_t> indices_;
+  bool open_ = true;
+};
+
+class NotebookDependencyCollectorGuard {
+public:
+  explicit NotebookDependencyCollectorGuard(
+      NotebookDependencyCollector *collector)
+      : collector_(collector) {}
+
+  ~NotebookDependencyCollectorGuard() {
+    if (collector_ != nullptr) {
+      collector_->close();
+    }
+  }
+
+  NotebookDependencyCollectorGuard(
+      const NotebookDependencyCollectorGuard &) = delete;
+  NotebookDependencyCollectorGuard &operator=(
+      const NotebookDependencyCollectorGuard &) = delete;
+
+private:
+  NotebookDependencyCollector *collector_ = nullptr;
+};
+
+// Registries contain module-derived native binding metadata and must advance
+// with the immutable module image. Rebuilding a complete candidate avoids
+// retaining code-id bindings removed by reload/install.
+struct RuntimeRegistryGeneration {
+  explicit RuntimeRegistryGeneration(const bytecode::BcModule &module) {
+    register_builtin_stdlib(native);
+    register_core_prelude_bindings(modules);
+    register_legacy_native_type_paths(modules);
+    register_builtin_runtime_modules(modules, dispatch, types, &errors);
+    RuntimeNativePackageDescriptor package =
+        runtime_native_package_descriptor_from_module(module);
+    NativeExtRegistry::global().contribute_to(package);
+    register_runtime_native_package_descriptor(dispatch, types, errors,
+                                               package);
+  }
+
+  NativeRegistry native;
+  RuntimeModuleRegistry modules;
+  RuntimeTypeRegistry types;
+  RuntimeDispatchRegistry dispatch;
+  RuntimeErrorRegistry errors;
+};
 
 RuntimeIoProviderStatus
 unsupported_io_provider_operation(const std::string &operation) {
@@ -152,6 +307,179 @@ runtime_reload_diagnostic(std::string error_name, std::string message,
   return diagnostic;
 }
 
+RuntimeNotebookImageDiagnostic notebook_image_diagnostic(
+    std::string error_name, std::string message,
+    std::uint32_t code_id = 0) {
+  RuntimeNotebookImageDiagnostic diagnostic;
+  diagnostic.error_name = std::move(error_name);
+  diagnostic.message = std::move(message);
+  diagnostic.code_id = code_id;
+  return diagnostic;
+}
+
+bool notebook_image_shape_is_safe(const bytecode::BcModule &image) {
+  if (image.init.has_entry_code_id || !image.methods.empty() ||
+      !image.classes.empty() || !image.exports.empty() ||
+      !image.dependencies.empty() || image.code_objects.empty()) {
+    return false;
+  }
+  std::unordered_set<std::uint32_t> code_ids;
+  for (const bytecode::BcCode &code : image.code_objects) {
+    if (code.code_id == 0U || code.code_id > kMaxRuntimeCodeId ||
+        !code_ids.insert(code.code_id).second) {
+      return false;
+    }
+    if (code.kind != bytecode::CodeKind::NotebookCell &&
+        code.kind != bytecode::CodeKind::Block &&
+        code.kind != bytecode::CodeKind::Rescue &&
+        code.kind != bytecode::CodeKind::Ensure) {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool notebook_name_pool_has_active_prefix(
+    const std::vector<std::string> &active,
+    const std::vector<std::string> &candidate) {
+  if (candidate.size() < active.size()) {
+    return false;
+  }
+  return std::equal(active.begin(), active.end(), candidate.begin());
+}
+
+bool validate_notebook_image(
+    const std::shared_ptr<const bytecode::BcModule> &image,
+    std::vector<RuntimeNotebookImageDiagnostic> *diagnostics) {
+  if (image == nullptr) {
+    diagnostics->push_back(notebook_image_diagnostic(
+        "NotebookImageError", "notebook image is null"));
+    return false;
+  }
+
+  // There is no public in-memory verifier. Round-tripping through the normal
+  // decoder exercises exactly the same structural/flow checks as a loaded
+  // image, while the original shared object remains the immutable image used
+  // by the VM after the swap.
+  try {
+    const std::vector<std::uint8_t> bytes = bytecode::serialize_module(*image);
+    const bytecode::DecodeResult decoded = bytecode::deserialize_module(bytes);
+    if (!decoded.ok()) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "BytecodeVerificationError",
+          bytecode::verify_errors_to_json(decoded.errors)));
+      return false;
+    }
+  } catch (const std::exception &error) {
+    diagnostics->push_back(notebook_image_diagnostic(
+        "BytecodeVerificationError",
+        std::string("notebook image verification failed: ") + error.what()));
+    return false;
+  } catch (...) {
+    diagnostics->push_back(notebook_image_diagnostic(
+        "BytecodeVerificationError",
+        "notebook image verification failed"));
+    return false;
+  }
+
+  if (image->code_objects.empty()) {
+    diagnostics->push_back(notebook_image_diagnostic(
+        "NotebookImageError", "notebook image has no code objects"));
+    return false;
+  }
+  if (image->init.has_entry_code_id) {
+    diagnostics->push_back(notebook_image_diagnostic(
+        "NotebookImageError", "notebook image cannot have module init",
+        image->init.entry_code_id));
+    return false;
+  }
+  if (!image->methods.empty() || !image->classes.empty() ||
+      !image->exports.empty() || !image->dependencies.empty()) {
+    diagnostics->push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image cannot contain classes, methods, exports, or "
+        "dependencies"));
+    return false;
+  }
+
+  std::unordered_set<std::uint32_t> handler_targets;
+  std::unordered_set<std::uint32_t> closure_targets;
+  std::unordered_set<std::uint32_t> code_ids;
+  for (const bytecode::BcCode &code : image->code_objects) {
+    if (code.code_id == 0U) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError", "notebook code id must be non-zero",
+          code.code_id));
+      return false;
+    }
+    if (code.code_id > kMaxRuntimeCodeId) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError",
+          "notebook code id exceeds the bounded runtime cache range",
+          code.code_id));
+      return false;
+    }
+    if (!code_ids.insert(code.code_id).second) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError", "duplicate notebook code id", code.code_id));
+      return false;
+    }
+    switch (code.kind) {
+    case bytecode::CodeKind::NotebookCell:
+    case bytecode::CodeKind::Block:
+      break;
+    case bytecode::CodeKind::Rescue:
+    case bytecode::CodeKind::Ensure:
+      for (const bytecode::HandlerEntry &handler : code.handler_table) {
+        handler_targets.insert(handler.handler_code_id);
+      }
+      break;
+    default:
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError",
+          "notebook image contains an ordinary executable code object",
+          code.code_id));
+      return false;
+    }
+    if (code.kind == bytecode::CodeKind::NotebookCell &&
+        !code.capture_layout.empty()) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError",
+          "notebook cell entry points cannot have lexical captures",
+          code.code_id));
+      return false;
+    }
+    for (const auto &instruction : code.instructions) {
+      if (instruction.opcode == bytecode::Opcode::MakeClosure) {
+        closure_targets.insert(static_cast<std::uint32_t>(instruction.operands[1].value));
+      }
+    }
+    for (const bytecode::HandlerEntry &handler : code.handler_table) {
+      handler_targets.insert(handler.handler_code_id);
+    }
+  }
+
+  for (const bytecode::BcCode &code : image->code_objects) {
+    if (code.kind == bytecode::CodeKind::Block &&
+        closure_targets.count(code.code_id) == 0U) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError", "notebook block must be referenced by a closure",
+          code.code_id));
+      return false;
+    }
+    if ((code.kind == bytecode::CodeKind::Rescue ||
+         code.kind == bytecode::CodeKind::Ensure) &&
+        handler_targets.find(code.code_id) == handler_targets.end()) {
+      diagnostics->push_back(notebook_image_diagnostic(
+          "NotebookImageError",
+          "notebook handler code must be reachable from a handler table",
+          code.code_id));
+      return false;
+    }
+  }
+  return true;
+}
+
 RuntimePackageImageDecode
 decode_runtime_package_image(const pkg::PackageArtifact &artifact) {
   RuntimePackageImageDecode decoded;
@@ -240,6 +568,11 @@ struct RuntimeWorld::Impl {
                                           : module->symbols),
         state(std::make_shared<RuntimeState>()),
         package(std::move(package_image)), options(std::move(world_options)) {
+    state->watch_stream->configure_capacity(options.watch_event_capacity);
+    state->watch_stream->configure_activity_notifier(
+        options.watch_activity_notifier);
+    state->set_external_gc_root_provider(
+        options.external_gc_root_provider);
     native_bridge_reported_runtime_string_count = runtime_strings.size();
     native_bridge_reported_runtime_symbol_count = runtime_symbols.size();
     state->initialize_for_module(*module);
@@ -289,12 +622,18 @@ struct RuntimeWorld::Impl {
     }
   }
 
-  replay::TraceEvent record_event(replay::TraceEvent event) {
+  replay::TraceEvent record_event_into(
+      replay::TraceEvent event, RuntimeReplayTrace &target_trace,
+      RuntimeReplayValidation &target_replay_validation,
+      std::size_t &target_replay_cursor,
+      const RuntimePackageImage *target_package,
+      const RuntimeState *target_state) const {
     if (!options.record_replay_trace && !options.enforce_replay) {
       return event;
     }
     if (event.event_id == 0) {
-      event.event_id = static_cast<std::uint64_t>(trace.events.size()) + 1U;
+      event.event_id =
+          static_cast<std::uint64_t>(target_trace.events.size()) + 1U;
     }
     if (event.timestamp_or_virtual_time == 0) {
       event.timestamp_or_virtual_time =
@@ -304,38 +643,49 @@ struct RuntimeWorld::Impl {
     if (event.trace_id.empty()) {
       event.trace_id = options.trace_id.empty() ? "runtime" : options.trace_id;
     }
-    if (event.module_id.empty() && package.has_value()) {
-      event.module_id = package->manifest.root_module;
+    if (event.module_id.empty() && target_package != nullptr) {
+      event.module_id = target_package->manifest.root_module;
     }
-    if (event.world_epoch == 0 && state != nullptr) {
-      event.world_epoch = state->world_epoch;
+    if (event.world_epoch == 0 && target_state != nullptr) {
+      event.world_epoch = target_state->world_epoch;
     }
     event = replay::normalize_event(std::move(event));
-    trace.events.push_back(event);
+    target_trace.events.push_back(event);
 
     if (options.enforce_replay) {
       const replay::ReplayTrace expected =
           replay::normalize_trace(options.expected_replay);
-      if (replay_cursor >= expected.events.size()) {
-        replay_validation.diagnostics.push_back(replay::ReplayDiagnostic{
+      if (target_replay_cursor >= expected.events.size()) {
+        target_replay_validation.diagnostics.push_back(
+            replay::ReplayDiagnostic{
             "ReplayDivergenceError", "replay produced an extra event", 0,
-            event.event_id, event.name});
+                event.event_id, event.name});
       } else {
         const replay::TraceEvent expected_event =
-            replay::normalize_event(expected.events[replay_cursor]);
+            replay::normalize_event(expected.events[target_replay_cursor]);
         if (replay::event_signature(expected_event) !=
             replay::event_signature(event)) {
-          replay_validation.diagnostics.push_back(replay::ReplayDiagnostic{
+          target_replay_validation.diagnostics.push_back(
+              replay::ReplayDiagnostic{
               "ReplayDivergenceError",
-              "replay event diverged at index " + std::to_string(replay_cursor),
-              expected_event.event_id, event.event_id, event.name});
+                  "replay event diverged at index " +
+                      std::to_string(target_replay_cursor),
+                  expected_event.event_id, event.event_id, event.name});
         }
       }
-      ++replay_cursor;
-      replay_validation.consumed_events = replay_cursor;
-      replay_validation.ok = replay_validation.diagnostics.empty();
+      ++target_replay_cursor;
+      target_replay_validation.consumed_events = target_replay_cursor;
+      target_replay_validation.ok =
+          target_replay_validation.diagnostics.empty();
     }
     return event;
+  }
+
+  replay::TraceEvent record_event(replay::TraceEvent event) {
+    return record_event_into(std::move(event), trace, replay_validation,
+                             replay_cursor,
+                             package.has_value() ? &*package : nullptr,
+                             state.get());
   }
 
   RuntimeReplayValidation current_replay_validation() const {
@@ -413,11 +763,17 @@ struct RuntimeWorld::Impl {
   std::size_t string_index_folded = 0;
   std::size_t symbol_index_folded = 0;
   std::mutex value_mutex;
-  std::recursive_mutex execution_mutex;
+  mutable std::recursive_mutex execution_mutex;
   std::unique_ptr<RuntimeNativeBridgeSession> native_bridge_session;
   std::mutex blocking_native_bridge_mutex;
   std::vector<std::unique_ptr<RuntimeNativeBridgeSession>>
       idle_blocking_native_bridge_sessions;
+  // Blocking bridge VMs execute outside execution_mutex and retain pointers
+  // into the active world generation. Image replacement is rejected while
+  // any such call is active, covering both worker execution and publication
+  // of its runtime-name result.
+  std::size_t active_blocking_native_bridge_calls = 0;
+  std::uint64_t native_bridge_generation = 1;
 };
 
 RuntimeWorld::RuntimeWorld(const bytecode::BcModule &module)
@@ -452,11 +808,14 @@ RuntimeWorld::RuntimeWorld(const pkg::PackageArtifact &artifact,
 RuntimeWorld::~RuntimeWorld() = default;
 
 Value RuntimeWorld::string_value(std::string text) {
-  if (impl_ == nullptr || impl_->module_owner == nullptr) {
+  if (impl_ == nullptr) {
     return Value::null();
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
+  if (impl_->module_owner == nullptr) {
+    return Value::null();
+  }
   std::lock_guard<std::mutex> guard(impl_->value_mutex);
   std::vector<std::string> &strings = impl_->runtime_strings;
   if (impl_->string_index_folded > strings.size()) {
@@ -480,11 +839,14 @@ Value RuntimeWorld::string_value(std::string text) {
 }
 
 Value RuntimeWorld::symbol_value(std::string text) {
-  if (impl_ == nullptr || impl_->module_owner == nullptr) {
+  if (impl_ == nullptr) {
     return Value::null();
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
+  if (impl_->module_owner == nullptr) {
+    return Value::null();
+  }
   std::lock_guard<std::mutex> guard(impl_->value_mutex);
   std::vector<std::string> &symbols = impl_->runtime_symbols;
   if (impl_->symbol_index_folded > symbols.size()) {
@@ -508,21 +870,36 @@ Value RuntimeWorld::symbol_value(std::string text) {
 }
 
 Value RuntimeWorld::list_value(std::vector<Value> items, bool frozen) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return Value::null();
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return Value::null();
   }
   return impl_->state->heap.make_list_value(std::move(items), frozen);
 }
 
 Value RuntimeWorld::tuple_value(std::vector<Value> items) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return Value::null();
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return Value::null();
   }
   return impl_->state->heap.make_tuple_value(std::move(items));
 }
 
 Value RuntimeWorld::set_value(std::vector<Value> items, bool frozen) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return Value::null();
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return Value::null();
   }
   return impl_->state->heap.make_set_value(std::move(items), frozen);
@@ -530,7 +907,12 @@ Value RuntimeWorld::set_value(std::vector<Value> items, bool frozen) {
 
 Value RuntimeWorld::symbol_map_value(std::vector<MapEntry> entries,
                                      bool frozen, bool strict) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return Value::null();
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return Value::null();
   }
   return impl_->state->heap.make_symbol_map_value(std::move(entries), frozen,
@@ -540,12 +922,17 @@ Value RuntimeWorld::symbol_map_value(std::vector<MapEntry> entries,
 ExecutionResult RuntimeWorld::execute(std::uint32_t code_id,
                                       const std::vector<Value> &args,
                                       Value self, Value block) {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->module_owner == nullptr ||
+      impl_->state == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
   impl_->state->initialize_for_module(*impl_->module);
   impl_->record_event(replay::make_event(
       "task.started", {{"code_id", std::to_string(code_id)}}));
@@ -602,6 +989,8 @@ ExecutionResult RuntimeWorld::execute(std::uint32_t code_id,
   vm_context.state = impl_->state;
   vm_context.module_id = module_id;
   vm_context.world_options = &impl_->options;
+  vm_context.external_gc_root_provider =
+      impl_->options.external_gc_root_provider;
   vm_context.capabilities = &impl_->capabilities;
   vm_context.effects = &impl_->effects;
   vm_context.trace_recorder = [impl = impl_](RuntimeTraceEvent event) {
@@ -638,77 +1027,222 @@ ExecutionResult RuntimeWorld::execute(std::uint32_t code_id,
   return result;
 }
 
-ExecutionResult RuntimeWorld::invoke_native_extension(
-    std::uint32_t code_id, const std::vector<Value> &args, Value self,
-    bool include_runtime_names) {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+ExecutionResult RuntimeWorld::execute_notebook_cell(
+    std::uint32_t code_id, RuntimeNotebookCellContext context,
+    const std::vector<Value> &args,
+    std::optional<std::uint64_t> expected_world_epoch) {
+  if (impl_ == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
   }
-  const RuntimeNativePackageCodeBindingDescriptor *binding =
-      impl_->dispatch_registry.native_package_code_binding(code_id);
-  const bool blocking =
-      binding != nullptr &&
-      impl_->dispatch_registry.native_package_thunk_is_blocking(
-          binding->logical);
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->module_owner == nullptr ||
+      impl_->state == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
+  if (expected_world_epoch.has_value() &&
+      impl_->state->world_epoch != *expected_world_epoch) {
+    return {Value::null(),
+            Fault{"StaleNotebookImageError",
+                  "notebook cell adapter belongs to a replaced image", 0,
+                  0}};
+  }
+  const std::uint64_t consumer_cell_id =
+      context.dependency_capture.consumer_cell_id;
+  // This field is a world-to-VM propagation detail, not a second host callback
+  // surface. Clear any caller-provided function before installing the closed
+  // per-run collector requested through dependency_capture.
+  context.observe_dependency = {};
+  std::shared_ptr<NotebookDependencyCollector> dependency_collector;
+  if (consumer_cell_id != 0U) {
+    dependency_collector = std::make_shared<NotebookDependencyCollector>(
+        consumer_cell_id, impl_->state->watch_stream->identity());
+    // This callback is an implementation detail of the world-owned
+    // collector. Do not chain an arbitrary host callback into the VM's read
+    // path: a throwing observer would otherwise escape interpreter fault
+    // handling. Hosts receive the completed set through ExecutionResult.
+    context.observe_dependency =
+        [dependency_collector](const RuntimeDependency &dependency) {
+          dependency_collector->record(dependency);
+        };
+  }
+  NotebookDependencyCollectorGuard dependency_collector_guard(
+      dependency_collector.get());
+  impl_->state->initialize_for_module(*impl_->module);
+  impl_->record_event(replay::make_event(
+      "task.started", {{"code_id", std::to_string(code_id)}}));
+
+  const std::string module_id =
+      impl_->package.has_value() ? impl_->package->manifest.root_module : "";
+  RuntimeVmExecutionContext vm_context;
+  vm_context.state = impl_->state;
+  vm_context.module_id = module_id;
+  vm_context.world_options = &impl_->options;
+  vm_context.external_gc_root_provider =
+      impl_->options.external_gc_root_provider;
+  vm_context.notebook_cell_context = std::move(context);
+  vm_context.notebook_cell_execution = true;
+  vm_context.capabilities = &impl_->capabilities;
+  vm_context.effects = &impl_->effects;
+  vm_context.trace_recorder = [impl = impl_](RuntimeTraceEvent event) {
+    impl->record_event(std::move(event));
+  };
+  vm_context.native_registry = &impl_->native_registry;
+  vm_context.module_registry = &impl_->module_registry;
+  vm_context.type_registry = &impl_->type_registry;
+  vm_context.dispatch_registry = &impl_->dispatch_registry;
+  vm_context.error_registry = &impl_->error_registry;
+
+  ExecutionResult result = execute_runtime_vm(
+      impl_->module_owner, impl_->runtime_strings, impl_->runtime_symbols,
+      std::move(vm_context), code_id, args, Value::null(), Value::null());
+  if (dependency_collector != nullptr) {
+    // This is the end of the run-local scope and happens before any result is
+    // returned, including a VM fault.  The adapter decides whether the set is
+    // publishable; the runtime merely reports what this run observed.
+    result.dependency_capture = dependency_collector->take();
+  }
+  if (!result.runtime_strings.empty()) {
+    impl_->runtime_strings = result.runtime_strings;
+  }
+  if (!result.runtime_symbols.empty()) {
+    impl_->runtime_symbols = result.runtime_symbols;
+  }
+  result.runtime_strings = impl_->runtime_strings;
+  result.runtime_symbols = impl_->runtime_symbols;
+  if (result.ok()) {
+    impl_->record_event(replay::make_event(
+        "task.completed", {{"code_id", std::to_string(code_id)}}));
+  } else {
+    impl_->record_event(replay::make_event(
+        "task.failed", {{"code_id", std::to_string(code_id)},
+                         {"error_name", result.fault->error_name}}));
+  }
+  return result;
+}
+
+ExecutionResult RuntimeWorld::invoke_native_extension(
+    std::uint32_t code_id, const std::vector<Value> &args, Value self,
+    bool include_runtime_names) {
+  if (impl_ == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
+  bool blocking = false;
+  {
+    std::lock_guard<std::recursive_mutex> execution_guard(
+        impl_->execution_mutex);
+    if (impl_->module == nullptr || impl_->module_owner == nullptr ||
+        impl_->state == nullptr) {
+      return {Value::null(),
+              Fault{"VMError", "runtime world is not bound", 0, 0}};
+    }
+    const RuntimeNativePackageCodeBindingDescriptor *binding =
+        impl_->dispatch_registry.native_package_code_binding(code_id);
+    blocking =
+        binding != nullptr &&
+        impl_->dispatch_registry.native_package_thunk_is_blocking(
+            binding->logical);
+  }
   if (blocking) {
+    struct ActiveBlockingCall {
+      std::shared_ptr<Impl> impl;
+      bool registered = false;
+
+      ~ActiveBlockingCall() {
+        if (!registered || impl == nullptr) {
+          return;
+        }
+        std::lock_guard<std::recursive_mutex> execution_guard(
+            impl->execution_mutex);
+        std::lock_guard<std::mutex> pool_guard(
+            impl->blocking_native_bridge_mutex);
+        if (impl->active_blocking_native_bridge_calls > 0U) {
+          --impl->active_blocking_native_bridge_calls;
+        }
+      }
+    } active_call{impl_};
     std::vector<std::string> runtime_strings;
     std::vector<std::string> runtime_symbols;
+    std::shared_ptr<const bytecode::BcModule> bridge_image;
+    std::uint64_t bridge_generation = 0;
+    std::unique_ptr<RuntimeNativeBridgeSession> owned_session;
+    const std::weak_ptr<Impl> weak_impl = impl_;
     {
       std::lock_guard<std::recursive_mutex> execution_guard(
           impl_->execution_mutex);
+      if (impl_->module == nullptr || impl_->module_owner == nullptr ||
+          impl_->state == nullptr) {
+        return {Value::null(),
+                Fault{"VMError", "runtime world is not bound", 0, 0}};
+      }
       impl_->state->initialize_for_module(*impl_->module);
       runtime_strings = impl_->runtime_strings;
       runtime_symbols = impl_->runtime_symbols;
+      bridge_image = impl_->module_owner;
+      bridge_generation = impl_->native_bridge_generation;
       impl_->record_event(replay::make_event(
           "native_extension.started", {{"code_id", std::to_string(code_id)},
                                          {"executor", "blocking_ffi"}}));
-    }
-
-    std::unique_ptr<RuntimeNativeBridgeSession> owned_session;
-    {
-      std::lock_guard<std::mutex> pool_guard(
-          impl_->blocking_native_bridge_mutex);
-      if (!impl_->idle_blocking_native_bridge_sessions.empty()) {
-        owned_session = std::move(
-            impl_->idle_blocking_native_bridge_sessions.back());
-        impl_->idle_blocking_native_bridge_sessions.pop_back();
-      }
-    }
-    const std::weak_ptr<Impl> weak_impl = impl_;
-    if (owned_session == nullptr) {
-      RuntimeVmExecutionContext context;
-      context.state = impl_->state;
-      context.module_id = impl_->package.has_value()
-                              ? impl_->package->manifest.root_module
-                              : "";
-      context.world_options = &impl_->options;
-      context.capabilities = &impl_->capabilities;
-      context.effects = &impl_->effects;
-      context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
-        if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
-          std::lock_guard<std::recursive_mutex> execution_guard(
-              impl->execution_mutex);
-          impl->record_event(std::move(event));
+      {
+        std::lock_guard<std::mutex> pool_guard(
+            impl_->blocking_native_bridge_mutex);
+        if (!impl_->idle_blocking_native_bridge_sessions.empty()) {
+          owned_session = std::move(
+              impl_->idle_blocking_native_bridge_sessions.back());
+          impl_->idle_blocking_native_bridge_sessions.pop_back();
         }
-      };
-      context.native_registry = &impl_->native_registry;
-      context.module_registry = &impl_->module_registry;
-      context.type_registry = &impl_->type_registry;
-      context.dispatch_registry = &impl_->dispatch_registry;
-      context.error_registry = &impl_->error_registry;
-      owned_session = std::make_unique<RuntimeNativeBridgeSession>(
-          impl_->module_owner, std::move(context));
+      }
+      if (owned_session == nullptr) {
+        RuntimeVmExecutionContext context;
+        context.state = impl_->state;
+        context.module_id = impl_->package.has_value()
+                                ? impl_->package->manifest.root_module
+                                : "";
+        context.world_options = &impl_->options;
+        context.external_gc_root_provider =
+            impl_->options.external_gc_root_provider;
+        context.capabilities = &impl_->capabilities;
+        context.effects = &impl_->effects;
+        context.trace_recorder = [weak_impl](RuntimeTraceEvent event) {
+          if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
+            std::lock_guard<std::recursive_mutex> execution_guard(
+                impl->execution_mutex);
+            impl->record_event(std::move(event));
+          }
+        };
+        context.native_registry = &impl_->native_registry;
+        context.module_registry = &impl_->module_registry;
+        context.type_registry = &impl_->type_registry;
+        context.dispatch_registry = &impl_->dispatch_registry;
+        context.error_registry = &impl_->error_registry;
+        owned_session = std::make_unique<RuntimeNativeBridgeSession>(
+            impl_->module_owner, std::move(context));
+      }
+      {
+        std::lock_guard<std::mutex> pool_guard(
+            impl_->blocking_native_bridge_mutex);
+        ++impl_->active_blocking_native_bridge_calls;
+        active_call.registered = true;
+      }
     }
     auto session = std::shared_ptr<RuntimeNativeBridgeSession>(
         owned_session.release(),
-        [weak_impl](RuntimeNativeBridgeSession *completed) {
+        [weak_impl, bridge_generation](RuntimeNativeBridgeSession *completed) {
           std::unique_ptr<RuntimeNativeBridgeSession> reclaimed(completed);
           if (const std::shared_ptr<Impl> impl = weak_impl.lock()) {
             constexpr std::size_t kMaxIdleBlockingNativeBridgeSessions = 32;
+            std::lock_guard<std::recursive_mutex> execution_guard(
+                impl->execution_mutex);
             std::lock_guard<std::mutex> pool_guard(
                 impl->blocking_native_bridge_mutex);
-            if (impl->idle_blocking_native_bridge_sessions.size() <
+            // A completed worker can reach this recycler after later image
+            // replacements. The monotonic generation also closes an A-B-A
+            // shared-image ABA; pointer identity alone is insufficient.
+            if (impl->native_bridge_generation == bridge_generation &&
+                impl->idle_blocking_native_bridge_sessions.size() <
                 kMaxIdleBlockingNativeBridgeSessions) {
               impl->idle_blocking_native_bridge_sessions.push_back(
                   std::move(reclaimed));
@@ -766,6 +1300,11 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->module_owner == nullptr ||
+      impl_->state == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
   impl_->state->initialize_for_module(*impl_->module);
   impl_->record_event(replay::make_event(
       "native_extension.started", {{"code_id", std::to_string(code_id)}}));
@@ -776,6 +1315,8 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
     context.module_id =
         impl_->package.has_value() ? impl_->package->manifest.root_module : "";
     context.world_options = &impl_->options;
+    context.external_gc_root_provider =
+        impl_->options.external_gc_root_provider;
     context.capabilities = &impl_->capabilities;
     context.effects = &impl_->effects;
     const std::weak_ptr<Impl> weak_impl = impl_;
@@ -814,12 +1355,17 @@ ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
     Value receiver, std::string selector, const std::vector<Value> &args,
     const std::vector<std::pair<std::string, Value>> &keyword_args,
     Value block, bool include_runtime_names) {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
   }
   std::lock_guard<std::recursive_mutex> execution_guard(
       impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->module_owner == nullptr ||
+      impl_->state == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
   impl_->state->initialize_for_module(*impl_->module);
 
   if (impl_->native_bridge_session == nullptr) {
@@ -828,6 +1374,8 @@ ExecutionResult RuntimeWorld::invoke_native_stdlib_send(
     context.module_id =
         impl_->package.has_value() ? impl_->package->manifest.root_module : "";
     context.world_options = &impl_->options;
+    context.external_gc_root_provider =
+        impl_->options.external_gc_root_provider;
     context.capabilities = &impl_->capabilities;
     context.effects = &impl_->effects;
     const std::weak_ptr<Impl> weak_impl = impl_;
@@ -1915,6 +2463,22 @@ bool validate_package_reload_compatible(
   return true;
 }
 
+bool validate_reload_code_id_range(
+    const bytecode::BcModule &module,
+    const std::string &module_name,
+    std::vector<RuntimePackageReloadDiagnostic> *diagnostics) {
+  for (const bytecode::BcCode &code : module.code_objects) {
+    if (code.code_id > kMaxRuntimeCodeId) {
+      diagnostics->push_back(runtime_reload_diagnostic(
+          "PackageReloadError",
+          "package reload code id exceeds the bounded runtime cache range",
+          module_name));
+      return false;
+    }
+  }
+  return true;
+}
+
 } // namespace
 
 ExecutionResult
@@ -1923,6 +2487,8 @@ RuntimeWorld::define_instance_method(std::uint32_t class_index,
   RuntimeWorldTransaction tx;
   tx.target_index = class_index;
   if (impl_ != nullptr) {
+    std::lock_guard<std::recursive_mutex> execution_guard(
+        impl_->execution_mutex);
     tx.target_kind = owner_kind_for_module_ptr(impl_->module, class_index);
   }
   tx.instance_methods.push_back(std::move(method));
@@ -1943,6 +2509,8 @@ ExecutionResult RuntimeWorld::include_mixin(std::uint32_t class_index,
   RuntimeWorldTransaction tx;
   tx.target_index = class_index;
   if (impl_ != nullptr) {
+    std::lock_guard<std::recursive_mutex> execution_guard(
+        impl_->execution_mutex);
     tx.target_kind = owner_kind_for_module_ptr(impl_->module, class_index);
   }
   tx.include_indices.push_back(mixin_index);
@@ -1960,7 +2528,13 @@ ExecutionResult RuntimeWorld::extend_mixin(std::uint32_t class_index,
 
 ExecutionResult
 RuntimeWorld::commit_transaction(const RuntimeWorldTransaction &tx) {
-  if (impl_ == nullptr || impl_->module == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->state == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
   }
@@ -2022,7 +2596,13 @@ RuntimeWorld::commit_transaction(const RuntimeWorldTransaction &tx) {
 }
 
 ExecutionResult RuntimeWorld::freeze_world() {
-  if (impl_ == nullptr || impl_->module == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {Value::null(),
+            Fault{"VMError", "runtime world is not bound", 0, 0}};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->state == nullptr) {
     return {Value::null(),
             Fault{"VMError", "runtime world is not bound", 0, 0}};
   }
@@ -2038,7 +2618,16 @@ ExecutionResult RuntimeWorld::freeze_world() {
 RuntimePackageReloadResult
 RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
   RuntimePackageReloadResult result;
-  if (impl_ == nullptr || impl_->module == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    result.diagnostics.push_back(
+        runtime_reload_diagnostic("VMError", "runtime world is not bound"));
+    return result;
+  }
+
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+
+  if (impl_->module == nullptr || impl_->state == nullptr) {
     result.diagnostics.push_back(
         runtime_reload_diagnostic("VMError", "runtime world is not bound"));
     return result;
@@ -2054,12 +2643,30 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
   result.new_version = artifact.manifest.version;
   result.root_module = artifact.manifest.root_module;
 
-  impl_->state->initialize_for_module(*impl_->module);
   if (impl_->state->world_frozen) {
     result.diagnostics.push_back(runtime_reload_diagnostic(
         "WorldFrozenError", "package reload after freeze barrier",
         artifact.manifest.root_module));
     return result;
+  }
+  {
+    std::lock_guard<std::mutex> pool_guard(
+        impl_->blocking_native_bridge_mutex);
+    if (impl_->active_blocking_native_bridge_calls != 0U) {
+      result.diagnostics.push_back(runtime_reload_diagnostic(
+          "NativeBridgeBusyError",
+          "package reload while a blocking native call is active",
+          artifact.manifest.root_module));
+      return result;
+    }
+    if (impl_->native_bridge_generation ==
+        std::numeric_limits<std::uint64_t>::max()) {
+      result.diagnostics.push_back(runtime_reload_diagnostic(
+          "NativeBridgeGenerationError",
+          "native bridge generation space exhausted",
+          artifact.manifest.root_module));
+      return result;
+    }
   }
 
   RuntimePackageImageDecode decoded = decode_runtime_package_image(artifact);
@@ -2084,64 +2691,480 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
         decoded.image.manifest.root_module));
     return result;
   }
+  if (!validate_reload_code_id_range(root->second,
+                                     decoded.image.manifest.root_module,
+                                     &result.diagnostics)) {
+    return result;
+  }
 
-  auto next_state = std::make_shared<RuntimeState>(*impl_->state);
-  next_state->replace_module_runtime_state(root->second);
-  auto next_module = std::make_shared<const bytecode::BcModule>(root->second);
+  // Prepare every allocation-bearing replacement before publishing the new
+  // module/state generation. A reload must either leave the old generation
+  // active or commit all derived registries, metadata, caches, and trace
+  // events together; publishing the module first would make a later
+  // validator/trace allocation failure observable as a mixed generation.
+  std::vector<std::string> next_runtime_strings;
+  std::vector<std::string> next_runtime_symbols;
+  RuntimeCapabilityResolution next_capabilities;
+  RuntimeEffectValidation next_effects;
+  RuntimeSchemaValidation next_schemas;
+  RuntimeTablePlanValidation next_table_plans;
+  RuntimeWasmValidation next_wasm_components;
+  RuntimeAcceleratorValidation next_accelerator_kernels;
+  RuntimeAgentValidation next_agent_metadata;
+  RuntimeContractValidation next_contract_metadata;
+  RuntimePrivacyValidation next_privacy_metadata;
+  RuntimeWorkflowValidation next_workflow_metadata;
+  std::optional<RuntimeRegistryGeneration> next_registries;
+  std::shared_ptr<RuntimeState> next_state;
+  std::shared_ptr<const bytecode::BcModule> next_module;
+  std::optional<RuntimePackageImage> next_package;
+  RuntimeReplayTrace next_trace;
+  RuntimeReplayValidation next_replay_validation;
+  std::size_t next_replay_cursor = impl_->replay_cursor;
+  try {
+    // Copy before moving decoded.image into the candidate package, because
+    // the root module is stored inside that image's map.
+    next_module = std::make_shared<const bytecode::BcModule>(root->second);
+    next_state = std::make_shared<RuntimeState>(*impl_->state);
+    // RuntimeState copies normally share the code-index cache so VMs for
+    // adjacent images can resolve their own immutable code.  This candidate
+    // must detach before preparing its new index: inserting into the shared
+    // cache here would mutate the published state before the swap commits.
+    next_state->detach_code_index_cache_for_replacement();
+    next_state->replace_module_runtime_state(*next_module);
+    next_package.emplace(std::move(decoded.image));
 
+    next_runtime_strings = next_module->strings;
+    next_runtime_symbols = next_module->symbols;
+    next_capabilities = capability::resolve_capabilities(
+        next_module->capabilities, impl_->options.capability_grants);
+    next_effects = effect::validate_effect_summaries(
+        next_module->effects, impl_->options.allowed_effects,
+        impl_->options.enforce_effects);
+    next_schemas = data::validate_schemas(next_module->schemas,
+                                          next_module->schema_migrations);
+    next_table_plans = data::validate_table_plans(next_module->table_plans);
+    next_wasm_components =
+        wasm_accel::validate_wasm_components(next_module->wasm_components);
+    next_accelerator_kernels = wasm_accel::validate_accelerator_kernels(
+        next_module->accelerator_kernels);
+    next_agent_metadata = modern::validate_agent_metadata(
+        next_module->agent_symbols, next_module->agent_patches,
+        next_module->provenance_records);
+    next_contract_metadata = modern::validate_contract_metadata(
+        next_module->contracts, next_module->properties);
+    next_privacy_metadata = modern::validate_privacy_metadata(
+        next_module->privacy_labels, next_module->privacy_policies,
+        next_module->lineage_nodes);
+    next_workflow_metadata = modern::validate_workflow_metadata(
+        next_module->workflow_steps, next_module->workflow_history);
+    next_registries.emplace(*next_module);
+
+    if (impl_->options.record_replay_trace || impl_->options.enforce_replay) {
+      next_trace = impl_->trace;
+      next_replay_validation = impl_->replay_validation;
+      RuntimeTraceEvent loaded = replay::make_event(
+          "loader.module.load",
+          { {"module", next_package->manifest.root_module} });
+      impl_->record_event_into(
+          std::move(loaded), next_trace, next_replay_validation,
+          next_replay_cursor, &*next_package, next_state.get());
+
+      RuntimeTraceEvent mutated = replay::make_event(
+          "world.mutation",
+          {{"package", next_package->manifest.name},
+           {"version", next_package->manifest.version}});
+      impl_->record_event_into(
+          std::move(mutated), next_trace, next_replay_validation,
+          next_replay_cursor, &*next_package, next_state.get());
+    }
+
+    // Result strings are part of the same preparation boundary. In
+    // particular, a diagnostic/result allocation failure must not happen
+    // after the world pointer has been published.
+    result.package_name = next_package->manifest.name;
+    result.previous_version = result.previous_version.empty()
+                                  ? next_package->manifest.version
+                                  : result.previous_version;
+    result.new_version = next_package->manifest.version;
+    result.root_module = next_package->manifest.root_module;
+    result.new_world_epoch = next_state->world_epoch;
+  } catch (const std::bad_alloc &) {
+    result.diagnostics.push_back(runtime_reload_diagnostic(
+        "PackageReloadError",
+        "package reload state/metadata preparation allocation failed; "
+        "active package unchanged",
+        artifact.manifest.root_module));
+    return result;
+  } catch (const std::exception &error) {
+    result.diagnostics.push_back(runtime_reload_diagnostic(
+        "PackageReloadError",
+        std::string("package reload state/metadata preparation failed: ") +
+            error.what(),
+        artifact.manifest.root_module));
+    return result;
+  } catch (...) {
+    result.diagnostics.push_back(runtime_reload_diagnostic(
+        "PackageReloadError",
+        "package reload state/metadata preparation failed; active package "
+        "unchanged",
+        artifact.manifest.root_module));
+    return result;
+  }
+
+  // Populate the candidate code-id index before publication as well. The
+  // candidate owns a detached cache, so a failed preparation can only discard
+  // candidate state; the published generation remains untouched.
+  bool code_index_inserted = false;
+  try {
+    (void)next_state->code_index_for_module(next_module, &code_index_inserted);
+  } catch (const std::bad_alloc &) {
+    if (code_index_inserted) {
+      next_state->erase_code_index_for_module(next_module);
+    }
+    result.diagnostics.push_back(runtime_reload_diagnostic(
+        "PackageReloadError",
+        "package reload code-index allocation failed; active package "
+        "unchanged",
+        artifact.manifest.root_module));
+    return result;
+  } catch (const std::exception &error) {
+    if (code_index_inserted) {
+      next_state->erase_code_index_for_module(next_module);
+    }
+    result.diagnostics.push_back(runtime_reload_diagnostic(
+        "PackageReloadError",
+        std::string("package reload code-index preparation failed: ") +
+            error.what(),
+        artifact.manifest.root_module));
+    return result;
+  } catch (...) {
+    if (code_index_inserted) {
+      next_state->erase_code_index_for_module(next_module);
+    }
+    result.diagnostics.push_back(runtime_reload_diagnostic(
+        "PackageReloadError",
+        "package reload code-index preparation failed; active package "
+        "unchanged",
+        artifact.manifest.root_module));
+    return result;
+  }
+
+  // From this point onward only pointer/scalar stores, swaps, and clears are
+  // allowed. All allocations and event normalization have completed above.
+  // Keep this publication lambda explicitly non-throwing: execution is
+  // serialized by execution_mutex, and every operation below is a no-throw
+  // move/swap, scalar store, or destruction of already-owned state.
+  const auto publish = [&]() noexcept {
+    impl_->native_bridge_session.reset();
+    {
+      std::lock_guard<std::mutex> pool_guard(
+          impl_->blocking_native_bridge_mutex);
+      impl_->idle_blocking_native_bridge_sessions.clear();
+    }
+    ++impl_->native_bridge_generation;
+    impl_->string_index.clear();
+    impl_->symbol_index.clear();
+    impl_->string_index_folded = 0;
+    impl_->symbol_index_folded = 0;
+    impl_->state = std::move(next_state);
+    impl_->module_owner = std::move(next_module);
+    impl_->module = impl_->module_owner.get();
+    std::swap(impl_->native_registry, next_registries->native);
+    std::swap(impl_->module_registry, next_registries->modules);
+    std::swap(impl_->type_registry, next_registries->types);
+    std::swap(impl_->dispatch_registry, next_registries->dispatch);
+    std::swap(impl_->error_registry, next_registries->errors);
+    impl_->runtime_strings.swap(next_runtime_strings);
+    impl_->runtime_symbols.swap(next_runtime_symbols);
+    impl_->native_bridge_reported_runtime_string_count =
+        impl_->runtime_strings.size();
+    impl_->native_bridge_reported_runtime_symbol_count =
+        impl_->runtime_symbols.size();
+    std::swap(impl_->package, next_package);
+    std::swap(impl_->capabilities, next_capabilities);
+    std::swap(impl_->effects, next_effects);
+    std::swap(impl_->schemas, next_schemas);
+    std::swap(impl_->table_plans, next_table_plans);
+    std::swap(impl_->wasm_components, next_wasm_components);
+    std::swap(impl_->accelerator_kernels, next_accelerator_kernels);
+    std::swap(impl_->agent_metadata, next_agent_metadata);
+    std::swap(impl_->contract_metadata, next_contract_metadata);
+    std::swap(impl_->privacy_metadata, next_privacy_metadata);
+    std::swap(impl_->workflow_metadata, next_workflow_metadata);
+    if (impl_->options.record_replay_trace || impl_->options.enforce_replay) {
+      std::swap(impl_->trace, next_trace);
+      std::swap(impl_->replay_validation, next_replay_validation);
+      impl_->replay_cursor = next_replay_cursor;
+    }
+  };
+  publish();
+
+  result.ok = true;
+  result.swapped = true;
+  return result;
+}
+
+RuntimeNotebookImageInstallResult RuntimeWorld::install_notebook_image(
+    std::shared_ptr<const bytecode::BcModule> image) {
+  RuntimeNotebookImageInstallResult result;
+  if (impl_ == nullptr) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "VMError", "runtime world is not bound"));
+    return result;
+  }
+
+  // Every RuntimeWorld host entry point is serialized by this mutex. Keeping
+  // validation and the pointer/cache replacement in one critical section
+  // means no world execution can observe a half-installed image.
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->state == nullptr) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "VMError", "runtime world is not bound"));
+    return result;
+  }
+  result.previous_world_epoch = impl_->state->world_epoch;
+  result.new_world_epoch = result.previous_world_epoch;
+  if (impl_->state->world_frozen) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "WorldFrozenError", "notebook image install after freeze barrier"));
+    return result;
+  }
+  {
+    std::lock_guard<std::mutex> pool_guard(
+        impl_->blocking_native_bridge_mutex);
+    if (impl_->active_blocking_native_bridge_calls != 0U) {
+      result.diagnostics.push_back(notebook_image_diagnostic(
+          "NativeBridgeBusyError",
+          "notebook image install while a blocking native call is active"));
+      return result;
+    }
+    if (impl_->native_bridge_generation ==
+        std::numeric_limits<std::uint64_t>::max()) {
+      result.diagnostics.push_back(notebook_image_diagnostic(
+          "NativeBridgeGenerationError",
+          "native bridge generation space exhausted"));
+      return result;
+    }
+  }
+  if (!notebook_image_shape_is_safe(*impl_->module)) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image install requires an existing notebook-safe runtime "
+        "world"));
+    return result;
+  }
+  if (!validate_notebook_image(image, &result.diagnostics)) {
+    return result;
+  }
+  if (!notebook_name_pool_has_active_prefix(impl_->runtime_strings,
+                                            image->strings) ||
+      !notebook_name_pool_has_active_prefix(impl_->runtime_symbols,
+                                            image->symbols)) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image string/symbol pools must retain the active runtime "
+        "tables as exact prefixes"));
+    return result;
+  }
+
+  // Prepare every replacement-owned allocation before publishing either the
+  // new RuntimeState view or the new module pointer.  In particular, the
+  // validators below return aggregate results containing several vectors and
+  // maps; assigning them after the state swap would make a bad_alloc leave a
+  // mixed old/new world.
+  std::vector<std::string> next_runtime_strings;
+  std::vector<std::string> next_runtime_symbols;
+  RuntimeCapabilityResolution next_capabilities;
+  RuntimeEffectValidation next_effects;
+  RuntimeSchemaValidation next_schemas;
+  RuntimeTablePlanValidation next_table_plans;
+  RuntimeWasmValidation next_wasm_components;
+  RuntimeAcceleratorValidation next_accelerator_kernels;
+  RuntimeAgentValidation next_agent_metadata;
+  RuntimeContractValidation next_contract_metadata;
+  RuntimePrivacyValidation next_privacy_metadata;
+  RuntimeWorkflowValidation next_workflow_metadata;
+  std::optional<RuntimeRegistryGeneration> next_registries;
+  RuntimeState::NotebookModuleRuntimeStatePreparation next_state_runtime;
+  RuntimeReplayTrace next_trace;
+  RuntimeReplayValidation next_replay_validation;
+  std::size_t next_replay_cursor = impl_->replay_cursor;
+  try {
+    next_state_runtime =
+        impl_->state->prepare_notebook_module_runtime_state(*image);
+    next_runtime_strings = image->strings;
+    next_runtime_symbols = image->symbols;
+    next_capabilities = capability::resolve_capabilities(
+        image->capabilities, impl_->options.capability_grants);
+    next_effects = effect::validate_effect_summaries(
+        image->effects, impl_->options.allowed_effects,
+        impl_->options.enforce_effects);
+    next_schemas = data::validate_schemas(image->schemas,
+                                          image->schema_migrations);
+    next_table_plans = data::validate_table_plans(image->table_plans);
+    next_wasm_components =
+        wasm_accel::validate_wasm_components(image->wasm_components);
+    next_accelerator_kernels =
+        wasm_accel::validate_accelerator_kernels(image->accelerator_kernels);
+    next_agent_metadata = modern::validate_agent_metadata(
+        image->agent_symbols, image->agent_patches, image->provenance_records);
+    next_contract_metadata = modern::validate_contract_metadata(
+        image->contracts, image->properties);
+    next_privacy_metadata = modern::validate_privacy_metadata(
+        image->privacy_labels, image->privacy_policies, image->lineage_nodes);
+    next_workflow_metadata = modern::validate_workflow_metadata(
+        image->workflow_steps, image->workflow_history);
+    next_registries.emplace(*image);
+
+    if (impl_->options.record_replay_trace || impl_->options.enforce_replay) {
+      next_trace = impl_->trace;
+      next_replay_validation = impl_->replay_validation;
+      const std::uint64_t next_epoch =
+          result.previous_world_epoch + 1U;
+      RuntimeTraceEvent loaded = replay::make_event(
+          "loader.notebook_image.load",
+          std::vector<replay::TraceAttribute>{{
+              "code_count",
+              std::to_string(image->code_objects.size())}});
+      loaded.world_epoch = next_epoch;
+      impl_->record_event_into(
+          std::move(loaded), next_trace, next_replay_validation,
+          next_replay_cursor, nullptr, nullptr);
+
+      RuntimeTraceEvent mutated = replay::make_event(
+          "world.mutation",
+          std::vector<replay::TraceAttribute>{{"notebook_image", "installed"}});
+      mutated.world_epoch = next_epoch;
+      impl_->record_event_into(
+          std::move(mutated), next_trace, next_replay_validation,
+          next_replay_cursor, nullptr, nullptr);
+    }
+  } catch (const std::bad_alloc &) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image state/metadata preparation allocation failed; "
+        "active image unchanged"));
+    return result;
+  } catch (const std::exception &error) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        std::string("notebook image state/metadata preparation failed: ") +
+            error.what()));
+    return result;
+  } catch (...) {
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image state/metadata preparation failed; active image "
+        "unchanged"));
+    return result;
+  }
+
+  // Build the candidate's pointer index before mutating RuntimeState.  The
+  // bounded code-id check above makes the following cache allocations finite;
+  // an allocation failure therefore leaves the old image and all state active.
+  bool code_index_inserted = false;
+  try {
+    (void)impl_->state->code_index_for_module(image, &code_index_inserted);
+  } catch (const std::bad_alloc &) {
+    if (code_index_inserted) {
+      impl_->state->erase_code_index_for_module(image);
+    }
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image cache allocation failed; active image unchanged"));
+    return result;
+  } catch (const std::exception &error) {
+    if (code_index_inserted) {
+      impl_->state->erase_code_index_for_module(image);
+    }
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        std::string("notebook image cache preparation failed: ") +
+            error.what()));
+    return result;
+  } catch (...) {
+    if (code_index_inserted) {
+      impl_->state->erase_code_index_for_module(image);
+    }
+    result.diagnostics.push_back(notebook_image_diagnostic(
+        "NotebookImageError",
+        "notebook image cache preparation failed; active image unchanged"));
+    return result;
+  }
+
+  // From this point on all replacement values are already allocated.  Keep
+  // the commit itself to pointer swaps, scalar stores, and container clears;
+  // none of those operations can throw for the involved standard containers.
+  // Keep the existing state object: its heap, shape storage, watch/dependency
+  // bookkeeping, and host root provider are all world-owned state.
+  impl_->state->commit_notebook_module_runtime_state(
+      std::move(next_state_runtime));
   impl_->native_bridge_session.reset();
+  {
+    std::lock_guard<std::mutex> pool_guard(
+        impl_->blocking_native_bridge_mutex);
+    impl_->idle_blocking_native_bridge_sessions.clear();
+  }
+  ++impl_->native_bridge_generation;
   impl_->string_index.clear();
   impl_->symbol_index.clear();
   impl_->string_index_folded = 0;
   impl_->symbol_index_folded = 0;
-  impl_->state = std::move(next_state);
-  impl_->module_owner = std::move(next_module);
+  impl_->module_owner = std::move(image);
   impl_->module = impl_->module_owner.get();
-  impl_->runtime_strings = impl_->module->strings;
-  impl_->runtime_symbols = impl_->module->symbols;
+  std::swap(impl_->native_registry, next_registries->native);
+  std::swap(impl_->module_registry, next_registries->modules);
+  std::swap(impl_->type_registry, next_registries->types);
+  std::swap(impl_->dispatch_registry, next_registries->dispatch);
+  std::swap(impl_->error_registry, next_registries->errors);
+  impl_->state->retain_only_code_index_for_module(impl_->module_owner);
+  impl_->runtime_strings.swap(next_runtime_strings);
+  impl_->runtime_symbols.swap(next_runtime_symbols);
   impl_->native_bridge_reported_runtime_string_count =
       impl_->runtime_strings.size();
   impl_->native_bridge_reported_runtime_symbol_count =
       impl_->runtime_symbols.size();
-  impl_->package = std::move(decoded.image);
-  impl_->capabilities = capability::resolve_capabilities(
-      impl_->module->capabilities, impl_->options.capability_grants);
-  impl_->effects = effect::validate_effect_summaries(
-      impl_->module->effects, impl_->options.allowed_effects,
-      impl_->options.enforce_effects);
-  impl_->schemas = data::validate_schemas(impl_->module->schemas,
-                                          impl_->module->schema_migrations);
-  impl_->table_plans = data::validate_table_plans(impl_->module->table_plans);
-  impl_->wasm_components =
-      wasm_accel::validate_wasm_components(impl_->module->wasm_components);
-  impl_->accelerator_kernels = wasm_accel::validate_accelerator_kernels(
-      impl_->module->accelerator_kernels);
-  impl_->agent_metadata = modern::validate_agent_metadata(
-      impl_->module->agent_symbols, impl_->module->agent_patches,
-      impl_->module->provenance_records);
-  impl_->contract_metadata = modern::validate_contract_metadata(
-      impl_->module->contracts, impl_->module->properties);
-  impl_->privacy_metadata = modern::validate_privacy_metadata(
-      impl_->module->privacy_labels, impl_->module->privacy_policies,
-      impl_->module->lineage_nodes);
-  impl_->workflow_metadata = modern::validate_workflow_metadata(
-      impl_->module->workflow_steps, impl_->module->workflow_history);
+  impl_->package.reset();
+  std::swap(impl_->capabilities, next_capabilities);
+  std::swap(impl_->effects, next_effects);
+  std::swap(impl_->schemas, next_schemas);
+  std::swap(impl_->table_plans, next_table_plans);
+  std::swap(impl_->wasm_components, next_wasm_components);
+  std::swap(impl_->accelerator_kernels, next_accelerator_kernels);
+  std::swap(impl_->agent_metadata, next_agent_metadata);
+  std::swap(impl_->contract_metadata, next_contract_metadata);
+  std::swap(impl_->privacy_metadata, next_privacy_metadata);
+  std::swap(impl_->workflow_metadata, next_workflow_metadata);
+  if (impl_->options.record_replay_trace || impl_->options.enforce_replay) {
+    std::swap(impl_->trace, next_trace);
+    std::swap(impl_->replay_validation, next_replay_validation);
+    impl_->replay_cursor = next_replay_cursor;
+  }
 
+  // The per-image code index was populated before the state commit. A missing
+  // id remains a null entry and is therefore reported deterministically by Vm
+  // as "unknown code id" rather than accidentally resolving an old body.
   result.ok = true;
   result.swapped = true;
-  result.package_name = impl_->package->manifest.name;
-  result.previous_version = result.previous_version.empty()
-                                ? impl_->package->manifest.version
-                                : result.previous_version;
-  result.new_version = impl_->package->manifest.version;
-  result.root_module = impl_->package->manifest.root_module;
   result.new_world_epoch = impl_->state->world_epoch;
-  impl_->record_event(replay::make_event("loader.module.load",
-                                         {{"module", result.root_module}}));
-  impl_->record_event(
-      replay::make_event("world.mutation", {{"package", result.package_name},
-                                            {"version", result.new_version}}));
   return result;
+}
+
+RuntimeNotebookImageNameSeed RuntimeWorld::notebook_image_name_seed() const {
+  RuntimeNotebookImageNameSeed seed;
+  if (impl_ == nullptr) {
+    return seed;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    return seed;
+  }
+  seed.strings = impl_->runtime_strings;
+  seed.symbols = impl_->runtime_symbols;
+  return seed;
 }
 
 RuntimeCapabilityCheckResult
@@ -2150,7 +3173,14 @@ RuntimeWorld::check_capability(const std::string &capability_name,
   RuntimeCapabilityCheckResult result;
   result.capability = capability_name;
   result.target = target;
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     result.error_name = "VMError";
     result.message = "runtime world is not bound";
     return result;
@@ -2175,7 +3205,12 @@ RuntimeWorld::check_capability(const std::string &capability_name,
 }
 
 RuntimeCapabilityResolution RuntimeWorld::capability_resolution() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->capabilities;
@@ -2186,7 +3221,14 @@ RuntimeWorld::check_effects(const std::vector<std::string> &requested) const {
   RuntimeEffectCheckResult result;
   result.effects = effect::normalize_effects(
       std::vector<std::string>(requested.begin(), requested.end()));
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     result.error_name = "VMError";
     result.message = "runtime world is not bound";
     return result;
@@ -2219,137 +3261,291 @@ RuntimeWorld::check_effects(const std::vector<std::string> &requested) const {
 }
 
 RuntimeEffectValidation RuntimeWorld::effect_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->effects;
 }
 
 RuntimeSchemaValidation RuntimeWorld::schema_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->schemas;
 }
 
 RuntimeTablePlanValidation RuntimeWorld::table_plan_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->table_plans;
 }
 
 RuntimeWasmValidation RuntimeWorld::wasm_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->wasm_components;
 }
 
 RuntimeAcceleratorValidation RuntimeWorld::accelerator_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->accelerator_kernels;
 }
 
 RuntimeAgentValidation RuntimeWorld::agent_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->agent_metadata;
 }
 
 RuntimeContractValidation RuntimeWorld::contract_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->contract_metadata;
 }
 
 RuntimePrivacyValidation RuntimeWorld::privacy_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->privacy_metadata;
 }
 
 RuntimeWorkflowValidation RuntimeWorld::workflow_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->workflow_metadata;
 }
 
 RuntimeTraceEvent RuntimeWorld::record_trace_event(RuntimeTraceEvent event) {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return event;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return event;
   }
   return impl_->record_event(std::move(event));
 }
 
 RuntimeReplayTrace RuntimeWorld::replay_trace() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return replay::normalize_trace(impl_->trace);
 }
 
 RuntimeReplayValidation RuntimeWorld::replay_validation() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return impl_->current_replay_validation();
 }
 
 std::uint64_t RuntimeWorld::world_epoch() const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return 0;
   }
   return impl_->state->world_epoch;
 }
 
 std::uint64_t RuntimeWorld::watch_epoch() const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return 0;
   }
   return impl_->state->watch_epoch_snapshot();
 }
 
 std::vector<RuntimeWatchEvent> RuntimeWorld::watch_events() const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return {};
   }
   return impl_->state->watch_events_snapshot();
 }
 
+RuntimeWatchCursor RuntimeWorld::watch_cursor() const {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    return {};
+  }
+  return impl_->state->watch_cursor_snapshot();
+}
+
+RuntimeWatchPollResult RuntimeWorld::poll_watch_events(
+    const RuntimeWatchCursor &cursor, std::size_t max_events) const {
+  if (impl_ == nullptr) {
+    RuntimeWatchPollResult result;
+    result.status = RuntimeWatchPollStatus::SourceChanged;
+    result.requested_cursor = cursor;
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    RuntimeWatchPollResult result;
+    result.status = RuntimeWatchPollStatus::SourceChanged;
+    result.requested_cursor = cursor;
+    return result;
+  }
+  return impl_->state->poll_watch_events(cursor, max_events);
+}
+
+RuntimeWatchPollResult RuntimeWorld::wait_watch_events(
+    const RuntimeWatchCursor &cursor, std::chrono::milliseconds timeout,
+    std::size_t max_events) const {
+  if (impl_ == nullptr) {
+    RuntimeWatchPollResult result;
+    result.status = RuntimeWatchPollStatus::SourceChanged;
+    result.requested_cursor = cursor;
+    return result;
+  }
+
+  std::shared_ptr<RuntimeWatchStream> stream;
+  {
+    std::lock_guard<std::recursive_mutex> execution_guard(
+        impl_->execution_mutex);
+    if (impl_->state == nullptr) {
+      RuntimeWatchPollResult result;
+      result.status = RuntimeWatchPollStatus::SourceChanged;
+      result.requested_cursor = cursor;
+      return result;
+    }
+    // RuntimeState generations share this stream across package/notebook image
+    // replacement. Retaining it here makes the blocking lifetime explicit and
+    // lets producers acquire execution_mutex while this call sleeps.
+    stream = impl_->state->watch_stream;
+  }
+  return stream->wait(cursor, timeout, max_events);
+}
+
 void RuntimeWorld::begin_dependency_capture(std::uint64_t notebook_cell_id) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return;
   }
   impl_->state->begin_dependency_capture(notebook_cell_id);
 }
 
 RuntimeDependencySet RuntimeWorld::end_dependency_capture() {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return {};
   }
   return impl_->state->end_dependency_capture();
 }
 
 RuntimeDependencySet RuntimeWorld::dependency_capture_snapshot() const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return {};
   }
   return impl_->state->dependency_capture_snapshot();
 }
 
 RuntimeWorldState RuntimeWorld::world_state() const {
-  if (impl_ == nullptr || impl_->state == nullptr ||
-      !impl_->state->world_frozen) {
+  if (impl_ == nullptr) {
     return RuntimeWorldState::Open;
   }
-  return RuntimeWorldState::Frozen;
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    return RuntimeWorldState::Open;
+  }
+  return impl_->state->world_frozen ? RuntimeWorldState::Frozen
+                                    : RuntimeWorldState::Open;
 }
 
 bool RuntimeWorld::is_world_frozen() const {
@@ -2357,8 +3553,15 @@ bool RuntimeWorld::is_world_frozen() const {
 }
 
 std::uint64_t RuntimeWorld::method_version(std::uint32_t class_index) const {
-  if (impl_ == nullptr || impl_->state == nullptr ||
-      class_index >= impl_->state->classes.size()) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    return 0;
+  }
+  if (class_index >= impl_->state->classes.size()) {
     return 0;
   }
   return impl_->state->classes[class_index].method_version;
@@ -2366,8 +3569,15 @@ std::uint64_t RuntimeWorld::method_version(std::uint32_t class_index) const {
 
 std::size_t RuntimeWorld::method_table_size(std::uint32_t class_index,
                                             MethodTableSide side) const {
-  if (impl_ == nullptr || impl_->state == nullptr ||
-      class_index >= impl_->state->classes.size()) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    return 0;
+  }
+  if (class_index >= impl_->state->classes.size()) {
     return 0;
   }
   const ClassRuntimeState &owner = impl_->state->classes[class_index];
@@ -2377,7 +3587,12 @@ std::size_t RuntimeWorld::method_table_size(std::uint32_t class_index,
 }
 
 RuntimePackageMirror RuntimeWorld::package_mirror() const {
-  if (impl_ == nullptr || impl_->module == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
     return {};
   }
   return package_mirror_for(*impl_->module);
@@ -2385,8 +3600,15 @@ RuntimePackageMirror RuntimeWorld::package_mirror() const {
 
 std::optional<RuntimeOwnerMirror>
 RuntimeWorld::owner_mirror(std::uint32_t owner_index) const {
-  if (impl_ == nullptr || impl_->module == nullptr || impl_->state == nullptr ||
-      owner_index >= impl_->module->classes.size()) {
+  if (impl_ == nullptr) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->state == nullptr) {
+    return std::nullopt;
+  }
+  if (owner_index >= impl_->module->classes.size()) {
     return std::nullopt;
   }
   impl_->state->initialize_for_module(*impl_->module);
@@ -2395,8 +3617,15 @@ RuntimeWorld::owner_mirror(std::uint32_t owner_index) const {
 
 std::optional<RuntimeOwnerMirror>
 RuntimeWorld::class_mirror(std::uint32_t class_index) const {
-  if (impl_ == nullptr || impl_->module == nullptr ||
-      class_index >= impl_->module->classes.size() ||
+  if (impl_ == nullptr) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
+    return std::nullopt;
+  }
+  if (class_index >= impl_->module->classes.size() ||
       owner_kind_for_index(*impl_->module, class_index) !=
           RuntimeOwnerKind::Class) {
     return std::nullopt;
@@ -2406,8 +3635,15 @@ RuntimeWorld::class_mirror(std::uint32_t class_index) const {
 
 std::optional<RuntimeOwnerMirror>
 RuntimeWorld::mixin_mirror(std::uint32_t mixin_index) const {
-  if (impl_ == nullptr || impl_->module == nullptr ||
-      mixin_index >= impl_->module->classes.size() ||
+  if (impl_ == nullptr) {
+    return std::nullopt;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr) {
+    return std::nullopt;
+  }
+  if (mixin_index >= impl_->module->classes.size() ||
       owner_kind_for_index(*impl_->module, mixin_index) !=
           RuntimeOwnerKind::Mixin) {
     return std::nullopt;
@@ -2417,7 +3653,12 @@ RuntimeWorld::mixin_mirror(std::uint32_t mixin_index) const {
 
 RuntimeWorldMirror RuntimeWorld::world_mirror() const {
   RuntimeWorldMirror mirror;
-  if (impl_ == nullptr || impl_->module == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return mirror;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->module == nullptr || impl_->state == nullptr) {
     return mirror;
   }
   impl_->state->initialize_for_module(*impl_->module);
@@ -2437,7 +3678,12 @@ RuntimeWorldMirror RuntimeWorld::world_mirror() const {
 
 RuntimeDispatchCacheStats RuntimeWorld::dispatch_cache_stats() const {
   RuntimeDispatchCacheStats stats;
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return stats;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return stats;
   }
   stats.call_cache_entries =
@@ -2449,21 +3695,51 @@ RuntimeDispatchCacheStats RuntimeWorld::dispatch_cache_stats() const {
 }
 
 RuntimeHeapStats RuntimeWorld::heap_stats() const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return {};
   }
   return impl_->state->heap.stats();
 }
 
+RuntimeHeap RuntimeWorld::heap_handle() const {
+  if (impl_ == nullptr) {
+    return RuntimeHeap{};
+  }
+  // The state pointer may be replaced by a package/image reload.  Take the
+  // same lock used by execution and reload before copying the heap handle so
+  // the returned shared implementation is a coherent snapshot.
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
+    return RuntimeHeap{};
+  }
+  return impl_->state->heap;
+}
+
 std::uint64_t RuntimeWorld::drain_remote_frees() {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return 0;
   }
   return impl_->state->heap.drain_remote_frees();
 }
 
 std::uint64_t RuntimeWorld::drain_remote_frees(std::uint64_t worker_id) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return 0;
   }
   return impl_->state->heap.drain_remote_frees(worker_id);
@@ -2471,7 +3747,16 @@ std::uint64_t RuntimeWorld::drain_remote_frees(std::uint64_t worker_id) {
 
 RuntimeWriteBarrierResult RuntimeWorld::write_barrier(const Value &owner,
                                                       const Value &value) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeWriteBarrierResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeWriteBarrierResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2483,7 +3768,16 @@ RuntimeWriteBarrierResult RuntimeWorld::write_barrier(const Value &owner,
 
 RuntimeGcResult RuntimeWorld::collect_garbage(const std::vector<Value> &roots,
                                               RuntimeGcCycle cycle) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return {};
+  }
+  // GC snapshots module bindings, cvars, and the external host provider.
+  // Serialize that snapshot with execution and notebook-image installation so
+  // a concurrent swap cannot expose a half-replaced module state to the root
+  // walk. recursive_mutex keeps safepoint-triggered collection re-entrant.
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return {};
   }
   std::vector<Value> all_roots = roots;
@@ -2499,12 +3793,23 @@ RuntimeGcResult RuntimeWorld::collect_garbage(const std::vector<Value> &roots,
       all_roots.push_back(value);
     }
   }
+  for (const Value &value : impl_->state->external_gc_roots_snapshot()) {
+    const Value root = unwrap_watch_value(value);
+    if (value_has_heap_payload_tag(root)) {
+      all_roots.push_back(root);
+    }
+  }
   runtime_append_task_local_gc_roots(&all_roots);
   return impl_->state->heap.collect_garbage(all_roots, cycle);
 }
 
 void RuntimeWorld::request_garbage_collection(RuntimeGcCycle cycle) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return;
   }
   impl_->state->heap.request_garbage_collection(cycle);
@@ -2513,7 +3818,16 @@ void RuntimeWorld::request_garbage_collection(RuntimeGcCycle cycle) {
 RuntimePinResult RuntimeWorld::pin(const Value &value,
                                    RuntimePinViewKind view_kind,
                                    RuntimePinPermission permissions) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimePinResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimePinResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2524,7 +3838,16 @@ RuntimePinResult RuntimeWorld::pin(const Value &value,
 }
 
 RuntimeUnpinResult RuntimeWorld::unpin(RuntimePinToken *token) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeUnpinResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeUnpinResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2535,7 +3858,12 @@ RuntimeUnpinResult RuntimeWorld::unpin(RuntimePinToken *token) {
 }
 
 std::uint64_t RuntimeWorld::pin_count(const Value &value) const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    return 0;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     return 0;
   }
   return impl_->state->heap.pin_count(value);
@@ -2547,7 +3875,16 @@ bool RuntimeWorld::is_pinned(const Value &value) const {
 
 RuntimeOpaqueHandleResult
 RuntimeWorld::opaque_handle_for(const RuntimePinToken &token) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeOpaqueHandleResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeOpaqueHandleResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2559,7 +3896,16 @@ RuntimeWorld::opaque_handle_for(const RuntimePinToken &token) {
 
 RuntimeOpaqueHandleResult
 RuntimeWorld::release_opaque_handle(RuntimeOpaqueHandle *handle) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeOpaqueHandleResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeOpaqueHandleResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2571,7 +3917,16 @@ RuntimeWorld::release_opaque_handle(RuntimeOpaqueHandle *handle) {
 
 RuntimeOpaqueHandleResult
 RuntimeWorld::resolve_opaque_handle(const RuntimeOpaqueHandle &handle) const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeOpaqueHandleResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeOpaqueHandleResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2583,7 +3938,16 @@ RuntimeWorld::resolve_opaque_handle(const RuntimeOpaqueHandle &handle) const {
 
 RuntimeValueBufferViewResult
 RuntimeWorld::value_buffer_view(const RuntimePinToken &token) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeValueBufferViewResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeValueBufferViewResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2595,7 +3959,16 @@ RuntimeWorld::value_buffer_view(const RuntimePinToken &token) {
 
 RuntimeNativeWaitResult
 RuntimeWorld::register_native_wait(const RuntimePinToken &token) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeNativeWaitResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeNativeWaitResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2607,7 +3980,16 @@ RuntimeWorld::register_native_wait(const RuntimePinToken &token) {
 
 RuntimeNativeWaitResult
 RuntimeWorld::cancel_native_wait(RuntimeNativeWaitHandle *handle) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeNativeWaitResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeNativeWaitResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2619,7 +4001,16 @@ RuntimeWorld::cancel_native_wait(RuntimeNativeWaitHandle *handle) {
 
 RuntimeNativeWaitResult
 RuntimeWorld::poll_native_wait(const RuntimeNativeWaitHandle &handle) const {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeNativeWaitResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeNativeWaitResult result;
     result.ok = false;
     result.error_name = "VMError";
@@ -2631,7 +4022,16 @@ RuntimeWorld::poll_native_wait(const RuntimeNativeWaitHandle &handle) const {
 
 RuntimeNativeWaitResult
 RuntimeWorld::finish_native_wait(RuntimeNativeWaitHandle *handle) {
-  if (impl_ == nullptr || impl_->state == nullptr) {
+  if (impl_ == nullptr) {
+    RuntimeNativeWaitResult result;
+    result.ok = false;
+    result.error_name = "VMError";
+    result.message = "runtime world is not bound";
+    return result;
+  }
+  std::lock_guard<std::recursive_mutex> execution_guard(
+      impl_->execution_mutex);
+  if (impl_->state == nullptr) {
     RuntimeNativeWaitResult result;
     result.ok = false;
     result.error_name = "VMError";

@@ -31,6 +31,10 @@ Header layout is fixed-size and little-endian:
 - `file_flags`
 - `abi_hash[32]`
 
+The core container remains format 1.0. Format 1.1 adds the optional `NBMD`
+section for self-describing notebook-only images; `NBMD` also starts with its
+own independently checked schema version (currently 1.0).
+
 Section directory entries are:
 
 - `kind` as 4-byte tag
@@ -42,7 +46,7 @@ Section directory entries are:
 Current canonical section tags:
 
 - required: `STRS`, `SYMS`, `KONS`, `CODE`, `METH`, `CLAS`, `DEPS`, `EXPT`, `INIT`
-- optional: `PATS`, `SPAN`, `LINE`, `LOCS`, `ATTR`, `PROF`, `HASH`
+- optional: `PATS`, `SPAN`, `LINE`, `LOCS`, `ATTR`, `PROF`, `HASH`, `NBMD`
 
 Writer policy is deterministic:
 
@@ -70,6 +74,13 @@ block which emits)
 continue to emit `RETURN value_reg`.
 
 `SPAN` is stored as a separate section and is reattached to owning `BcCode` by `code_id` during decode.
+
+`NBMD` stores global notebook descriptor records (`descriptor_id`, provider
+`CellId`, binding-name STRS ref) and per-cell records (`code_id`, `CellId`,
+ordered input/output descriptor arrays). It is valid only with the
+notebook-only file flag. Verification requires provider/output closure and an
+exact match between manifest directions and `LOAD_NOTEBOOK_SLOT` /
+`STORE_NOTEBOOK_SLOT` operands.
 
 `PATS` currently stores deterministic pattern-program descriptors only:
 

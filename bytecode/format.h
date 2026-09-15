@@ -10,6 +10,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,7 +49,10 @@ enum class SectionKind {
   Cntr,
   Priv,
   Wflw,
-  Hash
+  Hash,
+  // Notebook image sidecar. Appended to preserve the numeric values of all
+  // pre-existing section kinds.
+  Nbmd
 };
 
 enum class ConstantKind {
@@ -168,10 +172,22 @@ enum class Opcode : std::uint8_t {
   PTripleEq = 0x49,
   PBind = 0x4A,
   PCommit = 0x4B,
-  PFail = 0x4C
+  PFail = 0x4C,
+  LoadNotebookSlot = 0x4D,
+  StoreNotebookSlot = 0x4E
 };
 
-enum class CodeKind { Module, Method, Block, Ensure, Rescue, DefaultThunk };
+// Code kinds are part of the on-disk CODE record ABI. Keep existing numeric
+// values stable when adding a new execution boundary.
+enum class CodeKind {
+  Module = 0,
+  Method = 1,
+  Block = 2,
+  Ensure = 3,
+  Rescue = 4,
+  DefaultThunk = 5,
+  NotebookCell = 6,
+};
 
 struct SectionEntry {
   SectionKind kind;
@@ -377,6 +393,14 @@ inline constexpr std::uint32_t kClassFlagMixin = 0x1U;
 inline constexpr std::uint32_t kClassFlagException = 0x2U;
 inline constexpr std::uint32_t kClassFlagNativeError = 0x4U;
 
+// A NBMD sidecar is meaningful only on an image explicitly marked as a
+// notebook-only image. Ordinary .amberbc modules keep the historical header
+// and section set unchanged.
+inline constexpr std::uint32_t kFileFlagNotebookOnly = 0x1U;
+
+inline constexpr std::uint16_t kNotebookMetadataSchemaMajor = 1U;
+inline constexpr std::uint16_t kNotebookMetadataSchemaMinor = 0U;
+
 struct BcClass {
   std::uint32_t class_name_sym_id = 0;
   bool has_superclass_ref = false;
@@ -447,6 +471,32 @@ struct HashEntry {
   std::vector<std::uint8_t> digest;
 };
 
+// Persistent notebook descriptor sidecar. Descriptor ids are opaque operands
+// in LOAD_NOTEBOOK_SLOT / STORE_NOTEBOOK_SLOT; the binding identity is carried
+// by the producing CellId and a name in the module STRS pool.
+struct NotebookDescriptorEntry {
+  std::uint32_t descriptor_id = 0;
+  std::uint64_t cell_id = 0;
+  std::uint32_t name_str_id = 0;
+};
+
+// One code object (normally a CodeKind::NotebookCell) and the ordered
+// descriptor uses declared by that cell. Direction is encoded by membership in
+// input_descriptor_ids versus output_descriptor_ids.
+struct NotebookCellEntry {
+  std::uint32_t code_id = 0;
+  std::uint64_t cell_id = 0;
+  std::vector<std::uint32_t> input_descriptor_ids;
+  std::vector<std::uint32_t> output_descriptor_ids;
+};
+
+struct NotebookMetadata {
+  std::vector<NotebookDescriptorEntry> descriptors;
+  std::vector<NotebookCellEntry> cells;
+  Version schema_version{kNotebookMetadataSchemaMajor,
+                         kNotebookMetadataSchemaMinor};
+};
+
 struct BcModule {
   Version format_version;
   Version language_version;
@@ -489,6 +539,7 @@ struct BcModule {
   std::vector<modern::WorkflowStep> workflow_steps;
   std::vector<modern::WorkflowHistoryEvent> workflow_history;
   std::vector<HashEntry> hashes;
+  std::optional<NotebookMetadata> notebook_metadata;
 };
 
 struct VerifyError {

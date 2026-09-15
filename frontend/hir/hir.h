@@ -3,7 +3,10 @@
 #include "frontend/ast/expr.h"
 #include "frontend/binder/binder.h"
 
+#include <cstdint>
+#include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -48,9 +51,43 @@ struct Program {
   std::vector<Procedure> procedures;
 };
 
+// Notebook cells have a separate binding boundary from ordinary module
+// procedures. The callbacks are keyed by source occurrence for reads because
+// the binder predeclares module assignments (`x = x + 1` must still load the
+// previous notebook version), and by name for the current cell's published
+// writes.
+struct NotebookLoweringOptions {
+  std::function<std::optional<std::uint32_t>(const std::string &,
+                                             const lexer::Span &)>
+      external_read_descriptor;
+  // A notebook cell can resolve an otherwise-unbound read from an ambient
+  // module/export environment.  The compiler supplies the fully qualified
+  // constant path (for example, `models.A`) so emission uses LookupConst
+  // rather than allocating a notebook slot for that read.
+  std::function<std::optional<std::string>(const std::string &,
+                                            const lexer::Span &)>
+      external_read_constant_path;
+  std::function<std::optional<std::uint32_t>(const std::string &)>
+      declared_write_descriptor;
+};
+
+struct NotebookLoweringResult {
+  std::unique_ptr<Procedure> procedure;
+  std::vector<Procedure> blocks;
+  std::vector<lexer::Diagnostic> diagnostics;
+
+  bool ok() const { return procedure != nullptr && diagnostics.empty(); }
+};
+
 Program lower_module(const std::vector<std::unique_ptr<ast::Expr>> &items,
                      const std::string &module_name,
                      const binder::BindGraph &bind_graph);
+
+NotebookLoweringResult
+lower_notebook_cell(const std::vector<std::unique_ptr<ast::Expr>> &items,
+                    const std::string &module_name,
+                    const binder::BindGraph &bind_graph,
+                    const NotebookLoweringOptions &options);
 
 std::string program_to_json(const Program &program,
                             const std::string &module_name,

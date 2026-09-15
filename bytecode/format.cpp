@@ -9,6 +9,7 @@
 #include <iomanip>
 #include <limits>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -25,6 +26,22 @@ struct SectionPayload {
   std::uint32_t align = 1;
   std::uint32_t flags = 0;
 };
+
+std::uint8_t encode_code_kind(CodeKind kind) {
+  switch (kind) {
+  case CodeKind::Module:
+  case CodeKind::Method:
+  case CodeKind::Block:
+  case CodeKind::Ensure:
+  case CodeKind::Rescue:
+  case CodeKind::DefaultThunk:
+  case CodeKind::NotebookCell:
+    return static_cast<std::uint8_t>(kind);
+  }
+  // BcModule has no serialization error channel. Preserve the decoder's
+  // deterministic unknown-kind failure for malformed in-memory values.
+  return 0xffU;
+}
 
 bool constant_is_path_ref(const BcModule &module, std::uint32_t ref_id);
 
@@ -46,6 +63,10 @@ struct Reader {
 
   bool remaining(std::size_t need) const {
     return pos <= end && need <= end - pos;
+  }
+
+  std::size_t remaining_bytes() const {
+    return pos <= end ? end - pos : 0U;
   }
 
   bool read_u8(std::uint8_t &value) {
@@ -352,6 +373,8 @@ const char *section_tag(SectionKind kind) {
     return "WFLW";
   case SectionKind::Hash:
     return "HASH";
+  case SectionKind::Nbmd:
+    return "NBMD";
   }
   return "UNKN";
 }
@@ -470,6 +493,10 @@ bool decode_section_kind(const std::array<char, 4> &tag, SectionKind &kind) {
     kind = SectionKind::Hash;
     return true;
   }
+  if (value == "NBMD") {
+    kind = SectionKind::Nbmd;
+    return true;
+  }
   return false;
 }
 
@@ -530,6 +557,8 @@ bool optional_section_present(const BcModule &module, SectionKind kind) {
     return !module.workflow_steps.empty() || !module.workflow_history.empty();
   case SectionKind::Hash:
     return !module.hashes.empty();
+  case SectionKind::Nbmd:
+    return module.notebook_metadata.has_value();
   default:
     return true;
   }
@@ -588,7 +617,7 @@ std::vector<std::uint8_t> serialize_code(const std::vector<BcCode> &codes) {
   append_u32(out, static_cast<std::uint32_t>(codes.size()));
   for (const BcCode &code : codes) {
     append_u32(out, code.code_id);
-    append_u8(out, static_cast<std::uint8_t>(code.kind));
+    append_u8(out, encode_code_kind(code.kind));
     append_u32(out, code.reg_count);
     append_u32(out, code.flags);
 
@@ -1295,6 +1324,27 @@ serialize_hashes(const std::vector<HashEntry> &hashes) {
   return out;
 }
 
+std::vector<std::uint8_t>
+serialize_notebook_metadata(const NotebookMetadata &metadata) {
+  std::vector<std::uint8_t> out;
+  append_u16(out, metadata.schema_version.major);
+  append_u16(out, metadata.schema_version.minor);
+  append_u32(out, static_cast<std::uint32_t>(metadata.descriptors.size()));
+  for (const NotebookDescriptorEntry &entry : metadata.descriptors) {
+    append_u32(out, entry.descriptor_id);
+    append_u64(out, entry.cell_id);
+    append_u32(out, entry.name_str_id);
+  }
+  append_u32(out, static_cast<std::uint32_t>(metadata.cells.size()));
+  for (const NotebookCellEntry &entry : metadata.cells) {
+    append_u32(out, entry.code_id);
+    append_u64(out, entry.cell_id);
+    append_u32_array(out, entry.input_descriptor_ids);
+    append_u32_array(out, entry.output_descriptor_ids);
+  }
+  return out;
+}
+
 std::vector<SectionPayload> build_sections(const BcModule &module) {
   std::vector<SectionPayload> sections;
   sections.push_back(
@@ -1409,6 +1459,11 @@ std::vector<SectionPayload> build_sections(const BcModule &module) {
   if (optional_section_present(module, SectionKind::Hash)) {
     sections.push_back(
         {SectionKind::Hash, serialize_hashes(module.hashes), 1, 0});
+  }
+  if (optional_section_present(module, SectionKind::Nbmd)) {
+    sections.push_back({SectionKind::Nbmd,
+                        serialize_notebook_metadata(*module.notebook_metadata),
+                        1, 0});
   }
   return sections;
 }
@@ -1764,6 +1819,12 @@ bool decode_opcode(std::uint8_t raw, Opcode &opcode) {
   case 0x4C:
     opcode = Opcode::PFail;
     return true;
+  case 0x4D:
+    opcode = Opcode::LoadNotebookSlot;
+    return true;
+  case 0x4E:
+    opcode = Opcode::StoreNotebookSlot;
+    return true;
   default:
     return false;
   }
@@ -1789,9 +1850,26 @@ bool decode_code_kind(std::uint8_t raw, CodeKind &kind) {
   case 5:
     kind = CodeKind::DefaultThunk;
     return true;
+  case 6:
+    kind = CodeKind::NotebookCell;
+    return true;
   default:
     return false;
   }
+}
+
+bool known_code_kind(CodeKind kind) {
+  switch (kind) {
+  case CodeKind::Module:
+  case CodeKind::Method:
+  case CodeKind::Block:
+  case CodeKind::Ensure:
+  case CodeKind::Rescue:
+  case CodeKind::DefaultThunk:
+  case CodeKind::NotebookCell:
+    return true;
+  }
+  return false;
 }
 
 bool parse_constants(Reader &reader, std::vector<Constant> &out) {
@@ -2230,6 +2308,33 @@ bool parse_init(Reader &reader, InitEntry &out) {
     return false;
   }
   out.has_entry_code_id = has_entry != 0U;
+  return true;
+}
+
+bool parse_u32_array(Reader &reader, std::vector<std::uint32_t> &out) {
+  constexpr std::uint32_t kMaxNotebookArrayItems = 1U << 20U;
+  std::uint32_t count = 0;
+  if (!reader.read_u32(count)) {
+    return false;
+  }
+  const std::size_t max_by_bytes =
+      reader.remaining_bytes() / sizeof(std::uint32_t);
+  if (count > kMaxNotebookArrayItems ||
+      static_cast<std::size_t>(count) > max_by_bytes) {
+    reader.fail("BC1445",
+                "NBMD array count exceeds the safe section bounds",
+                reader.pos - sizeof(std::uint32_t));
+    return false;
+  }
+  out.clear();
+  out.reserve(count);
+  for (std::uint32_t i = 0; i < count; ++i) {
+    std::uint32_t value = 0;
+    if (!reader.read_u32(value)) {
+      return false;
+    }
+    out.push_back(value);
+  }
   return true;
 }
 
@@ -3082,6 +3187,79 @@ bool parse_hashes(Reader &reader, std::vector<HashEntry> &out) {
   return true;
 }
 
+bool parse_notebook_metadata(Reader &reader, NotebookMetadata &out) {
+  constexpr std::uint32_t kMaxNotebookDescriptors = 1U << 20U;
+  constexpr std::uint32_t kMaxNotebookCells = 1U << 20U;
+  constexpr std::size_t kDescriptorRecordSize = 16U;
+  constexpr std::size_t kCellRecordMinimumSize = 20U;
+  if (!reader.read_u16(out.schema_version.major) ||
+      !reader.read_u16(out.schema_version.minor)) {
+    return false;
+  }
+  if (out.schema_version.major != kNotebookMetadataSchemaMajor ||
+      out.schema_version.minor > kNotebookMetadataSchemaMinor) {
+    reader.fail("BC1440", "unsupported NBMD schema version", 0);
+    return false;
+  }
+  std::uint32_t descriptor_count = 0;
+  if (!reader.read_u32(descriptor_count)) {
+    return false;
+  }
+  // Each descriptor has a fixed 16-byte record, and a valid NBMD payload also
+  // needs the following cell-count field. Bound the reserve by both the
+  // actual section bytes and a practical metadata limit before allocating.
+  const std::size_t descriptor_bytes = reader.remaining_bytes();
+  const std::size_t descriptor_capacity =
+      descriptor_bytes >= sizeof(std::uint32_t)
+          ? (descriptor_bytes - sizeof(std::uint32_t)) /
+                kDescriptorRecordSize
+          : 0U;
+  if (descriptor_count > kMaxNotebookDescriptors ||
+      static_cast<std::size_t>(descriptor_count) > descriptor_capacity) {
+    reader.fail("BC1445",
+                "NBMD descriptor count exceeds the safe section bounds",
+                reader.pos - sizeof(std::uint32_t));
+    return false;
+  }
+  out.descriptors.clear();
+  out.descriptors.reserve(descriptor_count);
+  for (std::uint32_t i = 0; i < descriptor_count; ++i) {
+    NotebookDescriptorEntry entry;
+    if (!reader.read_u32(entry.descriptor_id) ||
+        !reader.read_u64(entry.cell_id) ||
+        !reader.read_u32(entry.name_str_id)) {
+      return false;
+    }
+    out.descriptors.push_back(entry);
+  }
+
+  std::uint32_t cell_count = 0;
+  if (!reader.read_u32(cell_count)) {
+    return false;
+  }
+  const std::size_t cell_capacity =
+      reader.remaining_bytes() / kCellRecordMinimumSize;
+  if (cell_count > kMaxNotebookCells ||
+      static_cast<std::size_t>(cell_count) > cell_capacity) {
+    reader.fail("BC1445",
+                "NBMD cell count exceeds the safe section bounds",
+                reader.pos - sizeof(std::uint32_t));
+    return false;
+  }
+  out.cells.clear();
+  out.cells.reserve(cell_count);
+  for (std::uint32_t i = 0; i < cell_count; ++i) {
+    NotebookCellEntry entry;
+    if (!reader.read_u32(entry.code_id) || !reader.read_u64(entry.cell_id) ||
+        !parse_u32_array(reader, entry.input_descriptor_ids) ||
+        !parse_u32_array(reader, entry.output_descriptor_ids)) {
+      return false;
+    }
+    out.cells.push_back(std::move(entry));
+  }
+  return true;
+}
+
 template <typename T>
 bool contains_index(const std::vector<T> &items, std::uint32_t index) {
   return index < items.size();
@@ -3229,14 +3407,25 @@ bool verify_symbol_ref(const BcModule &module, std::uint32_t symbol_id,
   return false;
 }
 
-bool verify_code_ref(const std::unordered_map<std::uint32_t, std::size_t> &ids,
-                     std::uint32_t code_id, const std::string &message,
-                     std::vector<VerifyError> &errors) {
-  if (code_id_exists(ids, code_id)) {
-    return true;
+bool verify_ordinary_code_ref(
+    const BcModule &module,
+    const std::unordered_map<std::uint32_t, std::size_t> &ids,
+    std::uint32_t code_id, const std::string &message,
+    std::vector<VerifyError> &errors, const char *missing_code = "BC1312",
+    SectionKind section = SectionKind::Code) {
+  if (!code_id_exists(ids, code_id)) {
+    add_verify_error(errors, missing_code, message, section, 0);
+    return false;
   }
-  add_verify_error(errors, "BC1312", message, SectionKind::Code, 0);
-  return false;
+  const BcCode &target = module.code_objects[ids.at(code_id)];
+  if (target.kind == CodeKind::NotebookCell) {
+    add_verify_error(errors, "BC1316",
+                     "notebook cell code cannot be used as an ordinary "
+                     "executable target",
+                     SectionKind::Code, 0);
+    return false;
+  }
+  return true;
 }
 
 void add_fallthrough_successor(std::size_t pc, std::size_t insn_count,
@@ -3363,6 +3552,291 @@ void verify_initializedness(const BcModule &module, const BcCode &code,
   }
 }
 
+void verify_notebook_metadata(
+    const BcModule &module,
+    const std::unordered_map<std::uint32_t, std::size_t> &code_ids,
+    std::vector<VerifyError> &errors) {
+  const bool notebook_only =
+      (module.file_flags & kFileFlagNotebookOnly) != 0U;
+  const NotebookMetadata *metadata =
+      module.notebook_metadata.has_value() ? &*module.notebook_metadata
+                                            : nullptr;
+
+  if (metadata == nullptr) {
+    if (notebook_only) {
+      add_verify_error(errors, "BC1421",
+                       "notebook-only image is missing NBMD metadata",
+                       SectionKind::Nbmd, 0);
+    }
+    // A raw NotebookCell without a sidecar remains valid for host-provided
+    // adapters. Such code is not a self-describing notebook-only image, but
+    // its existing bytecode ABI is intentionally preserved.
+    return;
+  }
+
+  if (!notebook_only) {
+    add_verify_error(errors, "BC1420",
+                     "NBMD metadata requires a notebook-only image",
+                     SectionKind::Nbmd, 0);
+  }
+  if (module.format_version.major != 1U ||
+      module.format_version.minor < 1U) {
+    add_verify_error(errors, "BC1444",
+                     "NBMD metadata requires bytecode format 1.1 or newer",
+                     SectionKind::Nbmd, 0);
+  }
+  if (metadata->schema_version.major != kNotebookMetadataSchemaMajor ||
+      metadata->schema_version.minor > kNotebookMetadataSchemaMinor) {
+    add_verify_error(errors, "BC1440", "unsupported NBMD schema version",
+                     SectionKind::Nbmd, 0);
+  }
+
+  std::unordered_map<std::uint32_t, const NotebookDescriptorEntry *>
+      descriptor_by_id;
+  std::map<std::pair<std::uint64_t, std::string>, std::uint32_t>
+      binding_keys;
+  for (const NotebookDescriptorEntry &descriptor : metadata->descriptors) {
+    const auto [_, inserted] =
+        descriptor_by_id.emplace(descriptor.descriptor_id, &descriptor);
+    if (!inserted) {
+      add_verify_error(errors, "BC1422", "duplicate notebook descriptor id",
+                       SectionKind::Nbmd, 0);
+    }
+    if (descriptor.cell_id == 0U) {
+      add_verify_error(errors, "BC1423",
+                       "notebook descriptor CellId must be non-zero",
+                       SectionKind::Nbmd, 0);
+    }
+    if (!contains_index(module.strings, descriptor.name_str_id)) {
+      add_verify_error(errors, "BC1424",
+                       "notebook descriptor name ref is out of range",
+                       SectionKind::Nbmd, 0);
+    } else if (module.strings[descriptor.name_str_id].empty()) {
+      add_verify_error(errors, "BC1425",
+                       "notebook descriptor binding name is empty",
+                       SectionKind::Nbmd, 0);
+    } else {
+      const auto [__, key_inserted] = binding_keys.emplace(
+          std::make_pair(descriptor.cell_id,
+                         module.strings[descriptor.name_str_id]),
+          descriptor.descriptor_id);
+      if (!key_inserted) {
+        add_verify_error(errors, "BC1426",
+                         "duplicate notebook descriptor BindingKey",
+                         SectionKind::Nbmd, 0);
+      }
+    }
+  }
+
+  std::unordered_map<std::uint32_t, const NotebookCellEntry *> cell_by_code;
+  std::unordered_map<std::uint64_t, std::uint32_t> code_by_cell;
+  std::unordered_map<std::uint64_t, const NotebookCellEntry *> cell_by_cell_id;
+  std::set<std::uint32_t> output_descriptor_ids;
+  for (const NotebookCellEntry &cell : metadata->cells) {
+    const auto [_, inserted] = cell_by_code.emplace(cell.code_id, &cell);
+    if (!inserted) {
+      add_verify_error(errors, "BC1427",
+                       "duplicate notebook cell manifest code id",
+                       SectionKind::Nbmd, 0);
+    }
+    if (cell.cell_id == 0U) {
+      add_verify_error(errors, "BC1423",
+                       "notebook cell manifest CellId must be non-zero",
+                       SectionKind::Nbmd, 0);
+    } else {
+      const auto [__, cell_inserted] =
+          code_by_cell.emplace(cell.cell_id, cell.code_id);
+      if (!cell_inserted) {
+        add_verify_error(errors, "BC1427",
+                         "duplicate notebook cell manifest CellId",
+                         SectionKind::Nbmd, 0);
+      } else {
+        cell_by_cell_id.emplace(cell.cell_id, &cell);
+      }
+    }
+    if (cell.code_id == 0U) {
+      add_verify_error(errors, "BC1428",
+                       "notebook cell manifest code id must be non-zero",
+                       SectionKind::Nbmd, 0);
+    }
+
+    std::set<std::uint32_t> input_ids;
+    for (std::uint32_t descriptor_id : cell.input_descriptor_ids) {
+      if (!input_ids.insert(descriptor_id).second) {
+        add_verify_error(errors, "BC1435",
+                         "duplicate notebook input descriptor id",
+                         SectionKind::Nbmd, 0);
+      }
+    }
+    std::set<std::uint32_t> output_ids;
+    for (std::uint32_t descriptor_id : cell.output_descriptor_ids) {
+      output_descriptor_ids.insert(descriptor_id);
+      if (!output_ids.insert(descriptor_id).second) {
+        add_verify_error(errors, "BC1436",
+                         "duplicate notebook output descriptor id",
+                         SectionKind::Nbmd, 0);
+      }
+      if (input_ids.find(descriptor_id) != input_ids.end()) {
+        add_verify_error(errors, "BC1437",
+                         "notebook input/output descriptor sets overlap",
+                         SectionKind::Nbmd, 0);
+      }
+    }
+
+    const auto code_found = code_ids.find(cell.code_id);
+    if (code_found == code_ids.end()) {
+      add_verify_error(errors, "BC1428",
+                       "notebook cell manifest references unknown code id",
+                       SectionKind::Nbmd, 0);
+    } else if (module.code_objects[code_found->second].kind !=
+               CodeKind::NotebookCell) {
+      add_verify_error(errors, "BC1429",
+                       "notebook cell manifest must reference NotebookCell "
+                       "code",
+                       SectionKind::Nbmd, 0);
+    }
+
+    auto verify_descriptor_list = [&](const std::vector<std::uint32_t> &ids) {
+      for (std::uint32_t descriptor_id : ids) {
+        if (descriptor_by_id.find(descriptor_id) == descriptor_by_id.end()) {
+          add_verify_error(
+              errors, "BC1431",
+              "notebook cell manifest references unknown descriptor id",
+              SectionKind::Nbmd, 0);
+        }
+      }
+    };
+    verify_descriptor_list(cell.input_descriptor_ids);
+    for (std::uint32_t descriptor_id : cell.output_descriptor_ids) {
+      const auto descriptor_found = descriptor_by_id.find(descriptor_id);
+      if (descriptor_found == descriptor_by_id.end()) {
+        add_verify_error(
+            errors, "BC1431",
+            "notebook cell manifest references unknown descriptor id",
+            SectionKind::Nbmd, 0);
+      } else if (descriptor_found->second->cell_id != cell.cell_id) {
+        add_verify_error(
+            errors, "BC1432",
+            "notebook output descriptor belongs to another CellId",
+            SectionKind::Nbmd, 0);
+      }
+    }
+  }
+
+  // Inputs carry the provider identity indirectly through their descriptor's
+  // BindingKey.cell_id. The provider must still be present in this image and
+  // explicitly publish that descriptor as an output. This prevents a global
+  // descriptor table from silently retaining orphaned or stale bindings.
+  for (const NotebookCellEntry &cell : metadata->cells) {
+    for (std::uint32_t descriptor_id : cell.input_descriptor_ids) {
+      const auto descriptor_found = descriptor_by_id.find(descriptor_id);
+      if (descriptor_found == descriptor_by_id.end()) {
+        continue;
+      }
+      const auto provider_found =
+          cell_by_cell_id.find(descriptor_found->second->cell_id);
+      if (provider_found == cell_by_cell_id.end()) {
+        add_verify_error(
+            errors, "BC1441",
+            "notebook input descriptor provider cell is missing",
+            SectionKind::Nbmd, 0);
+        continue;
+      }
+      const std::vector<std::uint32_t> &provider_outputs =
+          provider_found->second->output_descriptor_ids;
+      if (std::find(provider_outputs.begin(), provider_outputs.end(),
+                    descriptor_id) == provider_outputs.end()) {
+        add_verify_error(
+            errors, "BC1442",
+            "notebook input descriptor is not an output of its provider cell",
+            SectionKind::Nbmd, 0);
+      }
+    }
+  }
+  for (const NotebookDescriptorEntry &descriptor : metadata->descriptors) {
+    if (output_descriptor_ids.find(descriptor.descriptor_id) ==
+        output_descriptor_ids.end()) {
+      add_verify_error(errors, "BC1443",
+                       "orphan notebook descriptor is not a cell output",
+                       SectionKind::Nbmd, 0);
+    }
+  }
+
+  for (const BcCode &code : module.code_objects) {
+    if (code.kind == CodeKind::NotebookCell &&
+        cell_by_code.find(code.code_id) == cell_by_code.end()) {
+      add_verify_error(errors, "BC1430",
+                       "NotebookCell code is missing a cell manifest",
+                       SectionKind::Nbmd, 0);
+    }
+  }
+
+  // The instruction-side direction contract is intentionally checked here,
+  // after both tables have been indexed. A descriptor may be used multiple
+  // times in a cell, while each occurrence still has to use its declared
+  // direction.
+  for (const BcCode &code : module.code_objects) {
+    if (code.kind != CodeKind::NotebookCell) {
+      continue;
+    }
+    const auto cell_found = cell_by_code.find(code.code_id);
+    if (cell_found == cell_by_code.end()) {
+      continue;
+    }
+    const NotebookCellEntry &cell = *cell_found->second;
+    const std::vector<std::uint32_t> &inputs = cell.input_descriptor_ids;
+    const std::vector<std::uint32_t> &outputs = cell.output_descriptor_ids;
+    std::set<std::uint32_t> load_operands;
+    std::set<std::uint32_t> store_operands;
+    for (const Instruction &instruction : code.instructions) {
+      if (instruction.operands.size() != 2U) {
+        continue;
+      }
+      std::uint32_t descriptor_id = 0;
+      if (instruction.opcode == Opcode::LoadNotebookSlot) {
+        if (!operand_u32_for_verify(instruction, 1, &descriptor_id)) {
+          continue;
+        }
+        load_operands.insert(descriptor_id);
+        if (std::find(inputs.begin(), inputs.end(), descriptor_id) ==
+            inputs.end()) {
+          add_verify_error(
+              errors, "BC1433",
+              "LOAD_NOTEBOOK_SLOT descriptor is not a declared input",
+              SectionKind::Nbmd, 0);
+        }
+      } else if (instruction.opcode == Opcode::StoreNotebookSlot) {
+        if (!operand_u32_for_verify(instruction, 0, &descriptor_id)) {
+          continue;
+        }
+        store_operands.insert(descriptor_id);
+        if (std::find(outputs.begin(), outputs.end(), descriptor_id) ==
+            outputs.end()) {
+          add_verify_error(
+              errors, "BC1434",
+              "STORE_NOTEBOOK_SLOT descriptor is not a declared output",
+              SectionKind::Nbmd, 0);
+        }
+      }
+    }
+    const std::set<std::uint32_t> declared_inputs(inputs.begin(), inputs.end());
+    const std::set<std::uint32_t> declared_outputs(outputs.begin(),
+                                                   outputs.end());
+    if (load_operands != declared_inputs) {
+      add_verify_error(errors, "BC1438",
+                       "notebook input descriptor set does not match LOAD "
+                       "operands",
+                       SectionKind::Nbmd, 0);
+    }
+    if (store_operands != declared_outputs) {
+      add_verify_error(errors, "BC1439",
+                       "notebook output descriptor set does not match STORE "
+                       "operands",
+                       SectionKind::Nbmd, 0);
+    }
+  }
+}
+
 InstructionFlow verify_instruction_flow(
     const BcModule &module,
     const std::unordered_map<std::uint32_t, std::size_t> &code_ids,
@@ -3380,6 +3854,14 @@ InstructionFlow verify_instruction_flow(
     }
     return verify_target(*target, insn_count, "jump target is out of range",
                          errors);
+  };
+
+  auto require_notebook_cell = [&]() {
+    if (code.kind != CodeKind::NotebookCell) {
+      add_verify_error(errors, "BC1317",
+                       "notebook slot opcode requires notebook cell code",
+                       SectionKind::Code, 0);
+    }
   };
 
   switch (instruction.opcode) {
@@ -3401,6 +3883,28 @@ InstructionFlow verify_instruction_flow(
   case Opcode::GetLast: {
     if (operand_count_is(instruction, 1, errors)) {
       add_register_write(code, instruction, 0, flow, errors);
+    }
+    break;
+  }
+  case Opcode::LoadNotebookSlot: {
+    require_notebook_cell();
+    if (operand_count_is(instruction, 2, errors)) {
+      add_register_write(code, instruction, 0, flow, errors);
+      std::uint32_t descriptor = 0;
+      read_u32_operand(instruction, 1,
+                       "notebook slot descriptor must be unsigned", errors,
+                       &descriptor);
+    }
+    break;
+  }
+  case Opcode::StoreNotebookSlot: {
+    require_notebook_cell();
+    if (operand_count_is(instruction, 2, errors)) {
+      std::uint32_t descriptor = 0;
+      read_u32_operand(instruction, 0,
+                       "notebook slot descriptor must be unsigned", errors,
+                       &descriptor);
+      add_register_read(code, instruction, 1, flow, errors);
     }
     break;
   }
@@ -3693,8 +4197,8 @@ InstructionFlow verify_instruction_flow(
       std::uint32_t closure_code_id = 0;
       if (read_u32_operand(instruction, 1, "code ref must be unsigned", errors,
                            &closure_code_id)) {
-        verify_code_ref(code_ids, closure_code_id, "closure code id is unknown",
-                        errors);
+        verify_ordinary_code_ref(module, code_ids, closure_code_id,
+                                 "closure code id is unknown", errors);
       }
       std::size_t operand_index = 3;
       for (std::uint32_t index = 0; index < capture_count; ++index) {
@@ -4219,7 +4723,8 @@ InstructionFlow verify_instruction_flow(
 
 void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
   const std::uint16_t kSupportedFormatMajor = 1;
-  const std::uint16_t kSupportedFormatMinor = 0;
+  // 1.1 adds the optional self-describing NBMD notebook-image section.
+  const std::uint16_t kSupportedFormatMinor = 1;
   const std::uint16_t kSupportedLanguageMajor = 1;
   const std::uint16_t kSupportedLanguageMinor = 0;
 
@@ -4252,6 +4757,8 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
                        SectionKind::Pats, 0);
     }
   }
+
+  verify_notebook_metadata(module, code_ids, errors);
 
   for (const Constant &constant : module.const_pool) {
     switch (constant.kind) {
@@ -4295,6 +4802,10 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
   }
 
   for (const BcCode &code : module.code_objects) {
+    if (!known_code_kind(code.kind)) {
+      add_verify_error(errors, "BC1308", "unknown code kind",
+                       SectionKind::Code, 0);
+    }
     const std::size_t insn_count = code.instructions.size();
     std::map<std::uint32_t, std::uint32_t> safepoints;
     for (const SafepointEntry &entry : code.safepoint_table) {
@@ -4365,10 +4876,10 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
       const std::uint32_t kind =
           entry.flags == 0U ? kHandlerKindLegacyRescue
                             : handler_kind(entry.flags);
-      if (kind != kHandlerKindCatch &&
-          !code_id_exists(code_ids, entry.handler_code_id)) {
-        add_verify_error(errors, "BC1204", "handler references unknown code id",
-                         SectionKind::Code, 0);
+      if (kind != kHandlerKindCatch) {
+        verify_ordinary_code_ref(module, code_ids, entry.handler_code_id,
+                                 "handler references unknown code id", errors,
+                                 "BC1204");
       }
     }
 
@@ -4421,10 +4932,9 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
                        "method default thunk count does not match param flags",
                        SectionKind::Meth, 0);
     }
-    if (!code_id_exists(code_ids, method.entry_code_id)) {
-      add_verify_error(errors, "BC1204", "method entry code id is unknown",
-                       SectionKind::Meth, 0);
-    }
+    verify_ordinary_code_ref(module, code_ids, method.entry_code_id,
+                             "method entry code id is unknown", errors,
+                             "BC1204", SectionKind::Meth);
     if ((method.flags & (kMethodFlagInstance | kMethodFlagClass)) != 0U &&
         method.owner_dispatch_ref >= module.classes.size()) {
       add_verify_error(errors, "BC1205",
@@ -4432,18 +4942,14 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
                        SectionKind::Meth, 0);
     }
     for (std::uint32_t code_id : method.default_thunk_ids) {
-      if (!code_id_exists(code_ids, code_id)) {
-        add_verify_error(errors, "BC1204",
-                         "default thunk references unknown code id",
-                         SectionKind::Meth, 0);
-      }
+      verify_ordinary_code_ref(module, code_ids, code_id,
+                               "default thunk references unknown code id",
+                               errors, "BC1204", SectionKind::Meth);
     }
     for (std::uint32_t code_id : method.type_hook_ids) {
-      if (!code_id_exists(code_ids, code_id)) {
-        add_verify_error(errors, "BC1204",
-                         "type hook references unknown code id",
-                         SectionKind::Meth, 0);
-      }
+      verify_ordinary_code_ref(module, code_ids, code_id,
+                               "type hook references unknown code id", errors,
+                               "BC1204", SectionKind::Meth);
     }
     for (const ClauseEntry &entry : method.clause_table) {
       if (!pattern_ids.empty() &&
@@ -4452,12 +4958,15 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
                          "clause references unknown pattern program id",
                          SectionKind::Meth, 0);
       }
-      if (!code_id_exists(code_ids, entry.pattern_code_id) ||
-          !code_id_exists(code_ids, entry.guard_code_id) ||
-          !code_id_exists(code_ids, entry.body_code_id)) {
-        add_verify_error(errors, "BC1204", "clause references unknown code id",
-                         SectionKind::Meth, 0);
-      }
+      verify_ordinary_code_ref(module, code_ids, entry.pattern_code_id,
+                               "clause references unknown code id", errors,
+                               "BC1204", SectionKind::Meth);
+      verify_ordinary_code_ref(module, code_ids, entry.guard_code_id,
+                               "clause references unknown code id", errors,
+                               "BC1204", SectionKind::Meth);
+      verify_ordinary_code_ref(module, code_ids, entry.body_code_id,
+                               "clause references unknown code id", errors,
+                               "BC1204", SectionKind::Meth);
     }
     for (const AutoAssignEntry &entry : method.auto_assign_desc) {
       if (!contains_index(module.strings, entry.local_name_str_id) ||
@@ -4506,10 +5015,10 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
         break;
       }
     }
-    if (klass.has_class_init_code_id &&
-        !code_id_exists(code_ids, klass.class_init_code_id)) {
-      add_verify_error(errors, "BC1204", "class init code id is unknown",
-                       SectionKind::Clas, 0);
+    if (klass.has_class_init_code_id) {
+      verify_ordinary_code_ref(module, code_ids, klass.class_init_code_id,
+                               "class init code id is unknown", errors,
+                               "BC1204", SectionKind::Clas);
     }
   }
 
@@ -4539,10 +5048,10 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
                entry.target_index >= module.classes.size()) {
       add_verify_error(errors, "BC1205", "export class target is out of range",
                        SectionKind::Expt, 0);
-    } else if (target_kind == "code" &&
-               !code_id_exists(code_ids, entry.target_index)) {
-      add_verify_error(errors, "BC1204", "export code target is unknown",
-                       SectionKind::Expt, 0);
+    } else if (target_kind == "code") {
+      verify_ordinary_code_ref(module, code_ids, entry.target_index,
+                               "export code target is unknown", errors,
+                               "BC1204", SectionKind::Expt);
     }
     if (entry.has_reexport_module_name &&
         !contains_index(module.strings, entry.reexport_module_name_str_id)) {
@@ -4551,10 +5060,10 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
     }
   }
 
-  if (module.init.has_entry_code_id &&
-      !code_id_exists(code_ids, module.init.entry_code_id)) {
-    add_verify_error(errors, "BC1204", "init entry code id is unknown",
-                     SectionKind::Init, 0);
+  if (module.init.has_entry_code_id) {
+    verify_ordinary_code_ref(module, code_ids, module.init.entry_code_id,
+                             "init entry code id is unknown", errors, "BC1204",
+                             SectionKind::Init);
   }
 
   for (const LineEntry &entry : module.line_table) {
@@ -5163,6 +5672,12 @@ DecodeResult deserialize_module(const std::vector<std::uint8_t> &bytes) {
     parse_section(SectionKind::Hash, "HASH",
                   [&](Reader &r) { parse_hashes(r, result.module.hashes); });
   }
+  if (by_kind.find(SectionKind::Nbmd) != by_kind.end()) {
+    result.module.notebook_metadata.emplace();
+    parse_section(SectionKind::Nbmd, "NBMD", [&](Reader &r) {
+      parse_notebook_metadata(r, *result.module.notebook_metadata);
+    });
+  }
 
   if (!result.errors.empty()) {
     return result;
@@ -5398,6 +5913,10 @@ std::string opcode_name(Opcode opcode) {
     return "P_COMMIT";
   case Opcode::PFail:
     return "P_FAIL";
+  case Opcode::LoadNotebookSlot:
+    return "LOAD_NOTEBOOK_SLOT";
+  case Opcode::StoreNotebookSlot:
+    return "STORE_NOTEBOOK_SLOT";
   }
   return "UNKNOWN";
 }
@@ -5416,6 +5935,8 @@ std::string code_kind_name(CodeKind kind) {
     return "rescue";
   case CodeKind::DefaultThunk:
     return "default_thunk";
+  case CodeKind::NotebookCell:
+    return "notebook_cell";
   }
   return "unknown";
 }

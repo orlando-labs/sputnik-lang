@@ -2,6 +2,7 @@
 
 #include "buildsys/build.h"
 #include "runtime/vm.h"
+#include "runtime/stdlib_registry.h"
 
 #include <algorithm>
 #include <map>
@@ -13,6 +14,18 @@
 namespace amber::runtime {
 
 namespace {
+
+bool builtin_runtime_module(const std::string &name) {
+  static const RuntimeModuleRegistry registry = [] {
+    RuntimeModuleRegistry modules;
+    RuntimeDispatchRegistry dispatch;
+    RuntimeTypeRegistry types;
+    register_builtin_runtime_modules(modules, dispatch, types);
+    register_core_prelude_bindings(modules);
+    return modules;
+  }();
+  return registry.binding_for_path(name).has_value() || registry.has_namespace(name);
+}
 
 struct RuntimeExportCell {
   std::string module_name;
@@ -584,6 +597,7 @@ struct RuntimeModuleLoader::Impl {
       for (const bytecode::DepEntry &dependency : record.module.dependencies) {
         const std::string dep_name = dependency_name(record.module, dependency);
         const auto dep_it = modules.find(dep_name);
+        if (dep_it == modules.end() && builtin_runtime_module(dep_name)) continue;
         if (dep_name.empty() || dep_it == modules.end()) {
           std::ostringstream message;
           message << "module '" << record.name
@@ -689,6 +703,7 @@ struct RuntimeModuleLoader::Impl {
 
     for (const bytecode::DepEntry &dependency : record.module.dependencies) {
       const std::string dep_name = dependency_name(record.module, dependency);
+      if (modules.find(dep_name) == modules.end() && builtin_runtime_module(dep_name)) continue;
       if (!initialize_dfs(dep_name, stack, error_name, message, diagnostic)) {
         if (record.state != RuntimeModuleState::Failed) {
           std::ostringstream dep_message;

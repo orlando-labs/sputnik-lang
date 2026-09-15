@@ -7,8 +7,10 @@
 #include "runtime/value.h"
 #include "runtime/watch.h"
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -195,6 +197,28 @@ struct RuntimePackageReloadResult {
   std::vector<RuntimePackageReloadDiagnostic> diagnostics;
 };
 
+struct RuntimeNotebookImageDiagnostic {
+  std::string error_name;
+  std::string message;
+  std::uint32_t code_id = 0;
+};
+
+// Numeric string/symbol ids are part of the value ABI. A notebook compiler
+// uses this locked snapshot to seed a replacement image before appending new
+// names.
+struct RuntimeNotebookImageNameSeed {
+  std::vector<std::string> strings;
+  std::vector<std::string> symbols;
+};
+
+struct RuntimeNotebookImageInstallResult {
+  bool ok = false;
+  bool swapped = false;
+  std::uint64_t previous_world_epoch = 0;
+  std::uint64_t new_world_epoch = 0;
+  std::vector<RuntimeNotebookImageDiagnostic> diagnostics;
+};
+
 struct RuntimeCapabilityCheckResult {
   bool ok = false;
   std::string error_name;
@@ -247,6 +271,53 @@ public:
                                           const std::string &to);
 };
 
+// Returns a point-in-time copy of values owned by a host integration. The
+// callback is copied into the RuntimeWorld/RuntimeState, so VM instances may
+// outlive the call that installed it (for example while a task is parked).
+// Provider replacement is synchronized, but several VMs may request snapshots
+// concurrently; the callback must be thread-safe, read-only, and return an
+// independent vector.
+using RuntimeGcRootProvider = std::function<std::vector<Value>()>;
+
+// A run-local dependency capture request belongs to one notebook consumer.
+// The runtime treats the id as opaque; RuntimeDependency::cell_id continues
+// to identify the watched provider and is never converted to a notebook
+// BindingKey by this boundary.  A zero id means that no capture was requested.
+struct RuntimeDependencyCaptureRequest {
+  std::uint64_t consumer_cell_id = 0;
+
+  bool requested() const noexcept { return consumer_cell_id != 0; }
+};
+
+// Synchronous host boundary for executing one CodeKind::NotebookCell. Slot
+// descriptors are bytecode-defined unsigned integers; the runtime does not
+// interpret them and leaves storage/publication policy to the host.
+struct RuntimeNotebookCellContext {
+  using LoadSlot = std::function<std::optional<Value>(std::uint32_t)>;
+  using StageSlot = std::function<bool(std::uint32_t, Value)>;
+  // Runtime-owned propagation hook for rich watched dependencies. Hosts leave
+  // it empty, request capture through dependency_capture, and read the closed
+  // set from ExecutionResult. The VM also records into the independent legacy
+  // RuntimeState capture when one is active.
+  using ObserveDependency = std::function<void(const RuntimeDependency &)>;
+  // Called only after LOAD_NOTEBOOK_SLOT has obtained and installed a value.
+  // This is a run-local observation hook: the VM still treats descriptor ids
+  // as opaque and leaves dependency identity/publication to the host adapter.
+  using ObserveSlot = std::function<bool(std::uint32_t)>;
+  // Returns values staged by this synchronous execution that are not yet
+  // published into the host's persistent root set. The callback is sampled at
+  // VM safepoints and must return an independent snapshot. Exceptions are
+  // converted to a deterministic NotebookCellError fault.
+  using GcRoots = std::function<std::vector<Value>()>;
+
+  LoadSlot load_slot;
+  StageSlot stage_slot;
+  ObserveSlot observe_slot;
+  ObserveDependency observe_dependency;
+  GcRoots gc_roots;
+  RuntimeDependencyCaptureRequest dependency_capture;
+};
+
 struct RuntimeWorldOptions {
   std::vector<RuntimeCapabilityGrant> capability_grants;
   std::vector<std::string> allowed_effects;
@@ -258,6 +329,13 @@ struct RuntimeWorldOptions {
   std::uint64_t virtual_time_step = 1;
   RuntimeReplayTrace expected_replay;
   std::shared_ptr<RuntimeIoProvider> io_provider;
+  RuntimeGcRootProvider external_gc_root_provider;
+  // Retained watch events are bounded independently of replay tracing. A
+  // cursor older than this window receives an explicit Overflow result.
+  std::size_t watch_event_capacity = 65536U;
+  // Optional notification-only hook installed before execution and shared by
+  // all stream generations. See RuntimeWatchActivityNotifier's lock contract.
+  RuntimeWatchActivityNotifier watch_activity_notifier;
 };
 
 struct TraceFrame {
@@ -308,21 +386,31 @@ struct ExecutionResult {
                   std::vector<RuntimeWatchEvent> result_watch_events = {},
                   std::uint64_t result_watch_epoch = 0,
                   std::vector<std::string> result_runtime_strings = {},
-                  std::vector<std::string> result_runtime_symbols = {})
+                  std::vector<std::string> result_runtime_symbols = {},
+                  RuntimeDependencySet result_dependency_capture = {})
       : value(std::move(result_value)), fault(std::move(result_fault)),
         locals(std::move(result_locals)),
         watch_events(std::move(result_watch_events)),
         watch_epoch(result_watch_epoch),
         runtime_strings(std::move(result_runtime_strings)),
-        runtime_symbols(std::move(result_runtime_symbols)) {}
+        runtime_symbols(std::move(result_runtime_symbols)),
+        dependency_capture(std::move(result_dependency_capture)) {}
 
   Value value = Value::null();
   std::optional<Fault> fault;
   std::vector<ExecutionLocal> locals;
   std::vector<RuntimeWatchEvent> watch_events;
   std::uint64_t watch_epoch = 0;
+  // A bounded stream can overflow during a single long execution. This status
+  // makes a truncated/missing run-local suffix explicit to diagnostics/hosts.
+  RuntimeWatchPollStatus watch_event_status = RuntimeWatchPollStatus::Ok;
   std::vector<std::string> runtime_strings;
   std::vector<std::string> runtime_symbols;
+  // Run-local rich dependency capture.  RuntimeWorld populates this only for
+  // an explicit RuntimeDependencyCaptureRequest on a notebook execution.  A
+  // fault may carry a partial set for diagnostics, but adapters must publish
+  // it only after the complete cell execution succeeds.
+  RuntimeDependencySet dependency_capture;
   // Native bridge calls may return only an append-only suffix. Callers apply
   // each non-empty vector at its offset; ordinary execute results use offset
   // zero and therefore retain their full-table semantics.
@@ -347,6 +435,10 @@ public:
                           const std::vector<Value> &args = {},
                           Value self = Value::null(),
                           Value block = Value::null());
+  ExecutionResult execute_notebook_cell(
+      std::uint32_t code_id, RuntimeNotebookCellContext context,
+      const std::vector<Value> &args = {},
+      std::optional<std::uint64_t> expected_world_epoch = std::nullopt);
   ExecutionResult invoke_native_extension(
       std::uint32_t code_id, const std::vector<Value> &args = {},
       Value self = Value::null(), bool include_runtime_names = true);
@@ -379,6 +471,20 @@ public:
   ExecutionResult freeze_world();
   RuntimePackageReloadResult
   reload_package_artifact(const pkg::PackageArtifact &artifact);
+  // Atomically replace the immutable notebook-only bytecode image while
+  // retaining this world's RuntimeState, heap, host root provider, and
+  // options. The image must contain no module init, classes, methods, exports,
+  // dependencies, or ordinary executable entry points. Rescue/Ensure code is
+  // allowed only as internal handler targets; closure/block code is rejected.
+  // Its string/symbol pools must retain the current runtime tables as exact
+  // prefixes so host-owned slot Values keep their numeric name IDs across the
+  // swap. New names may be appended by a compiler seeded from that snapshot.
+  // The current world must already have the same notebook-only shape; this
+  // deliberately excludes swapping an ordinary/native world while an
+  // out-of-lock bridge task may still hold its old image.
+  RuntimeNotebookImageInstallResult
+  install_notebook_image(std::shared_ptr<const bytecode::BcModule> image);
+  RuntimeNotebookImageNameSeed notebook_image_name_seed() const;
   RuntimeCapabilityCheckResult
   check_capability(const std::string &capability,
                    const std::string &target = {}) const;
@@ -400,7 +506,26 @@ public:
 
   std::uint64_t world_epoch() const;
   std::uint64_t watch_epoch() const;
+  // Diagnostic snapshot of the currently retained bounded suffix. Consumers
+  // that need loss detection must use watch_cursor()/poll_watch_events().
   std::vector<RuntimeWatchEvent> watch_events() const;
+  // Returns a cursor positioned after the current tail. Polling is read-only:
+  // the returned next_cursor becomes acknowledged only when the host stores it.
+  RuntimeWatchCursor watch_cursor() const;
+  RuntimeWatchPollResult
+  poll_watch_events(const RuntimeWatchCursor &cursor,
+                    std::size_t max_events = 0U) const;
+  // Wait until poll_watch_events(cursor) would return an event or a non-Ok
+  // cursor status, or until timeout expires. This read-only operation never
+  // acknowledges next_cursor and does not hold the world's execution lock
+  // while blocked, so producers may continue executing concurrently. There is
+  // no cancellation token: hosts that need shutdown/cancellation must use a
+  // finite timeout and keep this RuntimeWorld alive until the call returns.
+  // Oversized timeouts saturate at the steady clock's maximum deadline.
+  RuntimeWatchPollResult
+  wait_watch_events(const RuntimeWatchCursor &cursor,
+                    std::chrono::milliseconds timeout,
+                    std::size_t max_events = 0U) const;
   void begin_dependency_capture(std::uint64_t notebook_cell_id);
   RuntimeDependencySet end_dependency_capture();
   RuntimeDependencySet dependency_capture_snapshot() const;
@@ -419,6 +544,11 @@ public:
   RuntimeWorldMirror world_mirror() const;
   RuntimeDispatchCacheStats dispatch_cache_stats() const;
   RuntimeHeapStats heap_stats() const;
+  // Return a copyable handle to this world's heap.  RuntimeHeap copies share
+  // the same internal implementation, so the handle can safely outlive the
+  // RuntimeWorld (for example while a notebook execution result releases
+  // staged pins).
+  RuntimeHeap heap_handle() const;
   std::uint64_t drain_remote_frees();
   std::uint64_t drain_remote_frees(std::uint64_t worker_id);
   RuntimeWriteBarrierResult write_barrier(const Value &owner,

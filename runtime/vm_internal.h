@@ -4,11 +4,13 @@
 #include "runtime/heap.h"
 #include "runtime/value.h"
 #include "runtime/watch.h"
+#include "runtime/watch_internal.h"
 #include "runtime/world.h"
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -496,9 +498,12 @@ struct RuntimeState {
              std::owner_less<std::shared_ptr<const bytecode::BcModule>>>
         indices;
   };
-  // RuntimeState is copied while preparing a hot-reload replacement. Sharing
-  // the complete cache (not only its mutex) makes that copy a race-free pointer
-  // copy even while another task constructs a VM for the current image.
+  // RuntimeState is copied while preparing a hot-reload replacement. Ordinary
+  // copies share the complete cache (not only its mutex), which makes that
+  // copy a race-free pointer copy even while another task constructs a VM for
+  // the current image. A replacement candidate detaches this cache before it
+  // prepares its new image index so preparation cannot mutate the published
+  // generation.
   std::shared_ptr<CodeIndexCache> code_index_cache =
       std::make_shared<CodeIndexCache>();
   bool world_frozen = false;
@@ -509,10 +514,16 @@ struct RuntimeState {
   // strands.
   std::shared_ptr<std::mutex> reactive_state_mutex =
       std::make_shared<std::mutex>();
-  std::uint64_t watch_epoch = 0;
-  std::uint64_t next_watch_cell_id = 1;
-  std::uint64_t next_watch_handle_id = 1;
-  std::vector<RuntimeWatchEvent> watch_events;
+  // A host-owned snapshot provider (for example persistent notebook slots).
+  // The callback is copied into shared state and guarded for concurrent VM
+  // safepoints and explicit RuntimeWorld GC calls. Keeping it here means
+  // nested, pooled, and scheduler VMs all observe the same provider without
+  // retaining notebook/runtime-specific types.
+  std::shared_ptr<std::mutex> external_gc_root_provider_mutex =
+      std::make_shared<std::mutex>();
+  RuntimeGcRootProvider external_gc_root_provider;
+  std::shared_ptr<RuntimeWatchStream> watch_stream =
+      std::make_shared<RuntimeWatchStream>();
   bool dependency_capture_active = false;
   RuntimeDependencySet dependency_capture;
   std::unordered_map<std::string, std::size_t> dependency_capture_index;
@@ -595,60 +606,91 @@ struct RuntimeState {
 
   std::shared_ptr<RuntimeWatchCell> make_watch_cell(Value value,
                                                     std::string target_name) {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
+    const std::weak_ptr<RuntimeWatchStream> weak_stream = watch_stream;
     return std::make_shared<RuntimeWatchCell>(
-        std::move(value), next_watch_cell_id++, std::move(target_name));
+        std::move(value), watch_stream->allocate_cell_id(),
+        std::move(target_name), [weak_stream](RuntimeWatchEvent event) {
+          if (const std::shared_ptr<RuntimeWatchStream> stream =
+                  weak_stream.lock()) {
+            (void)stream->record(std::move(event));
+          }
+        });
+  }
+
+  std::shared_ptr<RuntimeWatchObjectState>
+  make_watch_object_state(std::uint64_t object_id) {
+    const std::weak_ptr<RuntimeWatchStream> weak_stream = watch_stream;
+    return std::make_shared<RuntimeWatchObjectState>(
+        object_id, [weak_stream](RuntimeWatchEvent event) {
+          if (const std::shared_ptr<RuntimeWatchStream> stream =
+                  weak_stream.lock()) {
+            (void)stream->record(std::move(event));
+          }
+        });
   }
 
   std::shared_ptr<RuntimeWatchHandle>
   make_watch_handle(std::shared_ptr<RuntimeWatchCell> cell,
                     std::string target_name) {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     return std::make_shared<RuntimeWatchHandle>(
-        std::move(cell), next_watch_handle_id++, std::move(target_name));
+        std::move(cell), watch_stream->allocate_handle_id(),
+        std::move(target_name));
   }
 
   std::shared_ptr<RuntimeWatchHandle>
   make_watch_handle(std::shared_ptr<RuntimeWatchObjectState> object_state,
                     std::string target_name, std::string field_name) {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
     return std::make_shared<RuntimeWatchHandle>(
-        std::move(object_state), next_watch_handle_id++, std::move(target_name),
-        std::move(field_name));
+        std::move(object_state), watch_stream->allocate_handle_id(),
+        std::move(target_name), std::move(field_name));
   }
 
   RuntimeWatchEvent record_watch_event(RuntimeWatchEvent event) {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
-    event.watch_epoch = ++watch_epoch;
-    watch_events.push_back(event);
-    return event;
-  }
-
-  std::size_t watch_event_count() const {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
-    return watch_events.size();
-  }
-
-  std::pair<std::vector<RuntimeWatchEvent>, std::uint64_t>
-  watch_events_since(std::size_t start) const {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
-    std::vector<RuntimeWatchEvent> events;
-    if (start <= watch_events.size()) {
-      events.assign(
-          watch_events.begin() + static_cast<std::ptrdiff_t>(start),
-          watch_events.end());
-    }
-    return {std::move(events), watch_epoch};
+    return watch_stream->record(std::move(event));
   }
 
   std::uint64_t watch_epoch_snapshot() const {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
-    return watch_epoch;
+    return watch_stream->latest_epoch();
+  }
+
+  RuntimeWatchCursor watch_cursor_snapshot() const {
+    return watch_stream->tail_cursor();
+  }
+
+  RuntimeWatchPollResult poll_watch_events(const RuntimeWatchCursor &cursor,
+                                           std::size_t max_events) const {
+    return watch_stream->poll(cursor, max_events);
+  }
+
+  RuntimeWatchPollResult
+  wait_watch_events(const RuntimeWatchCursor &cursor,
+                    std::chrono::milliseconds timeout,
+                    std::size_t max_events) const {
+    return watch_stream->wait(cursor, timeout, max_events);
+  }
+
+  void set_external_gc_root_provider(RuntimeGcRootProvider provider) {
+    std::lock_guard<std::mutex> lock(*external_gc_root_provider_mutex);
+    external_gc_root_provider = std::move(provider);
+  }
+
+  std::vector<Value> external_gc_roots_snapshot() const {
+    RuntimeGcRootProvider provider;
+    {
+      std::lock_guard<std::mutex> lock(*external_gc_root_provider_mutex);
+      provider = external_gc_root_provider;
+    }
+    // Host code must not run while the provider mutex is held.  Apart from
+    // reducing lock contention this permits a provider to take its own
+    // snapshot locks without creating a runtime/host lock inversion.
+    if (!provider) {
+      return {};
+    }
+    return provider();
   }
 
   std::vector<RuntimeWatchEvent> watch_events_snapshot() const {
-    std::lock_guard<std::mutex> lock(*reactive_state_mutex);
-    return watch_events;
+    return watch_stream->events_snapshot();
   }
 
   static std::string dependency_key(const RuntimeDependency &dependency) {
@@ -669,6 +711,7 @@ struct RuntimeState {
     dependency_capture_active = true;
     dependency_capture = RuntimeDependencySet{};
     dependency_capture.notebook_cell_id = notebook_cell_id;
+    dependency_capture.source = watch_stream->identity();
     dependency_capture_index.clear();
   }
 
@@ -860,10 +903,14 @@ struct RuntimeState {
   }
 
   std::shared_ptr<const CodeIndex> code_index_for_module(
-      const std::shared_ptr<const bytecode::BcModule> &module) {
+      const std::shared_ptr<const bytecode::BcModule> &module,
+      bool *inserted = nullptr) {
     std::lock_guard<std::mutex> lock(code_index_cache->mutex);
     const auto found = code_index_cache->indices.find(module);
     if (found != code_index_cache->indices.end()) {
+      if (inserted != nullptr) {
+        *inserted = false;
+      }
       return found->second;
     }
     std::uint32_t max_code_id = 0;
@@ -876,7 +923,50 @@ struct RuntimeState {
       (*index)[code.code_id] = &code;
     }
     code_index_cache->indices.emplace(module, index);
+    if (inserted != nullptr) {
+      *inserted = true;
+    }
     return index;
+  }
+
+  // A hot-reload candidate must own its cache before preparing a code index.
+  // The cache is intentionally shared by ordinary RuntimeState copies, so
+  // this explicit detach is the boundary that prevents pre-publication cache
+  // inserts from becoming visible through the active state.
+  void detach_code_index_cache_for_replacement() {
+    code_index_cache = std::make_shared<CodeIndexCache>();
+  }
+
+  // Roll back a cache entry prepared for a module that was never published.
+  // The caller serializes this with RuntimeWorld execution, and the cache
+  // entry itself is immutable, so erasing it cannot invalidate an active VM.
+  void erase_code_index_for_module(
+      const std::shared_ptr<const bytecode::BcModule> &module) noexcept {
+    if (module == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(code_index_cache->mutex);
+    code_index_cache->indices.erase(module);
+  }
+
+  // Notebook image replacement runs while RuntimeWorld's execution mutex is
+  // held, so no VM can still be starting from an older notebook image. Drop
+  // those strong-key cache entries at commit; otherwise every edit would keep
+  // the complete old bytecode/string/metadata image alive indefinitely.
+  void retain_only_code_index_for_module(
+      const std::shared_ptr<const bytecode::BcModule> &module) noexcept {
+    if (module == nullptr) {
+      return;
+    }
+    std::lock_guard<std::mutex> lock(code_index_cache->mutex);
+    for (auto it = code_index_cache->indices.begin();
+         it != code_index_cache->indices.end();) {
+      if (it->first.owner_before(module) || module.owner_before(it->first)) {
+        it = code_index_cache->indices.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   std::shared_ptr<const ShapeDescriptor>
@@ -952,10 +1042,96 @@ struct RuntimeState {
     ++world_epoch;
   }
 
+  struct NotebookModuleRuntimeStatePreparation {
+    std::vector<std::vector<std::shared_ptr<CallCacheEntry>>> call_caches;
+    std::vector<std::vector<std::shared_ptr<IvarCacheEntry>>> ivar_caches;
+    std::vector<std::uint32_t> resolved_class_refs;
+    std::unordered_map<std::uint32_t, std::uint32_t>
+        rest_param_index_by_code;
+    std::unordered_map<std::uint32_t, std::uint32_t>
+        kw_rest_param_index_by_code;
+    std::unordered_set<std::uint32_t> codes_needing_param_shaping;
+    bool has_any_rest_params = false;
+    bool has_any_shaped_params = false;
+  };
+
+  // A notebook image has no classes or methods. Prepare all allocations for
+  // its code-indexed caches without touching the active RuntimeState.
+  // RuntimeWorld validates the shape and bounds before calling this helper.
+  NotebookModuleRuntimeStatePreparation
+  prepare_notebook_module_runtime_state(const bytecode::BcModule &module) const {
+    std::uint32_t max_code_id = 0;
+    for (const bytecode::BcCode &code : module.code_objects) {
+      max_code_id = std::max(max_code_id, code.code_id);
+    }
+
+    NotebookModuleRuntimeStatePreparation prepared;
+    prepared.call_caches.resize(static_cast<std::size_t>(max_code_id) + 1U);
+    prepared.ivar_caches.resize(static_cast<std::size_t>(max_code_id) + 1U);
+    for (const bytecode::BcCode &code : module.code_objects) {
+      prepared.call_caches[code.code_id].resize(code.call_site_table.size());
+      prepared.ivar_caches[code.code_id].resize(code.ivar_site_table.size());
+    }
+
+    prepared.resolved_class_refs.assign(
+        module.const_pool.size(), kClassRefUnknown);
+    for (const bytecode::BcCode &code : module.code_objects) {
+      if ((code.flags & bytecode::kCodeFlagRestParam) == 0U) {
+        continue;
+      }
+      prepared.rest_param_index_by_code[code.code_id] =
+          code.flags >> bytecode::kCodeRestParamIndexShift;
+      prepared.codes_needing_param_shaping.insert(code.code_id);
+      prepared.has_any_rest_params = true;
+      prepared.has_any_shaped_params = true;
+    }
+
+    return prepared;
+  }
+
+  // Publish a prepared notebook runtime view. Every operation here is a
+  // scalar store or a standard-container swap/clear, so the active state and
+  // the active module can never be left at different generations by an
+  // allocation exception.
+  void commit_notebook_module_runtime_state(
+      NotebookModuleRuntimeStatePreparation prepared) noexcept {
+    // The notebook-only contract has no class state to resolve.  Keep the
+    // existing class vector untouched; the public boundary rejects both an
+    // old and a replacement image that contain classes or methods.
+    call_caches.swap(prepared.call_caches);
+    ivar_caches.swap(prepared.ivar_caches);
+    resolved_class_refs.swap(prepared.resolved_class_refs);
+    rest_param_index_by_code.swap(prepared.rest_param_index_by_code);
+    kw_rest_param_index_by_code.swap(prepared.kw_rest_param_index_by_code);
+    codes_needing_param_shaping.swap(prepared.codes_needing_param_shaping);
+    has_any_rest_params = prepared.has_any_rest_params;
+    has_any_shaped_params = prepared.has_any_shaped_params;
+    owners_initialized = true;
+    call_cache_entry_count = 0;
+    module_init_completed = false;
+    module_bindings.clear();
+    ++world_epoch;
+  }
+
+  void replace_notebook_module_runtime_state(
+      const bytecode::BcModule &module) {
+    commit_notebook_module_runtime_state(
+        prepare_notebook_module_runtime_state(module));
+  }
+
   void replace_module_runtime_state(const bytecode::BcModule &module) {
     std::vector<ClassRuntimeState> previous_classes = std::move(classes);
     classes.clear();
     classes.resize(module.classes.size());
+    // These maps describe code entry parameters, not persistent runtime
+    // state. A notebook image swap keeps the heap/state object but must never
+    // let a VM for the replacement image consult stale entries from the old
+    // image.
+    rest_param_index_by_code.clear();
+    kw_rest_param_index_by_code.clear();
+    codes_needing_param_shaping.clear();
+    has_any_rest_params = false;
+    has_any_shaped_params = false;
     if (root_shapes.size() < module.classes.size()) {
       root_shapes.resize(module.classes.size());
     }
@@ -1007,6 +1183,11 @@ struct RuntimeVmExecutionContext {
   std::shared_ptr<RuntimeState> state;
   std::string module_id;
   const RuntimeWorldOptions *world_options = nullptr;
+  // Copied into RuntimeState when a VM is constructed. This avoids retaining
+  // a pointer into RuntimeWorld's options from parked/persistent VMs.
+  RuntimeGcRootProvider external_gc_root_provider;
+  RuntimeNotebookCellContext notebook_cell_context;
+  bool notebook_cell_execution = false;
   const RuntimeCapabilityResolution *capabilities = nullptr;
   const RuntimeEffectValidation *effects = nullptr;
   std::function<void(RuntimeTraceEvent)> trace_recorder;

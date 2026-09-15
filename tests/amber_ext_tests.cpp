@@ -13,12 +13,15 @@
 #include "runtime/world.h"
 
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -748,6 +751,118 @@ AmberStatus blocking_thread_probe(AmberCtx *cx, const AmberValue * /*args*/,
   return AMBER_OK;
 }
 
+struct BlockingReloadGate {
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool entered = false;
+  bool released = false;
+};
+
+BlockingReloadGate blocking_reload_gate;
+
+AmberStatus blocking_reload_probe(AmberCtx *cx,
+                                  const AmberValue * /*args*/,
+                                  std::size_t argc, AmberValue *out) {
+  if (argc != 0U) {
+    return amber_fault(cx, "TypeError", "reload probe expects no arguments");
+  }
+  std::unique_lock<std::mutex> lock(blocking_reload_gate.mutex);
+  blocking_reload_gate.entered = true;
+  blocking_reload_gate.condition.notify_all();
+  blocking_reload_gate.condition.wait(
+      lock, [] { return blocking_reload_gate.released; });
+  *out = amber_make_bool(cx, 1);
+  return AMBER_OK;
+}
+
+amber::bytecode::BcCode notebook_probe_code(std::uint32_t code_id) {
+  amber::bytecode::BcCode code;
+  code.code_id = code_id;
+  code.kind = amber::bytecode::CodeKind::NotebookCell;
+  code.reg_count = 1;
+  code.instructions = {
+      {amber::bytecode::Opcode::LoadNull, {{0, false}}},
+      {amber::bytecode::Opcode::Return, {{0, false}}},
+  };
+  return code;
+}
+
+void test_blocking_native_call_excludes_image_replacement() {
+  constexpr std::uint32_t kNativeCodeId = 19U;
+  amber::bytecode::BcModule module;
+  module.strings = {"amber.native.bind:19",
+                    "F:test.blocking_reload_probe"};
+  module.attrs.push_back({0, 1});
+  module.code_objects.push_back(notebook_probe_code(kNativeCodeId));
+
+  RuntimeNativePackageDescriptor package;
+  package.thunks.push_back(
+      {"test.blocking_reload_probe",
+       reinterpret_cast<void *>(&blocking_reload_probe), true});
+  NativeExtRegistry::global().register_package(std::move(package));
+
+  RuntimeWorld world(module);
+  auto replacement = std::make_shared<amber::bytecode::BcModule>(module);
+  replacement->attrs.clear();
+  replacement->code_objects.clear();
+  replacement->code_objects.push_back(notebook_probe_code(20U));
+
+  {
+    std::lock_guard<std::mutex> lock(blocking_reload_gate.mutex);
+    blocking_reload_gate.entered = false;
+    blocking_reload_gate.released = false;
+  }
+  amber::runtime::ExecutionResult worker_result;
+  std::thread worker([&] {
+    worker_result = world.invoke_native_extension(kNativeCodeId);
+  });
+  bool entered = false;
+  {
+    std::unique_lock<std::mutex> lock(blocking_reload_gate.mutex);
+    entered = blocking_reload_gate.condition.wait_for(
+        lock, std::chrono::seconds(5),
+        [] { return blocking_reload_gate.entered; });
+    if (!entered) {
+      blocking_reload_gate.released = true;
+    }
+  }
+  if (!entered) {
+    blocking_reload_gate.condition.notify_all();
+    worker.join();
+    expect(false, "blocking native reload probe did not enter its thunk");
+  }
+
+  const amber::runtime::RuntimeNotebookImageInstallResult rejected =
+      world.install_notebook_image(replacement);
+  expect(!rejected.ok && !rejected.swapped &&
+             !rejected.diagnostics.empty() &&
+             rejected.diagnostics.front().error_name ==
+                 "NativeBridgeBusyError",
+         "image replacement must reject an active blocking native VM");
+
+  {
+    std::lock_guard<std::mutex> lock(blocking_reload_gate.mutex);
+    blocking_reload_gate.released = true;
+  }
+  blocking_reload_gate.condition.notify_all();
+  worker.join();
+  expect(worker_result.ok() && worker_result.value.is_bool() &&
+             worker_result.value.as_bool(),
+         "rejected replacement must let the active native call finish");
+
+  const amber::runtime::RuntimeNotebookImageInstallResult installed =
+      world.install_notebook_image(replacement);
+  expect(installed.ok && installed.swapped,
+         "image replacement should succeed after the blocking call exits");
+  const amber::runtime::ExecutionResult removed_binding =
+      world.invoke_native_extension(kNativeCodeId);
+  expect(!removed_binding.ok() && removed_binding.fault.has_value() &&
+             removed_binding.fault->error_name == "VMError" &&
+             removed_binding.fault->message.find("unknown native-extension") !=
+                 std::string::npos,
+         "replacement must drop old native code and registry bindings");
+}
+
 void test_runtime_world_direct_native_extension_call() {
   amber::bytecode::BcModule module;
   module.strings = {"amber.native.bind:7", "F:test.direct_increment",
@@ -831,6 +946,7 @@ int main() {
   test_native_extension_thunk_import();
   test_native_extension_runtime_contributions();
   test_direct_amber_ctx_dispatch();
+  test_blocking_native_call_excludes_image_replacement();
   test_runtime_world_direct_native_extension_call();
   std::cout << "amber_ext_tests: ok\n";
   return 0;

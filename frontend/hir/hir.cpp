@@ -150,12 +150,10 @@ bool bool_value(const ast::Expr &expr, const std::string &name) {
 
 bool contains_nonlocal_return_for_block(const ast::Expr &expr,
                                         bool root = true) {
-  if (!root && expr.kind == "AstBlock" &&
-      bool_value(expr, "lambda_literal")) {
+  if (!root && expr.kind == "AstBlock" && bool_value(expr, "lambda_literal")) {
     return false;
   }
-  if (!root && (expr.kind == "AstDefStmt" ||
-                expr.kind == "AstClassMethodDef" ||
+  if (!root && (expr.kind == "AstDefStmt" || expr.kind == "AstClassMethodDef" ||
                 expr.kind == "AstClauseDef")) {
     return false;
   }
@@ -380,8 +378,10 @@ void append_node_json(std::ostringstream &out, const ast::Expr &expr) {
 class Lowerer {
 public:
   Lowerer(const std::vector<std::unique_ptr<ast::Expr>> &items,
-          const std::string &module_name, const binder::BindGraph &graph)
-      : items_(items), module_name_(module_name), graph_(graph) {
+          const std::string &module_name, const binder::BindGraph &graph,
+          const NotebookLoweringOptions *notebook_options = nullptr)
+      : items_(items), module_name_(module_name), graph_(graph),
+        notebook_options_(notebook_options) {
     for (const binder::Binding &binding : graph_.bindings) {
       bindings_by_id_.emplace(binding.id, &binding);
     }
@@ -390,8 +390,9 @@ public:
                                   ref.span.end.offset, ref.name, ref.context,
                                   ref.ref_kind},
                            &ref);
-      refs_by_key_.emplace(RefKey{-1, ref.span.start.offset, ref.span.end.offset,
-                                  ref.name, ref.context, ref.ref_kind},
+      refs_by_key_.emplace(RefKey{-1, ref.span.start.offset,
+                                  ref.span.end.offset, ref.name, ref.context,
+                                  ref.ref_kind},
                            &ref);
       refs_by_scope_[ref.scope_index].push_back(&ref);
     }
@@ -441,6 +442,31 @@ public:
     return program;
   }
 
+  NotebookLoweringResult lower_notebook() {
+    NotebookLoweringResult result;
+    validate_notebook_items(&result.diagnostics);
+    if (!result.diagnostics.empty()) {
+      return result;
+    }
+
+    const int module_scope = find_scope_index("module", module_span(), "");
+    const std::string procedure_id = lower_module_procedure(
+        module_scope, collect_module_exec_items(), "notebook_cell");
+    for (Procedure &procedure : procedures_) {
+      if (procedure.id == procedure_id) {
+        result.procedure = std::make_unique<Procedure>(std::move(procedure));
+      } else {
+        result.blocks.push_back(std::move(procedure));
+      }
+    }
+    if (result.procedure == nullptr) {
+      result.diagnostics.push_back({"NB1001", "error", "hir",
+                                    "failed to lower notebook cell",
+                                    module_span()});
+    }
+    return result;
+  }
+
 private:
   struct ProcedureContext {
     int scope_index = -1;
@@ -455,6 +481,7 @@ private:
   const std::vector<std::unique_ptr<ast::Expr>> &items_;
   std::string module_name_;
   const binder::BindGraph &graph_;
+  const NotebookLoweringOptions *notebook_options_ = nullptr;
   std::vector<Procedure> procedures_;
   std::map<std::string, const binder::Binding *> bindings_by_id_;
   std::map<RefKey, const binder::Reference *> refs_by_key_;
@@ -471,6 +498,84 @@ private:
       return lexer::Span{};
     }
     return ast::join_spans(items_.front()->span, items_.back()->span);
+  }
+
+  void
+  validate_notebook_items(std::vector<lexer::Diagnostic> *diagnostics) const {
+    if (diagnostics == nullptr) {
+      return;
+    }
+    const std::set<std::string> unsupported = {
+        "AstAttrDef",
+        "AstClassDef",    "AstClassMethodDef", "AstClassPropDef",
+        "AstClauseDef",   "AstDefStmt",        "AstExportStmt",
+        "AstImportStmt",  "AstMixinDef",       "AstNumericProfile",
+        "AstPackageDecl", "AstPropDef"};
+    std::function<void(const ast::Expr &)> visit = [&](const ast::Expr &expr) {
+      if (expr.kind == "AstBlock" && bool_value(expr, "lambda_literal")) {
+        diagnostics->push_back({"NB1002", "error", "hir",
+            "standalone lambda literals are not supported in notebook cells", expr.span});
+        return;
+      }
+      if (expr.kind == "AstImportStmt") {
+        // Native stdlib imports need no module initializer: every imported
+        // binding lowers to an existing runtime constant. Keep rejecting
+        // imports that would require linking a new ordinary module image.
+        bool found = false;
+        bool native_only = true;
+        for (const auto &binding : graph_.bindings) {
+          if (binding.kind != "import_alias" ||
+              binding.span.start.offset < expr.span.start.offset ||
+              binding.span.end.offset > expr.span.end.offset) continue;
+          found = true;
+          native_only = native_only &&
+              !stdlib_import_alias_constant_path(binding).empty();
+        }
+        if (found && native_only) return;
+      }
+      if (unsupported.count(expr.kind) != 0U) {
+        diagnostics->push_back(
+            {"NB1002", "error", "hir",
+             "unsupported construct in notebook cell profile: " + expr.kind,
+             expr.span});
+        return;
+      }
+      if (expr.kind == "AstIvar" || expr.kind == "AstCvar" ||
+          expr.kind == "AstPatternAssign") {
+        diagnostics->push_back(
+            {"NB1006", "error", "hir",
+             "only simple name assignments are supported in notebook cells",
+             expr.span});
+        return;
+      }
+      if (expr.kind == "AstAssign") {
+        const ast::Expr *left = node_field(expr, "left");
+        if (left == nullptr || left->kind != "AstName") {
+          diagnostics->push_back(
+              {"NB1006", "error", "hir",
+               "only simple name assignments are supported in notebook cells",
+               expr.span});
+          return;
+        }
+      }
+      for (const ast::NodeField &field : expr.node_fields) {
+        if (field.value != nullptr) {
+          visit(*field.value);
+        }
+      }
+      for (const ast::ListField &field : expr.list_fields) {
+        for (const std::unique_ptr<ast::Expr> &value : field.values) {
+          if (value != nullptr) {
+            visit(*value);
+          }
+        }
+      }
+    };
+    for (const std::unique_ptr<ast::Expr> &item : items_) {
+      if (item != nullptr) {
+        visit(*item);
+      }
+    }
   }
 
   int find_scope_index(const std::string &kind, const lexer::Span &span,
@@ -499,7 +604,8 @@ private:
     std::size_t seen = 0;
     for (std::size_t i = 0; i < graph_.scopes.size(); ++i) {
       const binder::Scope &scope = graph_.scopes[i];
-      if (scope.kind == kind && scope.owner == owner && same_span(scope.span, span)) {
+      if (scope.kind == kind && scope.owner == owner &&
+          same_span(scope.span, span)) {
         if (seen == cursor) {
           ++cursor;
           return static_cast<int>(i);
@@ -659,8 +765,7 @@ private:
            item.kind != "AstExportStmt" && item.kind != "AstClassDef" &&
            item.kind != "AstMixinDef" && item.kind != "AstDefStmt" &&
            item.kind != "AstClassMethodDef" && item.kind != "AstClauseDef" &&
-           item.kind != "AstNumericProfile" &&
-           !ast_is_property_decl(item);
+           item.kind != "AstNumericProfile" && !ast_is_property_decl(item);
   }
 
   bool is_module_callable_decl(const ast::Expr &item) const {
@@ -1439,8 +1544,9 @@ private:
 
   std::string
   lower_module_procedure(int scope_index,
-                         const std::vector<const ast::Expr *> &body_items) {
-    return lower_procedure(scope_index, "__module_init__", "module_init",
+                         const std::vector<const ast::Expr *> &body_items,
+                         const std::string &kind = "module_init") {
+    return lower_procedure(scope_index, "__module_init__", kind,
                            "__module_init__", nullptr, body_items,
                            module_span());
   }
@@ -2109,8 +2215,8 @@ private:
       const bool nonlocal =
           current_proc_ != nullptr &&
           procedures_[current_proc_->procedure_index].nonlocal_return_block;
-      auto node = make_node(nonlocal ? "HNonlocalReturn" : "HReturn",
-                            expr.span);
+      auto node =
+          make_node(nonlocal ? "HNonlocalReturn" : "HReturn", expr.span);
       if (const ast::Expr *value = node_field(expr, "value")) {
         node->node_field("value", lower_expr(*value));
       } else {
@@ -2160,8 +2266,8 @@ private:
     }
     if (expr.kind == "AstCallableRef") {
       const std::string ref_kind = string_value(expr, "ref_kind");
-      const ast::Expr *value = node_field(
-          expr, ref_kind == "binding" ? "target" : "closure");
+      const ast::Expr *value =
+          node_field(expr, ref_kind == "binding" ? "target" : "closure");
       if (value != nullptr) {
         return lower_expr(*value);
       }
@@ -2224,13 +2330,35 @@ private:
 
   std::unique_ptr<Node> lower_name(const ast::Expr &expr,
                                    const std::string &ref_kind) {
-    // `self` is the current method receiver as a first-class value. It is not an
-    // ordinary binding (a bare name would lower to a name/const lookup that
+    // `self` is the current method receiver as a first-class value. It is not
+    // an ordinary binding (a bare name would lower to a name/const lookup that
     // cannot be resolved), so load it directly from the frame. This makes both
     // the receiver form (`self.method()`) and the value form (`f(self)`,
     // `blk(self)`) work; outside a method the frame self is null.
     if (string_value(expr, "name") == "self") {
       return make_node("HSelf", expr.span);
+    }
+    if (notebook_options_ != nullptr &&
+        notebook_options_->external_read_descriptor) {
+      const std::optional<std::uint32_t> descriptor =
+          notebook_options_->external_read_descriptor(
+              string_value(expr, "name"), expr.span);
+      if (descriptor.has_value()) {
+        auto node = make_node("HLoadNotebookSlot", expr.span);
+        node->string_field("descriptor", std::to_string(*descriptor));
+        return node;
+      }
+    }
+    if (notebook_options_ != nullptr &&
+        notebook_options_->external_read_constant_path) {
+      const std::optional<std::string> path =
+          notebook_options_->external_read_constant_path(
+              string_value(expr, "name"), expr.span);
+      if (path.has_value()) {
+        auto node = make_node("HLoadConst", expr.span);
+        node->string_field("path", *path);
+        return node;
+      }
     }
     const binder::Reference *ref =
         find_reference(expr.span, string_value(expr, "name"),
@@ -2328,8 +2456,8 @@ private:
       // method body) has no local slot or capture here. Emit a module-qualified
       // constant path so the runtime resolves it against the owning module's
       // persisted binding (module_bindings). A bare name would lower to a
-      // single-segment LOOKUP_CONST that carries no module context and cannot be
-      // resolved once multiple modules are linked in the native whole-graph
+      // single-segment LOOKUP_CONST that carries no module context and cannot
+      // be resolved once multiple modules are linked in the native whole-graph
       // merge (it would fault as an unknown class path). Same-module functions
       // referenced from module scope keep their local-slot/capture lowering
       // above; only the cross-scope fallback needs qualifying.
@@ -2402,6 +2530,20 @@ private:
       node->string_field("slot",
                          slot.empty() ? string_value(*left, "name") : slot);
       node->node_field("expr", lower_assigned_value());
+      if (notebook_options_ != nullptr &&
+          current_proc_ != nullptr &&
+          procedures_[current_proc_->procedure_index].kind == "notebook_cell" &&
+          notebook_options_->declared_write_descriptor) {
+        const std::optional<std::uint32_t> descriptor =
+            notebook_options_->declared_write_descriptor(
+                string_value(*left, "name"));
+        if (descriptor.has_value()) {
+          auto publish = make_node("HStoreNotebookSlot", expr.span);
+          publish->string_field("descriptor", std::to_string(*descriptor));
+          publish->node_field("expr", std::move(node));
+          return publish;
+        }
+      }
       return node;
     }
     if (left->kind == "AstIvar") {
@@ -2550,8 +2692,7 @@ private:
           block = lower_block_suffix(*tails->values[i + 1]);
           ++i;
         } else if (i + 1 < tail_count &&
-                   tails->values[i + 1]->kind ==
-                       "AstTailMultiblockSuffix") {
+                   tails->values[i + 1]->kind == "AstTailMultiblockSuffix") {
           multiblock_tail = tails->values[i + 1].get();
           ++i;
         }
@@ -2560,8 +2701,7 @@ private:
         if (lowered) {
           if (multiblock_tail != nullptr) {
             std::vector<std::unique_ptr<Node>> multiblock_args;
-            append_multiblock_keyword_args(*multiblock_tail,
-                                           &multiblock_args);
+            append_multiblock_keyword_args(*multiblock_tail, &multiblock_args);
             ast::ListField *kw_args = mutable_list_field(*lowered, "kw_args");
             if (kw_args != nullptr) {
               for (std::unique_ptr<Node> &arg : multiblock_args) {
@@ -2569,8 +2709,8 @@ private:
               }
             }
             lowered->bool_field("source_multiblock", true);
-            lowered->span = ast::join_spans(lowered->span,
-                                            multiblock_tail->span);
+            lowered->span =
+                ast::join_spans(lowered->span, multiblock_tail->span);
           }
           current = std::move(lowered);
           ++i;
@@ -2597,8 +2737,7 @@ private:
           has_block_suffix = true;
           ++i;
         } else if (i + 1 < tail_count &&
-                   tails->values[i + 1]->kind ==
-                       "AstTailMultiblockSuffix") {
+                   tails->values[i + 1]->kind == "AstTailMultiblockSuffix") {
           append_multiblock_keyword_args(*tails->values[i + 1], &kw_args);
           has_multiblock_suffix = true;
           ++i;
@@ -2619,8 +2758,7 @@ private:
         auto node = make_node("HSend", node_span);
         node->node_field("receiver", std::move(receiver));
         node->string_field("selector", selector);
-        if (!has_explicit_call && !has_block_suffix &&
-            !has_multiblock_suffix) {
+        if (!has_explicit_call && !has_block_suffix && !has_multiblock_suffix) {
           node->bool_field("property_access", true);
         }
         if (has_multiblock_suffix) {
@@ -2653,16 +2791,14 @@ private:
             block = lower_block_suffix(*tails->values[i + 1]);
             ++i;
           } else if (i + 1 < tail_count &&
-                     tails->values[i + 1]->kind ==
-                         "AstTailMultiblockSuffix") {
+                     tails->values[i + 1]->kind == "AstTailMultiblockSuffix") {
             multiblock_tail = tails->values[i + 1].get();
             ++i;
           }
           current = lower_implicit_receiver_send(*base, tail, std::move(block));
           if (multiblock_tail != nullptr) {
             std::vector<std::unique_ptr<Node>> multiblock_args;
-            append_multiblock_keyword_args(*multiblock_tail,
-                                           &multiblock_args);
+            append_multiblock_keyword_args(*multiblock_tail, &multiblock_args);
             ast::ListField *lowered_kw_args =
                 mutable_list_field(*current, "kw_args");
             if (lowered_kw_args != nullptr) {
@@ -2684,10 +2820,9 @@ private:
           block = lower_block_suffix(*tails->values[i + 1]);
           ++i;
         } else if (i + 1 < tail_count &&
-                   tails->values[i + 1]->kind ==
-                       "AstTailMultiblockSuffix") {
-          source_multiblock = append_multiblock_keyword_args(
-              *tails->values[i + 1], &kw_args);
+                   tails->values[i + 1]->kind == "AstTailMultiblockSuffix") {
+          source_multiblock =
+              append_multiblock_keyword_args(*tails->values[i + 1], &kw_args);
           ++i;
         }
         const lexer::Span node_span = ast::join_spans(
@@ -2772,9 +2907,8 @@ private:
     if (name == "self") {
       return nullptr;
     }
-    const binder::Reference *ref =
-        find_reference(base.span, name, string_value(base, "syntax_context"),
-                       "name");
+    const binder::Reference *ref = find_reference(
+        base.span, name, string_value(base, "syntax_context"), "name");
     if (ref == nullptr || !ref->resolved) {
       return nullptr;
     }
@@ -2797,34 +2931,32 @@ private:
         (name.front() >= 'A' && name.front() <= 'Z')) {
       return false;
     }
-    const binder::Reference *ref =
-        find_reference(base.span, name, string_value(base, "syntax_context"),
-                       "name");
+    const binder::Reference *ref = find_reference(
+        base.span, name, string_value(base, "syntax_context"), "name");
     return ref == nullptr || !ref->resolved;
   }
 
   bool binding_is_object_member(const binder::Binding &binding) const {
     if (!binding_is_member(binding) || binding.scope_index < 0 ||
-        static_cast<std::size_t>(binding.scope_index) >=
-            graph_.scopes.size()) {
+        static_cast<std::size_t>(binding.scope_index) >= graph_.scopes.size()) {
       return false;
     }
     const std::string &scope_kind = graph_.scopes[binding.scope_index].kind;
     return scope_kind == "class" || scope_kind == "mixin";
   }
 
-  std::unique_ptr<Node> lower_implicit_receiver_send(
-      const ast::Expr &base, const ast::Expr &tail,
-      std::unique_ptr<Node> block = nullptr) {
+  std::unique_ptr<Node>
+  lower_implicit_receiver_send(const ast::Expr &base, const ast::Expr &tail,
+                               std::unique_ptr<Node> block = nullptr) {
     const binder::Binding *binding = implicit_receiver_member_binding(base);
     std::vector<std::unique_ptr<Node>> pos_args;
     std::vector<std::unique_ptr<Node>> kw_args;
     collect_call_args(tail, &pos_args, &kw_args, &block);
     auto node = make_node("HSend", ast::join_spans(base.span, tail.span));
     node->node_field("receiver", make_node("HSelf", base.span));
-    node->string_field("selector",
-                       binding != nullptr ? binding->name
-                                          : string_value(base, "name"));
+    node->string_field("selector", binding != nullptr
+                                       ? binding->name
+                                       : string_value(base, "name"));
     node->list_field("pos_args", std::move(pos_args));
     node->list_field("kw_args", std::move(kw_args));
     if (block) {
@@ -2837,9 +2969,8 @@ private:
     if (base.kind != "AstName" || string_value(base, "name") != "send") {
       return false;
     }
-    const binder::Reference *ref =
-        find_reference(base.span, "send", string_value(base, "syntax_context"),
-                       "name");
+    const binder::Reference *ref = find_reference(
+        base.span, "send", string_value(base, "syntax_context"), "name");
     return ref == nullptr || !ref->resolved;
   }
 
@@ -2907,9 +3038,8 @@ private:
         string_value(base, "name") != "Kernel") {
       return send;
     }
-    const binder::Reference *kernel_ref =
-        find_reference(base.span, "Kernel",
-                       string_value(base, "syntax_context"), "name");
+    const binder::Reference *kernel_ref = find_reference(
+        base.span, "Kernel", string_value(base, "syntax_context"), "name");
     if (kernel_ref != nullptr && kernel_ref->resolved) {
       return send;
     }
@@ -2972,9 +3102,9 @@ private:
     }
   }
 
-  bool append_multiblock_keyword_args(
-      const ast::Expr &tail,
-      std::vector<std::unique_ptr<Node>> *kw_args) {
+  bool
+  append_multiblock_keyword_args(const ast::Expr &tail,
+                                 std::vector<std::unique_ptr<Node>> *kw_args) {
     const ast::Expr *suffix = node_field(tail, "suffix");
     const ast::ListField *entries =
         suffix == nullptr ? nullptr : list_field(*suffix, "entries");
@@ -3177,8 +3307,8 @@ private:
         return found->second;
       }
     }
-    const auto found = refs_by_key_.find(
-        RefKey{-1, span.start.offset, span.end.offset, name, context, ref_kind});
+    const auto found = refs_by_key_.find(RefKey{
+        -1, span.start.offset, span.end.offset, name, context, ref_kind});
     return found == refs_by_key_.end() ? nullptr : found->second;
   }
 
@@ -3202,9 +3332,10 @@ private:
                : found->second;
   }
 
-  std::string procedure_slot_for_name(
-      const std::map<std::string, std::string> &slots,
-      const std::string &name, const std::string &context) const {
+  std::string
+  procedure_slot_for_name(const std::map<std::string, std::string> &slots,
+                          const std::string &name,
+                          const std::string &context) const {
     std::string match;
     for (const auto &[binding_id, slot] : slots) {
       const binder::Binding *binding = binding_for_id(binding_id);
@@ -3220,9 +3351,9 @@ private:
     return match;
   }
 
-  std::unique_ptr<Node> lower_procedure_name_fallback(
-      const ast::Expr &expr, const std::string &name,
-      const std::string &context) const {
+  std::unique_ptr<Node>
+  lower_procedure_name_fallback(const ast::Expr &expr, const std::string &name,
+                                const std::string &context) const {
     if (current_proc_ == nullptr) {
       return nullptr;
     }
@@ -3265,7 +3396,8 @@ private:
     // bare `import io` / `import net` reference must lower to HLoadConst rather
     // than reading an uninitialized local (verifier BC1313).
     if (binding.role == "module_import" &&
-        (binding.source == "io" || binding.source == "net")) {
+        (binding.source == "io" || binding.source == "net" ||
+         binding.source == "system")) {
       return binding.source;
     }
     // `import net.http` binds `http` to the net.http namespace constant.
@@ -3404,6 +3536,15 @@ Program lower_module(const std::vector<std::unique_ptr<ast::Expr>> &items,
   return lowerer.lower();
 }
 
+NotebookLoweringResult
+lower_notebook_cell(const std::vector<std::unique_ptr<ast::Expr>> &items,
+                    const std::string &module_name,
+                    const binder::BindGraph &bind_graph,
+                    const NotebookLoweringOptions &options) {
+  Lowerer lowerer(items, module_name, bind_graph, &options);
+  return lowerer.lower_notebook();
+}
+
 std::string program_to_json(const Program &program,
                             const std::string &module_name,
                             const std::string &source_hash) {
@@ -3428,8 +3569,7 @@ std::string program_to_json(const Program &program,
     out << "    {\"id\":\"" << json_escape(procedure.id) << "\",\"name\":\""
         << json_escape(procedure.name) << "\",\"kind\":\""
         << json_escape(procedure.kind) << "\",\"owner\":\""
-        << json_escape(procedure.owner)
-        << "\",\"nonlocal_return_block\":"
+        << json_escape(procedure.owner) << "\",\"nonlocal_return_block\":"
         << (procedure.nonlocal_return_block ? "true" : "false")
         << ",\"needs_nonlocal_return_target\":"
         << (procedure.needs_nonlocal_return_target ? "true" : "false")

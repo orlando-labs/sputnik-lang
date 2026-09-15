@@ -4353,7 +4353,12 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
     return expr;
   };
 
-  if (token.lexeme.size() < 2 || token.lexeme.front() != '"') {
+  const bool tagged_single = token.lexeme.size() >= 2 &&
+      token.lexeme.front() == '\'' && current_ >= 2 &&
+      tokens_[current_ - 2].kind == lexer::TokenKind::Identifier &&
+      tokens_[current_ - 2].span.end.offset == token.span.start.offset;
+  if (token.lexeme.size() < 2 ||
+      (token.lexeme.front() != '"' && !tagged_single)) {
     return literal();
   }
 
@@ -4512,7 +4517,8 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
   push_text_part(text_begin, content_end);
 
   auto expr = ast::make_expr("AstStringLiteral", token.span);
-  expr->string_field("quote_kind", block ? "block" : "double");
+  expr->string_field("quote_kind", block ? "block" :
+                                     (tagged_single ? "single" : "double"));
   expr->bool_field("interpolation", saw_interpolation);
   expr->list_field("parts", std::move(parts));
   return expr;
@@ -4520,6 +4526,21 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
 
 std::unique_ptr<ast::Expr>
 Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
+  // An adjacent tagged literal completes its call before any following
+  // postfix. This lets cmd'program'.capture() address the Command result.
+  if (check(lexer::TokenKind::String) && can_accept_bare_call(*expr) &&
+      current().span.start.offset == expr->span.end.offset) {
+    const auto token = advance();
+    auto literal = parse_string_literal_expr(token);
+    std::vector<std::unique_ptr<ast::Expr>> args;
+    args.push_back(std::move(literal));
+    auto tail = ast::make_expr("AstTailCall", token.span);
+    tail->string_field("call_style", "bare");
+    tail->list_field("args", std::move(args));
+    auto chain = ensure_postfix_chain(std::move(expr));
+    append_postfix_tail(*chain, std::move(tail));
+    return chain;
+  }
   if (starts_multiblock_suffix()) {
     const lexer::Token with_token = current();
     const bool completed_call = has_completed_call_segment(*expr);

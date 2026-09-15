@@ -410,12 +410,19 @@ syntax Amber already has:
    Dotted heads use the same module alias rule as the binder: `import orm`
    exposes `orm.model`, while `import db.postgres` exposes `postgres.sql`
    unless an explicit `as` alias is provided.
-5. **String tag** — `sql"""…"""` / `html"""…"""`: an identifier immediately
-   followed (no whitespace) by a text-block opener invokes a **string-tag
+5. **String tag** — `sql"…"`, `sql'…'`, `sql"""…"""`: an identifier immediately
+   followed (no whitespace) by a string-literal opener invokes a **string-tag
    macro** on the literal (JS tagged templates / Scala interpolators). The
    macro receives a dedicated `Ast.StringTemplate` node — post-dedent static
    chunks plus unevaluated interpolant `Ast`s and the text/raw flag — not a
    call's argument list, so the surface is declared at the definition site:
+
+   The one-line single-quoted tag supports `#{…}` just like the double-quoted
+   tag and allows unescaped double quotes in static text. Ordinary untagged
+   single-quoted strings keep their literal interpolation markers. The
+   template reports `quote_kind` as `single`, `double`, or `block`; source and
+   cooked escape parts remain available. Triple-quoted text blocks still
+   require a newline after their opener.
 
    ```amber
    string_tag macro def sql(t as Ast.StringTemplate) -> Ast:

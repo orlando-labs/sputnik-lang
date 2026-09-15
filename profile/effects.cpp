@@ -56,7 +56,7 @@ const std::set<std::string> &canonical_name_set() {
   static const std::set<std::string> names = {
       "alloc", "async",  "db",     "env",      "ffi",    "fs",     "gpu",
       "mut",   "net",    "random", "reflect",  "schema", "strand", "time",
-      "trace", "unsafe", "watch",  "workflow", "world"};
+      "trace", "unsafe", "watch",  "workflow", "world", "process"};
   return names;
 }
 

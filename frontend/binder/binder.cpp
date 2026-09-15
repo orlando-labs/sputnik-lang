@@ -1418,6 +1418,7 @@ bool native_prelude_name_impl(const std::string &name) {
       "Object",
       "Ok",
       "Range",
+      "Regexp",
       "SecureRandom",
       "Set",
       "Str",
@@ -1439,6 +1440,7 @@ bool native_prelude_name_impl(const std::string &name) {
       "pp",
       "print",
       "task",
+      "system",
   // Builtin runtime error classes resolve to native prelude constants at
   // runtime (see lookup_native_prelude_constant / runtime_error_id), so they
   // may be referenced in expression position too -- e.g. ValueError.new(msg)

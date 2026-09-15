@@ -31,6 +31,8 @@ Check with `make spec-sync-check`.
 | `docs/engineering/modern-profiles-v1.md` | 1 |
 | `docs/engineering/native-backend-equivalence-v1.md` | 6 |
 | `docs/engineering/native-v1.md` | 5 |
+| `docs/engineering/notebook-core-v1.md` | 9 |
+| `docs/engineering/notebook-project-v1.md` | 6 |
 | `docs/engineering/numeric-profile-v1.md` | 10 |
 | `docs/engineering/package-v1.md` | 1 |
 | `docs/engineering/replay-v1.md` | 1 |
@@ -44,11 +46,11 @@ Check with `make spec-sync-check`.
 
 | Registry | Lines | SHA-256 |
 | --- | ---: | --- |
-| `spec/registries/bytecode_sections.yaml` | 88 | `a1ece16c9bc4bb08c156aa91646f89ad9f8398add5191f4f6a17d5cabc487907` |
+| `spec/registries/bytecode_sections.yaml` | 91 | `ebadf7e28d0757943abaeb588d9a4301ec8374fcebd06e744dd668070991b65c` |
 | `spec/registries/diagnostics.yaml` | 111 | `fe0aaed4de73b6307c372ffcb957124d2b548f15b93f27bc6faafd7ebd703862` |
 | `spec/registries/opcodes.yaml` | 194 | `0546d31b062a926190382cf1b9711ee80ad6ad8d312e9f6426a8a69769664e67` |
 | `spec/registries/prelude.yaml` | 469 | `7637c3af5f5b9090b90bfd89d9e289bc1cf623201b60a9b6d8b7e0878a1d9602` |
-| `spec/registries/runtime_errors.yaml` | 263 | `2412fd039deca14565f9f9d545190dd3a03769973e99050d790a14a737bfa1f6` |
+| `spec/registries/runtime_errors.yaml` | 279 | `f5c3b50bd751296878c6517569c6b2f748e27d5dab5904428f7f3478ef2c0182` |
 | `spec/registries/tokens.yaml` | 127 | `8f625d0ae80376759b848e935282dca05065e1d7b742c69b6371d611f1a42fab` |
 
 ## Anchor Map
@@ -139,8 +141,8 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 71 | 2 | [`clause-defs`](../../docs/engineering/ast-v1.md#clause-defs) | Clause defs |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 1 | 1 | [`amberbcv1`](../../docs/engineering/bc-v1.md#amberbcv1) | amber.bc.v1 |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 22 | 2 | [`container`](../../docs/engineering/bc-v1.md#container) | Container |
-| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 55 | 2 | [`record-encoding`](../../docs/engineering/bc-v1.md#record-encoding) | Record Encoding |
-| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 138 | 2 | [`verifier-skeleton`](../../docs/engineering/bc-v1.md#verifier-skeleton) | Verifier Skeleton |
+| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 59 | 2 | [`record-encoding`](../../docs/engineering/bc-v1.md#record-encoding) | Record Encoding |
+| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 149 | 2 | [`verifier-skeleton`](../../docs/engineering/bc-v1.md#verifier-skeleton) | Verifier Skeleton |
 | [`docs/engineering/bind-v1.md`](../../docs/engineering/bind-v1.md) | 1 | 1 | [`amberbindv1`](../../docs/engineering/bind-v1.md#amberbindv1) | amber.bind.v1 |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 1 | 1 | [`amberbuildv1`](../../docs/engineering/build-v1.md#amberbuildv1) | amber.build.v1 |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 19 | 2 | [`manifest-shape`](../../docs/engineering/build-v1.md#manifest-shape) | Manifest Shape |
@@ -215,6 +217,21 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 74 | 2 | [`runtime-bridge`](../../docs/engineering/native-v1.md#runtime-bridge) | Runtime Bridge |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 90 | 2 | [`validation`](../../docs/engineering/native-v1.md#validation) | Validation |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 110 | 2 | [`w15-closure`](../../docs/engineering/native-v1.md#w15-closure) | W15 Closure |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 1 | 1 | [`amber-notebook-core-v1`](../../docs/engineering/notebook-core-v1.md#amber-notebook-core-v1) | Amber notebook core v1 |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 3 | 2 | [`scope`](../../docs/engineering/notebook-core-v1.md#scope) | Scope |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 18 | 2 | [`dependency-model`](../../docs/engineering/notebook-core-v1.md#dependency-model) | Dependency model |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 41 | 2 | [`persistent-slots-and-kernel`](../../docs/engineering/notebook-core-v1.md#persistent-slots-and-kernel) | Persistent slots and kernel |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 68 | 2 | [`compiler-and-bytecode-boundary`](../../docs/engineering/notebook-core-v1.md#compiler-and-bytecode-boundary) | Compiler and bytecode boundary |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 107 | 2 | [`runtime-transaction`](../../docs/engineering/notebook-core-v1.md#runtime-transaction) | Runtime transaction |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 246 | 2 | [`current-iamber-adapter`](../../docs/engineering/notebook-core-v1.md#current-iamber-adapter) | Current `iamber` adapter |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 306 | 2 | [`verified-invariants`](../../docs/engineering/notebook-core-v1.md#verified-invariants) | Verified invariants |
+| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 377 | 2 | [`next-runtime-increment`](../../docs/engineering/notebook-core-v1.md#next-runtime-increment) | Next runtime increment |
+| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 1 | 1 | [`notebook-project-v1-shared-document-not-a-runtime-snapshot`](../../docs/engineering/notebook-project-v1.md#notebook-project-v1-shared-document-not-a-runtime-snapshot) | Notebook project v1 — shared document, not a runtime snapshot |
+| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 10 | 2 | [`opening-and-saving`](../../docs/engineering/notebook-project-v1.md#opening-and-saving) | Opening and saving |
+| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 61 | 2 | [`package-layout`](../../docs/engineering/notebook-project-v1.md#package-layout) | Package layout |
+| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 117 | 2 | [`bundled-environment-save-apply-run`](../../docs/engineering/notebook-project-v1.md#bundled-environment-save-apply-run) | Bundled environment: Save, Apply, Run |
+| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 223 | 2 | [`filesystem-and-concurrency-contract`](../../docs/engineering/notebook-project-v1.md#filesystem-and-concurrency-contract) | Filesystem and concurrency contract |
+| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 255 | 2 | [`macos-document-package`](../../docs/engineering/notebook-project-v1.md#macos-document-package) | macOS document package |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 1 | 1 | [`ambernumeric-profilev1`](../../docs/engineering/numeric-profile-v1.md#ambernumeric-profilev1) | amber.numeric-profile.v1 |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 18 | 2 | [`source-preamble`](../../docs/engineering/numeric-profile-v1.md#source-preamble) | Source Preamble |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 56 | 2 | [`manifest-mirror`](../../docs/engineering/numeric-profile-v1.md#manifest-mirror) | Manifest Mirror |

@@ -15,8 +15,10 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -4738,6 +4740,560 @@ void test_runtime_watch_local_storage_replacement() {
          "execution local exposes unwrapped watched value");
 }
 
+void test_runtime_watch_stream_cursor_and_overflow() {
+  const amber::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
+                                                          "Kernel.watch(x)\n"
+                                                          "x = 1\n"
+                                                          "x = 2\n"
+                                                          "x\n");
+  const amber::bytecode::DecodeResult decoded =
+      amber::bytecode::deserialize_module(
+          amber::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+
+  amber::runtime::RuntimeWorldOptions bounded_options;
+  bounded_options.watch_event_capacity = 2U;
+  amber::runtime::RuntimeWorld bounded(decoded.module, bounded_options);
+  const amber::runtime::RuntimeWatchCursor before = bounded.watch_cursor();
+  const amber::runtime::ExecutionResult bounded_exec =
+      bounded.execute(decoded.module.init.entry_code_id);
+  expect(bounded_exec.ok(), "bounded watch stream module should execute");
+  expect(bounded_exec.watch_event_status ==
+             amber::runtime::RuntimeWatchPollStatus::Overflow &&
+             bounded_exec.watch_events.empty(),
+         "execution result must report a lost run-local watch suffix");
+
+  const amber::runtime::RuntimeWatchPollResult overflow =
+      bounded.poll_watch_events(before);
+  expect(overflow.status == amber::runtime::RuntimeWatchPollStatus::Overflow &&
+             overflow.events.empty(),
+         "a lagging cursor must report overflow without a partial batch");
+  expect(overflow.requested_cursor.source == before.source &&
+             overflow.requested_cursor.next_epoch == before.next_epoch,
+         "a poll result must retain the exact cursor that observed its gap");
+  expect(overflow.oldest_retained_epoch == 2U &&
+             overflow.latest_epoch == 3U &&
+             overflow.next_cursor.next_epoch == 4U,
+         "overflow exposes retained bounds and a recovery cursor");
+  const std::vector<amber::runtime::RuntimeWatchEvent> retained =
+      bounded.watch_events();
+  expect(retained.size() == 2U && retained.front().watch_epoch == 2U &&
+             retained.back().watch_epoch == 3U,
+         "bounded stream retains only its configured suffix");
+
+  const amber::runtime::RuntimeWatchPollResult recovered =
+      bounded.poll_watch_events(overflow.next_cursor);
+  expect(recovered.ok() && recovered.events.empty(),
+         "publishing the overflow recovery cursor acknowledges the gap");
+
+  amber::runtime::RuntimeWorld replayable(decoded.module);
+  const amber::runtime::RuntimeWatchCursor replay_start =
+      replayable.watch_cursor();
+  const amber::runtime::ExecutionResult replay_exec =
+      replayable.execute(decoded.module.init.entry_code_id);
+  expect(replay_exec.ok(), "replayable watch stream module should execute");
+  const amber::runtime::RuntimeWatchPollResult first =
+      replayable.poll_watch_events(replay_start, 1U);
+  const amber::runtime::RuntimeWatchPollResult repeated =
+      replayable.poll_watch_events(replay_start, 1U);
+  expect(first.ok() && repeated.ok() && first.events.size() == 1U &&
+             repeated.events.size() == 1U &&
+             first.events.front().watch_epoch ==
+                 repeated.events.front().watch_epoch &&
+             first.next_cursor.next_epoch == 2U,
+         "polling is read-only until the caller publishes its successor");
+  expect(first.requested_cursor.source == replay_start.source &&
+             first.requested_cursor.next_epoch == replay_start.next_epoch,
+         "a successful poll is self-contained with its requested cursor");
+  const amber::runtime::RuntimeWatchPollResult rest =
+      replayable.poll_watch_events(first.next_cursor);
+  expect(rest.ok() && rest.events.size() == 2U &&
+             rest.requested_cursor.next_epoch ==
+                 first.next_cursor.next_epoch &&
+             rest.next_cursor.next_epoch == 4U,
+         "a bounded poll successor resumes at the first unacknowledged event");
+  expect(first.events.front().watch_world_id == first.source.world_id &&
+             first.events.front().watch_generation == first.source.generation,
+         "events carry their stream namespace");
+
+  amber::runtime::RuntimeWatchCursor future = replay_start;
+  future.next_epoch = replay_exec.watch_epoch + 2U;
+  expect(replayable.poll_watch_events(future).status ==
+             amber::runtime::RuntimeWatchPollStatus::InvalidCursor,
+         "a cursor from the future is rejected explicitly");
+  expect(replayable.poll_watch_events({}).status ==
+             amber::runtime::RuntimeWatchPollStatus::InvalidCursor,
+         "a structurally invalid cursor is not mistaken for another source");
+
+  amber::runtime::RuntimeWorld independent(decoded.module);
+  const amber::runtime::RuntimeWatchPollResult changed =
+      independent.poll_watch_events(replay_start);
+  expect(changed.status ==
+             amber::runtime::RuntimeWatchPollStatus::SourceChanged &&
+             changed.source.world_id != replay_start.source.world_id,
+         "a cursor cannot be reused with an independent runtime world");
+
+  const amber::bytecode::EmitResult handle_emit =
+      emit_ok("x = 1\nKernel.watch(x)\n");
+  std::atomic<unsigned> activity_calls{0U};
+  amber::runtime::RuntimeWorldOptions activity_options;
+  activity_options.watch_activity_notifier = [&activity_calls] {
+    activity_calls.fetch_add(1U, std::memory_order_relaxed);
+  };
+  amber::runtime::RuntimeWorld handle_world(handle_emit.module,
+                                            std::move(activity_options));
+  const amber::runtime::ExecutionResult handle_exec =
+      handle_world.execute(handle_emit.module.init.entry_code_id);
+  expect(handle_exec.ok() && handle_exec.value.is_watch_handle(),
+         "Kernel.watch should expose a host-visible watch handle");
+  const amber::runtime::RuntimeWatchCursor host_write_start =
+      handle_world.watch_cursor();
+  const std::shared_ptr<amber::runtime::RuntimeWatchHandle> handle =
+      handle_exec.value.as_watch_handle();
+  expect(handle != nullptr && handle->cell() != nullptr,
+         "watch handle should retain its backing cell");
+  const unsigned calls_before_write = activity_calls.load();
+  expect(calls_before_write != 0U,
+         "watch registration must notify the world's activity hook");
+  const amber::runtime::RuntimeWatchWriteResult host_write =
+      handle->cell()->write(amber::runtime::Value::integer(9));
+  const amber::runtime::RuntimeWatchPollResult host_events =
+      handle_world.poll_watch_events(host_write_start);
+  expect(host_write.changed && host_events.ok() &&
+             host_events.events.size() == 1U &&
+             host_events.events[0].kind == "watch.write" &&
+             host_events.events[0].new_value.is_integer() &&
+             host_events.events[0].new_value.as_integer() == 9,
+         "a host write through a handle must enter the world event stream");
+  expect(activity_calls.load() == calls_before_write + 1U,
+         "host watch writes must use the same activity notification hook");
+}
+
+void test_runtime_watch_activity_hook_runs_after_publication_and_is_advisory() {
+  using namespace amber::runtime;
+  RuntimeWatchStream stream;
+  const auto cursor = stream.tail_cursor();
+  unsigned calls = 0U;
+  stream.configure_activity_notifier([&] {
+    ++calls;
+    // A direct stream snapshot is safe only after record releases its mutex.
+    // This callback must never enter RuntimeWorld or another watched source.
+    const auto batch = stream.poll(cursor, 0U);
+    expect(batch.ok() && batch.events.size() == 1U,
+           "activity callback must see the completely published event");
+    throw std::runtime_error("advisory callback failure");
+  });
+  const auto event = stream.record(RuntimeWatchEvent{});
+  expect(calls == 1U && event.watch_epoch == 1U &&
+             stream.poll(cursor, 0U).events.size() == 1U,
+         "a throwing activity hook must not undo or fail event publication");
+}
+
+void test_runtime_watch_stream_wait_timeout_and_wakeup() {
+  using namespace amber::runtime;
+  auto stream = std::make_shared<RuntimeWatchStream>();
+  const RuntimeWatchCursor cursor = stream->tail_cursor();
+
+  const RuntimeWatchPollResult timeout =
+      stream->wait(cursor, std::chrono::milliseconds(20), 0U);
+  expect(timeout.ok() && timeout.timed_out && timeout.events.empty() &&
+             timeout.requested_cursor.source == cursor.source &&
+             timeout.requested_cursor.next_epoch == cursor.next_epoch &&
+             timeout.next_cursor.source == cursor.source &&
+             timeout.next_cursor.next_epoch == cursor.next_epoch,
+         "watch wait timeout must preserve the unacknowledged cursor");
+
+  std::mutex start_mutex;
+  std::condition_variable start_condition;
+  bool started = false;
+  RuntimeWatchPollResult awakened;
+  std::thread waiter([&] {
+    {
+      std::lock_guard<std::mutex> lock(start_mutex);
+      started = true;
+    }
+    start_condition.notify_one();
+    awakened = stream->wait(cursor, std::chrono::seconds(2), 1U);
+  });
+  {
+    std::unique_lock<std::mutex> lock(start_mutex);
+    expect(start_condition.wait_for(lock, std::chrono::seconds(2),
+                                    [&] { return started; }),
+           "watch waiter should start before its producer");
+  }
+  RuntimeWatchEvent event;
+  event.kind = "watch.write";
+  event.cell_id = 9U;
+  event.new_revision = 1U;
+  const RuntimeWatchEvent recorded = stream->record(std::move(event));
+  waiter.join();
+
+  expect(awakened.ok() && !awakened.timed_out &&
+             awakened.events.size() == 1U &&
+             awakened.events.front().watch_epoch == recorded.watch_epoch &&
+             awakened.requested_cursor.source == cursor.source &&
+             awakened.requested_cursor.next_epoch == cursor.next_epoch &&
+             awakened.next_cursor.next_epoch == recorded.watch_epoch + 1U,
+         "watch wait must not miss an event recorded around wait startup");
+
+  const RuntimeWatchPollResult repeated =
+      stream->wait(cursor, std::chrono::seconds(2), 1U);
+  expect(repeated.ok() && !repeated.timed_out &&
+             repeated.events.size() == 1U &&
+             repeated.events.front().watch_epoch == recorded.watch_epoch,
+         "watch wait is read-only until its successor is acknowledged");
+
+  RuntimeWatchCursor invalid = cursor;
+  invalid.next_epoch = recorded.watch_epoch + 2U;
+  const RuntimeWatchPollResult rejected =
+      stream->wait(invalid, std::chrono::seconds(2), 0U);
+  expect(rejected.status == RuntimeWatchPollStatus::InvalidCursor &&
+             !rejected.timed_out,
+         "watch wait must reject a future cursor without sleeping");
+
+  auto foreign_stream = std::make_shared<RuntimeWatchStream>();
+  const RuntimeWatchPollResult changed =
+      foreign_stream->wait(cursor, std::chrono::seconds(2), 0U);
+  expect(changed.status == RuntimeWatchPollStatus::SourceChanged &&
+             !changed.timed_out && changed.events.empty(),
+         "watch wait must reject a foreign source without sleeping");
+
+  auto bounded_stream = std::make_shared<RuntimeWatchStream>();
+  bounded_stream->configure_capacity(1U);
+  const RuntimeWatchCursor lagging = bounded_stream->tail_cursor();
+  (void)bounded_stream->record(RuntimeWatchEvent{});
+  (void)bounded_stream->record(RuntimeWatchEvent{});
+  const RuntimeWatchPollResult overflow =
+      bounded_stream->wait(lagging, std::chrono::seconds(2), 0U);
+  expect(overflow.status == RuntimeWatchPollStatus::Overflow &&
+             !overflow.timed_out && overflow.events.empty() &&
+             overflow.requested_cursor.next_epoch == lagging.next_epoch &&
+             overflow.oldest_retained_epoch == 2U &&
+             overflow.latest_epoch == 2U &&
+             overflow.next_cursor.next_epoch == 3U,
+         "watch wait must surface overflow immediately without a suffix");
+}
+
+void test_runtime_watch_wait_large_timeout_does_not_overflow() {
+  using namespace amber::runtime;
+  using namespace std::chrono_literals;
+  for (const auto timeout : {std::chrono::milliseconds::max(),
+                             std::chrono::milliseconds::max() / 2}) {
+    auto stream = std::make_shared<RuntimeWatchStream>();
+    const auto cursor = stream->tail_cursor();
+    std::promise<void> started;
+    auto start = started.get_future();
+    std::promise<RuntimeWatchPollResult> completed;
+    auto completion = completed.get_future();
+    std::thread waiting([&] {
+      started.set_value();
+      completed.set_value(stream->wait(cursor, timeout, 0U));
+    });
+    expect(start.wait_for(1s) == std::future_status::ready,
+           "large-timeout watch waiter should start");
+    const bool stayed_waiting =
+        completion.wait_for(20ms) == std::future_status::timeout;
+    const auto event = stream->record(RuntimeWatchEvent{});
+    expect(completion.wait_for(1s) == std::future_status::ready,
+           "large-timeout watch waiter must wake after publication");
+    const auto result = completion.get();
+    waiting.join();
+    expect(stayed_waiting && result.ok() && !result.timed_out &&
+               result.events.size() == 1U &&
+               result.events[0].watch_epoch == event.watch_epoch,
+           "large watch timeouts must not overflow into immediate timeout");
+  }
+}
+
+void test_runtime_world_watch_wait_does_not_hold_execution_lock() {
+  using namespace amber::runtime;
+  const amber::bytecode::EmitResult emit_result =
+      emit_ok("x = 0\n"
+              "def noop():\n"
+              "  1\n"
+              "Kernel.watch(x)\n");
+  const amber::bytecode::BcMethod *noop =
+      method_by_name(emit_result.module, "noop");
+  expect(noop != nullptr, "watch wait lock test should emit noop");
+
+  RuntimeWorld world(emit_result.module);
+  const ExecutionResult initialized =
+      world.execute(emit_result.module.init.entry_code_id);
+  expect(initialized.ok() && initialized.value.is_watch_handle(),
+         "watch wait lock test should return a host watch handle");
+  const std::shared_ptr<RuntimeWatchHandle> handle =
+      initialized.value.as_watch_handle();
+  expect(handle != nullptr && handle->cell() != nullptr,
+         "watch wait lock test should retain its watched cell");
+  const RuntimeWatchCursor cursor = world.watch_cursor();
+
+  std::mutex start_mutex;
+  std::condition_variable start_condition;
+  bool started = false;
+  RuntimeWatchPollResult awakened;
+  std::thread waiter([&] {
+    {
+      std::lock_guard<std::mutex> lock(start_mutex);
+      started = true;
+    }
+    start_condition.notify_one();
+    awakened =
+        world.wait_watch_events(cursor, std::chrono::seconds(2), 1U);
+  });
+  {
+    std::unique_lock<std::mutex> lock(start_mutex);
+    expect(start_condition.wait_for(lock, std::chrono::seconds(2),
+                                    [&] { return started; }),
+           "world watch waiter should start before concurrent execution");
+  }
+
+  // execute() needs RuntimeWorld::execution_mutex. If wait_watch_events kept
+  // that mutex while sleeping, this call could not reach the following host
+  // write until the wait had already timed out.
+  const ExecutionResult concurrent = world.execute(noop->entry_code_id);
+  expect(concurrent.ok(),
+         "world execution should proceed while a watch waiter is blocked");
+  (void)handle->cell()->write(Value::integer(9));
+  waiter.join();
+
+  expect(awakened.ok() && !awakened.timed_out &&
+             awakened.events.size() == 1U &&
+             awakened.events.front().kind == "watch.write" &&
+             awakened.events.front().new_value.is_integer() &&
+             awakened.events.front().new_value.as_integer() == 9,
+         "world wait must release execution lock and wake for a host write");
+}
+
+struct BlockingWatchEventProbe {
+  explicit BlockingWatchEventProbe(
+      std::shared_ptr<amber::runtime::RuntimeWatchStream> stream)
+      : stream(std::move(stream)) {}
+
+  void deliver(amber::runtime::RuntimeWatchEvent event) {
+    const bool first = event.new_revision == 1U;
+    if (first) {
+      std::unique_lock<std::mutex> lock(mutex);
+      first_callback_entered = true;
+      condition.notify_all();
+      condition.wait(lock, [this] { return release_first; });
+      lock.unlock();
+      (void)stream->record(std::move(event));
+      return;
+    }
+
+    (void)stream->record(std::move(event));
+    std::lock_guard<std::mutex> lock(mutex);
+    second_callback_recorded = true;
+    condition.notify_all();
+  }
+
+  bool wait_for_first_callback() {
+    std::unique_lock<std::mutex> lock(mutex);
+    return condition.wait_for(lock, std::chrono::seconds(2), [this] {
+      return first_callback_entered;
+    });
+  }
+
+  bool second_callback_arrives_before_release() {
+    std::unique_lock<std::mutex> lock(mutex);
+    // A serialized implementation legitimately keeps writer B outside this
+    // callback, so a bounded watchdog is unavoidable. Callers first handshake
+    // that B has started its write; 500 ms then distinguishes overtaking from
+    // intentional blocking without making ordinary test completion unbounded.
+    return condition.wait_for(lock, std::chrono::milliseconds(500), [this] {
+      return second_callback_recorded;
+    });
+  }
+
+  void release() {
+    std::lock_guard<std::mutex> lock(mutex);
+    release_first = true;
+    condition.notify_all();
+  }
+
+  std::shared_ptr<amber::runtime::RuntimeWatchStream> stream;
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool first_callback_entered = false;
+  bool second_callback_recorded = false;
+  bool release_first = false;
+};
+
+void test_runtime_watch_binding_events_follow_mutation_order() {
+  using namespace amber::runtime;
+  auto stream = std::make_shared<RuntimeWatchStream>();
+  BlockingWatchEventProbe probe(stream);
+  RuntimeWatchCell cell(
+      Value::integer(0), stream->allocate_cell_id(), "value",
+      [&probe](RuntimeWatchEvent event) { probe.deliver(std::move(event)); });
+  cell.enable_watch("value");
+
+  RuntimeWatchWriteResult first;
+  RuntimeWatchWriteResult second;
+  std::thread first_writer(
+      [&] { first = cell.write(Value::integer(1)); });
+  expect(probe.wait_for_first_callback(),
+         "first binding writer should reach its blocked event sink");
+  std::atomic<bool> second_started{false};
+  std::thread second_writer([&] {
+    second_started.store(true, std::memory_order_release);
+    second = cell.write(Value::integer(2));
+  });
+  expect(wait_for_condition(
+             [&] { return second_started.load(std::memory_order_acquire); },
+             std::chrono::seconds(2)),
+         "second binding writer should start before the ordering watchdog");
+  const bool overtook = probe.second_callback_arrives_before_release();
+  probe.release();
+  first_writer.join();
+  second_writer.join();
+
+  const std::vector<RuntimeWatchEvent> events = stream->events_snapshot();
+  expect(!overtook && events.size() == 2U &&
+             events[0].watch_epoch == 1U && events[0].old_revision == 0U &&
+             events[0].new_revision == 1U &&
+             events[1].watch_epoch == 2U && events[1].old_revision == 1U &&
+             events[1].new_revision == 2U,
+         "parallel binding event delivery must not overtake mutation order");
+  const RuntimeWatchCellSnapshot snapshot = cell.snapshot();
+  expect(first.changed && first.old_revision == 0U &&
+             first.new_revision == 1U && second.changed &&
+             second.old_revision == 1U && second.new_revision == 2U &&
+             snapshot.revision == 2U && snapshot.value.is_integer() &&
+             snapshot.value.as_integer() == 2,
+         "serialized binding delivery must preserve write results and value");
+}
+
+void test_runtime_watch_ivar_events_follow_object_mutation_order() {
+  using namespace amber::runtime;
+  auto stream = std::make_shared<RuntimeWatchStream>();
+  BlockingWatchEventProbe probe(stream);
+  RuntimeWatchObjectState object(
+      42U,
+      [&probe](RuntimeWatchEvent event) { probe.deliver(std::move(event)); });
+  object.subscribe_field("mass");
+
+  RuntimeWatchIvarWriteResult first;
+  RuntimeWatchIvarWriteResult second;
+  std::thread first_writer([&] {
+    first = object.write_field("mass", Value::integer(0), Value::integer(1));
+  });
+  expect(probe.wait_for_first_callback(),
+         "first ivar writer should reach its blocked event sink");
+  std::atomic<bool> second_started{false};
+  std::thread second_writer([&] {
+    second_started.store(true, std::memory_order_release);
+    second = object.write_field("mass", Value::integer(1), Value::integer(2));
+  });
+  expect(wait_for_condition(
+             [&] { return second_started.load(std::memory_order_acquire); },
+             std::chrono::seconds(2)),
+         "second ivar writer should start before the ordering watchdog");
+  const bool overtook = probe.second_callback_arrives_before_release();
+  probe.release();
+  first_writer.join();
+  second_writer.join();
+
+  const std::vector<RuntimeWatchEvent> events = stream->events_snapshot();
+  expect(!overtook && events.size() == 2U &&
+             events[0].watch_epoch == 1U && events[0].old_revision == 0U &&
+             events[0].new_revision == 1U &&
+             events[0].old_object_revision == 0U &&
+             events[0].new_object_revision == 1U &&
+             events[1].watch_epoch == 2U && events[1].old_revision == 1U &&
+             events[1].new_revision == 2U &&
+             events[1].old_object_revision == 1U &&
+             events[1].new_object_revision == 2U,
+         "parallel ivar event delivery must follow global object revisions");
+  const RuntimeWatchObjectStateSnapshot snapshot = object.snapshot();
+  expect(first.changed && first.new_object_revision == 1U &&
+             second.changed && second.new_object_revision == 2U &&
+             snapshot.object_revision == 2U &&
+             snapshot.field_revisions.at("mass") == 2U,
+         "serialized ivar delivery must preserve field and object revisions");
+}
+
+void test_runtime_watch_binding_sink_may_reenter_same_cell() {
+  using namespace amber::runtime;
+  RuntimeWatchCell *cell_pointer = nullptr;
+  std::vector<std::uint64_t> delivered;
+  RuntimeWatchCell cell(
+      Value::integer(0), 77U, "value",
+      [&cell_pointer, &delivered](RuntimeWatchEvent event) {
+        delivered.push_back(event.new_revision);
+        if (event.new_revision == 1U) {
+          expect(cell_pointer != nullptr,
+                 "reentrant binding sink should have its cell pointer");
+          (void)cell_pointer->write(Value::integer(2));
+        }
+      });
+  cell_pointer = &cell;
+  cell.enable_watch("value");
+  const RuntimeWatchWriteResult outer = cell.write(Value::integer(1));
+  const RuntimeWatchCellSnapshot snapshot = cell.snapshot();
+  expect(outer.changed && delivered == std::vector<std::uint64_t>({1U, 2U}) &&
+             snapshot.revision == 2U && snapshot.value.is_integer() &&
+             snapshot.value.as_integer() == 2,
+         "same-thread reentrant writes should retain revision invocation order");
+}
+
+void test_runtime_watch_ivar_sink_may_reenter_same_object() {
+  using namespace amber::runtime;
+  RuntimeWatchObjectState *object_pointer = nullptr;
+  std::vector<std::uint64_t> delivered;
+  RuntimeWatchObjectState object(
+      88U, [&object_pointer, &delivered](RuntimeWatchEvent event) {
+        delivered.push_back(event.new_object_revision);
+        expect(object_pointer != nullptr,
+               "reentrant ivar sink should have its object pointer");
+        const RuntimeWatchObjectStateSnapshot during =
+            object_pointer->snapshot();
+        expect(during.object_revision >= event.new_object_revision,
+               "ivar sink should read its already committed revision");
+        if (event.new_object_revision == 1U) {
+          (void)object_pointer->write_field(
+              "mass", Value::integer(1), Value::integer(2));
+        }
+      });
+  object_pointer = &object;
+  object.subscribe_field("mass");
+  const RuntimeWatchIvarWriteResult outer = object.write_field(
+      "mass", Value::integer(0), Value::integer(1));
+  const RuntimeWatchObjectStateSnapshot snapshot = object.snapshot();
+  expect(outer.changed && delivered == std::vector<std::uint64_t>({1U, 2U}) &&
+             snapshot.object_revision == 2U &&
+             snapshot.field_revisions.at("mass") == 2U,
+         "same-thread reentrant ivar writes should retain invocation order");
+}
+
+void test_runtime_watch_throwing_sink_commits_and_releases_delivery() {
+  using namespace amber::runtime;
+  std::vector<std::uint64_t> delivered;
+  RuntimeWatchCell cell(
+      Value::integer(0), 99U, "value",
+      [&delivered](RuntimeWatchEvent event) {
+        if (event.new_revision == 1U) {
+          throw std::runtime_error("test sink failure");
+        }
+        delivered.push_back(event.new_revision);
+      });
+  cell.enable_watch("value");
+  bool threw = false;
+  try {
+    (void)cell.write(Value::integer(1));
+  } catch (const std::runtime_error &) {
+    threw = true;
+  }
+  const RuntimeWatchCellSnapshot after_failure = cell.snapshot();
+  const RuntimeWatchWriteResult recovered = cell.write(Value::integer(2));
+  expect(threw && after_failure.revision == 1U &&
+             after_failure.value.is_integer() &&
+             after_failure.value.as_integer() == 1 && recovered.changed &&
+             recovered.old_revision == 1U && recovered.new_revision == 2U &&
+             delivered == std::vector<std::uint64_t>({2U}),
+         "sink failure must keep its mutation and release delivery for retry");
+}
+
 void test_runtime_watch_parallel_task_bookkeeping() {
   const amber::bytecode::EmitResult emit_result = emit_ok(
       "def watched(start):\n"
@@ -4775,9 +5331,16 @@ void test_runtime_watch_parallel_task_bookkeeping() {
   expect(world.watch_epoch() == kExpectedEvents &&
              events.size() == kExpectedEvents,
          "parallel watched tasks retain every event");
+  expect(!events.empty() && events.front().watch_world_id != 0U &&
+             events.front().watch_generation != 0U,
+         "parallel watch events carry a valid source identity");
   for (std::size_t index = 0; index < events.size(); ++index) {
     expect(events[index].watch_epoch == index + 1U,
            "parallel watch epochs remain unique and ordered");
+    expect(events[index].watch_world_id == events.front().watch_world_id &&
+               events[index].watch_generation ==
+                   events.front().watch_generation,
+           "parallel watch writers share one source namespace");
   }
 }
 
@@ -5076,6 +5639,8 @@ void test_runtime_dependency_capture_records_binding_reads() {
          "dependency capture module init exists");
 
   amber::runtime::RuntimeWorld world(decoded.module);
+  const amber::runtime::RuntimeWatchStreamIdentity source =
+      world.watch_cursor().source;
   const std::uint64_t watch_epoch_before = world.watch_epoch();
   world.begin_dependency_capture(42);
   const amber::runtime::ExecutionResult exec =
@@ -5084,14 +5649,14 @@ void test_runtime_dependency_capture_records_binding_reads() {
 
   const amber::runtime::RuntimeDependencySet active =
       world.dependency_capture_snapshot();
-  expect(active.notebook_cell_id == 42,
+  expect(active.notebook_cell_id == 42 && active.source == source,
          "active dependency capture keeps notebook cell id");
   expect(active.dependencies.size() == 1,
          "active dependency capture deduplicates binding reads");
 
   const amber::runtime::RuntimeDependencySet deps =
       world.end_dependency_capture();
-  expect(deps.notebook_cell_id == 42,
+  expect(deps.notebook_cell_id == 42 && deps.source == source,
          "ended dependency capture returns notebook cell id");
   expect(deps.dependencies.size() == 1,
          "ended dependency capture returns one binding dependency");
@@ -6379,6 +6944,502 @@ void test_runtime_gc_safepoint_scans_vm_frame_roots() {
          "safepoint should run one requested GC cycle");
   expect(stats.gc_full_cycles == 1,
          "requested safepoint GC should be a full cycle");
+}
+
+void test_runtime_external_gc_root_provider_preserves_world_roots() {
+  amber::bytecode::BcModule module;
+  std::vector<amber::runtime::Value> external_roots;
+  std::atomic<std::uint64_t> snapshots{0};
+
+  amber::runtime::RuntimeWorldOptions options;
+  options.external_gc_root_provider = [&external_roots, &snapshots]() {
+    snapshots.fetch_add(1, std::memory_order_relaxed);
+    return external_roots;
+  };
+  amber::runtime::RuntimeWorld world(module, std::move(options));
+
+  amber::runtime::Value external_root = world.list_value({});
+  amber::runtime::IntrusivePtr<amber::runtime::ListValue> external_root_ptr =
+      external_root.as_list();
+  external_root_ptr->items.push_back(external_root);
+  external_roots.push_back(external_root);
+  external_root.reset();
+
+  const amber::runtime::RuntimeGcResult rooted = world.collect_garbage();
+  expect(rooted.marked == 1 && rooted.reclaimed == 0,
+         "external GC root provider should preserve a world-owned root");
+  expect(external_root_ptr->header.lifetime_state ==
+             amber::runtime::ObjectLifetimeState::Live,
+         "provider-rooted object should remain live after explicit GC");
+
+  external_roots.clear();
+  const amber::runtime::RuntimeGcResult unrooted = world.collect_garbage();
+  expect(unrooted.reclaimed == 1 &&
+             external_root_ptr->header.lifetime_state ==
+                 amber::runtime::ObjectLifetimeState::Deallocated,
+         "clearing provider snapshot should release its external root");
+  expect(snapshots.load(std::memory_order_relaxed) == 2,
+         "explicit GC should take one external root snapshot per cycle");
+}
+
+void test_runtime_external_gc_root_provider_preserves_safepoint_roots() {
+  using namespace amber::bytecode;
+
+  BcModule module;
+  Constant one;
+  one.kind = ConstantKind::Integer;
+  one.int_value = 1;
+  module.const_pool.push_back(one);
+
+  BcCode code;
+  code.code_id = 1;
+  code.kind = CodeKind::Method;
+  code.reg_count = 1;
+  code.instructions.push_back({Opcode::LoadK, {{0, false}, {0, false}}});
+  code.instructions.push_back({Opcode::Safepoint, {}});
+  code.instructions.push_back({Opcode::Return, {{0, false}}});
+  module.code_objects.push_back(code);
+
+  std::vector<amber::runtime::Value> external_roots;
+  std::atomic<std::uint64_t> snapshots{0};
+  amber::runtime::RuntimeWorldOptions options;
+  options.external_gc_root_provider = [&external_roots, &snapshots]() {
+    snapshots.fetch_add(1, std::memory_order_relaxed);
+    return external_roots;
+  };
+  amber::runtime::RuntimeWorld world(module, std::move(options));
+
+  amber::runtime::Value external_root = world.list_value({});
+  amber::runtime::IntrusivePtr<amber::runtime::ListValue> external_root_ptr =
+      external_root.as_list();
+  external_root_ptr->items.push_back(external_root);
+  external_roots.push_back(external_root);
+  external_root.reset();
+
+  world.request_garbage_collection(amber::runtime::RuntimeGcCycle::Full);
+  const amber::runtime::ExecutionResult exec = world.execute(1);
+  expect(exec.ok() && exec.value.is_integer() && exec.value.as_integer() == 1,
+         "external safepoint root probe should execute");
+  expect(external_root_ptr->header.lifetime_state ==
+             amber::runtime::ObjectLifetimeState::Live,
+         "VM safepoint should preserve a provider-owned root");
+  expect(world.heap_stats().gc_safepoint_collections == 1,
+         "provider root probe should run one requested safepoint GC");
+  expect(snapshots.load(std::memory_order_relaxed) == 1,
+         "VM safepoint should take one external root snapshot");
+
+  external_roots.clear();
+  world.collect_garbage();
+  expect(external_root_ptr->header.lifetime_state ==
+             amber::runtime::ObjectLifetimeState::Deallocated,
+         "provider root should be released after the safepoint owner clears");
+}
+
+amber::bytecode::BcModule make_notebook_cell_test_module() {
+  using namespace amber::bytecode;
+
+  BcModule module;
+  Constant forty;
+  forty.kind = ConstantKind::Integer;
+  forty.int_value = 40;
+  module.const_pool.push_back(forty);
+
+  BcCode cell;
+  cell.code_id = 1;
+  cell.kind = CodeKind::NotebookCell;
+  cell.reg_count = 4;
+  cell.instructions = {
+      {Opcode::LoadNotebookSlot, {{0, false}, {7, false}}},
+      {Opcode::LoadNotebookSlot, {{0, false}, {7, false}}},
+      {Opcode::LoadK, {{1, false}, {0, false}}},
+      {Opcode::IAdd, {{2, false}, {0, false}, {1, false}}},
+      {Opcode::StoreNotebookSlot, {{11, false}, {2, false}}},
+      {Opcode::Return, {{2, false}}},
+  };
+  module.code_objects.push_back(std::move(cell));
+  return module;
+}
+
+void test_runtime_notebook_cell_execution_boundary() {
+  using namespace amber::runtime;
+
+  const amber::bytecode::BcModule module = make_notebook_cell_test_module();
+  std::vector<std::pair<std::uint32_t, Value>> staged;
+  RuntimeNotebookCellContext context;
+  std::vector<std::uint32_t> observed;
+  context.load_slot = [](std::uint32_t descriptor) -> std::optional<Value> {
+    if (descriptor != 7U) {
+      return std::nullopt;
+    }
+    return Value::integer(2);
+  };
+  context.stage_slot = [&staged](std::uint32_t descriptor, Value value) {
+    staged.emplace_back(descriptor, std::move(value));
+    return true;
+  };
+  context.observe_slot = [&observed](std::uint32_t descriptor) {
+    observed.push_back(descriptor);
+    return true;
+  };
+
+  RuntimeWorld world(module);
+  const ExecutionResult success = world.execute_notebook_cell(1, context);
+  expect(success.ok() && success.value.is_integer() &&
+             success.value.as_integer() == 42,
+         "notebook cell execution should load and add a slot value");
+  expect(staged.size() == 1U && staged[0].first == 11U &&
+             staged[0].second.is_integer() &&
+             staged[0].second.as_integer() == 42,
+         "notebook cell store should stage the computed value");
+  expect(observed == std::vector<std::uint32_t>({7U, 7U}),
+         "each successful notebook load should notify the observer once");
+
+  RuntimeNotebookCellContext missing_input;
+  missing_input.load_slot =
+      [](std::uint32_t) -> std::optional<Value> { return std::nullopt; };
+  missing_input.stage_slot = [](std::uint32_t, Value) { return false; };
+  const ExecutionResult missing =
+      world.execute_notebook_cell(1, std::move(missing_input));
+  expect(!missing.ok() && missing.fault.has_value() &&
+             missing.fault->error_name == "NotebookCellError",
+         "missing notebook input should fault as NotebookCellError");
+
+  RuntimeNotebookCellContext failed_stage;
+  failed_stage.load_slot = [](std::uint32_t) -> std::optional<Value> {
+    return Value::integer(2);
+  };
+  failed_stage.stage_slot = [](std::uint32_t, Value) { return false; };
+  const ExecutionResult failed =
+      world.execute_notebook_cell(1, std::move(failed_stage));
+  expect(!failed.ok() && failed.fault.has_value() &&
+             failed.fault->error_name == "NotebookCellError",
+         "failed notebook staging should fault as NotebookCellError");
+
+  RuntimeNotebookCellContext rejected_observation;
+  rejected_observation.load_slot =
+      [](std::uint32_t) -> std::optional<Value> { return Value::integer(2); };
+  rejected_observation.stage_slot = [](std::uint32_t, Value) { return true; };
+  rejected_observation.observe_slot = [](std::uint32_t) { return false; };
+  const ExecutionResult rejected = world.execute_notebook_cell(
+      1, std::move(rejected_observation));
+  expect(!rejected.ok() && rejected.fault.has_value() &&
+             rejected.fault->error_name == "NotebookCellError",
+         "rejected notebook observation should fail the cell");
+
+  const ExecutionResult ordinary = world.execute(1);
+  expect(!ordinary.ok() && ordinary.fault.has_value() &&
+             ordinary.fault->error_name == "NotebookCellError",
+         "ordinary execute should reject notebook cell code");
+}
+
+void test_runtime_notebook_cell_store_before_later_fault_is_only_staged() {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+
+  BcModule module = make_notebook_cell_test_module();
+  module.code_objects[0].instructions = {
+      {Opcode::LoadK, {{0, false}, {0, false}}},
+      {Opcode::StoreNotebookSlot, {{11, false}, {0, false}}},
+      {Opcode::LoadNotebookSlot, {{1, false}, {99, false}}},
+      {Opcode::Return, {{1, false}}},
+  };
+
+  std::vector<std::pair<std::uint32_t, Value>> staged;
+  RuntimeNotebookCellContext context;
+  context.load_slot =
+      [](std::uint32_t) -> std::optional<Value> { return std::nullopt; };
+  context.stage_slot = [&staged](std::uint32_t descriptor, Value value) {
+    staged.emplace_back(descriptor, std::move(value));
+    return true;
+  };
+
+  RuntimeWorld world(module);
+  const ExecutionResult result = world.execute_notebook_cell(1, context);
+  expect(!result.ok() && result.fault.has_value() &&
+             result.fault->error_name == "NotebookCellError",
+         "later notebook cell fault should be reported");
+  expect(staged.size() == 1U && staged[0].first == 11U &&
+             staged[0].second.is_integer() &&
+             staged[0].second.as_integer() == 40,
+         "store before a later fault should remain host staging only");
+}
+
+void test_runtime_notebook_cell_staged_roots_survive_safepoint() {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+
+  BcModule module;
+  Constant one;
+  one.kind = ConstantKind::Integer;
+  one.int_value = 1;
+  module.const_pool.push_back(one);
+
+  BcCode cell;
+  cell.code_id = 1;
+  cell.kind = CodeKind::NotebookCell;
+  cell.reg_count = 3;
+  cell.instructions = {
+      {Opcode::LoadK, {{0, false}, {0, false}}},
+      {Opcode::MakeList, {{1, false}, {0, false}, {1, false}}},
+      {Opcode::StoreNotebookSlot, {{7, false}, {1, false}}},
+      {Opcode::LoadNull, {{1, false}}},
+      {Opcode::Safepoint, {}},
+      {Opcode::LoadNotebookSlot, {{2, false}, {99, false}}},
+      {Opcode::Return, {{2, false}}},
+  };
+  module.code_objects.push_back(std::move(cell));
+
+  std::vector<Value> staged;
+  ListValue *staged_raw = nullptr;
+  RuntimeNotebookCellContext context;
+  context.load_slot =
+      [](std::uint32_t) -> std::optional<Value> { return std::nullopt; };
+  context.stage_slot = [&staged, &staged_raw](std::uint32_t, Value value) {
+    staged_raw = value.as_list().get();
+    staged.push_back(std::move(value));
+    return true;
+  };
+  context.gc_roots = [&staged]() { return staged; };
+
+  RuntimeWorld world(module);
+  world.request_garbage_collection(RuntimeGcCycle::Full);
+  const ExecutionResult result = world.execute_notebook_cell(1, context);
+  expect(!result.ok() && result.fault.has_value() &&
+             result.fault->error_name == "NotebookCellError",
+         "notebook cell should report the later missing load fault");
+  expect(staged_raw != nullptr &&
+             staged_raw->header.lifetime_state == ObjectLifetimeState::Live,
+         "run-local staged root should survive a later VM safepoint");
+}
+
+void test_runtime_notebook_image_install_preserves_world_state() {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+
+  BcModule original = make_notebook_cell_test_module();
+  original.format_version = {1, 0};
+  original.language_version = {1, 0};
+  original.strings = {"stable runtime name"};
+  original.symbols = {"stable symbol"};
+  BcCode stale = original.code_objects.front();
+  stale.code_id = 2;
+  original.code_objects.push_back(std::move(stale));
+
+  BcModule replacement = make_notebook_cell_test_module();
+  replacement.format_version = {1, 0};
+  replacement.language_version = {1, 0};
+  replacement.strings = original.strings;
+  replacement.symbols = original.symbols;
+  replacement.const_pool.front().int_value = 5;
+
+  std::vector<Value> external_roots;
+  RuntimeWorldOptions options;
+  options.external_gc_root_provider = [&external_roots]() {
+    return external_roots;
+  };
+  RuntimeWorld world(original, std::move(options));
+  const RuntimeWatchCursor watch_cursor_before_install = world.watch_cursor();
+  const RuntimeNotebookImageNameSeed initial_name_seed =
+      world.notebook_image_name_seed();
+  expect(initial_name_seed.strings == original.strings &&
+             initial_name_seed.symbols == original.symbols,
+         "notebook name seed should snapshot active runtime tables");
+
+  Value persistent = world.list_value({});
+  IntrusivePtr<ListValue> persistent_owner = persistent.as_list();
+  ListValue *persistent_raw = persistent_owner.get();
+  external_roots.push_back(persistent);
+  persistent.reset();
+
+  const auto context = [] {
+    RuntimeNotebookCellContext context;
+    context.load_slot = [](std::uint32_t descriptor) -> std::optional<Value> {
+      return descriptor == 7U ? std::optional<Value>(Value::integer(2))
+                              : std::nullopt;
+    };
+    context.stage_slot = [](std::uint32_t, Value) { return true; };
+    return context;
+  };
+
+  const ExecutionResult before = world.execute_notebook_cell(1, context());
+  expect(before.ok() && before.value.is_integer() &&
+             before.value.as_integer() == 42,
+         "notebook image install should execute the old image first");
+  world.collect_garbage();
+  expect(persistent_raw->header.lifetime_state == ObjectLifetimeState::Live,
+         "external root should survive before notebook image install");
+
+  const std::uint64_t epoch_before = world.world_epoch();
+  const auto replacement_owner =
+      std::make_shared<const BcModule>(std::move(replacement));
+  const RuntimeNotebookImageInstallResult installed =
+      world.install_notebook_image(replacement_owner);
+  expect(installed.ok && installed.swapped,
+         "valid notebook image should install atomically");
+  expect(installed.previous_world_epoch == epoch_before &&
+             installed.new_world_epoch == epoch_before + 1U &&
+             world.world_epoch() == epoch_before + 1U,
+         "notebook image install should bump world epoch once");
+  expect(world.watch_cursor().source == watch_cursor_before_install.source,
+         "notebook image install should preserve the world's watch stream");
+
+  world.collect_garbage();
+  expect(persistent_raw->header.lifetime_state == ObjectLifetimeState::Live,
+         "notebook image install should preserve the existing heap/root provider");
+  const ExecutionResult after = world.execute_notebook_cell(1, context());
+  expect(after.ok() && after.value.is_integer() &&
+             after.value.as_integer() == 7,
+         "notebook image install should execute the replacement body");
+
+  const ExecutionResult stale_result =
+      world.execute_notebook_cell(2, context());
+  expect(!stale_result.ok() && stale_result.fault.has_value() &&
+             stale_result.fault->error_name == "VMError" &&
+             stale_result.fault->message == "unknown code id",
+         "removed notebook code ids should fail deterministically");
+
+  BcModule appended_names = *replacement_owner;
+  appended_names.strings.push_back("new runtime name");
+  appended_names.symbols.push_back("new runtime symbol");
+  const auto appended_owner =
+      std::make_shared<const BcModule>(std::move(appended_names));
+  const RuntimeNotebookImageInstallResult appended =
+      world.install_notebook_image(appended_owner);
+  expect(appended.ok && appended.swapped &&
+             world.world_epoch() == epoch_before + 2U,
+         "a compiler-seeded image may append runtime names");
+  const RuntimeNotebookImageNameSeed appended_name_seed =
+      world.notebook_image_name_seed();
+  expect(appended_name_seed.strings == appended_owner->strings &&
+             appended_name_seed.symbols == appended_owner->symbols,
+         "installed notebook image should publish appended name tables");
+
+  BcModule incompatible_names = *appended_owner;
+  incompatible_names.strings.front() = "different runtime name";
+  const RuntimeNotebookImageInstallResult names_rejected =
+      world.install_notebook_image(
+          std::make_shared<const BcModule>(std::move(incompatible_names)));
+  expect(!names_rejected.ok && !names_rejected.swapped &&
+             !names_rejected.diagnostics.empty() &&
+             names_rejected.diagnostics.front().error_name ==
+                 "NotebookImageError" &&
+             world.world_epoch() == epoch_before + 2U,
+         "incompatible runtime name tables should reject the image atomically");
+
+  BcModule invalid = *replacement_owner;
+  invalid.code_objects.front().kind = CodeKind::Method;
+  const RuntimeNotebookImageInstallResult rejected =
+      world.install_notebook_image(
+          std::make_shared<const BcModule>(std::move(invalid)));
+  expect(!rejected.ok && !rejected.swapped &&
+             !rejected.diagnostics.empty() &&
+             world.world_epoch() == epoch_before + 2U,
+         "invalid notebook image should leave the active image untouched");
+  expect(world.watch_cursor().source == watch_cursor_before_install.source,
+         "rejected notebook image should preserve watch stream identity");
+  const ExecutionResult after_rejection =
+      world.execute_notebook_cell(1, context());
+  expect(after_rejection.ok() && after_rejection.value.is_integer() &&
+             after_rejection.value.as_integer() == 7,
+         "rejected notebook image should keep the replacement body active");
+
+  BcModule oversized = *replacement_owner;
+  oversized.code_objects.front().code_id = (1U << 20) + 1U;
+  const RuntimeNotebookImageInstallResult oversized_rejected =
+      world.install_notebook_image(
+          std::make_shared<const BcModule>(std::move(oversized)));
+  expect(!oversized_rejected.ok && !oversized_rejected.swapped &&
+             !oversized_rejected.diagnostics.empty() &&
+             oversized_rejected.diagnostics.front().code_id == (1U << 20) + 1U &&
+             world.world_epoch() == epoch_before + 2U,
+         "oversized notebook code ids should reject before cache allocation");
+
+  external_roots.clear();
+  world.collect_garbage();
+  expect(persistent_raw->header.lifetime_state ==
+             ObjectLifetimeState::Deallocated,
+         "external root should release the preserved heap object normally");
+  persistent_owner.reset();
+}
+
+void test_runtime_notebook_image_install_commits_trace_atomically() {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+
+  BcModule original = make_notebook_cell_test_module();
+  original.format_version = {1, 0};
+  original.language_version = {1, 0};
+
+  BcModule replacement = original;
+  replacement.const_pool.front().int_value = 5;
+
+  RuntimeWorldOptions options;
+  options.record_replay_trace = true;
+  RuntimeWorld world(original, std::move(options));
+  const RuntimeReplayTrace before = world.replay_trace();
+  const std::uint64_t epoch_before = world.world_epoch();
+
+  const RuntimeNotebookImageInstallResult installed =
+      world.install_notebook_image(
+          std::make_shared<const BcModule>(std::move(replacement)));
+  expect(installed.ok && installed.swapped,
+         "trace-enabled notebook image should install");
+
+  const RuntimeReplayTrace after = world.replay_trace();
+  expect(after.events.size() == before.events.size() + 2U,
+         "notebook install should publish exactly two trace events");
+  expect(after.events[after.events.size() - 2U].name ==
+                 "loader.notebook_image.load" &&
+             after.events.back().name == "world.mutation",
+         "notebook install trace events should be committed together");
+  expect(after.events[after.events.size() - 2U].world_epoch ==
+                 epoch_before + 1U &&
+             after.events.back().world_epoch == epoch_before + 1U,
+         "notebook install trace events should carry the committed epoch");
+
+  BcModule invalid = make_notebook_cell_test_module();
+  invalid.format_version = {1, 0};
+  invalid.language_version = {1, 0};
+  invalid.code_objects.front().kind = CodeKind::Method;
+  const RuntimeNotebookImageInstallResult rejected =
+      world.install_notebook_image(
+          std::make_shared<const BcModule>(std::move(invalid)));
+  const RuntimeReplayTrace after_rejection = world.replay_trace();
+  expect(!rejected.ok && !rejected.swapped &&
+             after_rejection.events.size() == after.events.size() &&
+             world.world_epoch() == epoch_before + 1U,
+         "rejected notebook image should not append a trace or epoch");
+}
+
+void test_runtime_notebook_image_install_releases_old_code_index_images() {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+
+  auto original =
+      std::make_shared<const BcModule>(make_notebook_cell_test_module());
+  std::weak_ptr<const BcModule> old_image = original;
+  RuntimeWorld world(original, RuntimeWorldOptions{});
+  original.reset();
+  expect(!old_image.expired(),
+         "active notebook image should be retained by RuntimeWorld");
+  RuntimeNotebookCellContext context;
+  context.load_slot = [](std::uint32_t descriptor) -> std::optional<Value> {
+    return descriptor == 7U ? std::optional<Value>(Value::integer(2))
+                            : std::nullopt;
+  };
+  context.stage_slot = [](std::uint32_t, Value) { return true; };
+  expect(world.execute_notebook_cell(1, context).ok(),
+         "retention test should populate the old image code index");
+
+  BcModule replacement = make_notebook_cell_test_module();
+  replacement.const_pool.front().int_value = 17;
+  const RuntimeNotebookImageInstallResult installed =
+      world.install_notebook_image(
+          std::make_shared<const BcModule>(std::move(replacement)));
+  expect(installed.ok && installed.swapped,
+         "replacement used by retention test should install");
+  expect(old_image.expired(),
+         "notebook code-index cache should release the replaced image");
 }
 
 void test_runtime_gc_safepoint_preserves_caller_roots_during_call() {
@@ -8910,6 +9971,8 @@ void test_runtime_package_reload_swaps_compatible_package_atomically() {
   const amber::pkg::PackageArtifact replacement =
       make_reload_artifact(make_reload_module(2));
   amber::runtime::RuntimeWorld world(original);
+  const amber::runtime::RuntimeWatchCursor watch_cursor_before_reload =
+      world.watch_cursor();
 
   auto instance =
       amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
@@ -8927,12 +9990,58 @@ void test_runtime_package_reload_swaps_compatible_package_atomically() {
          "compatible package reload should swap active package");
   expect(world.world_epoch() == epoch_before + 1,
          "compatible package reload should bump world epoch once");
+  expect(world.watch_cursor().source == watch_cursor_before_reload.source,
+         "package reload should keep one ordered watch stream per world");
 
   const amber::runtime::ExecutionResult after =
       world.execute(1, {amber::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 2,
          "package reload should execute replacement method body");
+}
+
+void test_runtime_package_reload_commits_trace_atomically() {
+  const amber::pkg::PackageArtifact original =
+      make_reload_artifact(make_reload_module(1));
+  const amber::pkg::PackageArtifact replacement =
+      make_reload_artifact(make_reload_module(2));
+  amber::runtime::RuntimeWorldOptions options;
+  options.record_replay_trace = true;
+  options.trace_id = "package-reload-trace";
+  options.virtual_time_start = 40;
+  amber::runtime::RuntimeWorld world(original, std::move(options));
+
+  const amber::runtime::RuntimeReplayTrace before = world.replay_trace();
+  const std::uint64_t epoch_before = world.world_epoch();
+  const amber::runtime::RuntimePackageReloadResult reloaded =
+      world.reload_package_artifact(replacement);
+  expect(reloaded.ok && reloaded.swapped,
+         "trace-enabled package reload should swap the package");
+
+  const amber::runtime::RuntimeReplayTrace after = world.replay_trace();
+  expect(after.events.size() == before.events.size() + 2U,
+         "package reload should publish exactly two trace events");
+  expect(after.events[after.events.size() - 2U].name ==
+                 "loader.module.load" &&
+             after.events.back().name == "world.mutation",
+         "package reload trace events should be committed together");
+  expect(after.events[after.events.size() - 2U].module_id == "reload.core" &&
+             after.events.back().module_id == "reload.core" &&
+             after.events[after.events.size() - 2U].world_epoch ==
+                 epoch_before + 1U &&
+             after.events.back().world_epoch == epoch_before + 1U,
+         "package reload events should carry the new module and epoch");
+
+  const amber::pkg::PackageArtifact incompatible =
+      make_reload_artifact(make_reload_module(3, false));
+  const amber::runtime::RuntimePackageReloadResult rejected =
+      world.reload_package_artifact(incompatible);
+  const amber::runtime::RuntimeReplayTrace after_rejection =
+      world.replay_trace();
+  expect(!rejected.ok && !rejected.swapped &&
+             after_rejection.events.size() == after.events.size() &&
+             world.world_epoch() == epoch_before + 1U,
+         "rejected package reload should not append trace or epoch");
 }
 
 void test_runtime_package_reload_rejects_incompatible_surface_without_swap() {
@@ -9031,6 +10140,39 @@ void test_runtime_package_reload_rolls_back_failed_decode() {
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 1,
          "broken reload should leave original method body active");
+}
+
+void test_runtime_package_reload_rejects_unbounded_code_index() {
+  const amber::pkg::PackageArtifact original =
+      make_reload_artifact(make_reload_module(1));
+  amber::bytecode::BcModule oversized = make_reload_module(2);
+  constexpr std::uint32_t oversized_code_id = (1U << 20U) + 1U;
+  oversized.methods[0].entry_code_id = oversized_code_id;
+  oversized.code_objects[1].code_id = oversized_code_id;
+  const amber::pkg::PackageArtifact replacement =
+      make_reload_artifact(oversized);
+  amber::runtime::RuntimeWorld world(original);
+
+  const std::uint64_t epoch_before = world.world_epoch();
+  const amber::runtime::RuntimePackageReloadResult rejected =
+      world.reload_package_artifact(replacement);
+  expect(!rejected.ok && !rejected.swapped,
+         "reload should reject code ids outside the bounded cache range");
+  expect(!rejected.diagnostics.empty() &&
+             rejected.diagnostics[0].error_name == "PackageReloadError" &&
+             rejected.diagnostics[0].module_name == "reload.core",
+         "oversized code id should report a package reload diagnostic");
+  expect(world.world_epoch() == epoch_before,
+         "oversized code id rejection should not bump the world epoch");
+
+  auto instance =
+      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+  instance->class_index = 0;
+  const amber::runtime::ExecutionResult after =
+      world.execute(1, {amber::runtime::Value::instance(instance)});
+  expect(after.ok() && after.value.is_integer() &&
+             after.value.as_integer() == 1,
+         "oversized code id rejection should leave the old image active");
 }
 
 void test_manual_pattern_deconstruct_protocol_sequence() {
@@ -11110,13 +12252,15 @@ void test_string_tag_macro_staging() {
   expect(providers["db.mock"].size() == 1,
          "tag staging: string_tag export harvested");
 
+  for (const std::string &tag_literal : {
+           std::string("q\"\"\"\n    A #{40 + 2} B\n    \"\"\""),
+           std::string("q\"A #{40 + 2} B\""),
+           std::string("q'A \"#{40 + 2}\" B'")}) {
   const std::string importer_source = "package app.q\n"
                                       "from db.mock import sql as q\n"
                                       "\n"
                                       "def probe():\n"
-                                      "  pair = q\"\"\"\n"
-                                      "    A #{40 + 2} B\n"
-                                      "    \"\"\"\n"
+                                      "  pair = " + tag_literal + "\n"
                                       "  pair[1][0]\n";
   amber::lexer::Lexer importer_lexer(importer_source, "<tag-importer>");
   amber::lexer::LexResult importer_lex = importer_lexer.lex();
@@ -11145,6 +12289,7 @@ void test_string_tag_macro_staging() {
   expect(exec.ok(), "tag staging: probe executes");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
          "imported tag bound the interpolant as a parameter (probe == 42)");
+  }
 
   // Misusing a string_tag macro through an ordinary call channel is a
   // located diagnostic, not a wrong-channel expansion.
@@ -11288,6 +12433,16 @@ int main() {
   test_execute_emitted_v20_5_array_generation_and_optional_access();
   test_runtime_map_get_or_set();
   test_runtime_watch_local_storage_replacement();
+  test_runtime_watch_stream_cursor_and_overflow();
+  test_runtime_watch_activity_hook_runs_after_publication_and_is_advisory();
+  test_runtime_watch_stream_wait_timeout_and_wakeup();
+  test_runtime_watch_wait_large_timeout_does_not_overflow();
+  test_runtime_world_watch_wait_does_not_hold_execution_lock();
+  test_runtime_watch_binding_events_follow_mutation_order();
+  test_runtime_watch_ivar_events_follow_object_mutation_order();
+  test_runtime_watch_binding_sink_may_reenter_same_cell();
+  test_runtime_watch_ivar_sink_may_reenter_same_object();
+  test_runtime_watch_throwing_sink_commits_and_releases_delivery();
   test_runtime_watch_parallel_task_bookkeeping();
   test_runtime_amber_tasks_execute_without_global_interpreter_lock();
   test_runtime_integer_specialized_op_preserves_watch_local_write();
@@ -11318,6 +12473,14 @@ int main() {
   test_runtime_gc_write_barrier_remembers_mature_to_young_edge();
   test_runtime_gc_write_barrier_rejects_invalid_edges();
   test_runtime_gc_safepoint_scans_vm_frame_roots();
+  test_runtime_external_gc_root_provider_preserves_world_roots();
+  test_runtime_external_gc_root_provider_preserves_safepoint_roots();
+  test_runtime_notebook_cell_execution_boundary();
+  test_runtime_notebook_cell_store_before_later_fault_is_only_staged();
+  test_runtime_notebook_cell_staged_roots_survive_safepoint();
+  test_runtime_notebook_image_install_preserves_world_state();
+  test_runtime_notebook_image_install_commits_trace_atomically();
+  test_runtime_notebook_image_install_releases_old_code_index_images();
   test_runtime_gc_safepoint_preserves_caller_roots_during_call();
   test_runtime_gc_backedge_safepoint_preserves_live_roots();
   test_runtime_gc_preserves_rooted_local_and_shared_cycles();
@@ -11364,9 +12527,11 @@ int main() {
   test_runtime_world_extend_invalidates_class_side_send_cache();
   test_runtime_reflection_mirrors_are_read_only_stable_and_ordered();
   test_runtime_package_reload_swaps_compatible_package_atomically();
+  test_runtime_package_reload_commits_trace_atomically();
   test_runtime_package_reload_rejects_incompatible_surface_without_swap();
   test_runtime_package_reload_rejects_frozen_world_without_swap();
   test_runtime_package_reload_rolls_back_failed_decode();
+  test_runtime_package_reload_rejects_unbounded_code_index();
   test_manual_pattern_deconstruct_protocol_sequence();
   test_manual_pattern_deconstruct_protocol_map();
   test_source_try_rescue_ensure_execution();

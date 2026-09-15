@@ -519,8 +519,8 @@ std::optional<MacroCall> match_use_trigger(const ast::Expr &expr,
   return call;
 }
 
-// `name"""…"""` — the string-tag trigger (§8.5): a bare call whose single
-// argument is a block string literal ADJACENT to the tag head. The parser
+// `name"…"`, `name'…'`, `name"""…"""` — the string-tag trigger: a bare call
+// whose single argument is a string literal ADJACENT to the tag head. The parser
 // already produces this shape (an identifier juxtaposed with a text block is
 // a bare call); adjacency — no whitespace between the identifier and the
 // `"""` opener — is what makes it a tag invocation, so `sql """…"""` with a
@@ -532,6 +532,7 @@ struct StringTagCall {
   std::string name;
   const ast::Expr *literal = nullptr;
   lexer::Span span;
+  std::size_t tail_count = 0;
 };
 
 std::optional<StringTagCall>
@@ -543,7 +544,7 @@ match_string_tag(const ast::Expr &expr,
   const ast::Expr *base = node_field(expr, "base");
   const ast::ListField *tails = list_field(expr, "tails");
   if (base == nullptr || base->kind != "AstName" || tails == nullptr ||
-      tails->values.empty() || tails->values.size() > 2) {
+      tails->values.empty()) {
     return std::nullopt;
   }
   std::size_t index = 0;
@@ -552,7 +553,7 @@ match_string_tag(const ast::Expr &expr,
       string_tag_names.find(spelling) == string_tag_names.end()) {
     return std::nullopt;
   }
-  if (tails->values.size() != index + 1 || !tails->values[index] ||
+  if (tails->values.size() < index + 1 || !tails->values[index] ||
       tails->values[index]->kind != "AstTailCall") {
     return std::nullopt;
   }
@@ -566,7 +567,9 @@ match_string_tag(const ast::Expr &expr,
   }
   const ast::Expr &literal = *args->values[0];
   const std::string *quote_kind = string_field(literal, "quote_kind");
-  if (quote_kind == nullptr || *quote_kind != "block") {
+  if (quote_kind == nullptr ||
+      (*quote_kind != "block" && *quote_kind != "double" &&
+       *quote_kind != "single")) {
     return std::nullopt;
   }
   // The tag head ends at the base name or, for a dotted head, at the dot
@@ -576,12 +579,13 @@ match_string_tag(const ast::Expr &expr,
   if (literal.span.start.offset != head_span.end.offset) {
     return std::nullopt; // whitespace before the opener: not a tag
   }
-  return StringTagCall{spelling, &literal, expr.span};
+  return StringTagCall{spelling, &literal, expr.span, index + 1};
 }
 
 struct BuiltinRegexpTag {
   const ast::Expr *literal = nullptr;
   lexer::Span span;
+  std::size_t tail_count = 1;
 };
 
 std::optional<BuiltinRegexpTag>
@@ -592,7 +596,7 @@ match_builtin_regexp_tag(const ast::Expr &expr) {
   const ast::Expr *base = node_field(expr, "base");
   const ast::ListField *tails = list_field(expr, "tails");
   if (base == nullptr || base->kind != "AstName" || tails == nullptr ||
-      tails->values.size() != 1U || !tails->values[0]) {
+      tails->values.empty() || !tails->values[0]) {
     return std::nullopt;
   }
   const std::string *name = string_field(*base, "name");
@@ -758,11 +762,26 @@ public:
              at_location(tag->span));
         return;
       }
+      std::vector<std::unique_ptr<ast::Expr>> suffix;
+      const auto *tails = list_field(*slot, "tails");
+      for (std::size_t i = tag->tail_count; i < tails->values.size(); ++i)
+        suffix.push_back(ast::clone_expr(*tails->values[i]));
       slot = make_regexp_compile_call(*source, tag->span);
+      if (!suffix.empty()) {
+        auto chain = ast::make_expr("AstPostfixChain", tag->span);
+        chain->node_field("base", std::move(slot));
+        chain->list_field("tails", std::move(suffix));
+        slot = std::move(chain);
+        expand(slot, depth + 1);
+      }
       return;
     }
     if (std::optional<StringTagCall> tag =
             match_string_tag(*slot, string_tag_names_)) {
+      std::vector<std::unique_ptr<ast::Expr>> suffix;
+      const auto *tails = list_field(*slot, "tails");
+      for (std::size_t i = tag->tail_count; i < tails->values.size(); ++i)
+        suffix.push_back(ast::clone_expr(*tails->values[i]));
       // Hand-off (§8.5 / multiline design §7): the literal re-kinded as
       // Ast.StringTemplate becomes the tag macro's single argument; the
       // macro must return exactly one expression Ast.
@@ -776,6 +795,13 @@ public:
         return;
       }
       splice_expression_result(slot, tag->name, tag->span, *value, depth);
+      if (result_.ok && !suffix.empty()) {
+        auto chain = ast::make_expr("AstPostfixChain", tag->span);
+        chain->node_field("base", std::move(slot));
+        chain->list_field("tails", std::move(suffix));
+        slot = std::move(chain);
+        expand(slot, depth + 1);
+      }
       return;
     }
     if (std::optional<MacroCall> call = match_macro_call(*slot, macro_names_)) {
@@ -1174,7 +1200,7 @@ private:
     if (string_tag_names_.find(call.name) == string_tag_names_.end()) {
       return true;
     }
-    fail("macro `" + call.name + "` is a string_tag macro; invoke it as `" +
+    fail("macro `" + call.name + "` is a string_tag macro; invoke it adjacent to a string literal, e.g. `" +
          call.name +
          "\"\"\"…\"\"\"` with the text-block opener adjacent to the tag" +
          at_location(call.span));
@@ -2036,7 +2062,39 @@ ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
 ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
                            const std::string &module_name,
                            const std::string &source,
-                           const MacroProviderMap &providers) {
+                           const MacroProviderMap &supplied_providers) {
+  // The standard command tag follows the ordinary provider/import protocol.
+  // Interpolants are inserted as expressions exactly once; static fragments
+  // are parsed by the shared process engine, never by a shell.
+  static const std::vector<MacroExport> system_exports = [] {
+    const std::string source = R"AMBER(
+string_tag macro def cmd(t):
+  parts = []
+  text = ""
+  t.parts.each |part|:
+    if part.kind == "AstStringExpr":
+      parts.push!(Ast.lift(text))
+      parts.push!(part.expr)
+      text = ""
+    else:
+      text = text + part.value
+  parts.push!(Ast.lift(text))
+  return Ast.node("AstPostfixChain", {
+    base: Ast.node("AstName", {name: "system"}),
+    tails: [
+      Ast.node("AstTailDotMember", {name: "__template", chain_boundary: false}),
+      Ast.node("AstTailCall", {call_style: "paren", args: [Ast.node("AstListLiteral", {elements: parts})]})
+    ]
+  })
+export macro cmd
+)AMBER";
+    lexer::Lexer lexer(source, "<stdlib/system>");
+    auto lexed = lexer.lex(); parser::Parser parser(lexed.tokens);
+    auto parsed = parser.parse_module_unit();
+    return collect_macro_exports(parsed.items);
+  }();
+  MacroProviderMap providers = supplied_providers;
+  providers.emplace("system", system_exports);
   std::vector<const ast::Expr *> macro_defs;
   MacroNameTable macro_names;
   // string_tag macros are invocable only via `name"""…"""`.

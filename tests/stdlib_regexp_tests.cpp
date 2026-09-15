@@ -107,7 +107,7 @@ void test_regexp_tag_and_escape() {
       execute_source("pat = r\"\\d+\"\n"
                      "same = Regexp.new(\"\\\\d+\")\n"
                      "escaped = Regexp.escape(\"a+b[c]\")\n"
-                     "if pat == same and pat.source == \"\\\\d+\" and "
+                     "if r'\\d+'.source == pat.source and r\"\\d+\".match?(\"42\") and pat == same and pat.source == \"\\\\d+\" and "
                      "pat.to_str == \"/\\\\d+/\" and pat.match?(\"x42\") and "
                      "escaped == \"a\\\\+b\\\\[c\\\\]\":\n"
                      "  42\n"

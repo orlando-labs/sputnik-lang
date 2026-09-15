@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,15 @@ bool has_error_code(const amber::bytecode::DecodeResult &result,
     }
   }
   return false;
+}
+
+void write_u32_le(std::vector<std::uint8_t> &bytes, std::size_t offset,
+                  std::uint32_t value) {
+  expect(offset + 4U <= bytes.size(), "byte mutation is in range");
+  bytes[offset] = static_cast<std::uint8_t>(value & 0xffU);
+  bytes[offset + 1U] = static_cast<std::uint8_t>((value >> 8U) & 0xffU);
+  bytes[offset + 2U] = static_cast<std::uint8_t>((value >> 16U) & 0xffU);
+  bytes[offset + 3U] = static_cast<std::uint8_t>((value >> 24U) & 0xffU);
 }
 
 std::string path_constant_text(const amber::bytecode::BcModule &module,
@@ -276,6 +286,410 @@ void test_round_trip_and_dump() {
   expect(dump1 == dump2, "JSON dump changed across round-trip");
   expect(decoded.sections.size() == 28,
          "expected required and optional sections");
+}
+
+void test_notebook_format_minor_version_boundary() {
+  using namespace amber::bytecode;
+
+  BcModule supported = sample_module();
+  supported.format_version = {1, 1};
+  const DecodeResult supported_decoded =
+      deserialize_module(serialize_module(supported));
+  expect(supported_decoded.ok(), "bytecode format 1.1 should be supported");
+
+  BcModule future = sample_module();
+  future.format_version = {1, 2};
+  const DecodeResult future_decoded =
+      deserialize_module(serialize_module(future));
+  expect(!future_decoded.ok(), "future bytecode minor unexpectedly accepted");
+  expect(has_error_code(future_decoded, "BC1003"),
+         "expected BC1003 for unsupported future bytecode minor");
+}
+
+void test_notebook_cell_round_trip() {
+  using namespace amber::bytecode;
+
+  expect(static_cast<std::uint8_t>(Opcode::PFail) == 0x4cU,
+         "existing opcode value changed");
+  expect(static_cast<std::uint8_t>(Opcode::LoadNotebookSlot) == 0x4dU,
+         "notebook slot load opcode has the wrong ABI value");
+  expect(static_cast<std::uint8_t>(Opcode::StoreNotebookSlot) == 0x4eU,
+         "notebook slot store opcode has the wrong ABI value");
+  expect(static_cast<std::uint8_t>(CodeKind::Module) == 0U,
+         "module code kind value changed");
+  expect(static_cast<std::uint8_t>(CodeKind::Method) == 1U,
+         "method code kind value changed");
+  expect(static_cast<std::uint8_t>(CodeKind::Block) == 2U,
+         "block code kind value changed");
+  expect(static_cast<std::uint8_t>(CodeKind::Ensure) == 3U,
+         "ensure code kind value changed");
+  expect(static_cast<std::uint8_t>(CodeKind::Rescue) == 4U,
+         "rescue code kind value changed");
+  expect(static_cast<std::uint8_t>(CodeKind::DefaultThunk) == 5U,
+         "default thunk code kind value changed");
+  expect(static_cast<std::uint8_t>(CodeKind::NotebookCell) == 6U,
+         "notebook cell code kind value is not the extension value");
+
+  BcModule module = sample_module();
+  module.format_version = {1, 1};
+  BcCode notebook_provider = module.code_objects.front();
+  notebook_provider.code_id = 8;
+  notebook_provider.kind = CodeKind::NotebookCell;
+  notebook_provider.instructions = {
+      {Opcode::LoadK, {{0, false}, {0, false}}},
+      {Opcode::StoreNotebookSlot, {{17, false}, {0, false}}},
+      {Opcode::Return, {{0, false}}},
+  };
+  BcCode notebook_cell = module.code_objects.front();
+  notebook_cell.code_id = 9;
+  notebook_cell.kind = CodeKind::NotebookCell;
+  notebook_cell.instructions = {
+      {Opcode::LoadNotebookSlot, {{0, false}, {17, false}}},
+      {Opcode::StoreNotebookSlot, {{18, false}, {0, false}}},
+      {Opcode::Return, {{0, false}}},
+  };
+  module.code_objects.push_back(notebook_provider);
+  module.code_objects.push_back(notebook_cell);
+  module.file_flags |= kFileFlagNotebookOnly;
+  NotebookMetadata notebook_metadata;
+  notebook_metadata.descriptors.push_back({17, 41, 0});
+  notebook_metadata.descriptors.push_back({18, 42, 0});
+  notebook_metadata.cells.push_back({8, 41, {}, {17}});
+  notebook_metadata.cells.push_back({9, 42, {17}, {18}});
+  module.notebook_metadata = notebook_metadata;
+
+  const std::vector<std::uint8_t> bytes = serialize_module(module);
+  const DecodeResult decoded = deserialize_module(bytes);
+  expect(decoded.ok(), verify_errors_to_json(decoded.errors));
+  expect(decoded.module.code_objects.size() == 3U,
+         "notebook cell code objects were not preserved");
+  expect(decoded.module.code_objects[2].kind == CodeKind::NotebookCell,
+         "notebook cell kind was not preserved");
+  expect(decoded.module.code_objects[2].instructions[0].opcode ==
+             Opcode::LoadNotebookSlot,
+         "notebook slot load opcode was not preserved");
+  expect(decoded.module.code_objects[2].instructions[1].opcode ==
+             Opcode::StoreNotebookSlot,
+         "notebook slot store opcode was not preserved");
+  expect(decoded.module.notebook_metadata.has_value(),
+         "notebook metadata sidecar was not preserved");
+  expect(decoded.module.notebook_metadata->schema_version.major == 1U &&
+             decoded.module.notebook_metadata->schema_version.minor == 0U &&
+             decoded.module.notebook_metadata->descriptors.size() == 2U &&
+             decoded.module.notebook_metadata->cells.size() == 2U,
+         "notebook metadata sidecar record counts were not preserved");
+  expect(decoded.module.notebook_metadata->cells[1].input_descriptor_ids ==
+             std::vector<std::uint32_t>{17} &&
+             decoded.module.notebook_metadata->cells[1].output_descriptor_ids ==
+                 std::vector<std::uint32_t>{18},
+         "notebook metadata ordered direction sets were not preserved");
+  expect(opcode_name(Opcode::LoadNotebookSlot) == "LOAD_NOTEBOOK_SLOT" &&
+             opcode_name(Opcode::StoreNotebookSlot) == "STORE_NOTEBOOK_SLOT",
+         "notebook slot opcode has the wrong name");
+  expect(code_kind_name(decoded.module.code_objects[1].kind) == "notebook_cell",
+         "notebook cell kind has the wrong name");
+  expect(module_to_disasm(decoded.module, decoded.sections, bytes_hash(bytes))
+             .find("kind=notebook_cell") != std::string::npos,
+         "notebook cell kind is missing from disassembly");
+  expect(bytes == serialize_module(decoded.module),
+         "notebook cell round-trip is not byte stable");
+}
+
+void test_unknown_code_kind_rejected() {
+  using namespace amber::bytecode;
+
+  BcModule module = sample_module();
+  module.code_objects[0].kind = static_cast<CodeKind>(0xffU);
+  const DecodeResult decoded = deserialize_module(serialize_module(module));
+  expect(!decoded.ok(), "unknown code kind unexpectedly decoded");
+  expect(has_error_code(decoded, "BC1308"),
+         "expected BC1308 for unknown code kind");
+}
+
+void test_notebook_cell_cannot_be_an_ordinary_entry() {
+  using namespace amber::bytecode;
+
+  BcModule module = sample_module();
+  BcCode notebook_cell = module.code_objects.front();
+  notebook_cell.code_id = 8;
+  notebook_cell.kind = CodeKind::NotebookCell;
+  module.code_objects.push_back(notebook_cell);
+  module.init.entry_code_id = notebook_cell.code_id;
+
+  const DecodeResult decoded = deserialize_module(serialize_module(module));
+  expect(!decoded.ok(),
+         "notebook cell was accepted as an ordinary module entry");
+  expect(has_error_code(decoded, "BC1316"),
+         "expected BC1316 for an ordinary notebook-cell entry");
+}
+
+void test_notebook_slot_opcodes_require_notebook_cell() {
+  using namespace amber::bytecode;
+
+  BcModule module = sample_module();
+  module.code_objects[0].instructions = {
+      {Opcode::LoadNotebookSlot, {{0, false}, {17, false}}},
+      {Opcode::Return, {{0, false}}},
+  };
+  module.line_table[1].pc = 1;
+  const DecodeResult decoded = deserialize_module(serialize_module(module));
+  expect(!decoded.ok(),
+         "notebook slot opcode was accepted by ordinary code");
+  expect(has_error_code(decoded, "BC1317"),
+         "expected BC1317 for notebook slot opcode in ordinary code");
+}
+
+amber::bytecode::BcModule valid_notebook_metadata_module() {
+  using namespace amber::bytecode;
+  BcModule module = sample_module();
+  module.format_version = {1, 1};
+  BcCode provider = module.code_objects.front();
+  provider.code_id = 8;
+  provider.kind = CodeKind::NotebookCell;
+  provider.instructions = {
+      {Opcode::LoadK, {{0, false}, {0, false}}},
+      {Opcode::StoreNotebookSlot, {{17, false}, {0, false}}},
+      {Opcode::Return, {{0, false}}},
+  };
+  BcCode cell = module.code_objects.front();
+  cell.code_id = 9;
+  cell.kind = CodeKind::NotebookCell;
+  cell.instructions = {
+      {Opcode::LoadNotebookSlot, {{0, false}, {17, false}}},
+      {Opcode::StoreNotebookSlot, {{18, false}, {0, false}}},
+      {Opcode::Return, {{0, false}}},
+  };
+  module.code_objects.push_back(provider);
+  module.code_objects.push_back(cell);
+  module.file_flags |= kFileFlagNotebookOnly;
+  NotebookMetadata metadata;
+  metadata.descriptors = {{17, 41, 0}, {18, 42, 0}};
+  metadata.cells = {{8, 41, {}, {17}}, {9, 42, {17}, {18}}};
+  module.notebook_metadata = std::move(metadata);
+  return module;
+}
+
+void test_notebook_metadata_negative_cases() {
+  using namespace amber::bytecode;
+
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.format_version = {1, 0};
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "NBMD in bytecode format 1.0 unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1444"),
+           "expected BC1444 for NBMD before bytecode format 1.1");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.file_flags &= ~kFileFlagNotebookOnly;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "NBMD in ordinary image unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1420"),
+           "expected BC1420 for NBMD in ordinary image");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata.reset();
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "notebook-only image without NBMD accepted");
+    expect(has_error_code(decoded, "BC1421"),
+           "expected BC1421 for missing NBMD");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->schema_version.minor = 1;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "unsupported NBMD schema unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1440"),
+           "expected BC1440 for unsupported NBMD schema");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    std::vector<std::uint8_t> bytes = serialize_module(module);
+    const DecodeResult baseline = deserialize_module(bytes);
+    expect(baseline.ok(), "valid NBMD baseline did not decode");
+    std::size_t nbmd_offset = 0;
+    for (const SectionEntry &section : baseline.sections) {
+      if (section.kind == SectionKind::Nbmd) {
+        nbmd_offset = static_cast<std::size_t>(section.offset);
+        break;
+      }
+    }
+    expect(nbmd_offset != 0U, "NBMD section offset was not found");
+
+    // The count is syntactically valid but cannot fit even one 16-byte
+    // descriptor in the section. The decoder must reject before reserve().
+    write_u32_le(bytes, nbmd_offset + 4U,
+                 std::numeric_limits<std::uint32_t>::max());
+    DecodeResult decoded;
+    bool threw = false;
+    try {
+      decoded = deserialize_module(bytes);
+    } catch (...) {
+      threw = true;
+    }
+    expect(!threw, "malformed NBMD descriptor count threw an exception");
+    expect(!decoded.ok() && has_error_code(decoded, "BC1445"),
+           "expected BC1445 for oversized NBMD descriptor count");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    std::vector<std::uint8_t> bytes = serialize_module(module);
+    const DecodeResult baseline = deserialize_module(bytes);
+    expect(baseline.ok(), "valid NBMD baseline did not decode");
+    std::size_t nbmd_offset = 0;
+    std::size_t nbmd_directory_index = 0;
+    bool found_nbmd = false;
+    for (std::size_t index = 0; index < baseline.sections.size(); ++index) {
+      if (baseline.sections[index].kind == SectionKind::Nbmd) {
+        nbmd_offset = static_cast<std::size_t>(baseline.sections[index].offset);
+        nbmd_directory_index = index;
+        found_nbmd = true;
+        break;
+      }
+    }
+    expect(found_nbmd, "NBMD section directory entry was not found");
+
+    // Keep only the schema and descriptor count, then advertise UINT32_MAX
+    // descriptors. This exercises both truncation and the count guard.
+    write_u32_le(bytes, nbmd_offset + 4U,
+                 std::numeric_limits<std::uint32_t>::max());
+    write_u32_le(bytes, 56U + nbmd_directory_index * 24U + 12U, 8U);
+    bytes.resize(nbmd_offset + 8U);
+    DecodeResult decoded;
+    bool threw = false;
+    try {
+      decoded = deserialize_module(bytes);
+    } catch (...) {
+      threw = true;
+    }
+    expect(!threw, "truncated NBMD count threw an exception");
+    expect(!decoded.ok() && has_error_code(decoded, "BC1445"),
+           "expected BC1445 for truncated oversized NBMD count");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    std::vector<std::uint8_t> bytes = serialize_module(module);
+    const DecodeResult baseline = deserialize_module(bytes);
+    expect(baseline.ok(), "valid NBMD baseline did not decode");
+    std::size_t nbmd_offset = 0;
+    for (const SectionEntry &section : baseline.sections) {
+      if (section.kind == SectionKind::Nbmd) {
+        nbmd_offset = static_cast<std::size_t>(section.offset);
+        break;
+      }
+    }
+    expect(nbmd_offset != 0U, "NBMD section offset was not found");
+
+    // Cell 2's input descriptor array starts at offset 80 in this compact
+    // two-cell fixture. Its UINT32_MAX count must not trigger a huge reserve.
+    write_u32_le(bytes, nbmd_offset + 80U,
+                 std::numeric_limits<std::uint32_t>::max());
+    DecodeResult decoded;
+    bool threw = false;
+    try {
+      decoded = deserialize_module(bytes);
+    } catch (...) {
+      threw = true;
+    }
+    expect(!threw, "malformed NBMD array count threw an exception");
+    expect(!decoded.ok() && has_error_code(decoded, "BC1445"),
+           "expected BC1445 for oversized NBMD array count");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->descriptors.push_back({17, 43, 0});
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "duplicate descriptor id unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1422"),
+           "expected BC1422 for duplicate descriptor id");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->descriptors[0].cell_id = 0;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "zero descriptor CellId unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1423"),
+           "expected BC1423 for zero descriptor CellId");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->descriptors[1].name_str_id = 99;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "invalid descriptor name ref unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1424"),
+           "expected BC1424 for invalid descriptor name ref");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->descriptors[1].name_str_id = 0;
+    module.notebook_metadata->descriptors[1].cell_id = 41;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "duplicate BindingKey unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1426"),
+           "expected BC1426 for duplicate BindingKey");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->cells[1].output_descriptor_ids = {17};
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "output descriptor from another cell accepted");
+    expect(has_error_code(decoded, "BC1432"),
+           "expected BC1432 for output CellId mismatch");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->cells[1].input_descriptor_ids.clear();
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "undeclared LOAD descriptor unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1433") &&
+               has_error_code(decoded, "BC1438"),
+           "expected exact input direction validation errors");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->descriptors[0].cell_id = 99;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "missing notebook provider cell unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1441"),
+           "expected BC1441 for missing notebook provider cell");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->cells[0].output_descriptor_ids.clear();
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "input without provider output unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1442") &&
+               has_error_code(decoded, "BC1443"),
+           "expected provider output and orphan descriptor validation errors");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.strings.push_back("orphan");
+    module.notebook_metadata->descriptors.push_back(
+        {19, 41, static_cast<std::uint32_t>(module.strings.size() - 1U)});
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "orphan notebook descriptor unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1443"),
+           "expected BC1443 for orphan notebook descriptor");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->cells.clear();
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "NotebookCell without manifest unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1430"),
+           "expected BC1430 for missing cell manifest");
+  }
+  {
+    BcModule module = valid_notebook_metadata_module();
+    module.notebook_metadata->cells[0].code_id = 7;
+    const DecodeResult decoded = deserialize_module(serialize_module(module));
+    expect(!decoded.ok(), "ordinary code manifest unexpectedly accepted");
+    expect(has_error_code(decoded, "BC1429"),
+           "expected BC1429 for non-notebook manifest target");
+  }
 }
 
 void test_disasm_is_stable() {
@@ -639,6 +1053,12 @@ void test_invalid_workflow_metadata_rejected() {
 
 int main() {
   test_round_trip_and_dump();
+  test_notebook_format_minor_version_boundary();
+  test_notebook_cell_round_trip();
+  test_unknown_code_kind_rejected();
+  test_notebook_cell_cannot_be_an_ordinary_entry();
+  test_notebook_slot_opcodes_require_notebook_cell();
+  test_notebook_metadata_negative_cases();
   test_disasm_is_stable();
   test_bad_magic_rejected();
   test_missing_required_section_rejected();

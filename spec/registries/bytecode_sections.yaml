@@ -86,3 +86,6 @@ sections:
   - tag: HASH
     required: false
     meaning: section digests
+  - tag: NBMD
+    required: false
+    meaning: notebook-only descriptor and per-cell manifest sidecar

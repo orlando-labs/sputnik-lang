@@ -573,6 +573,8 @@ void register_builtin_runtime_modules(RuntimeModuleRegistry &modules,
 }
 
 void register_core_prelude_bindings(RuntimeModuleRegistry &registry) {
+  registry.register_native_type_path("system", RuntimeNativeTypeKind::System);
+  registry.register_native_type_path("system.cmd", RuntimeNativeTypeKind::System);
   registry.register_native_function_path("print",
                                          RuntimeNativeFunctionKind::Print);
   registry.register_native_function_path("p", RuntimeNativeFunctionKind::P);

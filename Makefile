@@ -120,21 +120,37 @@ NATIVE_SRCS := optimizer/native.cpp
 FROZEN_SRCS := frozen/image.cpp
 PROFILE_SRCS := profile/capabilities.cpp profile/effects.cpp profile/replay.cpp profile/data.cpp profile/wasm_accel.cpp profile/modern.cpp
 BUILD_SRCS := buildsys/build.cpp
-BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp
+BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp bytecode/graph_linker.cpp
 IO_SRCS := runtime/io.cpp runtime/reactor.cpp
 DIGEST_SRCS := runtime/digest.cpp
 HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_server.cpp runtime/net_http_transport.cpp
 STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
-RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/vm.cpp $(STDLIB_SRCS) runtime/amber_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
+RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/system.cpp runtime/vm.cpp $(STDLIB_SRCS) runtime/amber_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
 FROZEN_RUNTIME_SRCS := runtime/frozen_image.cpp
 PACKAGE_SRCS := package/package.cpp
 FRONTEND_SRCS := $(LEXER_SRCS) $(AST_SRCS) $(PARSER_SRCS) $(PATTERN_SRCS) $(BINDER_SRCS) $(CHECKER_SRCS) $(HIR_SRCS)
+NOTEBOOK_GRAPH_SRCS := notebook/model.cpp notebook/analysis.cpp notebook/dependency_graph.cpp notebook/scheduler.cpp
+NOTEBOOK_SRCS := $(NOTEBOOK_GRAPH_SRCS) notebook/slot_table.cpp notebook/kernel.cpp notebook/vm_cell_executor.cpp notebook/compiler.cpp
+NOTEBOOK_PROJECT_SRCS := notebook/project.cpp notebook/project_json.cpp
+NOTEBOOK_PROJECT_TEST_SRCS := tests/notebook_project_tests.cpp notebook/model.cpp $(NOTEBOOK_PROJECT_SRCS)
 CORE_SRCS := $(PROFILE_SRCS) $(BUILD_SRCS) $(FRONTEND_SRCS) $(MIR_SRCS) $(NATIVE_SRCS) $(BYTECODE_SRCS)
+NOTEBOOK_SLOT_TEST_SRCS := tests/notebook_slot_tests.cpp notebook/slot_table.cpp notebook/model.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 AMBERC_SRCS := tools/amberc/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS)
 AMBERTEST_SRCS := tools/ambertest/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
-IAMBER_SRCS := tools/iamber/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
+IAMBER_ENVIRONMENT_SRCS := tools/iamber/environment.cpp
+IAMBER_SRCS := tools/iamber/main.cpp tools/iamber/session.cpp tools/iamber/project_session.cpp tools/iamber/tabs.cpp $(IAMBER_ENVIRONMENT_SRCS) tools/iamber/activity.cpp tools/iamber/dispatch.cpp tools/iamber/terminal_wait.cpp $(NOTEBOOK_PROJECT_SRCS) $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
 IAMBER_LDLIBS ?= -lncurses
-IAMBER_TEST_SRCS := tests/iamber_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
+IAMBER_TEST_SRCS := tests/iamber_tests.cpp tools/iamber/session.cpp tools/iamber/project_session.cpp $(IAMBER_ENVIRONMENT_SRCS) tools/iamber/activity.cpp $(NOTEBOOK_PROJECT_SRCS) $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
+IAMBER_PROJECT_TEST_SRCS := tests/iamber_project_tests.cpp $(filter-out tests/iamber_tests.cpp,$(IAMBER_TEST_SRCS))
+IAMBER_TABS_TEST_SRCS := tests/iamber_tabs_tests.cpp tools/iamber/tabs.cpp tools/iamber/dispatch.cpp $(filter-out tests/iamber_tests.cpp,$(IAMBER_TEST_SRCS))
+IAMBER_ACTIVITY_TEST_SRCS := tests/iamber_activity_tests.cpp tools/iamber/activity.cpp
+IAMBER_POLL_TEST_SRCS := tests/iamber_poll_tests.cpp tools/iamber/activity.cpp
+IAMBER_DISPATCH_TEST_SRCS := tests/iamber_dispatch_tests.cpp tools/iamber/dispatch.cpp
+IAMBER_TERMINAL_WAIT_TEST_SRCS := tests/iamber_terminal_wait_tests.cpp tools/iamber/terminal_wait.cpp
+NOTEBOOK_CORE_TEST_SRCS := tests/notebook_core_tests.cpp $(NOTEBOOK_GRAPH_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
+NOTEBOOK_COMPILER_TEST_SRCS := tests/notebook_compiler_tests.cpp $(NOTEBOOK_GRAPH_SRCS) notebook/compiler.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
+NOTEBOOK_KERNEL_TEST_SRCS := tests/notebook_kernel_tests.cpp $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
+NOTEBOOK_VM_INTEGRATION_TEST_SRCS := tests/notebook_vm_integration_tests.cpp $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
 LEXER_TEST_SRCS := tests/lexer_tests.cpp $(LEXER_SRCS)
 PARSER_TEST_SRCS := tests/parser_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS)
 BINDER_TEST_SRCS := tests/binder_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS)
@@ -147,6 +163,7 @@ MIR_TEST_SRCS := tests/mir_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS) $(MIR_SRCS
 NATIVE_TEST_SRCS := tests/native_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 FROZEN_IMAGE_TEST_SRCS := tests/frozen_image_tests.cpp $(CORE_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS) $(RUNTIME_SRCS) $(FROZEN_RUNTIME_SRCS)
 BYTECODE_TEST_SRCS := tests/bytecode_tests.cpp $(PROFILE_SRCS) $(BYTECODE_SRCS) $(LEXER_SRCS) $(AST_SRCS)
+GRAPH_LINKER_TEST_SRCS := tests/graph_linker_tests.cpp bytecode/graph_linker.cpp bytecode/format.cpp $(PROFILE_SRCS) $(LEXER_SRCS)
 EMITTER_TEST_SRCS := tests/emitter_tests.cpp $(CORE_SRCS)
 VM_TEST_SRCS := tests/vm_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_COLLECTIONS_TEST_SRCS := tests/stdlib_collections_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
@@ -279,8 +296,37 @@ FORMAT_FILES := \
 	runtime/amber_ext.cpp \
 	package/package.cpp \
 	package/package.h \
+	notebook/model.cpp \
+	notebook/model.h \
+	notebook/analysis.cpp \
+	notebook/dependency_graph.cpp \
+	notebook/dependency_graph.h \
+	notebook/kernel.cpp \
+	notebook/kernel.h \
+	notebook/scheduler.cpp \
+	notebook/scheduler.h \
+	notebook/notebook.h \
+	notebook/project.h \
+	notebook/project.cpp \
+	notebook/project_json.cpp \
+	notebook/slot_table.cpp \
+	notebook/slot_table.h \
+	notebook/compiler.cpp \
+	notebook/compiler.h \
 	tools/amberc/main.cpp \
 	tools/iamber/main.cpp \
+	tools/iamber/session.cpp \
+	tools/iamber/session.h \
+	tools/iamber/project_session.h \
+	tools/iamber/project_session.cpp \
+	tools/iamber/tabs.cpp \
+	tools/iamber/tabs.h \
+	tools/iamber/activity.cpp \
+	tools/iamber/activity.h \
+	tools/iamber/dispatch.cpp \
+	tools/iamber/dispatch.h \
+	tools/iamber/terminal_wait.cpp \
+	tools/iamber/terminal_wait.h \
 	tools/ambertest/main.cpp \
 	tests/lexer_tests.cpp \
 	tests/parser_tests.cpp \
@@ -297,7 +343,19 @@ FORMAT_FILES := \
 	tests/emitter_tests.cpp \
 	tests/module_loader_tests.cpp \
 	tests/package_tests.cpp \
+	tests/notebook_core_tests.cpp \
+	tests/notebook_compiler_tests.cpp \
+	tests/notebook_kernel_tests.cpp \
+	tests/notebook_slot_tests.cpp \
+	tests/notebook_vm_integration_tests.cpp \
 	tests/iamber_tests.cpp \
+	tests/notebook_project_tests.cpp \
+	tests/iamber_project_tests.cpp \
+	tests/iamber_tabs_tests.cpp \
+	tests/iamber_activity_tests.cpp \
+	tests/iamber_poll_tests.cpp \
+	tests/iamber_dispatch_tests.cpp \
+	tests/iamber_terminal_wait_tests.cpp \
 	tests/vm_tests.cpp \
 	tests/stdlib_collections_tests.cpp \
 	tests/stdlib_task_tests.cpp \
@@ -317,15 +375,33 @@ FORMAT_FILES := \
 	tests/net_http_tests.cpp \
 	tests/net_http_tcp_tests.cpp
 
-.PHONY: all build test conformance backend-equivalence spec-sync-check fmt clean
+.PHONY: all build test test-iamber-tui conformance backend-equivalence spec-sync-check fmt clean
 
 all: build
 
-build: $(BUILD_DIR)/amberc $(BUILD_DIR)/ambertest $(BUILD_DIR)/iamber $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/amber_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/iamber_tests
+build: $(BUILD_DIR)/system_tests $(BUILD_DIR)/stdlib_system_tests
+
+$(BUILD_DIR)/system_tests: tests/system_tests.cpp runtime/system.cpp runtime/system.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/system_tests.cpp runtime/system.cpp $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/stdlib_system_tests: tests/stdlib_system_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) runtime/system_vm.inc | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/stdlib_system_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(LDFLAGS) -o $@
+
+build: $(BUILD_DIR)/amberc $(BUILD_DIR)/ambertest $(BUILD_DIR)/iamber $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/amber_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/notebook_core_tests $(BUILD_DIR)/notebook_slot_tests $(BUILD_DIR)/notebook_kernel_tests $(BUILD_DIR)/notebook_vm_integration_tests $(BUILD_DIR)/notebook_compiler_tests $(BUILD_DIR)/iamber_tests
+
+build: $(BUILD_DIR)/iamber_activity_tests $(BUILD_DIR)/iamber_poll_tests $(BUILD_DIR)/iamber_dispatch_tests $(BUILD_DIR)/iamber_terminal_wait_tests
+build: $(BUILD_DIR)/notebook_project_tests $(BUILD_DIR)/iamber_project_tests $(BUILD_DIR)/iamber_tabs_tests
+build: $(BUILD_DIR)/graph_linker_tests
+
+# These adapters are included from the VM rather than compiled separately.
+# Keep all runtime consumers current when their implementation changes.
+$(addprefix $(BUILD_DIR)/,amberc ambertest iamber vm_tests native_tests frozen_image_tests stdlib_system_tests stdlib_collections_tests stdlib_task_tests stdlib_registry_tests stdlib_json_tests stdlib_codecs_tests stdlib_digest_tests stdlib_benchmark_tests stdlib_secure_random_tests stdlib_argparser_tests stdlib_regexp_tests stdlib_uuid_tests stdlib_time_tests stdlib_url_tests stdlib_yaml_tests amber_ext_tests module_loader_tests notebook_core_tests notebook_compiler_tests notebook_slot_tests notebook_kernel_tests notebook_vm_integration_tests iamber_tests): runtime/system_vm.inc runtime/system.h
 
 $(BUILD_DIR)/.dir:
 	mkdir -p $(BUILD_DIR)
 	touch $(BUILD_DIR)/.dir
+
+$(BUILD_DIR)/amberc $(BUILD_DIR)/iamber $(BUILD_DIR)/iamber_tests $(BUILD_DIR)/iamber_project_tests $(BUILD_DIR)/iamber_tabs_tests: bytecode/graph_linker.h
 
 $(BUILD_DIR)/amberc: $(AMBERC_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERC_SRCS) $(LDFLAGS) $(AMBERC_DYNAMIC_EXPORT_FLAGS) $(AMBERC_DYNAMIC_LOADER_LIBS) -o $@
@@ -333,11 +409,53 @@ $(BUILD_DIR)/amberc: $(AMBERC_SRCS) | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/ambertest: $(AMBERTEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERTEST_SRCS) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/iamber: $(IAMBER_SRCS) | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/iamber: $(IAMBER_SRCS) tools/iamber/session.h tools/iamber/project_session.h tools/iamber/tabs.h notebook/project.h notebook/model.h tools/iamber/activity.h tools/iamber/dispatch.h tools/iamber/terminal_wait.h | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_SRCS) $(LDFLAGS) $(IAMBER_LDLIBS) -o $@
 
-$(BUILD_DIR)/iamber_tests: $(IAMBER_TEST_SRCS) tools/iamber/main.cpp | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TEST_SRCS) $(LDFLAGS) $(IAMBER_LDLIBS) -o $@
+$(BUILD_DIR)/iamber_tests: $(IAMBER_TEST_SRCS) tools/iamber/session.h tools/iamber/project_session.h notebook/project.h notebook/model.h tools/iamber/activity.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_project_tests: $(NOTEBOOK_PROJECT_TEST_SRCS) notebook/project.h notebook/model.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_PROJECT_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/iamber_project_tests: $(IAMBER_PROJECT_TEST_SRCS) tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h tools/iamber/activity.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_PROJECT_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/iamber_tabs_tests: $(IAMBER_TABS_TEST_SRCS) tools/iamber/tabs.h tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h tools/iamber/activity.h tools/iamber/dispatch.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TABS_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/iamber_activity_tests: $(IAMBER_ACTIVITY_TEST_SRCS) tools/iamber/activity.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_ACTIVITY_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/iamber_poll_tests: $(IAMBER_POLL_TEST_SRCS) tools/iamber/activity.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_POLL_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/iamber_dispatch_tests: $(IAMBER_DISPATCH_TEST_SRCS) tools/iamber/dispatch.h tools/iamber/session.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_DISPATCH_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/iamber_terminal_wait_tests: $(IAMBER_TERMINAL_WAIT_TEST_SRCS) tools/iamber/terminal_wait.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TERMINAL_WAIT_TEST_SRCS) $(LDFLAGS) -o $@
+
+# Separate from the headless test suite: requires POSIX PTY allocation.
+test-iamber-tui: $(BUILD_DIR)/iamber
+	python3 tests/iamber_tui_smoke.py $(BUILD_DIR)/iamber
+	python3 tests/iamber_project_tui_smoke.py $(BUILD_DIR)/iamber
+	python3 tests/iamber_tabs_tui_smoke.py $(BUILD_DIR)/iamber
+
+$(BUILD_DIR)/notebook_core_tests: $(NOTEBOOK_CORE_TEST_SRCS) | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_CORE_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_compiler_tests: $(NOTEBOOK_COMPILER_TEST_SRCS) | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_COMPILER_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_slot_tests: $(NOTEBOOK_SLOT_TEST_SRCS) | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_SLOT_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_kernel_tests: $(NOTEBOOK_KERNEL_TEST_SRCS) | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_KERNEL_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_vm_integration_tests: $(NOTEBOOK_VM_INTEGRATION_TEST_SRCS) | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_VM_INTEGRATION_TEST_SRCS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/lexer_tests: $(LEXER_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LEXER_TEST_SRCS) $(LDFLAGS) -o $@
@@ -374,6 +492,9 @@ $(BUILD_DIR)/frozen_image_tests: $(FROZEN_IMAGE_TEST_SRCS) | $(BUILD_DIR)/.dir
 
 $(BUILD_DIR)/bytecode_tests: $(BYTECODE_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(BYTECODE_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/graph_linker_tests: $(GRAPH_LINKER_TEST_SRCS) bytecode/graph_linker.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(GRAPH_LINKER_TEST_SRCS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/emitter_tests: $(EMITTER_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(EMITTER_TEST_SRCS) $(LDFLAGS) -o $@
@@ -448,6 +569,9 @@ $(BUILD_DIR)/package_tests: $(PACKAGE_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PACKAGE_TEST_SRCS) $(LDFLAGS) -o $@
 
 test: build
+	$(BUILD_DIR)/system_tests
+	$(BUILD_DIR)/stdlib_system_tests
+	python3 tests/system_backend_test.py $(BUILD_DIR)/amberc
 	$(BUILD_DIR)/lexer_tests
 	$(BUILD_DIR)/parser_tests
 	$(BUILD_DIR)/binder_tests
@@ -460,6 +584,8 @@ test: build
 	$(BUILD_DIR)/native_tests
 	$(BUILD_DIR)/frozen_image_tests
 	$(BUILD_DIR)/bytecode_tests
+	$(BUILD_DIR)/graph_linker_tests
+	python3 tests/graph_linker_cli_smoke.py $(BUILD_DIR)/amberc
 	$(BUILD_DIR)/emitter_tests
 	$(BUILD_DIR)/vm_tests
 	$(BUILD_DIR)/stdlib_collections_tests
@@ -483,7 +609,20 @@ test: build
 	$(BUILD_DIR)/net_http_tcp_tests
 	$(BUILD_DIR)/module_loader_tests
 	$(BUILD_DIR)/package_tests
+	$(BUILD_DIR)/notebook_core_tests
+	$(BUILD_DIR)/notebook_compiler_tests
+	$(BUILD_DIR)/notebook_slot_tests
+	$(BUILD_DIR)/notebook_kernel_tests
+	$(BUILD_DIR)/notebook_vm_integration_tests
 	$(BUILD_DIR)/iamber_tests
+	python3 tests/iamber_system_test.py $(BUILD_DIR)/iamber
+	$(BUILD_DIR)/notebook_project_tests
+	$(BUILD_DIR)/iamber_project_tests
+	$(BUILD_DIR)/iamber_tabs_tests
+	$(BUILD_DIR)/iamber_activity_tests
+	$(BUILD_DIR)/iamber_poll_tests
+	$(BUILD_DIR)/iamber_dispatch_tests
+	$(BUILD_DIR)/iamber_terminal_wait_tests
 	$(BUILD_DIR)/amberc lex corpus/parse/lexer/basic/source.am > $(BUILD_DIR)/lexer-basic.tokens.json
 	$(BUILD_DIR)/amberc build tests/fixtures/w14_build/amber.build.json --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-first.json
 	$(BUILD_DIR)/amberc build tests/fixtures/w14_build/amber.build.json --target bytecode --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-second.json

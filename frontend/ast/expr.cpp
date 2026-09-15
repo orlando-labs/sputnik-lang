@@ -464,7 +464,7 @@ std::string last_path_segment_of(const std::string &path) {
 }
 
 bool is_native_prelude_namespace(const std::string &module_path) {
-  return module_path == "task" || module_path == "task.flow" ||
+  return module_path == "system" || module_path == "task" || module_path == "task.flow" ||
          module_path == "io" || module_path == "net" ||
          module_path == "net.http" || module_path == "net.http.json" ||
          module_path == "net.http.form";

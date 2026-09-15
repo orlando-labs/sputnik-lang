@@ -261,3 +261,19 @@ errors:
     parent: IOError
   - name: DatagramTooLargeError
     parent: IOError
+  - name: ProcessError
+    parent: IOError
+  - name: ProcessSpawnError
+    parent: ProcessError
+  - name: ProcessExitError
+    parent: ProcessError
+  - name: ProcessTimeoutError
+    parent: ProcessError
+  - name: ProcessOutputLimitError
+    parent: ProcessError
+  - name: ProcessDrainTimeoutError
+    parent: ProcessError
+  - name: ProcessClosedError
+    parent: ProcessError
+  - name: ProcessDecodeError
+    parent: ProcessError

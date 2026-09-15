@@ -1,0 +1,49 @@
+package conformance.run
+import system
+from system import cmd
+
+def probe():
+  score = 0
+  try:
+    system.command("/no/such/amber-process").output()
+  rescue ProcessSpawnError:
+    score += 1
+  try:
+    system.shell("exit 17").capture()
+  rescue ProcessExitError:
+    score += 1
+  unchecked = system.shell("exit 17").capture(check: false)
+  if unchecked.exit_code == 17 and not unchecked.success?():
+    score += 1
+  try:
+    cmd'sleep 5'.capture(timeout: 0.03, kill_after: 0.03)
+  rescue ProcessTimeoutError:
+    score += 1
+  try:
+    cmd'printf abcdef'.capture(limit: 3)
+  rescue ProcessOutputLimitError:
+    score += 1
+  try:
+    cmd'printf done'.capture(timeout: 0.03) with:
+      stdin |input|:
+        task.sleep(5.0)
+  rescue ProcessTimeoutError:
+    score += 1
+  try:
+    cmd'cat'.capture() with:
+      stdin |input|:
+        raise ValueError.new("handler failed")
+  rescue ValueError:
+    score += 1
+  work = task.async:
+    cmd'sleep 5'.capture()
+  task.sleep(0.03)
+  work.cancel()
+  try:
+    work.wait()
+  rescue CancelledError:
+    score += 1
+  if score == 8:
+    42
+  else:
+    score

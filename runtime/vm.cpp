@@ -4,6 +4,7 @@
 #include "runtime/context.h"
 #include "runtime/http_codec.h"
 #include "runtime/io.h"
+#include "runtime/system.h"
 #include "runtime/net_http.h"
 #include "runtime/net_http_server.h"
 #include "runtime/net_http_transport.h"
@@ -1046,13 +1047,18 @@ public:
       const RuntimeErrorRegistry *error_registry = nullptr,
       std::function<ExecutionResult(const Value &)> macro_block_executor = {},
       bool isolate_inline_caches = false,
-      std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names = nullptr)
+      std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names = nullptr,
+      RuntimeGcRootProvider external_gc_root_provider = {},
+      RuntimeNotebookCellContext notebook_cell_context = {},
+      bool notebook_cell_execution = false)
       : Vm(std::make_shared<const BcModule>(module), std::move(state),
            std::move(module_id), world_options, capabilities, effects,
            std::move(trace_recorder), native_registry, module_registry,
            type_registry, dispatch_registry, error_registry,
            std::move(macro_block_executor), isolate_inline_caches,
-           std::move(shared_runtime_names)) {}
+           std::move(shared_runtime_names),
+           std::move(external_gc_root_provider),
+           std::move(notebook_cell_context), notebook_cell_execution) {}
 
   explicit Vm(
       std::shared_ptr<const BcModule> module,
@@ -1068,7 +1074,10 @@ public:
       const RuntimeErrorRegistry *error_registry = nullptr,
       std::function<ExecutionResult(const Value &)> macro_block_executor = {},
       bool isolate_inline_caches = false,
-      std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names = nullptr)
+      std::shared_ptr<SharedRuntimeNamePool> shared_runtime_names = nullptr,
+      RuntimeGcRootProvider external_gc_root_provider = {},
+      RuntimeNotebookCellContext notebook_cell_context = {},
+      bool notebook_cell_execution = false)
       : module_owner_(std::move(module)), module_(*module_owner_),
         runtime_strings_(module_.strings), runtime_symbols_(module_.symbols),
         initial_string_count_(runtime_strings_.size()),
@@ -1078,12 +1087,18 @@ public:
         shared_runtime_names_(std::move(shared_runtime_names)),
         isolate_inline_caches_(isolate_inline_caches),
         module_id_(std::move(module_id)), world_options_(world_options),
+        notebook_cell_context_(std::move(notebook_cell_context)),
+        notebook_cell_execution_(notebook_cell_execution),
         capabilities_(capabilities), effects_(effects),
         trace_recorder_(std::move(trace_recorder)),
         native_registry_(native_registry), module_registry_(module_registry),
         type_registry_(type_registry), dispatch_registry_(dispatch_registry),
         error_registry_(error_registry),
         macro_block_executor_(std::move(macro_block_executor)) {
+    if (external_gc_root_provider) {
+      state_->set_external_gc_root_provider(
+          std::move(external_gc_root_provider));
+    }
     code_by_id_ = state_->code_index_for_module(module_owner_);
     state_->initialize_for_module(module_);
     for (std::uint32_t class_index = 0;
@@ -1726,7 +1741,8 @@ public:
       root_task_context_ = RuntimeTaskContext::create();
     }
     RuntimeTaskContextScope task_context_scope(root_task_context_, true, true);
-    const std::size_t watch_event_start = state_->watch_event_count();
+    const RuntimeWatchCursor watch_event_start =
+        state_->watch_cursor_snapshot();
     if (!numeric_profile_error_.empty()) {
       return with_runtime_names(
           fail("UnsupportedProfileError", numeric_profile_error_, code_id, 0));
@@ -1734,6 +1750,16 @@ public:
     const BcCode *entry = lookup_code(code_id);
     if (entry == nullptr) {
       return with_runtime_names(fail("VMError", "unknown code id", code_id, 0));
+    }
+    if (entry->kind == CodeKind::NotebookCell && !notebook_cell_execution_) {
+      return with_runtime_names(fail(
+          "NotebookCellError",
+          "notebook cell code requires notebook execution", code_id, 0));
+    }
+    if (entry->kind != CodeKind::NotebookCell && notebook_cell_execution_) {
+      return with_runtime_names(fail(
+          "NotebookCellError",
+          "notebook execution requires notebook cell code", code_id, 0));
     }
     std::vector<Value> entry_captures;
     if (!prepare_direct_entry_captures(*entry, code_id, &entry_captures,
@@ -1803,19 +1829,24 @@ public:
       step();
     }
     state_->heap.drain_remote_frees();
-    auto watch_snapshot = state_->watch_events_since(watch_event_start);
+    RuntimeWatchPollResult watch_snapshot =
+        state_->poll_watch_events(watch_event_start, 0U);
     if (fault_.has_value()) {
       unwind_all_frame_scopes();
-      return with_runtime_names({Value::null(),
-                                 fault_,
-                                 {},
-                                 std::move(watch_snapshot.first),
-                                 watch_snapshot.second});
+      ExecutionResult result{Value::null(),
+                             fault_,
+                             {},
+                             std::move(watch_snapshot.events),
+                             watch_snapshot.latest_epoch};
+      result.watch_event_status = watch_snapshot.status;
+      return with_runtime_names(std::move(result));
     }
-    return with_runtime_names({final_value_, std::nullopt,
-                               completed_locals_for(*entry),
-                               std::move(watch_snapshot.first),
-                               watch_snapshot.second});
+    ExecutionResult result{final_value_, std::nullopt,
+                           completed_locals_for(*entry),
+                           std::move(watch_snapshot.events),
+                           watch_snapshot.latest_epoch};
+    result.watch_event_status = watch_snapshot.status;
+    return with_runtime_names(std::move(result));
   }
 
   ExecutionResult invoke_native_extension(std::uint32_t code_id,
@@ -2140,7 +2171,8 @@ private:
                  child_native_registry(), child_module_registry(),
                  child_type_registry(), child_dispatch_registry(),
                  child_error_registry(), macro_block_executor_,
-                 isolate_inline_caches_, shared_runtime_names_);
+                 isolate_inline_caches_, shared_runtime_names_, {},
+                 notebook_cell_context_, false);
       sync_runtime_names_to(init_vm);
       ExecutionResult init_result = init_vm.execute(
           module_.init.entry_code_id, {}, Value::null(), Value::null());
@@ -3252,8 +3284,7 @@ private:
           const std::shared_ptr<RuntimeWatchCell> cell =
               closure.captures[slot].as_watch_cell();
           if (cell != nullptr) {
-            const RuntimeWatchWriteResult write = cell->write(value);
-            record_watch_write(cell, write);
+            (void)cell->write(value);
           }
         } else {
           closure.captures[slot] = value;
@@ -3475,7 +3506,8 @@ private:
           child_module_registry(), child_type_registry(),
           child_dispatch_registry(), child_error_registry(),
           macro_block_executor_, isolate_inline_caches_,
-          shared_runtime_names_);
+          shared_runtime_names_, RuntimeGcRootProvider{},
+          notebook_cell_context_, false);
       sync_runtime_names_to(*lease.vm);
       // Block results flow through final_value_; nobody reads the completed
       // register snapshot, so skip the per-return register copy.
@@ -3686,7 +3718,7 @@ private:
     }
   }
 
-  std::vector<Value> collect_gc_roots() {
+  std::vector<Value> collect_gc_roots(Frame &fault_frame) {
     std::vector<Value> roots;
     for (std::size_t index = 0; index < frames_.size(); ++index) {
       Frame &frame = frames_[index];
@@ -3707,18 +3739,41 @@ private:
     for (const Value &value : state_->cvar_roots_snapshot()) {
       append_value_root(&roots, value);
     }
+    for (const Value &value : state_->external_gc_roots_snapshot()) {
+      append_value_root(&roots, value);
+    }
+    if (notebook_cell_context_.gc_roots) {
+      try {
+        const std::vector<Value> notebook_roots =
+            notebook_cell_context_.gc_roots();
+        for (const Value &value : notebook_roots) {
+          append_value_root(&roots, value);
+        }
+      } catch (...) {
+        // A host callback must not escape through the interpreter's GC
+        // boundary. A deterministic fault also prevents collecting with an
+        // incomplete root snapshot.
+        set_fault(fault_frame, "NotebookCellError",
+                  "notebook cell GC root callback failed");
+        return roots;
+      }
+    }
     runtime_append_task_local_gc_roots(&roots);
     return roots;
   }
 
-  void run_safepoint() {
+  void run_safepoint(Frame &fault_frame) {
     state_->heap.drain_remote_frees();
     const std::optional<RuntimeGcCycle> requested =
         state_->heap.pending_gc_request();
     if (!requested.has_value()) {
       return;
     }
-    state_->heap.collect_garbage(collect_gc_roots(), *requested, true);
+    std::vector<Value> roots = collect_gc_roots(fault_frame);
+    if (fault_.has_value()) {
+      return;
+    }
+    state_->heap.collect_garbage(std::move(roots), *requested, true);
   }
 
   RuntimeTextSourceLocation text_source_location_for(const Frame &frame,
@@ -3930,6 +3985,7 @@ private:
     case Opcode::LoadBlock:
     case Opcode::GetLast:
     case Opcode::LoadUpval:
+    case Opcode::LoadNotebookSlot:
     case Opcode::LookupConst:
     case Opcode::WatchUpval:
     case Opcode::CloseUpvalues:
@@ -3953,6 +4009,8 @@ private:
       return quick_operand_reg_equals(insn, 0, reg) ||
              quick_operand_reg_equals(insn, 1, reg);
     case Opcode::StoreUpval:
+      return quick_operand_reg_equals(insn, 1, reg);
+    case Opcode::StoreNotebookSlot:
       return quick_operand_reg_equals(insn, 1, reg);
     case Opcode::LoadIvar:
     case Opcode::LoadCvar:
@@ -4204,6 +4262,7 @@ private:
     case Opcode::MakeSet:
     case Opcode::MakeSetSpread:
     case Opcode::LoadUpval:
+    case Opcode::LoadNotebookSlot:
     case Opcode::LoadIvar:
     case Opcode::LoadCvar:
     case Opcode::LookupConst:
@@ -4270,6 +4329,7 @@ private:
              quick_register_range_contains(base_slot, count, reg);
     }
     case Opcode::StoreUpval:
+    case Opcode::StoreNotebookSlot:
     case Opcode::StoreIvar:
     case Opcode::StoreCvar:
     case Opcode::CloseUpvalues:
@@ -6981,6 +7041,9 @@ private:
     dependency.cell_id = snapshot.cell_id;
     dependency.target_name = snapshot.target_name;
     dependency.revision = snapshot.revision;
+    if (notebook_cell_context_.observe_dependency) {
+      notebook_cell_context_.observe_dependency(dependency);
+    }
     state_->record_dependency(std::move(dependency));
   }
 
@@ -7012,6 +7075,9 @@ private:
     dependency.field_name = snapshot.field_name;
     dependency.revision = snapshot.field_revision;
     dependency.object_revision = snapshot.object_revision;
+    if (notebook_cell_context_.observe_dependency) {
+      notebook_cell_context_.observe_dependency(dependency);
+    }
     state_->record_dependency(std::move(dependency));
   }
 
@@ -7076,15 +7142,6 @@ private:
     return event;
   }
 
-  void record_watch_write(const std::shared_ptr<RuntimeWatchCell> &cell,
-                          const RuntimeWatchWriteResult &write) {
-    if (cell == nullptr || !write.changed) {
-      return;
-    }
-    state_->record_watch_event(
-        make_watch_event("watch.write", cell->snapshot(), &write));
-  }
-
   std::uint64_t
   object_watch_id(const IntrusivePtr<InstanceValue> &instance) const {
     if (instance == nullptr) {
@@ -7104,7 +7161,7 @@ private:
     }
     if (instance->watch_state == nullptr) {
       instance->watch_state =
-          std::make_shared<RuntimeWatchObjectState>(object_watch_id(instance));
+          state_->make_watch_object_state(object_watch_id(instance));
     }
     return instance->watch_state;
   }
@@ -7133,16 +7190,8 @@ private:
         !instance->watch_state->field_watched(field_name)) {
       return;
     }
-    const RuntimeWatchIvarWriteResult write =
-        instance->watch_state->write_field(field_name, std::move(old_value),
-                                           std::move(new_value));
-    if (!write.changed) {
-      return;
-    }
-    const RuntimeWatchIvarSnapshot snapshot =
-        instance->watch_state->snapshot_field(field_name, write.new_value);
-    state_->record_watch_event(
-        make_watch_ivar_event("watch.ivar.write", snapshot, &write));
+    (void)instance->watch_state->write_field(
+        field_name, std::move(old_value), std::move(new_value));
   }
 
   bool write_reg(Frame &frame, std::uint32_t reg, Value value) {
@@ -7159,8 +7208,7 @@ private:
       const std::shared_ptr<RuntimeWatchCell> cell =
           frame.regs[reg].as_watch_cell();
       if (cell != nullptr) {
-        const RuntimeWatchWriteResult write = cell->write(std::move(value));
-        record_watch_write(cell, write);
+        (void)cell->write(std::move(value));
         frame.initialized[reg] = 1U;
         if (!frame.prepared_seq_regs.empty() ||
             !frame.prepared_map_regs.empty() ||
@@ -14227,6 +14275,7 @@ private:
     const RuntimeWorldOptions *world_options = world_options_;
     const RuntimeCapabilityResolution *capabilities = capabilities_;
     const RuntimeEffectValidation *effects = effects_;
+    RuntimeNotebookCellContext notebook_cell_context = notebook_cell_context_;
     std::function<void(RuntimeTraceEvent)> trace_recorder = trace_recorder_;
     const std::uint32_t code_id = closure->code_id;
     std::vector<Value> captures = closure->captures;
@@ -14239,7 +14288,9 @@ private:
          runtime_state = std::move(runtime_state),
          module_id = std::move(module_id), code_id,
          captures = std::move(captures), self = std::move(self), world_options,
-         capabilities, effects, trace_recorder = std::move(trace_recorder)](
+         capabilities, effects,
+         notebook_cell_context = std::move(notebook_cell_context),
+         trace_recorder = std::move(trace_recorder)](
             const std::vector<Value> &args) mutable {
           const BcCode *code = find_code(*module, code_id);
           if (code == nullptr) {
@@ -14247,7 +14298,8 @@ private:
           }
           Vm nested(module, runtime_state, module_id, world_options,
                     capabilities, effects, trace_recorder, nullptr, nullptr,
-                    nullptr, nullptr, nullptr, {}, true, runtime_names);
+                    nullptr, nullptr, nullptr, {}, true, runtime_names,
+                    {}, notebook_cell_context, false);
           if (runtime_names == nullptr) {
             nested.synchronize_runtime_names(runtime_strings, runtime_symbols);
           }
@@ -14286,6 +14338,7 @@ private:
     const RuntimeWorldOptions *world_options = nullptr;
     const RuntimeCapabilityResolution *capabilities = nullptr;
     const RuntimeEffectValidation *effects = nullptr;
+    RuntimeNotebookCellContext notebook_cell_context;
     std::function<void(RuntimeTraceEvent)> trace_recorder;
     std::uint32_t code_id = 0;
     std::vector<Value> captures;
@@ -14350,6 +14403,7 @@ private:
     mutable_template->world_options = world_options_;
     mutable_template->capabilities = capabilities_;
     mutable_template->effects = effects_;
+    mutable_template->notebook_cell_context = notebook_cell_context_;
     mutable_template->trace_recorder = trace_recorder_;
     mutable_template->code_id = closure->code_id;
     mutable_template->captures = closure->captures;
@@ -14388,7 +14442,9 @@ private:
             template_state->child_modules, template_state->child_types,
             template_state->child_dispatch, template_state->child_errors,
             std::function<ExecutionResult(const Value &)>{}, true,
-            template_state->runtime_names);
+            template_state->runtime_names,
+            RuntimeGcRootProvider{},
+            template_state->notebook_cell_context, false);
       }
       const std::shared_ptr<typename ResumableTaskTemplate::VmPool> vm_pool =
           template_state->vm_pool;
@@ -14702,7 +14758,7 @@ private:
 
   bool set_fault_from_task_result(const Frame &frame,
                                   const RuntimeTaskPublicResult &result) {
-    set_fault(
+    raise_runtime_error(
         frame, result.error_name.empty() ? "TaskError" : result.error_name,
         result.message.empty() ? "task operation failed" : result.message);
     return false;
@@ -21330,12 +21386,24 @@ private:
     TaskRuntimeIntrinsic,
   };
 
+#include "runtime/system_vm.inc"
+
   SendStatus try_apply_native_stdlib_send(
       const Frame &frame, const Value &receiver,
       const std::string &selector_text,
       const std::vector<Value> &args, const Value &block,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out,
       NativeStdlibSendMode mode = NativeStdlibSendMode::Normal) {
+    SystemCallbackSuspension system_callback_wait(
+        selector_text == "sleep" || selector_text == "wait" ||
+        selector_text == "recv" || selector_text == "send" ||
+        selector_text == "lock" || selector_text == "yield");
+    if ((receiver.is_native_type() &&
+         receiver.as_native_type().kind == RuntimeNativeTypeKind::System) ||
+        (receiver.is_io_value() && system_resource(receiver.as_io_value()))) {
+      return apply_system_send(frame, receiver, selector_text, args, block,
+                               kw_args, out);
+    }
     const SelectorKey selector(selector_text);
     auto require_arity = [&](std::size_t expected) -> bool {
       if (args.size() != expected) {
@@ -23267,9 +23335,9 @@ private:
         }
         RuntimeTaskHandle handle;
         if (selector == "async") {
-          handle = task->async(std::move(*task_function));
+          handle = task->spawn_resumable(std::move(*task_function));
         } else {
-          handle = task->spawn(std::move(*task_function));
+          handle = task->spawn_resumable(std::move(*task_function));
         }
         *out = Value::task_handle(
             std::make_shared<RuntimeTaskHandle>(std::move(handle)));
@@ -30423,7 +30491,8 @@ private:
         return FastSendStatus::Faulted;
       }
       if (park_request_.has_value() &&
-          park_request_->kind == ParkRequest::Kind::Io) {
+          (park_request_->kind == ParkRequest::Kind::Io ||
+           park_request_->kind == ParkRequest::Kind::Ffi)) {
         return FastSendStatus::Matched;
       }
       if (status == SendStatus::Matched) {
@@ -31034,7 +31103,8 @@ private:
       // falls through to Matched below: task.sleep already produced its null
       // result and the PC advances so resume continues past it.)
       if (park_request_.has_value() &&
-          park_request_->kind == ParkRequest::Kind::Io) {
+          (park_request_->kind == ParkRequest::Kind::Io ||
+           park_request_->kind == ParkRequest::Kind::Ffi)) {
         return true;
       }
       if (scalar_status == SendStatus::Matched) {
@@ -31331,7 +31401,8 @@ private:
         // PC untouched so resume retries the same operation. The ordinary
         // parenthesised-send path above already enforces this contract.
         if (park_request_.has_value() &&
-            park_request_->kind == ParkRequest::Kind::Io) {
+            (park_request_->kind == ParkRequest::Kind::Io ||
+           park_request_->kind == ParkRequest::Kind::Ffi)) {
           return true;
         }
         if (bare_status == SendStatus::Matched) {
@@ -31738,8 +31809,7 @@ private:
           const std::shared_ptr<RuntimeWatchCell> cell =
               frame.captures[quick->a].as_watch_cell();
           if (cell != nullptr) {
-            const RuntimeWatchWriteResult write = cell->write(value);
-            record_watch_write(cell, write);
+            (void)cell->write(value);
           }
         } else {
           frame.captures[quick->a] = value;
@@ -31984,12 +32054,96 @@ private:
         ++frame.pc;
         return;
       case QuickOpcode::Safepoint:
-        run_safepoint();
+        run_safepoint(frame);
         ++frame.pc;
         return;
       }
     }
     switch (insn.opcode) {
+    case Opcode::LoadNotebookSlot: {
+      std::uint32_t dst = 0;
+      std::uint32_t descriptor = 0;
+      if (!operand_u32(frame, insn, 0, &dst) ||
+          !operand_u32(frame, insn, 1, &descriptor)) {
+        return;
+      }
+      if (!notebook_cell_context_.load_slot) {
+        set_fault(frame, "NotebookCellError",
+                  "notebook cell load slot callback is unavailable");
+        return;
+      }
+      std::optional<Value> value;
+      try {
+        value = notebook_cell_context_.load_slot(descriptor);
+      } catch (...) {
+        set_fault(frame, "NotebookCellError",
+                  "notebook cell load slot callback failed");
+        return;
+      }
+      if (!value.has_value()) {
+        set_fault(frame, "NotebookCellError",
+                  "notebook cell input slot is missing");
+        return;
+      }
+      if (!write_reg(frame, dst, std::move(*value))) {
+        return;
+      }
+      // Notebook inputs may carry a RuntimeWatchCell owned by the host. Keep
+      // the frame on the watch-aware read path so returning/using the input
+      // unwraps it and records its rich runtime dependency.
+      if (frame.regs[dst].is_watch_cell()) {
+        frame.has_watch_registers = true;
+      }
+      if (notebook_cell_context_.observe_slot) {
+        bool observed = false;
+        try {
+          observed = notebook_cell_context_.observe_slot(descriptor);
+        } catch (...) {
+          set_fault(frame, "NotebookCellError",
+                    "notebook cell observe slot callback failed");
+          return;
+        }
+        if (!observed) {
+          set_fault(frame, "NotebookCellError",
+                    "notebook cell input slot observation was rejected");
+          return;
+        }
+      }
+      ++frame.pc;
+      return;
+    }
+    case Opcode::StoreNotebookSlot: {
+      std::uint32_t descriptor = 0;
+      std::uint32_t src = 0;
+      if (!operand_u32(frame, insn, 0, &descriptor) ||
+          !operand_u32(frame, insn, 1, &src)) {
+        return;
+      }
+      if (!notebook_cell_context_.stage_slot) {
+        set_fault(frame, "NotebookCellError",
+                  "notebook cell stage slot callback is unavailable");
+        return;
+      }
+      const Value value = read_reg(frame, src);
+      if (fault_.has_value()) {
+        return;
+      }
+      bool staged = false;
+      try {
+        staged = notebook_cell_context_.stage_slot(descriptor, value);
+      } catch (...) {
+        set_fault(frame, "NotebookCellError",
+                  "notebook cell stage slot callback failed");
+        return;
+      }
+      if (!staged) {
+        set_fault(frame, "NotebookCellError",
+                  "notebook cell stage slot callback rejected value");
+        return;
+      }
+      ++frame.pc;
+      return;
+    }
     case Opcode::LoadK: {
       std::uint32_t dst = 0;
       std::uint32_t const_id = 0;
@@ -32600,8 +32754,7 @@ private:
         const std::shared_ptr<RuntimeWatchCell> cell =
             frame.captures[slot].as_watch_cell();
         if (cell != nullptr) {
-          const RuntimeWatchWriteResult write = cell->write(value);
-          record_watch_write(cell, write);
+          (void)cell->write(value);
         }
       } else {
         frame.captures[slot] = value;
@@ -33662,7 +33815,7 @@ private:
       ++frame.pc;
       return;
     case Opcode::Safepoint:
-      run_safepoint();
+      run_safepoint(frame);
       ++frame.pc;
       return;
     default:
@@ -33715,6 +33868,8 @@ private:
   std::unordered_map<std::uint64_t, IvarCacheEntry> isolated_ivar_caches_;
   std::string module_id_;
   const RuntimeWorldOptions *world_options_ = nullptr;
+  RuntimeNotebookCellContext notebook_cell_context_;
+  bool notebook_cell_execution_ = false;
   const RuntimeCapabilityResolution *capabilities_ = nullptr;
   const RuntimeEffectValidation *effects_ = nullptr;
   std::function<void(RuntimeTraceEvent)> trace_recorder_;
@@ -33849,7 +34004,10 @@ struct RuntimeNativeBridgeSession::Impl {
            std::move(context.trace_recorder), context.native_registry,
            context.module_registry, context.type_registry,
            context.dispatch_registry, context.error_registry,
-           std::move(context.macro_block_executor)) {}
+           std::move(context.macro_block_executor), false, nullptr,
+           std::move(context.external_gc_root_provider),
+           std::move(context.notebook_cell_context),
+           context.notebook_cell_execution) {}
 
   Impl(std::shared_ptr<const bytecode::BcModule> module,
        RuntimeVmExecutionContext context)
@@ -33859,7 +34017,10 @@ struct RuntimeNativeBridgeSession::Impl {
            std::move(context.trace_recorder), context.native_registry,
            context.module_registry, context.type_registry,
            context.dispatch_registry, context.error_registry,
-           std::move(context.macro_block_executor)) {}
+           std::move(context.macro_block_executor), false, nullptr,
+           std::move(context.external_gc_root_provider),
+           std::move(context.notebook_cell_context),
+           context.notebook_cell_execution) {}
 
   Vm vm;
 };
@@ -33922,7 +34083,10 @@ ExecutionResult execute_runtime_vm(
         std::move(context.trace_recorder), context.native_registry,
         context.module_registry, context.type_registry,
         context.dispatch_registry, context.error_registry,
-        std::move(context.macro_block_executor));
+        std::move(context.macro_block_executor), false, nullptr,
+        std::move(context.external_gc_root_provider),
+        std::move(context.notebook_cell_context),
+        context.notebook_cell_execution);
   vm.synchronize_runtime_names(runtime_strings, runtime_symbols);
   if (context.step_budget > 0) {
     vm.enable_step_budget(context.step_budget);
@@ -33943,7 +34107,10 @@ execute_runtime_vm(const bytecode::BcModule &module,
         std::move(context.trace_recorder), context.native_registry,
         context.module_registry, context.type_registry,
         context.dispatch_registry, context.error_registry,
-        std::move(context.macro_block_executor));
+        std::move(context.macro_block_executor), false, nullptr,
+        std::move(context.external_gc_root_provider),
+        std::move(context.notebook_cell_context),
+        context.notebook_cell_execution);
   if (context.step_budget > 0) {
     vm.enable_step_budget(context.step_budget);
   }
@@ -33958,7 +34125,10 @@ ExecutionResult invoke_runtime_native_extension(
         std::move(context.trace_recorder), context.native_registry,
         context.module_registry, context.type_registry,
         context.dispatch_registry, context.error_registry,
-        std::move(context.macro_block_executor));
+        std::move(context.macro_block_executor), false, nullptr,
+        std::move(context.external_gc_root_provider),
+        std::move(context.notebook_cell_context),
+        context.notebook_cell_execution);
   return vm.invoke_native_extension(code_id, args, std::move(self));
 }
 
@@ -33972,7 +34142,10 @@ ExecutionResult invoke_runtime_native_stdlib_send(
         std::move(context.trace_recorder), context.native_registry,
         context.module_registry, context.type_registry,
         context.dispatch_registry, context.error_registry,
-        std::move(context.macro_block_executor));
+        std::move(context.macro_block_executor), false, nullptr,
+        std::move(context.external_gc_root_provider),
+        std::move(context.notebook_cell_context),
+        context.notebook_cell_execution);
   return vm.invoke_native_stdlib_send(
       std::move(receiver), selector, args, keyword_args, std::move(block));
 }

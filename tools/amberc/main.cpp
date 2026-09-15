@@ -1,6 +1,7 @@
 #include "buildsys/build.h"
 #include "bytecode/emitter.h"
 #include "bytecode/format.h"
+#include "bytecode/graph_linker.h"
 #include "frontend/ast/expr.h"
 #include "frontend/binder/binder.h"
 #include "frontend/checker/checker.h"
@@ -1273,6 +1274,7 @@ struct NativeCppBuildPlan {
   bool uses_bytecode_fallback = true;
   bool uses_native_stdlib_bridge = false;
   bool uses_native_http_server_runtime = false;
+  bool uses_native_system_runtime = false;
 };
 
 struct NativeExecutableBuildResult {
@@ -2010,7 +2012,7 @@ bool native_cpp_lookup_const_supported(
       "fs",           "io",           "task",         "SecureRandom",
       "Uuid",         "UUID",
       "Range",        "Time",         "TimePeriod",  "Atomic",
-      "Channel",      "Mutex"};
+      "Channel",      "Mutex", "system"};
   const std::string name =
       native_cpp_desugared_lookup_name(module.symbols[path.items.back()]);
   return supported.find(name) != supported.end() ||
@@ -2956,6 +2958,13 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           native_cpp_user_constructor_shape(module, selector) ||
           native_cpp_user_method_selector(module, selector) ||
           native_cpp_open_protocol_selector(selector);
+      const bool system_send = std::set<std::string>{
+          "command", "shell", "__template", "with", "argv", "program", "cwd",
+          "capture", "output", "run", "spawn", "communicate", "wait", "close",
+          "stdin", "stdout", "stderr", "stdin_value", "stdout_value", "stderr_value",
+          "pid", "running?", "status", "success?", "exit_code", "signal", "signaled?",
+          "terminate", "kill", "read!", "read_all!", "each_chunk", "write!", "write_all!"
+      }.count(selector) != 0;
       if (!scalar && !native_cpp_collection_selector(selector, pos_count) &&
           !native_cpp_collection_mutator_selector(selector, pos_count) &&
           !native_cpp_collection_query_selector(selector, pos_count,
@@ -2968,7 +2977,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !atomic_send && !mutex_send &&
           !channel_send && !io_send && !task_send && !http_send &&
-          !amber_send && !result_send &&
+          !system_send && !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send) {
         *reason = "unsupported SEND selector '" + selector + "' at pc " +
@@ -2980,7 +2989,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !atomic_send && !mutex_send &&
           !channel_send && !io_send && !task_send && !http_send &&
-          !amber_send && !result_send &&
+          !system_send && !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send &&
           !map_get_or_set_send && !array_factory_send && !data_path_send &&
@@ -5431,6 +5440,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             native_module_expr = "NativeValue::io_module()";
           } else if (name == "task") {
             native_module_expr = "NativeValue::task_module()";
+          } else if (name == "system") {
+            native_module_expr = "NativeValue::runtime_handle(amber::runtime::Value::native_type(amber::runtime::RuntimeNativeTypeKind::System))";
           } else if (name == "SecureRandom") {
             native_module_expr = "NativeValue::secure_random_module()";
           } else if (name == "Uuid" || name == "UUID") {
@@ -7940,6 +7951,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
        const_id < static_cast<std::uint32_t>(module.const_pool.size());
        ++const_id) {
     const std::string path = native_cpp_constant_path_text(module, const_id);
+    if (path == "system") plan.uses_native_system_runtime = true;
     if (path == "net.http.Server" ||
         path == "net.http.ServerRequest" ||
         path == "net.http.ServerRequestBody" ||
@@ -8200,6 +8212,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include \"runtime/digest.h\"\n";
   out << "#include \"runtime/errors.h\"\n";
   out << "#include \"runtime/io.h\"\n";
+  out << "#include \"runtime/system.h\"\n";
   out << "#include \"runtime/net_http_server.h\"\n";
   out << "#include \"runtime/stdlib_registry.h\"\n";
   out << "#include \"runtime/stdlib_url.h\"\n";
@@ -22351,6 +22364,7 @@ static NativeValue native_channel_send(
   out << "  static amber::runtime::RuntimeTaskModule runtime;\n";
   out << "  return runtime;\n";
   out << "}\n";
+  if (plan.uses_native_system_runtime) out << "#include \"runtime/system_native_task.inc\"\n";
   out << "static std::chrono::milliseconds native_task_duration("
          "const NativeValue &value) {\n";
   out << "  if (value.tag == NativeValue::Tag::Integer) return "
@@ -22436,10 +22450,15 @@ static NativeValue native_channel_send(
   out << "        }\n";
   out << "        return amber::runtime::Value::null();\n";
   out << "      };\n";
-  out << "      amber::runtime::RuntimeTaskHandle handle = "
+  if (plan.uses_native_system_runtime) {
+    out << "      auto driver = native_system_task_driver(std::move(function));\n";
+  }
+  if (plan.uses_native_system_runtime) {
+    out << "      amber::runtime::RuntimeTaskHandle handle = native_task_runtime().spawn_resumable(std::move(driver));\n";
+  } else out << "      amber::runtime::RuntimeTaskHandle handle = "
          "selector == \"async\" "
-         "? native_task_runtime().async(std::move(function)) "
-         ": native_task_runtime().spawn(std::move(function));\n";
+         "? native_task_runtime().async(std::move(" << (plan.uses_native_system_runtime ? "driver" : "function") << ")) "
+         ": native_task_runtime().spawn(std::move(" << (plan.uses_native_system_runtime ? "driver" : "function") << "));\n";
   out << "      return NativeValue::task("
          "std::move(handle), std::move(state));\n";
   out << "    }\n";
@@ -22726,16 +22745,19 @@ static NativeValue native_channel_send(
   // function.  Repeating this tag chain at every String/Array/Map operation
   // bloats the translation unit and pushes hot builtin code out of the
   // instruction cache.
+  out << "#include \"runtime/system_native.inc\"\n";
   out << "static NativeValue native_special_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
          "const NativeKeywordArgsView &kwargs, NativeValue block) {\n";
+  out << "  amber::runtime::SystemCallbackSuspension system_wait(selector == \"sleep\" || selector == \"wait\" || selector == \"send\" || selector == \"recv\");\n";
   out << "  switch (receiver.tag) {\n";
   out << "  case NativeValue::Tag::ErrorClass:\n"
          "  case NativeValue::Tag::ErrorInstance:\n"
          "  case NativeValue::Tag::ErrorNamespace:\n"
          "    return native_error_send(receiver, selector, args, block);\n"
          "  case NativeValue::Tag::RuntimeHandle:\n"
+         "    if (native_system_receiver(receiver)) return native_system_send(receiver, selector, args, kwargs, block);\n"
          "    return native_http_send(receiver, selector, args, kwargs, block);\n"
          "  case NativeValue::Tag::IoModule:\n"
          "  case NativeValue::Tag::TextBufferType:\n"
@@ -25020,6 +25042,7 @@ native_runtime_sources(const std::filesystem::path &root) {
       "runtime/concurrency.cpp",
       "runtime/world.cpp",
       "runtime/io.cpp",
+      "runtime/system.cpp",
       "runtime/reactor.cpp",
       "runtime/digest.cpp",
       "runtime/http_codec.cpp",
@@ -25138,7 +25161,7 @@ native_runtime_cache_key(const std::string &cxx,
          std::filesystem::recursive_directory_iterator(root)) {
       const std::string extension = entry.path().extension().string();
       if (entry.is_regular_file() &&
-          (extension == ".h" || extension == ".def")) {
+          (extension == ".h" || extension == ".def" || extension == ".inc")) {
         hashed_files.push_back(entry.path());
       }
     }
@@ -26291,1127 +26314,24 @@ amber::build::BuildArtifactRecord build_one_module(
   return record;
 }
 
-struct NativeGraphModule {
-  std::string name;
-  std::string path;
-  std::vector<std::uint8_t> bytes;
-  amber::bytecode::BcModule module;
-  bool stdlib = false;
-};
-
 struct NativeGraphLinkResult {
   bool ok = false;
   RunnableModuleArtifact artifact;
   std::vector<amber::build::BuildDiagnostic> diagnostics;
 };
 
-struct NativeGraphExportRef {
-  std::string kind;
-  std::uint32_t code_id = 0;
-  std::uint32_t method_index = 0;
-  std::uint32_t class_index = 0;
-};
-
-std::string bc_string_or_empty(const amber::bytecode::BcModule &module,
-                               std::uint32_t id) {
-  return id < module.strings.size() ? module.strings[id] : std::string{};
-}
-
-std::string bc_symbol_or_empty(const amber::bytecode::BcModule &module,
-                               std::uint32_t id) {
-  return id < module.symbols.size() ? module.symbols[id] : std::string{};
-}
-
-std::vector<std::string> split_tab_fields(const std::string &text) {
-  std::vector<std::string> fields;
-  std::size_t start = 0;
-  while (start <= text.size()) {
-    const std::size_t tab = text.find('\t', start);
-    if (tab == std::string::npos) {
-      fields.push_back(text.substr(start));
-      break;
-    }
-    fields.push_back(text.substr(start, tab - start));
-    start = tab + 1U;
-  }
-  return fields;
-}
-
-bool parse_u32_text(const std::string &text, std::uint32_t *out) {
-  if (text.empty()) {
-    return false;
-  }
-  std::uint64_t value = 0;
-  for (const char c : text) {
-    if (c < '0' || c > '9') {
-      return false;
-    }
-    value = value * 10U + static_cast<std::uint64_t>(c - '0');
-    if (value > std::numeric_limits<std::uint32_t>::max()) {
-      return false;
-    }
-  }
-  *out = static_cast<std::uint32_t>(value);
-  return true;
-}
-
-bool integer_k_opcode(amber::bytecode::Opcode opcode) {
-  using amber::bytecode::Opcode;
-  switch (opcode) {
-  case Opcode::IAddK:
-  case Opcode::ISubK:
-  case Opcode::ILtK:
-  case Opcode::IGtK:
-  case Opcode::IMulK:
-  case Opcode::IDivK:
-  case Opcode::IModK:
-  case Opcode::IFloorDivK:
-  case Opcode::ILeK:
-  case Opcode::IGeK:
-  case Opcode::IEqK:
-  case Opcode::INeK:
-  case Opcode::ICmpK:
-  case Opcode::IBitAndK:
-  case Opcode::IBitOrK:
-  case Opcode::IBitXorK:
-  case Opcode::IShlK:
-  case Opcode::IShrK:
-    return true;
-  default:
-    return false;
-  }
-}
-
-struct NativeGraphModuleState {
-  const NativeGraphModule *input = nullptr;
-  std::unordered_map<std::uint32_t, std::uint32_t> strings;
-  std::unordered_map<std::uint32_t, std::uint32_t> symbols;
-  std::unordered_map<std::uint32_t, std::uint32_t> constants;
-  std::unordered_map<std::uint32_t, std::uint32_t> code_ids;
-  std::unordered_map<std::uint32_t, std::uint32_t> code_pc_offsets;
-  std::unordered_map<std::uint32_t, std::uint32_t> code_pc_insert_points;
-  std::unordered_map<std::string, std::string> import_alias_paths;
-  std::uint32_t method_offset = 0;
-  std::uint32_t class_offset = 0;
-  std::uint32_t pattern_offset = 0;
-  std::map<std::string, NativeGraphExportRef> exports;
-};
-
-class NativeGraphModuleBuilder {
-public:
-  explicit NativeGraphModuleBuilder(std::vector<NativeGraphModule> order)
-      : order_(std::move(order)) {
-    out_.format_version = {1, 0};
-    out_.language_version = {1, 0};
-  }
-
-  NativeGraphLinkResult
-  build(const std::string &root_module, EntryExecutionMode entry_mode,
-        const std::vector<amber::capability::CapabilityRequest>
-            &capability_grants) {
-    NativeGraphLinkResult result;
-    if (order_.empty()) {
-      result.diagnostics.push_back(
-          {"BuildError", "native graph is empty", root_module});
-      return result;
-    }
-    std::uint32_t method_offset = 0;
-    std::uint32_t class_offset = 0;
-    std::uint32_t pattern_offset = 0;
-    for (const NativeGraphModule &module : order_) {
-      NativeGraphModuleState state;
-      state.input = &module;
-      state.method_offset = method_offset;
-      state.class_offset = class_offset;
-      state.pattern_offset = pattern_offset;
-      for (const amber::bytecode::BcCode &code : module.module.code_objects) {
-        state.code_ids[code.code_id] = next_code_id_++;
-      }
-      states_[module.name] = std::move(state);
-      method_offset += static_cast<std::uint32_t>(module.module.methods.size());
-      class_offset += static_cast<std::uint32_t>(module.module.classes.size());
-      pattern_offset +=
-          static_cast<std::uint32_t>(module.module.pattern_programs.size());
-    }
-
-    for (const NativeGraphModule &module : order_) {
-      NativeGraphModuleState &state = states_.at(module.name);
-      copy_module(state);
-    }
-
-    synthesize_merged_init();
-    // Manifest builds use the same explicit host-policy surface as source
-    // builds: a CLI grant is both the package's requested capability and the
-    // capability embedded into the generated executable. Without copying the
-    // requests into the merged module, RuntimeWorld resolves an empty
-    // effective set even though the executable carries the host grants.
-    out_.capabilities = capability_grants;
-    add_module_attr(&out_, "amber.build.graph", "merged-native-v1");
-    add_module_attr(&out_, "amber.build.graph.root", root_module);
-    add_module_attr(&out_, "amber.build.graph.modules",
-                    std::to_string(order_.size()));
-    normalize_string_vector(&out_.required_features);
-    normalize_string_vector(&out_.optional_features);
-    normalize_string_vector(&out_.forbidden_features);
-
-    amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-        amber::bytecode::serialize_module(out_));
-    if (!decoded.ok()) {
-      result.diagnostics.push_back(
-          {"BuildError", amber::bytecode::verify_errors_to_json(decoded.errors),
-           root_module});
-      return result;
-    }
-
-    const auto root_found = states_.find(root_module);
-    if (root_found == states_.end()) {
-      result.diagnostics.push_back(
-          {"BuildError",
-           "root module is missing from native graph: " + root_module,
-           root_module});
-      return result;
-    }
-    const NativeGraphModuleState &root_state = root_found->second;
-    std::uint32_t root_main_code = 0;
-    bool has_root_main = false;
-    for (std::size_t i = 0; i < root_state.input->module.methods.size(); ++i) {
-      const amber::bytecode::BcMethod &method =
-          root_state.input->module.methods[i];
-      const std::string selector =
-          bc_symbol_or_empty(root_state.input->module, method.selector_sym_id);
-      if (selector == "main" && method.params.empty() &&
-          (method.flags & (amber::bytecode::kMethodFlagInstance |
-                           amber::bytecode::kMethodFlagClass |
-                           amber::bytecode::kMethodFlagPropertyGetter |
-                           amber::bytecode::kMethodFlagPropertySetter)) == 0U) {
-        const auto id_found = root_state.code_ids.find(method.entry_code_id);
-        if (id_found != root_state.code_ids.end()) {
-          root_main_code = id_found->second;
-          has_root_main = true;
-        }
-        break;
-      }
-    }
-
-    result.artifact.module_name = root_module;
-    result.artifact.entry_mode = entry_mode;
-    result.artifact.module = std::move(decoded.module);
-    result.artifact.bytes =
-        amber::bytecode::serialize_module(result.artifact.module);
-    result.artifact.capability_grants = capability_grants;
-    result.artifact.whole_graph_native = true;
-    result.artifact.graph_module_count = order_.size();
-    result.artifact.has_entry_init_code_id =
-        result.artifact.module.init.has_entry_code_id;
-    result.artifact.entry_init_code_id =
-        result.artifact.module.init.entry_code_id;
-    result.artifact.has_entry_main_code_id = has_root_main;
-    result.artifact.entry_main_code_id = root_main_code;
-    result.ok = true;
-    return result;
-  }
-
-private:
-  std::uint32_t intern_string(const std::string &text) {
-    const auto found = string_ids_.find(text);
-    if (found != string_ids_.end()) {
-      return found->second;
-    }
-    const std::uint32_t id = static_cast<std::uint32_t>(out_.strings.size());
-    out_.strings.push_back(text);
-    string_ids_[text] = id;
-    return id;
-  }
-
-  std::uint32_t intern_symbol(const std::string &text) {
-    const auto found = symbol_ids_.find(text);
-    if (found != symbol_ids_.end()) {
-      return found->second;
-    }
-    const std::uint32_t id = static_cast<std::uint32_t>(out_.symbols.size());
-    out_.symbols.push_back(text);
-    symbol_ids_[text] = id;
-    return id;
-  }
-
-  std::uint32_t intern_path_constant(const std::string &path) {
-    amber::bytecode::Constant constant;
-    constant.kind = amber::bytecode::ConstantKind::Path;
-    std::size_t start = 0;
-    while (start <= path.size()) {
-      const std::size_t end = path.find('.', start);
-      const std::string segment = end == std::string::npos
-                                      ? path.substr(start)
-                                      : path.substr(start, end - start);
-      if (!segment.empty()) {
-        constant.items.push_back(intern_symbol(segment));
-      }
-      if (end == std::string::npos) {
-        break;
-      }
-      start = end + 1U;
-    }
-    if (constant.items.empty()) {
-      constant.items.push_back(intern_symbol(path));
-    }
-    const std::uint32_t id = static_cast<std::uint32_t>(out_.const_pool.size());
-    out_.const_pool.push_back(std::move(constant));
-    return id;
-  }
-
-  std::uint32_t map_string(NativeGraphModuleState &state, std::uint32_t id) {
-    const auto found = state.strings.find(id);
-    if (found != state.strings.end()) {
-      return found->second;
-    }
-    const std::uint32_t mapped =
-        intern_string(bc_string_or_empty(state.input->module, id));
-    state.strings[id] = mapped;
-    return mapped;
-  }
-
-  std::uint32_t map_symbol(NativeGraphModuleState &state, std::uint32_t id) {
-    const auto found = state.symbols.find(id);
-    if (found != state.symbols.end()) {
-      return found->second;
-    }
-    const std::uint32_t mapped =
-        intern_symbol(bc_symbol_or_empty(state.input->module, id));
-    state.symbols[id] = mapped;
-    return mapped;
-  }
-
-  std::uint32_t map_code(NativeGraphModuleState &state,
-                         std::uint32_t id) const {
-    const auto found = state.code_ids.find(id);
-    return found == state.code_ids.end() ? 0U : found->second;
-  }
-
-  std::uint32_t map_constant(NativeGraphModuleState &state, std::uint32_t id) {
-    const auto found = state.constants.find(id);
-    if (found != state.constants.end()) {
-      return found->second;
-    }
-    if (id >= state.input->module.const_pool.size()) {
-      return 0;
-    }
-    amber::bytecode::Constant constant = state.input->module.const_pool[id];
-    if (constant.kind == amber::bytecode::ConstantKind::Path &&
-        !constant.items.empty()) {
-      const std::string first =
-          bc_symbol_or_empty(state.input->module, constant.items[0]);
-      const auto alias = state.import_alias_paths.find(first);
-      if (alias != state.import_alias_paths.end()) {
-        std::string path = alias->second;
-        for (std::size_t i = 1; i < constant.items.size(); ++i) {
-          if (!path.empty()) {
-            path += ".";
-          }
-          path += bc_symbol_or_empty(state.input->module, constant.items[i]);
-        }
-        const std::uint32_t mapped = intern_path_constant(path);
-        state.constants[id] = mapped;
-        return mapped;
-      }
-    }
-    switch (constant.kind) {
-    case amber::bytecode::ConstantKind::SymbolRef:
-      constant.ref_id = map_symbol(state, constant.ref_id);
-      break;
-    case amber::bytecode::ConstantKind::StringRef:
-      constant.ref_id = map_string(state, constant.ref_id);
-      break;
-    case amber::bytecode::ConstantKind::CodeRef:
-      constant.ref_id = map_code(state, constant.ref_id);
-      break;
-    case amber::bytecode::ConstantKind::KeySet:
-    case amber::bytecode::ConstantKind::Path:
-      for (std::uint32_t &item : constant.items) {
-        item = map_symbol(state, item);
-      }
-      break;
-    case amber::bytecode::ConstantKind::Null:
-    case amber::bytecode::ConstantKind::Bool:
-    case amber::bytecode::ConstantKind::Integer:
-    case amber::bytecode::ConstantKind::Float:
-      break;
-    }
-    const std::uint32_t mapped =
-        static_cast<std::uint32_t>(out_.const_pool.size());
-    out_.const_pool.push_back(std::move(constant));
-    state.constants[id] = mapped;
-    return mapped;
-  }
-
-  std::uint32_t class_index(NativeGraphModuleState &state,
-                            std::uint32_t old_index) const {
-    return state.class_offset + old_index;
-  }
-
-  std::uint32_t method_index(NativeGraphModuleState &state,
-                             std::uint32_t old_index) const {
-    return state.method_offset + old_index;
-  }
-
-  std::uint32_t pattern_index(NativeGraphModuleState &state,
-                              std::uint32_t old_index) const {
-    return state.pattern_offset + old_index;
-  }
-
-  static void normalize_string_vector(std::vector<std::string> *values) {
-    std::sort(values->begin(), values->end());
-    values->erase(std::unique(values->begin(), values->end()), values->end());
-  }
-
-  void remap_symbol_operand(NativeGraphModuleState &state,
-                            amber::bytecode::Instruction &insn,
-                            std::size_t index) {
-    if (index < insn.operands.size()) {
-      insn.operands[index].value = map_symbol(
-          state, static_cast<std::uint32_t>(insn.operands[index].value));
-    }
-  }
-
-  void remap_constant_operand(NativeGraphModuleState &state,
-                              amber::bytecode::Instruction &insn,
-                              std::size_t index) {
-    if (index < insn.operands.size()) {
-      insn.operands[index].value = map_constant(
-          state, static_cast<std::uint32_t>(insn.operands[index].value));
-    }
-  }
-
-  void shift_target(amber::bytecode::Instruction &insn, std::size_t index,
-                    std::uint32_t offset) {
-    if (offset == 0U || index >= insn.operands.size()) {
-      return;
-    }
-    insn.operands[index].value += offset;
-  }
-
-  void remap_instruction(NativeGraphModuleState &state,
-                         amber::bytecode::Instruction &insn,
-                         std::uint32_t pc_offset) {
-    using amber::bytecode::Opcode;
-    switch (insn.opcode) {
-    case Opcode::LoadK:
-      remap_constant_operand(state, insn, 1);
-      break;
-    case Opcode::LookupConst:
-      remap_constant_operand(state, insn, 1);
-      break;
-    case Opcode::TypeCheck:
-      remap_constant_operand(state, insn, 1);
-      break;
-    case Opcode::MakeClosure:
-      if (insn.operands.size() > 1U) {
-        insn.operands[1].value =
-            map_code(state, static_cast<std::uint32_t>(insn.operands[1].value));
-      }
-      break;
-    case Opcode::LoadIvar:
-    case Opcode::LoadCvar:
-      remap_symbol_operand(state, insn, 2);
-      break;
-    case Opcode::StoreIvar:
-    case Opcode::StoreCvar:
-      remap_symbol_operand(state, insn, 1);
-      break;
-    case Opcode::MakeMap: {
-      if (insn.operands.size() >= 2U) {
-        const std::uint32_t count =
-            static_cast<std::uint32_t>(insn.operands[1].value) &
-            amber::bytecode::kMapCountMask;
-        for (std::uint32_t i = 0; i < count; ++i) {
-          remap_symbol_operand(state, insn, 2U + i * 2U);
-        }
-      }
-      break;
-    }
-    case Opcode::MakeMapSpread: {
-      if (insn.operands.size() >= 2U) {
-        const std::uint32_t count =
-            static_cast<std::uint32_t>(insn.operands[1].value) &
-            amber::bytecode::kMapCountMask;
-        for (std::uint32_t i = 0; i < count; ++i) {
-          const std::size_t base = 2U + i * 3U;
-          if (base + 1U < insn.operands.size() &&
-              insn.operands[base].value ==
-                  amber::bytecode::kMapSpreadEntrySymbol) {
-            remap_symbol_operand(state, insn, base + 1U);
-          }
-        }
-      }
-      break;
-    }
-    case Opcode::Send:
-    case Opcode::SendDyn:
-    case Opcode::SendSpread:
-    case Opcode::SendDynSpread: {
-      const bool spread = insn.opcode == Opcode::SendSpread ||
-                          insn.opcode == Opcode::SendDynSpread;
-      if (insn.opcode == Opcode::Send || insn.opcode == Opcode::SendSpread) {
-        remap_symbol_operand(state, insn, 2);
-      }
-      if (insn.operands.size() > 3U) {
-        const std::uint32_t pos_count =
-            static_cast<std::uint32_t>(insn.operands[3].value);
-        const std::size_t per_arg = spread ? 2U : 1U;
-        const std::size_t kw_index = 4U + pos_count * per_arg;
-        if (kw_index < insn.operands.size()) {
-          const std::uint32_t kw_count =
-              static_cast<std::uint32_t>(insn.operands[kw_index].value);
-          for (std::uint32_t i = 0; i < kw_count; ++i) {
-            const std::size_t key_index =
-                kw_index + 1U + i * (spread ? 3U : 2U) + (spread ? 1U : 0U);
-            remap_symbol_operand(state, insn, key_index);
-          }
-        }
-      }
-      break;
-    }
-    case Opcode::CallSpread: {
-      if (insn.operands.size() > 2U) {
-        const std::uint32_t pos_count =
-            static_cast<std::uint32_t>(insn.operands[2].value);
-        const std::size_t kw_index = 3U + pos_count * 2U;
-        if (kw_index < insn.operands.size()) {
-          const std::uint32_t kw_count =
-              static_cast<std::uint32_t>(insn.operands[kw_index].value);
-          for (std::uint32_t i = 0; i < kw_count; ++i) {
-            remap_symbol_operand(state, insn, kw_index + 1U + i * 3U + 1U);
-          }
-        }
-      }
-      break;
-    }
-    case Opcode::Call: {
-      if (insn.operands.size() > 2U) {
-        const std::uint32_t pos_count =
-            static_cast<std::uint32_t>(insn.operands[2].value);
-        const std::size_t kw_index = 3U + pos_count;
-        if (kw_index < insn.operands.size()) {
-          const std::uint32_t kw_count =
-              static_cast<std::uint32_t>(insn.operands[kw_index].value);
-          for (std::uint32_t i = 0; i < kw_count; ++i) {
-            remap_symbol_operand(state, insn, kw_index + 1U + i * 2U);
-          }
-        }
-      }
-      break;
-    }
-    case Opcode::PCheckEq:
-      remap_constant_operand(state, insn, 1);
-      shift_target(insn, 2, pc_offset);
-      break;
-    case Opcode::PHasKey:
-      remap_symbol_operand(state, insn, 1);
-      shift_target(insn, 2, pc_offset);
-      break;
-    case Opcode::PGetKey:
-      remap_symbol_operand(state, insn, 2);
-      break;
-    case Opcode::Jump:
-      shift_target(insn, 0, pc_offset);
-      break;
-    case Opcode::JumpIfTrue:
-    case Opcode::JumpIfFalse:
-    case Opcode::JumpIfNull:
-      shift_target(insn, 1, pc_offset);
-      break;
-    default:
-      if (integer_k_opcode(insn.opcode)) {
-        remap_constant_operand(state, insn, 2);
-      }
-      break;
-    }
-  }
-
-  std::optional<NativeGraphExportRef>
-  resolve_import(const std::string &dependency,
-                 const std::string &source) const {
-    const auto dep_state = states_.find(dependency);
-    if (dep_state == states_.end()) {
-      return std::nullopt;
-    }
-    const auto export_found = dep_state->second.exports.find(source);
-    if (export_found == dep_state->second.exports.end()) {
-      return std::nullopt;
-    }
-    return export_found->second;
-  }
-
-  void index_import_alias_paths(NativeGraphModuleState &state) {
-    const std::string prefix = "amber.import.alias:";
-    for (const amber::bytecode::AttrEntry &attr : state.input->module.attrs) {
-      const std::string key =
-          bc_string_or_empty(state.input->module, attr.key_str_id);
-      if (key.rfind(prefix, 0) != 0) {
-        continue;
-      }
-      const std::vector<std::string> key_fields =
-          split_tab_fields(key.substr(prefix.size()));
-      if (key_fields.size() != 2U) {
-        continue;
-      }
-      const std::string value =
-          bc_string_or_empty(state.input->module, attr.value_str_id);
-      const std::vector<std::string> fields = split_tab_fields(value);
-      if (fields.empty()) {
-        continue;
-      }
-      if (fields[0] == "M" && fields.size() == 3U) {
-        state.import_alias_paths[key_fields[1]] = fields[1];
-        continue;
-      }
-      if (fields[0] == "F" && fields.size() == 4U) {
-        state.import_alias_paths[key_fields[1]] = fields[1] + "." + fields[2];
-      }
-    }
-  }
-
-  std::vector<amber::bytecode::Instruction>
-  import_seed_instructions(NativeGraphModuleState &state) {
-    std::vector<amber::bytecode::Instruction> seeds;
-    const std::string prefix = "amber.import.alias:";
-    for (const amber::bytecode::AttrEntry &attr : state.input->module.attrs) {
-      const std::string key =
-          bc_string_or_empty(state.input->module, attr.key_str_id);
-      const std::string value =
-          bc_string_or_empty(state.input->module, attr.value_str_id);
-      if (key.rfind(prefix, 0) != 0) {
-        continue;
-      }
-      const std::vector<std::string> fields = split_tab_fields(value);
-      if (fields.empty()) {
-        continue;
-      }
-      if (fields[0] == "M") {
-        if (fields.size() != 3U) {
-          continue;
-        }
-        std::uint32_t slot = 0;
-        if (!parse_u32_text(fields[2], &slot)) {
-          continue;
-        }
-        const auto dep_state = states_.find(fields[1]);
-        if (dep_state == states_.end()) {
-          const std::uint32_t const_id = intern_path_constant(fields[1]);
-          seeds.push_back({amber::bytecode::Opcode::LookupConst,
-                           {{slot, false}, {const_id, false}}});
-          continue;
-        }
-        if (!dep_state->second.input->stdlib) {
-          throw std::runtime_error(
-              "whole-graph native does not support non-stdlib module import "
-              "aliases in executable package objects: " +
-              key.substr(prefix.size()));
-        }
-        const std::uint32_t const_id = intern_path_constant(fields[1]);
-        seeds.push_back({amber::bytecode::Opcode::LookupConst,
-                         {{slot, false}, {const_id, false}}});
-        continue;
-      }
-      if (fields[0] != "F" || fields.size() != 4U) {
-        continue;
-      }
-      std::uint32_t slot = 0;
-      if (!parse_u32_text(fields[3], &slot)) {
-        continue;
-      }
-      const std::optional<NativeGraphExportRef> target =
-          resolve_import(fields[1], fields[2]);
-      if (!target.has_value()) {
-        if (states_.find(fields[1]) == states_.end()) {
-          const std::uint32_t const_id =
-              intern_path_constant(fields[1] + "." + fields[2]);
-          seeds.push_back({amber::bytecode::Opcode::LookupConst,
-                           {{slot, false}, {const_id, false}}});
-          continue;
-        }
-        throw std::runtime_error("whole-graph native import `" + fields[2] +
-                                 "` from module `" + fields[1] +
-                                 "` is not resolved");
-      }
-      // Resolve the import to the exporting module's ALREADY-BUILT binding
-      // (via LookupConst -> module_bindings) rather than rebuilding a closure
-      // here. A rebuilt `MakeClosure(code_id, 0 captures)` dropped the callee's
-      // upvalues, so an imported function that closes over other module-level
-      // bindings ran with no captures ("capture slot out of range"). The
-      // exporting module's init runs first (dependency order) and persists the
-      // real closure (with captures) under `<module>:<name>`, which the
-      // extended lookup_constant recovers. Classes resolve the same way.
-      if (target->kind == "method" || target->kind == "code" ||
-          target->kind == "class") {
-        const std::uint32_t const_id =
-            intern_path_constant(fields[1] + "." + fields[2]);
-        seeds.push_back({amber::bytecode::Opcode::LookupConst,
-                         {{slot, false}, {const_id, false}}});
-      }
-    }
-    return seeds;
-  }
-
-  void shift_instruction_targets_from(amber::bytecode::BcCode *code,
-                                      std::uint32_t from_pc,
-                                      std::uint32_t offset) {
-    if (offset == 0U) {
-      return;
-    }
-    const auto shift_operand = [&](amber::bytecode::Instruction &insn,
-                                   std::size_t index) {
-      if (index >= insn.operands.size() ||
-          insn.operands[index].signed_immediate ||
-          insn.operands[index].value < 0) {
-        return;
-      }
-      const std::uint32_t target =
-          static_cast<std::uint32_t>(insn.operands[index].value);
-      if (target >= from_pc) {
-        insn.operands[index].value = static_cast<std::int64_t>(target + offset);
-      }
-    };
-    for (amber::bytecode::Instruction &insn : code->instructions) {
-      switch (insn.opcode) {
-      case amber::bytecode::Opcode::Jump:
-        shift_operand(insn, 0);
-        break;
-      case amber::bytecode::Opcode::JumpIfTrue:
-      case amber::bytecode::Opcode::JumpIfFalse:
-      case amber::bytecode::Opcode::JumpIfNull:
-        shift_operand(insn, 1);
-        break;
-      default:
-        break;
-      }
-    }
-  }
-
-  std::uint32_t
-  import_seed_insert_pc(const amber::bytecode::BcCode &code) const {
-    std::set<std::uint32_t> import_slots;
-    for (const amber::bytecode::SlotLayoutEntry &entry : code.local_layout) {
-      const std::string binding =
-          entry.binding_kind_str_id < out_.strings.size()
-              ? out_.strings[entry.binding_kind_str_id]
-              : std::string();
-      if (binding == "import_alias") {
-        import_slots.insert(entry.slot);
-      }
-    }
-    std::uint32_t pc = 0;
-    while (pc < code.instructions.size()) {
-      const amber::bytecode::Instruction &insn = code.instructions[pc];
-      if (insn.opcode != amber::bytecode::Opcode::LoadNull ||
-          insn.operands.empty() || insn.operands[0].signed_immediate ||
-          insn.operands[0].value < 0) {
-        break;
-      }
-      const std::uint32_t slot =
-          static_cast<std::uint32_t>(insn.operands[0].value);
-      if (import_slots.find(slot) == import_slots.end()) {
-        break;
-      }
-      ++pc;
-    }
-    return pc;
-  }
-
-  void shift_code_pcs(amber::bytecode::BcCode *code, std::uint32_t offset,
-                      std::uint32_t from_pc = 0) {
-    if (offset == 0U) {
-      return;
-    }
-    for (amber::bytecode::HandlerEntry &entry : code->handler_table) {
-      if (entry.protected_from >= from_pc) {
-        entry.protected_from += offset;
-      }
-      if (entry.protected_to >= from_pc) {
-        entry.protected_to += offset;
-      }
-      if (entry.handler_pc >= from_pc) {
-        entry.handler_pc += offset;
-      }
-    }
-    for (amber::bytecode::CacheSiteEntry &entry : code->call_site_table) {
-      if (entry.pc >= from_pc) {
-        entry.pc += offset;
-      }
-    }
-    for (amber::bytecode::CacheSiteEntry &entry : code->ivar_site_table) {
-      if (entry.pc >= from_pc) {
-        entry.pc += offset;
-      }
-    }
-    for (amber::bytecode::SafepointEntry &entry : code->safepoint_table) {
-      if (entry.pc >= from_pc) {
-        entry.pc += offset;
-      }
-    }
-    for (amber::bytecode::SourceSpanEntry &entry : code->source_spans) {
-      if (entry.pc_from >= from_pc) {
-        entry.pc_from += offset;
-      }
-      if (entry.pc_to > from_pc) {
-        entry.pc_to += offset;
-      }
-    }
-  }
-
-  amber::bytecode::BcCode remap_code(NativeGraphModuleState &state,
-                                     const amber::bytecode::BcCode &source,
-                                     std::uint32_t pc_offset) {
-    amber::bytecode::BcCode code = source;
-    code.code_id = map_code(state, source.code_id);
-    for (amber::bytecode::SlotLayoutEntry &entry : code.local_layout) {
-      entry.name_str_id = map_string(state, entry.name_str_id);
-      entry.role_str_id = map_string(state, entry.role_str_id);
-      entry.binding_kind_str_id = map_string(state, entry.binding_kind_str_id);
-    }
-    for (amber::bytecode::CaptureLayoutEntry &entry : code.capture_layout) {
-      entry.name_str_id = map_string(state, entry.name_str_id);
-      entry.source_kind_str_id = map_string(state, entry.source_kind_str_id);
-      entry.source_name_str_id = map_string(state, entry.source_name_str_id);
-    }
-    for (amber::bytecode::Instruction &insn : code.instructions) {
-      remap_instruction(state, insn, pc_offset);
-    }
-    for (amber::bytecode::HandlerEntry &entry : code.handler_table) {
-      entry.handler_code_id = map_code(state, entry.handler_code_id);
-    }
-    for (amber::bytecode::CacheSiteEntry &entry : code.call_site_table) {
-      entry.symbol_id = map_symbol(state, entry.symbol_id);
-    }
-    for (amber::bytecode::CacheSiteEntry &entry : code.ivar_site_table) {
-      entry.symbol_id = map_symbol(state, entry.symbol_id);
-    }
-    shift_code_pcs(&code, pc_offset);
-    return code;
-  }
-
-  void copy_module(NativeGraphModuleState &state) {
-    out_.required_features.insert(out_.required_features.end(),
-                                  state.input->module.required_features.begin(),
-                                  state.input->module.required_features.end());
-    out_.optional_features.insert(out_.optional_features.end(),
-                                  state.input->module.optional_features.begin(),
-                                  state.input->module.optional_features.end());
-    out_.forbidden_features.insert(
-        out_.forbidden_features.end(),
-        state.input->module.forbidden_features.begin(),
-        state.input->module.forbidden_features.end());
-    out_.capabilities.insert(out_.capabilities.end(),
-                             state.input->module.capabilities.begin(),
-                             state.input->module.capabilities.end());
-    out_.effects.insert(out_.effects.end(), state.input->module.effects.begin(),
-                        state.input->module.effects.end());
-    out_.schemas.insert(out_.schemas.end(), state.input->module.schemas.begin(),
-                        state.input->module.schemas.end());
-    out_.schema_migrations.insert(out_.schema_migrations.end(),
-                                  state.input->module.schema_migrations.begin(),
-                                  state.input->module.schema_migrations.end());
-    out_.table_plans.insert(out_.table_plans.end(),
-                            state.input->module.table_plans.begin(),
-                            state.input->module.table_plans.end());
-    out_.wasm_components.insert(out_.wasm_components.end(),
-                                state.input->module.wasm_components.begin(),
-                                state.input->module.wasm_components.end());
-    out_.accelerator_kernels.insert(
-        out_.accelerator_kernels.end(),
-        state.input->module.accelerator_kernels.begin(),
-        state.input->module.accelerator_kernels.end());
-    out_.agent_symbols.insert(out_.agent_symbols.end(),
-                              state.input->module.agent_symbols.begin(),
-                              state.input->module.agent_symbols.end());
-    out_.agent_patches.insert(out_.agent_patches.end(),
-                              state.input->module.agent_patches.begin(),
-                              state.input->module.agent_patches.end());
-    out_.provenance_records.insert(
-        out_.provenance_records.end(),
-        state.input->module.provenance_records.begin(),
-        state.input->module.provenance_records.end());
-    out_.contracts.insert(out_.contracts.end(),
-                          state.input->module.contracts.begin(),
-                          state.input->module.contracts.end());
-    out_.properties.insert(out_.properties.end(),
-                           state.input->module.properties.begin(),
-                           state.input->module.properties.end());
-    out_.privacy_labels.insert(out_.privacy_labels.end(),
-                               state.input->module.privacy_labels.begin(),
-                               state.input->module.privacy_labels.end());
-    out_.privacy_policies.insert(out_.privacy_policies.end(),
-                                 state.input->module.privacy_policies.begin(),
-                                 state.input->module.privacy_policies.end());
-    out_.lineage_nodes.insert(out_.lineage_nodes.end(),
-                              state.input->module.lineage_nodes.begin(),
-                              state.input->module.lineage_nodes.end());
-    out_.workflow_steps.insert(out_.workflow_steps.end(),
-                               state.input->module.workflow_steps.begin(),
-                               state.input->module.workflow_steps.end());
-    out_.workflow_history.insert(out_.workflow_history.end(),
-                                 state.input->module.workflow_history.begin(),
-                                 state.input->module.workflow_history.end());
-
-    index_import_alias_paths(state);
-
-    for (std::uint32_t i = 0; i < state.input->module.const_pool.size(); ++i) {
-      map_constant(state, i);
-    }
-
-    std::vector<amber::bytecode::Instruction> import_seeds =
-        import_seed_instructions(state);
-    for (const amber::bytecode::BcCode &source_code :
-         state.input->module.code_objects) {
-      const bool is_init =
-          state.input->module.init.has_entry_code_id &&
-          source_code.code_id == state.input->module.init.entry_code_id;
-      state.code_pc_offsets[source_code.code_id] = 0;
-      state.code_pc_insert_points[source_code.code_id] = 0;
-      amber::bytecode::BcCode code = remap_code(state, source_code, 0);
-      if (is_init && !import_seeds.empty()) {
-        const std::uint32_t insert_pc = import_seed_insert_pc(code);
-        const std::uint32_t pc_offset =
-            static_cast<std::uint32_t>(import_seeds.size());
-        state.code_pc_offsets[source_code.code_id] = pc_offset;
-        state.code_pc_insert_points[source_code.code_id] = insert_pc;
-        shift_instruction_targets_from(&code, insert_pc, pc_offset);
-        shift_code_pcs(&code, pc_offset, insert_pc);
-        code.instructions.insert(code.instructions.begin() + insert_pc,
-                                 import_seeds.begin(), import_seeds.end());
-      }
-      out_.code_objects.push_back(std::move(code));
-    }
-
-    for (const amber::bytecode::BcMethod &source :
-         state.input->module.methods) {
-      amber::bytecode::BcMethod method = source;
-      method.selector_sym_id = map_symbol(state, method.selector_sym_id);
-      if ((method.flags & (amber::bytecode::kMethodFlagInstance |
-                           amber::bytecode::kMethodFlagClass |
-                           amber::bytecode::kMethodFlagPropertyGetter |
-                           amber::bytecode::kMethodFlagPropertySetter)) != 0U) {
-        method.owner_dispatch_ref =
-            class_index(state, method.owner_dispatch_ref);
-      }
-      method.signature_blob_id = map_constant(state, method.signature_blob_id);
-      for (amber::bytecode::MethodParamEntry &param : method.params) {
-        param.external_name_sym_id =
-            map_symbol(state, param.external_name_sym_id);
-        param.local_name_str_id = map_string(state, param.local_name_str_id);
-      }
-      for (std::uint32_t &code_id : method.default_thunk_ids) {
-        code_id = map_code(state, code_id);
-      }
-      for (std::uint32_t &code_id : method.type_hook_ids) {
-        code_id = map_code(state, code_id);
-      }
-      for (amber::bytecode::ClauseEntry &entry : method.clause_table) {
-        entry.pattern_program_id =
-            pattern_index(state, entry.pattern_program_id);
-        entry.pattern_code_id = map_code(state, entry.pattern_code_id);
-        entry.guard_code_id = map_code(state, entry.guard_code_id);
-        entry.body_code_id = map_code(state, entry.body_code_id);
-      }
-      for (amber::bytecode::AutoAssignEntry &entry : method.auto_assign_desc) {
-        entry.local_name_str_id = map_string(state, entry.local_name_str_id);
-        entry.target_name_str_id = map_string(state, entry.target_name_str_id);
-      }
-      method.entry_code_id = map_code(state, method.entry_code_id);
-      out_.methods.push_back(std::move(method));
-    }
-
-    for (const amber::bytecode::BcClass &source : state.input->module.classes) {
-      amber::bytecode::BcClass klass = source;
-      klass.class_name_sym_id = map_symbol(state, klass.class_name_sym_id);
-      if (klass.has_superclass_ref) {
-        klass.superclass_ref = map_constant(state, klass.superclass_ref);
-      }
-      klass.ivar_schema_id = map_constant(state, klass.ivar_schema_id);
-      klass.method_range_start = method_index(state, klass.method_range_start);
-      for (std::uint32_t &ref : klass.direct_include_refs) {
-        ref = map_constant(state, ref);
-      }
-      for (std::uint32_t &ref : klass.direct_extend_refs) {
-        ref = map_constant(state, ref);
-      }
-      if (klass.has_class_init_code_id) {
-        klass.class_init_code_id = map_code(state, klass.class_init_code_id);
-      }
-      out_.classes.push_back(std::move(klass));
-    }
-
-    for (const amber::bytecode::PatternProgramEntry &source :
-         state.input->module.pattern_programs) {
-      amber::bytecode::PatternProgramEntry entry = source;
-      entry.pattern_id = pattern_index(state, source.pattern_id);
-      out_.pattern_programs.push_back(entry);
-    }
-
-    for (const amber::bytecode::ExportEntry &source :
-         state.input->module.exports) {
-      amber::bytecode::ExportEntry entry = source;
-      entry.symbol_id = map_symbol(state, entry.symbol_id);
-      entry.target_kind_str_id = map_string(state, entry.target_kind_str_id);
-      entry.reexport_module_name_str_id =
-          map_string(state, entry.reexport_module_name_str_id);
-      const std::string kind =
-          bc_string_or_empty(state.input->module, source.target_kind_str_id);
-      NativeGraphExportRef ref;
-      ref.kind = kind;
-      if (kind == "method") {
-        entry.target_index = method_index(state, source.target_index);
-        const amber::bytecode::BcMethod &method =
-            state.input->module.methods[source.target_index];
-        ref.method_index = entry.target_index;
-        ref.code_id = map_code(state, method.entry_code_id);
-      } else if (kind == "code") {
-        entry.target_index = map_code(state, source.target_index);
-        ref.code_id = entry.target_index;
-      } else if (kind == "class") {
-        entry.target_index = class_index(state, source.target_index);
-        ref.class_index = entry.target_index;
-      } else {
-        entry.target_index = source.target_index;
-      }
-      out_.exports.push_back(entry);
-      const std::string export_name =
-          bc_symbol_or_empty(state.input->module, source.symbol_id);
-      state.exports[export_name] = ref;
-      if ((ref.kind == "method" || ref.kind == "code") &&
-          ref.code_id != 0U) {
-        add_module_attr(
-            &out_, "amber.merged.export:" + state.input->name + "." +
-                       export_name,
-            ref.kind + "\t" + std::to_string(ref.code_id));
-      } else if (ref.kind == "class") {
-        add_module_attr(
-            &out_, "amber.merged.export:" + state.input->name + "." +
-                       export_name,
-            "class\t" + std::to_string(ref.class_index));
-      }
-    }
-
-    for (const amber::bytecode::LineEntry &source :
-         state.input->module.line_table) {
-      amber::bytecode::LineEntry entry = source;
-      entry.code_id = map_code(state, source.code_id);
-      const auto offset = state.code_pc_offsets.find(source.code_id);
-      const auto insert = state.code_pc_insert_points.find(source.code_id);
-      const std::uint32_t insert_pc =
-          insert == state.code_pc_insert_points.end() ? 0U : insert->second;
-      if (offset != state.code_pc_offsets.end() && entry.pc >= insert_pc) {
-        entry.pc += offset->second;
-      }
-      out_.line_table.push_back(entry);
-    }
-    for (const amber::bytecode::LocalDebugEntry &source :
-         state.input->module.local_debug) {
-      amber::bytecode::LocalDebugEntry entry = source;
-      entry.code_id = map_code(state, source.code_id);
-      entry.name_str_id = map_string(state, source.name_str_id);
-      const auto offset = state.code_pc_offsets.find(source.code_id);
-      const auto insert = state.code_pc_insert_points.find(source.code_id);
-      const std::uint32_t insert_pc =
-          insert == state.code_pc_insert_points.end() ? 0U : insert->second;
-      if (offset != state.code_pc_offsets.end()) {
-        if (entry.start_pc >= insert_pc) {
-          entry.start_pc += offset->second;
-        }
-        if (entry.end_pc > insert_pc) {
-          entry.end_pc += offset->second;
-        }
-      }
-      out_.local_debug.push_back(entry);
-    }
-
-    for (const amber::bytecode::AttrEntry &source : state.input->module.attrs) {
-      const std::string raw_key =
-          bc_string_or_empty(state.input->module, source.key_str_id);
-      const std::string raw_value =
-          bc_string_or_empty(state.input->module, source.value_str_id);
-      if (raw_key.rfind("amber.import.alias:", 0) == 0) {
-        continue;
-      }
-      std::string key = raw_key;
-      if (raw_key.rfind("amber.native.bind:", 0) == 0) {
-        std::uint32_t old_code = 0;
-        if (parse_u32_text(
-                raw_key.substr(std::string("amber.native.bind:").size()),
-                &old_code)) {
-          key =
-              "amber.native.bind:" + std::to_string(map_code(state, old_code));
-        }
-      }
-      out_.attrs.push_back({intern_string(key), intern_string(raw_value)});
-    }
-    if (state.input->module.init.has_entry_code_id) {
-      add_module_attr(&out_,
-                      "amber.merged.init:" +
-                          std::to_string(map_code(
-                              state, state.input->module.init.entry_code_id)),
-                      state.input->name);
-      init_code_ids_.push_back(
-          map_code(state, state.input->module.init.entry_code_id));
-    }
-  }
-
-  void synthesize_merged_init() {
-    const std::uint32_t wrapper_id = next_code_id_++;
-    amber::bytecode::BcCode wrapper;
-    wrapper.code_id = wrapper_id;
-    wrapper.kind = amber::bytecode::CodeKind::Module;
-    wrapper.reg_count = 2;
-    std::uint32_t pc = 0;
-    for (const std::uint32_t code_id : init_code_ids_) {
-      wrapper.instructions.push_back(
-          {amber::bytecode::Opcode::MakeClosure,
-           {{0, false}, {code_id, false}, {0, false}}});
-      wrapper.instructions.push_back(
-          {amber::bytecode::Opcode::Call,
-           {{1, false},
-            {0, false},
-            {0, false},
-            {0, false},
-            {-1, true},
-            {static_cast<std::int64_t>(wrapper.call_site_table.size()),
-             false}}});
-      wrapper.call_site_table.push_back(
-          {pc + 1U, static_cast<std::uint32_t>(wrapper.call_site_table.size()),
-           intern_symbol("<call>"), 0});
-      pc += 2U;
-    }
-    if (init_code_ids_.empty()) {
-      wrapper.instructions.push_back(
-          {amber::bytecode::Opcode::LoadNull, {{1, false}}});
-    }
-    wrapper.instructions.push_back(
-        {amber::bytecode::Opcode::Return, {{1, false}}});
-    out_.code_objects.push_back(std::move(wrapper));
-    out_.init = {true, wrapper_id, 0};
-    add_module_attr(&out_, "amber.merged.wrapper:" + std::to_string(wrapper_id),
-                    "true");
-  }
-
-  std::vector<NativeGraphModule> order_;
-  amber::bytecode::BcModule out_;
-  std::unordered_map<std::string, NativeGraphModuleState> states_;
-  std::unordered_map<std::string, std::uint32_t> string_ids_;
-  std::unordered_map<std::string, std::uint32_t> symbol_ids_;
-  std::vector<std::uint32_t> init_code_ids_;
-  std::uint32_t next_code_id_ = 1;
-};
-
-std::vector<NativeGraphModule>
+std::vector<amber::bytecode::GraphModule>
 decode_native_graph_modules(const amber::build::BuildSummary &summary) {
-  std::vector<NativeGraphModule> modules;
+  std::vector<amber::bytecode::GraphModule> modules;
+  modules.reserve(summary.artifacts.size());
   for (const amber::build::BuildArtifactRecord &record : summary.artifacts) {
-    NativeGraphModule module;
+    amber::bytecode::GraphModule module;
     module.name = record.name;
     module.path = record.path;
     module.stdlib = record.stdlib;
-    module.bytes = read_bytes(record.output_path);
+    const std::vector<std::uint8_t> bytes = read_bytes(record.output_path);
     amber::bytecode::DecodeResult decoded =
-        amber::bytecode::deserialize_module(module.bytes);
+        amber::bytecode::deserialize_module(bytes);
     if (!decoded.ok()) {
       throw std::runtime_error(
           amber::bytecode::verify_errors_to_json(decoded.errors));
@@ -27423,24 +26343,11 @@ decode_native_graph_modules(const amber::build::BuildSummary &summary) {
 }
 
 NativeGraphLinkResult
-link_native_graph(const std::vector<NativeGraphModule> &modules,
+link_native_graph(const std::vector<amber::bytecode::GraphModule> &modules,
                   const std::string &root_module, EntryExecutionMode entry_mode,
                   const std::vector<amber::capability::CapabilityRequest>
                       &capability_grants) {
   NativeGraphLinkResult result;
-  std::map<std::string, const NativeGraphModule *> by_name;
-  for (const NativeGraphModule &module : modules) {
-    by_name[module.name] = &module;
-  }
-  if (by_name.find(root_module) == by_name.end()) {
-    result.diagnostics.push_back(
-        {"BuildError", "root build artifact is missing: " + root_module,
-         root_module});
-    return result;
-  }
-  std::set<std::string> visiting;
-  std::set<std::string> visited;
-  std::vector<NativeGraphModule> order;
   amber::runtime::RuntimeModuleRegistry runtime_modules;
   amber::runtime::RuntimeDispatchRegistry runtime_dispatch;
   amber::runtime::RuntimeTypeRegistry runtime_types;
@@ -27448,54 +26355,35 @@ link_native_graph(const std::vector<NativeGraphModule> &modules,
       runtime_modules, runtime_dispatch, runtime_types);
   amber::runtime::register_core_prelude_bindings(runtime_modules);
   amber::runtime::register_legacy_native_type_paths(runtime_modules);
-  std::function<bool(const std::string &)> visit =
-      [&](const std::string &name) {
-        if (visited.count(name) != 0U) {
-          return true;
-        }
-        if (!visiting.insert(name).second) {
-          result.diagnostics.push_back(
-              {"BuildError", "module dependency cycle in native graph: " + name,
-               name});
-          return false;
-        }
-        const auto found = by_name.find(name);
-        if (found == by_name.end()) {
-          if (runtime_modules.has_namespace(name)) {
-            visiting.erase(name);
-            visited.insert(name);
-            return true;
-          }
-          result.diagnostics.push_back(
-              {"BuildError",
-               "module dependency is missing from native graph: " + name,
-               name});
-          return false;
-        }
-        const NativeGraphModule &module = *found->second;
-        for (const amber::bytecode::DepEntry &dep :
-             module.module.dependencies) {
-          const std::string dep_name =
-              bc_string_or_empty(module.module, dep.module_name_str_id);
-          if (!dep_name.empty() && !visit(dep_name)) {
-            return false;
-          }
-        }
-        visiting.erase(name);
-        visited.insert(name);
-        order.push_back(module);
-        return true;
-      };
-  if (!visit(root_module)) {
+  const amber::bytecode::GraphLinkResult linked =
+      amber::bytecode::link_graph(
+          modules, root_module,
+          [&](const std::string &name) {
+            return runtime_modules.has_namespace(name);
+          });
+  for (const amber::bytecode::GraphLinkDiagnostic &diagnostic :
+       linked.diagnostics) {
+    result.diagnostics.push_back(
+        {diagnostic.error_name, diagnostic.message, diagnostic.module_name});
+  }
+  if (!linked.ok) {
     return result;
   }
-  try {
-    return NativeGraphModuleBuilder(std::move(order))
-        .build(root_module, entry_mode, capability_grants);
-  } catch (const std::exception &error) {
-    result.diagnostics.push_back({"BuildError", error.what(), root_module});
-    return result;
-  }
+  result.artifact.module_name = root_module;
+  result.artifact.entry_mode = entry_mode;
+  result.artifact.module = linked.module;
+  result.artifact.module.capabilities = capability_grants;
+  result.artifact.bytes =
+      amber::bytecode::serialize_module(result.artifact.module);
+  result.artifact.capability_grants = capability_grants;
+  result.artifact.whole_graph_native = true;
+  result.artifact.graph_module_count = linked.init_order.size();
+  result.artifact.has_entry_init_code_id = linked.has_entry_init_code_id;
+  result.artifact.entry_init_code_id = linked.entry_init_code_id;
+  result.artifact.has_entry_main_code_id = linked.has_entry_main_code_id;
+  result.artifact.entry_main_code_id = linked.entry_main_code_id;
+  result.ok = true;
+  return result;
 }
 
 void build_manifest_modules(
@@ -27555,7 +26443,8 @@ std::string vm_graph_cache_key(
     const amber::build::BuildSummary &summary, const std::string &root_module,
     const std::vector<amber::capability::CapabilityRequest> &grants) {
   std::ostringstream material;
-  material << "amber.vm.graph.v3\n";
+  material << "amber.vm.graph.v4\n";
+  material << amber::bytecode::kGraphLinkerAbiVersion << '\n';
   material << summary.name << '\n' << root_module << '\n';
   for (const amber::capability::CapabilityRequest &grant : grants) {
     material << grant.name << '\n'
@@ -28331,9 +27220,12 @@ int run_command(int argc, char **argv) {
         std::string entry_mode_text;
         int has_entry_main_code_id = 0;
         std::uint32_t entry_main_code_id = 0;
+        std::size_t graph_module_count = 0;
         if (!(metadata >> entry_mode_text >> has_entry_main_code_id >>
-              entry_main_code_id) ||
-            (has_entry_main_code_id != 0 && has_entry_main_code_id != 1)) {
+              entry_main_code_id >> graph_module_count) ||
+            (has_entry_main_code_id != 0 && has_entry_main_code_id != 1) ||
+            graph_module_count == 0U ||
+            graph_module_count > summary.artifacts.size()) {
           throw std::runtime_error("invalid cached VM graph metadata");
         }
         const EntryExecutionMode entry_mode =
@@ -28343,7 +27235,7 @@ int run_command(int argc, char **argv) {
         linked_graph.artifact.module = std::move(graph_decoded.module);
         populate_cached_graph_entry(
             &linked_graph.artifact, parsed.manifest.root_module, entry_mode,
-            summary.artifacts.size(), has_entry_main_code_id != 0,
+            graph_module_count, has_entry_main_code_id != 0,
             entry_main_code_id, options.capability_grants);
         graph_cache_hit = true;
       }
@@ -28376,7 +27268,8 @@ int run_command(int argc, char **argv) {
         graph_metadata_path.string(),
         entry_mode_name(linked_graph.artifact.entry_mode) + " " +
             std::to_string(linked_graph.artifact.has_entry_main_code_id) + " " +
-            std::to_string(linked_graph.artifact.entry_main_code_id) + "\n");
+            std::to_string(linked_graph.artifact.entry_main_code_id) + " " +
+            std::to_string(linked_graph.artifact.graph_module_count) + "\n");
   }
 
   ScopedNativeExtensionLibraries loaded_libraries;

@@ -10,6 +10,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -624,6 +625,16 @@ public:
     module_.language_version = {1, 0};
   }
 
+  // Notebook emission mutates the module and every interning/sidecar index
+  // while walking one procedure. Keep the transaction primitive at the
+  // owner level so a future emitter side table cannot be accidentally omitted
+  // from a hand-written rollback list.
+  Emitter checkpoint() const { return *this; }
+
+  void rollback(Emitter checkpoint) noexcept {
+    *this = std::move(checkpoint);
+  }
+
   EmitResult emit() {
     if (program_ == nullptr || program_->root == nullptr ||
         program_->root->kind != "HModule") {
@@ -654,6 +665,106 @@ public:
     return {std::move(module_), std::move(diagnostics_)};
   }
 
+  NotebookEmitResult append_notebook_cell(const hir::Procedure &procedure,
+                                          std::uint32_t code_id,
+                                          const std::vector<hir::Procedure> &blocks) {
+    Emitter checkpoint = this->checkpoint();
+    const std::size_t diagnostic_start = diagnostics_.size();
+    try {
+      // The cell's code object is appended only after CodeEmitter has walked
+      // the procedure. Reserve its explicit ID first so helpers emitted while
+      // lowering try/rescue/ensure cannot claim the cell's ID.
+      if (code_id != 0) {
+        reserved_code_ids_.insert(code_id);
+      }
+      // All block IDs must exist before any body is emitted, including nested
+      // closures and blocks used inside rescue/ensure helpers.
+      procedures_by_id_.clear();
+      code_id_by_procedure_.clear();
+      for (const auto &block : blocks) {
+        const auto id = allocate_code_id();
+        if (id == 0) throw std::length_error("notebook block code id space exhausted");
+        reserved_code_ids_.insert(id);
+        procedures_by_id_.emplace(block.id, &block);
+        code_id_by_procedure_.emplace(block.id, id);
+      }
+      for (const auto &block : blocks) {
+        CodeEmitter emitter(this, &block, code_id_by_procedure_.at(block.id));
+        auto code = emitter.emit();
+        append_local_debug(block, code);
+        module_.code_objects.push_back(std::move(code));
+      }
+      CodeEmitter code_emitter(this, &procedure, code_id, nullptr,
+                               CodeKind::NotebookCell);
+      BcCode code = code_emitter.emit();
+      append_local_debug(procedure, code);
+      const std::size_t code_index = module_.code_objects.size();
+      module_.code_objects.push_back(std::move(code));
+      procedures_by_id_.clear();
+      code_id_by_procedure_.clear();
+      std::vector<lexer::Diagnostic> diagnostics;
+      diagnostics.reserve(diagnostics_.size() - diagnostic_start);
+      for (std::size_t index = diagnostic_start; index < diagnostics_.size();
+           ++index) {
+        diagnostics.push_back(diagnostics_[index]);
+      }
+      NotebookEmitResult result{code_index, std::move(diagnostics)};
+      if (!result.ok()) {
+        // Return diagnostics from the failed attempt, but publish none of its
+        // module, interning, pattern, cache-site, or sidecar mutations.
+        rollback(std::move(checkpoint));
+      }
+      return result;
+    } catch (...) {
+      // Allocation and other unexpected emitter failures have the same
+      // all-or-nothing contract as ordinary diagnostics.
+      rollback(std::move(checkpoint));
+      throw;
+    }
+  }
+
+  void seed_notebook_name_tables(std::vector<std::string> strings,
+                                 std::vector<std::string> symbols) {
+    // This hook is used only by a freshly constructed NotebookEmitter. Keep
+    // the full vectors, including duplicate spellings, because indices are
+    // the persistent ABI; interning new references may reuse the first
+    // matching spelling without changing any existing index.
+    module_.strings = std::move(strings);
+    module_.symbols = std::move(symbols);
+    for (std::uint32_t index = 0; index < module_.strings.size(); ++index) {
+      string_ids_.emplace(module_.strings[index], index);
+    }
+    for (std::uint32_t index = 0; index < module_.symbols.size(); ++index) {
+      symbol_ids_.emplace(module_.symbols[index], index);
+    }
+  }
+
+  void reserve_notebook_code_ids(const std::vector<std::uint32_t> &ids) {
+    reserved_code_ids_.insert(ids.begin(), ids.end());
+  }
+
+  void seed_notebook_base_module(BcModule module) {
+    // Called only on a fresh persistent emitter. Retain the complete verified
+    // module rather than selectively copying tables: class/method indices,
+    // dependency metadata, debug records, and module-init bindings are all
+    // part of the composite image ABI.
+    module_ = std::move(module);
+    string_ids_.clear();
+    symbol_ids_.clear();
+    const_ids_.clear();
+    reserved_code_ids_.clear();
+    next_code_id_ = 1U;
+    for (std::uint32_t index = 0; index < module_.strings.size(); ++index) {
+      string_ids_.emplace(module_.strings[index], index);
+    }
+    for (std::uint32_t index = 0; index < module_.symbols.size(); ++index) {
+      symbol_ids_.emplace(module_.symbols[index], index);
+    }
+    for (std::uint32_t index = 0; index < module_.const_pool.size(); ++index) {
+      const_ids_.emplace(constant_key(module_.const_pool[index]), index);
+    }
+  }
+
   std::optional<std::uint32_t>
   module_init_local_slot(const std::string &local_name) const {
     if (!module_.init.has_entry_code_id) {
@@ -675,8 +786,8 @@ public:
 
   // Native whole-graph builds need to seed package import aliases before each
   // original module init creates closures that capture them. The runtime loader
-  // owns this out-of-band today, so mirror the source imports into attrs without
-  // changing ordinary bytecode semantics.
+  // owns this out-of-band today, so mirror the source imports into attrs
+  // without changing ordinary bytecode semantics.
   void emit_import_alias_attrs(const ast::Expr &root) {
     const ast::ListField *imports = list_field(root, "imports");
     if (imports == nullptr) {
@@ -751,13 +862,14 @@ public:
     }
     for (const NativeTypeRecord &record : native_types_) {
       const std::string key = "amber.native.type:" + record.amber;
-      const std::string value = record.tag + "\t" + record.ownership + "\t" +
-                                record.destructor;
+      const std::string value =
+          record.tag + "\t" + record.ownership + "\t" + record.destructor;
       module_.attrs.push_back({intern_string(key), intern_string(value)});
     }
     for (const NativeErrorRecord &record : native_errors_) {
       const std::string key = "amber.native.error:" + record.name;
-      module_.attrs.push_back({intern_string(key), intern_string(record.parent)});
+      module_.attrs.push_back(
+          {intern_string(key), intern_string(record.parent)});
     }
   }
 
@@ -831,7 +943,7 @@ public:
     return id;
   }
 
-  std::uint32_t intern_constant(const Constant &constant) {
+  static std::string constant_key(const Constant &constant) {
     std::ostringstream key;
     key << static_cast<int>(constant.kind) << ":";
     switch (constant.kind) {
@@ -858,14 +970,19 @@ public:
       }
       break;
     }
-    const auto found = const_ids_.find(key.str());
+    return key.str();
+  }
+
+  std::uint32_t intern_constant(const Constant &constant) {
+    const std::string key = constant_key(constant);
+    const auto found = const_ids_.find(key);
     if (found != const_ids_.end()) {
       return found->second;
     }
     const std::uint32_t id =
         static_cast<std::uint32_t>(module_.const_pool.size());
     module_.const_pool.push_back(constant);
-    const_ids_.emplace(key.str(), id);
+    const_ids_.emplace(key, id);
     return id;
   }
 
@@ -1008,9 +1125,31 @@ public:
   }
 
   BcModule *module() { return &module_; }
+  const BcModule *module() const { return &module_; }
 
 private:
-  std::uint32_t allocate_code_id() { return next_code_id_++; }
+  bool code_id_in_use(std::uint32_t code_id) const {
+    if (reserved_code_ids_.find(code_id) != reserved_code_ids_.end()) {
+      return true;
+    }
+    return std::any_of(module_.code_objects.begin(), module_.code_objects.end(),
+                       [code_id](const BcCode &code) {
+                         return code.code_id == code_id;
+                       });
+  }
+
+  std::uint32_t allocate_code_id() {
+    while (next_code_id_ != 0 && code_id_in_use(next_code_id_)) {
+      if (next_code_id_ == std::numeric_limits<std::uint32_t>::max()) {
+        return 0;
+      }
+      ++next_code_id_;
+    }
+    if (next_code_id_ == 0) {
+      return 0;
+    }
+    return next_code_id_++;
+  }
 
   void append_local_debug(const hir::Procedure &procedure, const BcCode &code) {
     for (const hir::ProcedureLocal &local : procedure.locals) {
@@ -1278,8 +1417,7 @@ private:
     const std::string class_name = string_field(item, "name");
     const std::uint32_t ancestry_flags =
         is_mixin ? 0U : class_ancestry_flags_[class_name];
-    const bool native_error =
-        (ancestry_flags & kClassFlagNativeError) != 0U;
+    const bool native_error = (ancestry_flags & kClassFlagNativeError) != 0U;
     const std::string runtime_class_name =
         native_error ? qualified_native_error_name(class_name) : class_name;
     const std::uint32_t class_index =
@@ -1603,6 +1741,7 @@ private:
   std::unordered_map<std::string, std::uint32_t> declared_classes_;
   std::unordered_map<std::string, std::string> class_superclasses_;
   std::unordered_map<std::string, std::uint32_t> class_ancestry_flags_;
+  std::unordered_set<std::uint32_t> reserved_code_ids_;
   std::uint32_t next_code_id_ = 1;
   std::string numeric_int_type_ = "Int64";
   std::string numeric_overflow_ = "checked";
@@ -1674,8 +1813,8 @@ CodeEmitter::CodeEmitter(Emitter *owner, const hir::Procedure *procedure,
             list_field(*procedure_->signature, "params")) {
       for (std::uint32_t index = 0; index < params->values.size(); ++index) {
         if (string_field(*params->values[index], "kind") == "rest") {
-          code_.flags |= kCodeFlagRestParam |
-                         (index << kCodeRestParamIndexShift);
+          code_.flags |=
+              kCodeFlagRestParam | (index << kCodeRestParamIndexShift);
           break;
         }
       }
@@ -1728,8 +1867,8 @@ BcCode CodeEmitter::emit() {
   if (procedure_ != nullptr && procedure_->kind == "module_init") {
     for (const hir::ProcedureLocal &local : procedure_->locals) {
       if (local.binding_kind == "import_alias") {
-        emit_instruction(Opcode::LoadNull, {{parse_slot(local.slot, 'l'), false}},
-                         local.span);
+        emit_instruction(Opcode::LoadNull,
+                         {{parse_slot(local.slot, 'l'), false}}, local.span);
       }
     }
   }
@@ -3224,7 +3363,8 @@ void CodeEmitter::compile_pattern_node(const ast::Expr &node,
           continue;
         }
         const std::uint32_t item_reg = alloc_temp();
-        std::uint32_t item_index = parse_u32_string(string_field(*item, "index"));
+        std::uint32_t item_index =
+            parse_u32_string(string_field(*item, "index"));
         if (bool_field(*item, "from_end")) {
           item_index |= kPatternSeqFromEndBit;
         }
@@ -3596,6 +3736,14 @@ CodeEmitter::compile_closure(const ast::Expr &expr,
   if (!code_id.has_value()) {
     diag(expr.span, "BC2003", "missing closure procedure in bytecode emitter");
     return dst;
+  }
+
+  // Notebook inputs are snapshotted before creating worker closures. These
+  // synthetic stores must not replace the user's last-result value ($_).
+  if (const auto *initializers = list_field(expr, "capture_initializers")) {
+    for (const auto &initializer : initializers->values) {
+      compile_expr(*initializer);
+    }
   }
 
   std::vector<InstructionOperand> operands;
@@ -4489,6 +4637,15 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
   if (expr.kind == "HLoadLocal") {
     return parse_slot(string_field(expr, "slot"), 'l');
   }
+  if (expr.kind == "HLoadNotebookSlot") {
+    const std::uint32_t dst = alloc_temp();
+    emit_instruction(
+        Opcode::LoadNotebookSlot,
+        {{dst, false},
+         {parse_u32_string(string_field(expr, "descriptor")), false}},
+        expr.span);
+    return dst;
+  }
   if (expr.kind == "HLastGet") {
     const std::uint32_t dst = alloc_temp();
     emit_instruction(Opcode::GetLast, {{dst, false}}, expr.span);
@@ -4604,6 +4761,20 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     }
     compile_expr(*binding);
     return compile_expr(*body);
+  }
+  if (expr.kind == "HStoreNotebookSlot") {
+    const ast::Expr *value = node_field(expr, "expr");
+    if (value == nullptr) {
+      diag(expr.span, "BC2001", "HStoreNotebookSlot is missing expr");
+      return alloc_temp();
+    }
+    const std::uint32_t src = compile_expr(*value);
+    emit_instruction(
+        Opcode::StoreNotebookSlot,
+        {{parse_u32_string(string_field(expr, "descriptor")), false},
+         {src, false}},
+        expr.span);
+    return src;
   }
   if (expr.kind == "HStoreCapture") {
     const ast::Expr *value = node_field(expr, "expr");
@@ -4827,6 +4998,59 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
 }
 
 } // namespace
+
+class NotebookEmitter::Impl {
+public:
+  Emitter emitter{nullptr, ""};
+};
+
+NotebookEmitter::NotebookEmitter() : impl_(std::make_unique<Impl>()) {}
+
+NotebookEmitter::NotebookEmitter(std::vector<std::string> string_seed,
+                                 std::vector<std::string> symbol_seed)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->emitter.seed_notebook_name_tables(std::move(string_seed),
+                                           std::move(symbol_seed));
+}
+
+NotebookEmitter::NotebookEmitter(BcModule base_module)
+    : impl_(std::make_unique<Impl>()) {
+  impl_->emitter.seed_notebook_base_module(std::move(base_module));
+}
+
+NotebookEmitter::~NotebookEmitter() = default;
+
+NotebookEmitter::NotebookEmitter(NotebookEmitter &&) noexcept = default;
+
+NotebookEmitter &
+NotebookEmitter::operator=(NotebookEmitter &&) noexcept = default;
+
+NotebookEmitResult
+NotebookEmitter::append_cell(const hir::Procedure &procedure,
+                             std::uint32_t code_id,
+                             const std::string &module_name,
+                             const std::vector<hir::Procedure> &blocks) {
+  if (impl_ == nullptr) {
+    impl_ = std::make_unique<Impl>();
+  }
+  if (!module_name.empty()) {
+    // The current emitter only needs a module name for ordinary module
+    // lookups; notebook cells have no HLoadConst module bindings. Keep the
+    // argument in the public API for future qualified references.
+    (void)module_name;
+  }
+  return impl_->emitter.append_notebook_cell(procedure, code_id, blocks);
+}
+
+void NotebookEmitter::reserve_code_ids(const std::vector<std::uint32_t> &ids) {
+  impl_->emitter.reserve_notebook_code_ids(ids);
+}
+
+BcModule &NotebookEmitter::module() { return *impl_->emitter.module(); }
+
+const BcModule &NotebookEmitter::module() const {
+  return *impl_->emitter.module();
+}
 
 EmitResult emit_program(const hir::Program &program,
                         const std::string &module_name) {

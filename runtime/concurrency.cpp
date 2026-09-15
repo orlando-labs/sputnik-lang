@@ -4117,7 +4117,15 @@ bool RuntimeTaskModule::sync_active() const {
 void RuntimeTaskModule::sleep(std::chrono::milliseconds duration) const {
   throw_if_runtime_task_cancelled();
   if (duration.count() > 0) {
-    std::this_thread::sleep_for(duration);
+    const auto deadline = std::chrono::steady_clock::now() + duration;
+    // Host-thread callbacks cannot park a scheduler stack, but still need
+    // prompt cancellation (including subprocess deadlines).
+    do {
+      std::this_thread::sleep_until(std::min(
+          deadline, std::chrono::steady_clock::now() +
+                        std::chrono::milliseconds(20)));
+      throw_if_runtime_task_cancelled();
+    } while (std::chrono::steady_clock::now() < deadline);
   } else if (!current_runtime_task_sync_active()) {
     std::this_thread::yield();
   }

@@ -258,6 +258,13 @@ void test_new_operator_tokens() {
 }
 
 void test_string_interpolation_lexing() {
+  expect_kinds("single quoted tag preserves nested interpolation quotes",
+               "tag'--eval \"#{\"a\" + 'b'}\"'\n",
+               {TokenKind::Identifier, TokenKind::String,
+                TokenKind::Newline, TokenKind::Eof});
+  expect_kinds("plain single quote does not interpolate",
+               "'#{not an expression}'\n",
+               {TokenKind::String, TokenKind::Newline, TokenKind::Eof});
   expect_kinds("interpolated string stays one token",
                "\"#{if ok then \"yes\" else \"no\"}\"\n",
                {TokenKind::String, TokenKind::Newline, TokenKind::Eof});

@@ -58,6 +58,8 @@ Documentation:
   codecs, strict/lenient decode modes, `Bytes`, `ByteBuffer`, and error cases.
 - [Url standard library guide](docs/stdlib-url.md) - parse/build, percent
   coding, and query-map helpers.
+- [System standard library guide](docs/stdlib-system.md) - command tags,
+  subprocess capture, multiblock streams, async, and full native compilation.
 
 Current matrix status:
 

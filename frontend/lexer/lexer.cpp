@@ -624,7 +624,8 @@ void Lexer::lex_identifier_or_keyword() {
   const std::string text =
       source_.substr(start.offset, position().offset - start.offset);
   TokenKind keyword = TokenKind::Identifier;
-  const bool raw_regexp_tag = text == "r" && !at_end() && current() == '"';
+  const bool raw_regexp_tag = text == "r" && !at_end() &&
+                             (current() == '"' || current() == '\'');
   if (is_keyword_text(text, &keyword)) {
     emit(keyword, start, text);
   } else if (is_placeholder_text(text)) {
@@ -752,6 +753,11 @@ void Lexer::lex_number() {
 
 void Lexer::lex_string(char quote, bool raw) {
   const Position start = position();
+  // Adjacent identifier + quote is a tag candidate. Both tag delimiters
+  // support interpolation; an ordinary single-quoted string stays literal.
+  const bool tagged = !result_.tokens.empty() &&
+      result_.tokens.back().kind == TokenKind::Identifier &&
+      result_.tokens.back().span.end.offset == start.offset;
   advance();
   bool closed = false;
   bool emitted_unterminated_interpolation = false;
@@ -768,7 +774,7 @@ void Lexer::lex_string(char quote, bool raw) {
       }
       continue;
     }
-    if (!raw && quote == '"' && current() == '#' && peek() == '{') {
+    if (!raw && (quote == '"' || tagged) && current() == '#' && peek() == '{') {
       const Position interpolation_start = position();
       advance();
       advance();

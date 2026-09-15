@@ -32,7 +32,10 @@ public:
   ParseModuleResult parse_module_unit();
 
 private:
-  enum class StopMode { Normal, InlineBlock, InlineIfBranch, ControlHeader };
+  enum class StopMode {
+    Normal, InlineBlock, InlineIfBranch, ControlHeader, ChainGuard,
+    CollectionElement
+  };
 
   enum class BodyContext { Module, Class, Mixin, Def };
 
@@ -197,6 +200,7 @@ private:
   bool is_stop_token(StopMode stop_mode) const;
   bool starts_primary() const;
   bool starts_bare_arg() const;
+  bool starts_chain_segment() const;
   bool starts_indented_postfix_continuation() const;
   bool starts_same_indent_postfix_continuation() const;
   bool starts_indented_boolean_continuation(int min_precedence) const;

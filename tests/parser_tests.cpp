@@ -805,6 +805,86 @@ void test_conditional_collection_elements() {
          "map unless condition kind");
 }
 
+void test_conditional_chain_segments() {
+  for (const std::string &source : {
+           "items\n  .select(1).reverse() if enabled?\n  .take(2) unless skip?\n",
+           "items .select(1).reverse() if enabled? .take(2) unless skip?\n",
+           "(items\n  .select(1).reverse() if enabled?\n  .take(2) unless skip?)\n"}) {
+    auto expr = parse_ok(source);
+    const Expr &chain = expr->kind == "AstGroup" ? node_field(*expr, "expr")
+                                                : *expr;
+    const auto &tails = list_field(chain, "tails");
+    expect(tails.values.size() == 6, "guarded segments retain all call tails");
+    expect(string_field(*tails.values[0], "guard_tail_count") == "4",
+           "adjacent calls form one conditional segment");
+    expect(string_field(node_field(*tails.values[0], "condition"), "kind") == "if",
+           "first segment if preserved");
+    expect(string_field(*tails.values[4], "guard_tail_count") == "2",
+           "next segment is independently guarded");
+    expect(string_field(node_field(*tails.values[4], "condition"), "kind") == "unless",
+           "second segment unless preserved");
+  }
+
+  for (const std::string &source : {
+           "items .map if enabled? |x|: x * 2 .uniq()\n",
+           "(items .map if enabled? |x|: x * 2 .uniq())\n",
+           "items\n  .map if enabled? |x|:\n    x * 2\n  .uniq()\n",
+           "items .map() if enabled? |x|: x * 2 .uniq()\n",
+           "items .map if enabled?: $it * 2 .uniq()\n"}) {
+    auto expr = parse_ok(source);
+    const Expr &chain = expr->kind == "AstGroup" ? node_field(*expr, "expr")
+                                                : *expr;
+    const auto &tails = list_field(chain, "tails");
+    const std::size_t block_index = tails.values.size() - 3;
+    expect(tails.values[block_index]->kind == "AstTailBlockSuffix",
+           "guard precedes the call's block");
+    expect(string_field(*tails.values[0], "guard_tail_count") ==
+               std::to_string(block_index + 1),
+           "guard includes block but excludes next call");
+    expect(node_field(node_field(*tails.values[0], "condition"), "expr").kind == "AstName",
+           "block never attaches to condition");
+  }
+
+  auto predicate = parse_ok(
+      "items .take(2) if params[:id].present? and (flags .any?) .reverse()\n");
+  const auto &tails = list_field(*predicate, "tails");
+  expect(tails.values.size() == 4, "predicate chain does not swallow continuation");
+  expect(node_field(node_field(*tails.values[0], "condition"), "expr").kind == "AstBinary",
+         "compound predicate retains nested expression");
+  expect(parse_module_raw("if (items .any? if enabled?): 1\n").ok(),
+         "grouped guarded values work in control headers");
+  parse_ok("items .take(2) if flags[keys .first() if enabled?] .size()\n");
+
+  auto old = parse_module_raw("items.map().uniq() if enabled?\n");
+  expect(old.ok() && old.items[0]->kind == "AstIf",
+         "ordinary postfix condition still guards the entire statement");
+  auto assignment = parse_module_raw("result = items .take(2) if enabled?\n");
+  expect(assignment.ok() && assignment.items[0]->kind == "AstExprStmt" &&
+             node_field(*assignment.items[0], "expr").kind == "AstAssign",
+         "guarded chain remains a value inside unconditional assignment");
+
+  auto map = parse_ok("{a: items .take(2) if enabled?, b: (items .take(2) if enabled?)}\n");
+  const auto &entries = list_field(*map, "entries");
+  expect(node_field(*entries.values[0], "condition").kind == "AstCollectionCondition",
+         "map entry condition keeps precedence over chain condition");
+  const Expr &nested = node_field(node_field(*entries.values[1], "value"), "expr");
+  expect(node_field(*list_field(nested, "tails").values[0], "condition").kind == "AstChainCondition",
+         "parentheses allow guarded chain as a map value");
+
+  expect(has_diagnostic(parse_raw("items .map if |x|: x\n"),
+                        "AMB_CHAIN_GUARD_CONDITION"), "missing guard diagnostic");
+  expect(has_diagnostic(parse_raw("items .take(2) if true unless false\n"),
+                        "AMB_CHAIN_GUARD_DUPLICATE"), "duplicate guard diagnostic");
+  expect(has_diagnostic(parse_raw("items .map |x|: x if true\n"),
+                        "AMB_CHAIN_GUARD_POSITION"), "guard must precede block");
+  for (const std::string &source : {"obj .value += 1 if enabled?\n",
+                                    "obj .value < 3 if enabled?\n"}) {
+    const auto stmt = parse_module_raw(source);
+    expect(stmt.ok() && stmt.items[0]->kind == "AstIf",
+           "infix expression ends the guardable chain segment");
+  }
+}
+
 void test_string_literal_surface() {
   std::unique_ptr<Expr> plain = parse_ok("\"plain\"\n");
   expect(plain->kind == "AstStringLiteral", "plain double string AST kind");
@@ -2124,6 +2204,7 @@ int main() {
   test_v20_7_spread_surface();
   test_inline_conditional_expression();
   test_conditional_collection_elements();
+  test_conditional_chain_segments();
   test_string_literal_surface();
   test_inline_conditional_diagnostics();
   test_clause_def_forms();

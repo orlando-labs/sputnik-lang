@@ -53,6 +53,11 @@ Currently lowered node families:
 - local/import/placeholder reads as `HLoadLocal`;
 - closure capture reads and writes as `HLoadCapture` / `HStoreCapture`;
 - explicit safe-nav guards as `HIf(cond = HIsNull(...), ...)`;
+- conditional chain segments as `HLet(binding = HStoreLocal(slot, receiver),
+  body = HIf(condition, applied_segment, saved_receiver))`; `unless` swaps
+  the branches. `HLet` evaluates its binding before its body and returns the
+  body's value without treating the binding as a user statement or updating
+  `$_`. Both MIR and bytecode lower it to existing local stores and branches;
 - unresolved names as implementation-local `HLoadName` bridge nodes for late
   global lookup cases that binder cannot resolve statically;
 - constant reads as `HLoadConst`;

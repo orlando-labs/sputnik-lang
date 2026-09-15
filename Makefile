@@ -617,6 +617,7 @@ test: build
 	$(BUILD_DIR)/native-http-server-core/native.http_server_core > $(BUILD_DIR)/native-http-server-core.out
 	grep -q '^7$$' $(BUILD_DIR)/native-http-server-core.out
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/native-cycle-lifetime
+	python3 tests/conditional_chain_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/conditional-chain
 	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_path_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-fs-path-core-build.json
 	$(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core.out

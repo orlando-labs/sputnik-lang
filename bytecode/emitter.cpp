@@ -4595,6 +4595,16 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     }
     return slot;
   }
+  if (expr.kind == "HLet") {
+    const ast::Expr *binding = node_field(expr, "binding");
+    const ast::Expr *body = node_field(expr, "body");
+    if (binding == nullptr || body == nullptr) {
+      diag(expr.span, "BC2001", "HLet is missing binding or body");
+      return alloc_temp();
+    }
+    compile_expr(*binding);
+    return compile_expr(*body);
+  }
   if (expr.kind == "HStoreCapture") {
     const ast::Expr *value = node_field(expr, "expr");
     const std::uint32_t slot = parse_slot(string_field(expr, "slot"), 'u');

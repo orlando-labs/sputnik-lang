@@ -12,6 +12,10 @@ diagnostics:
   - { code: AMB-SYN-INLINE-TERNARY-CSTYLE, severity: error, phase: parser, condition: C-style ternary operator is not supported }
   - { code: AMB-SYN-INLINE-IF-MISSING-ELSE, severity: error, phase: parser, condition: inline conditional expression is missing required else branch }
   - { code: AMB-SYN-CONDITIONAL-ELEMENT-MISSING-VALUE, severity: error, phase: parser, condition: conditional collection element has if or unless without a preceding value }
+  - { code: AMB_CHAIN_GUARD_CONDITION, severity: error, phase: parser, condition: conditional chain segment has no condition }
+  - { code: AMB_CHAIN_GUARD_DUPLICATE, severity: error, phase: parser, condition: conditional chain segment has multiple trailing conditions }
+  - { code: AMB_CHAIN_GUARD_POSITION, severity: error, phase: parser, condition: segment condition appears after its block suffix }
+  - { code: AMB_CHAIN_GUARD_BLOCK, severity: error, phase: parser, condition: guarded block is not attached to a call or duplicates an existing block }
   - { code: E_SPREAD_POSITION, severity: error, phase: parser, condition: star spread marker outside call arguments or collection literals }
   - { code: E_KWARG_SPREAD_POSITION, severity: error, phase: parser, condition: double-star keyword spread marker outside call arguments or map literals }
   - { code: E_KWARG_SPREAD_KEY, severity: error, phase: runtime, condition: keyword spread key cannot be converted to a valid keyword name }

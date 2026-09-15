@@ -87,6 +87,38 @@ bool has_error_code(const std::vector<amber::mir::ValidationError> &errors,
   return false;
 }
 
+void test_conditional_chain_and_nonlocal_return() {
+  const auto module = lower_mir_ok(
+      "def pipeline(xs, enabled):\n"
+      "  xs .map if enabled |x|: x + 1 .first()\n"
+      "def leave(xs, enabled):\n"
+      "  xs\n"
+      "    .each if enabled |x|:\n"
+      "      return x\n"
+      "  0\n");
+  const auto *pipeline = function_by_name(module, "pipeline");
+  expect(pipeline != nullptr && function_contains_op(*pipeline, "local.store") &&
+             function_contains_op(*pipeline, "branch_if") &&
+             function_contains_op(*pipeline, "phi") &&
+             !function_contains_op(*pipeline, "unsupported"),
+         "guard lowers to ordinary SSA store, branch and merge");
+  bool found_nonlocal = false;
+  for (const auto &function : module.functions) {
+    found_nonlocal = found_nonlocal || function_contains_op(function, "return.nonlocal");
+  }
+  expect(found_nonlocal, "guarded block preserves nonlocal return");
+  auto broken = module;
+  for (auto &function : broken.functions) {
+    for (auto &block : function.blocks) {
+      if (block.has_terminator && block.terminator.op == "return.nonlocal") {
+        block.terminator.targets.push_back(block.id);
+      }
+    }
+  }
+  expect(has_error_code(amber::mir::validate_module(broken).errors, "MIR1009"),
+         "nonlocal return is still checked for invalid successors");
+}
+
 void test_hir_to_mir_if_ssa() {
   const amber::mir::Module module = lower_mir_ok("def choose(x):\n"
                                                  "  if x > 0:\n"
@@ -205,6 +237,7 @@ void test_pass_harness_phase_order_and_validation() {
 } // namespace
 
 int main() {
+  test_conditional_chain_and_nonlocal_return();
   test_hir_to_mir_if_ssa();
   test_closure_capture_operands_use_parent_slots();
   test_validator_rejects_duplicate_ssa_definition();

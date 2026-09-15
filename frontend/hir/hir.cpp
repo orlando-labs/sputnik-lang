@@ -2494,14 +2494,54 @@ private:
       return node;
     }
     std::unique_ptr<Node> current = lower_expr(*base);
+    return lower_postfix_tails(base, tails, 0, tail_limit, std::move(current));
+  }
+
+  std::unique_ptr<Node> lower_postfix_tails(
+      const ast::Expr *base, const ast::ListField *tails,
+      std::size_t tail_begin, std::size_t tail_limit,
+      std::unique_ptr<Node> current, bool skip_first_guard = false) {
     if (tails == nullptr) {
       return current;
     }
     const std::size_t tail_count = std::min(tail_limit, tails->values.size());
 
-    std::size_t i = 0;
+    std::size_t i = tail_begin;
     while (i < tail_count) {
       const ast::Expr &tail = *tails->values[i];
+      const ast::Expr *condition = node_field(tail, "condition");
+      if (condition != nullptr && !(skip_first_guard && i == tail_begin)) {
+        const std::size_t end = std::min(
+            tail_count, i + static_cast<std::size_t>(
+                std::stoull(string_value(tail, "guard_tail_count"))));
+        const lexer::Span &last = tails->values[end - 1]->span;
+        const lexer::Span span = ast::join_spans(
+            current->span, condition->span.end.offset > last.end.offset
+                               ? condition->span : last);
+        const std::string slot = allocate_temp_local(current->span);
+        auto binding = make_node("HStoreLocal", current->span);
+        binding->string_field("slot", slot);
+        binding->node_field("expr", std::move(current));
+        auto applied = lower_postfix_tails(
+            base, tails, i, end, make_load_local(slot, span), true);
+        auto skipped = make_load_local(slot, span);
+        auto branch = make_node("HIf", span);
+        branch->node_field("cond", lower_expr(
+            *node_field_required(*condition, "expr")));
+        if (string_value(*condition, "kind") == "unless") {
+          std::swap(applied, skipped);
+        }
+        branch->node_field("then_body", make_expr_body(std::move(applied)));
+        branch->node_field("else_body", make_expr_body(std::move(skipped)));
+        // HLet sequences an internal binding without changing user-visible $_.
+        // Both backends lower it to an ordinary store followed by the body.
+        auto let = make_node("HLet", span);
+        let->node_field("binding", std::move(binding));
+        let->node_field("body", std::move(branch));
+        current = std::move(let);
+        i = end;
+        continue;
+      }
       if (i == 0 && tail.kind == "AstTailCall" && is_builtin_send_base(*base)) {
         std::unique_ptr<Node> block;
         const ast::Expr *multiblock_tail = nullptr;

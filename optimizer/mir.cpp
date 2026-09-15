@@ -294,6 +294,14 @@ private:
           {}, expr.span);
       return compiled;
     }
+    if (expr.kind == "HLet") {
+      if (const ast::Expr *binding = node_field(expr, "binding")) {
+        compile_expr(*binding);
+      }
+      const ast::Expr *body = node_field(expr, "body");
+      return body == nullptr ? emit_value("undef", {}, {}, expr.span)
+                             : compile_expr(*body);
+    }
     if (expr.kind == "HLastGet") {
       return emit_value("last.get", {}, {}, expr.span);
     }
@@ -854,7 +862,7 @@ ValidationResult validate_module(const Module &module) {
                        block.id);
         }
       }
-      if (terminator.op == "return") {
+      if (terminator.op == "return" || terminator.op == "return.nonlocal") {
         if (terminator.operands.size() > 1U || !terminator.targets.empty()) {
           append_error(result.errors, "MIR1009",
                        "return terminator has invalid shape", function.id,

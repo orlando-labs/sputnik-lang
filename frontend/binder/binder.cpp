@@ -1135,6 +1135,10 @@ private:
     }
     std::set<std::string> current_call_keywords;
     for (const std::unique_ptr<ast::Expr> &tail : tails->values) {
+      if (const ast::Expr *condition = node_field(*tail, "condition")) {
+        // The guard is in the receiver's scope, before any block parameters.
+        visit_expr(scope_index, *condition);
+      }
       if (tail->kind == "AstTailCall" || tail->kind == "AstTailSafeCall" ||
           tail->kind == "AstTailDotCall") {
         current_call_keywords.clear();

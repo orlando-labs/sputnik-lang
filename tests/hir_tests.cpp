@@ -648,6 +648,36 @@ void test_inline_conditional_and_conditional_literal_lowering() {
          "conditional map condition lowers");
 }
 
+void test_conditional_chain_lowering() {
+  const auto program = lower_ok(
+      "def pipeline(items, enabled):\n"
+      "  items .map if enabled |x|: x + 1 .first()\n");
+  const auto *proc = procedure_by_name(program, "pipeline");
+  expect(proc != nullptr && proc->body != nullptr, "pipeline procedure exists");
+  const auto *stmt = list_item(*proc->body, "items", 0);
+  const auto *send = node_field(*stmt, "expr");
+  expect(send != nullptr && send->kind == "HSend" &&
+             string_field(*send, "selector") == "first",
+         "continuation is outside the guard");
+  const auto *let = node_field(*send, "receiver");
+  expect(let != nullptr && let->kind == "HLet", "receiver is bound before guard");
+  const auto *binding = node_field(*let, "binding");
+  expect(binding != nullptr && binding->kind == "HStoreLocal" &&
+             node_field(*binding, "expr")->kind == "HLoadLocal",
+         "receiver binding evaluates original receiver once");
+  const auto *branch = node_field(*let, "body");
+  expect(branch != nullptr && branch->kind == "HIf", "guard uses ordinary HIf");
+  const auto *applied = node_field(*list_item(*node_field(*branch, "then_body"), "items", 0), "expr");
+  const auto *skipped = node_field(*list_item(*node_field(*branch, "else_body"), "items", 0), "expr");
+  expect(applied->kind == "HSend" && string_field(*applied, "selector") == "map" &&
+             contains_kind(*applied, "HClosure"), "call and closure stay in taken branch");
+  expect(skipped->kind == "HLoadLocal" &&
+             string_field(*skipped, "slot") == string_field(*binding, "slot") &&
+             string_field(*node_field(*applied, "receiver"), "slot") == string_field(*binding, "slot"),
+         "both branches share the exact saved receiver");
+  expect(!contains_kind(*proc->body, "HUnsupported"), "guard fully lowers");
+}
+
 void test_string_interpolation_lowering() {
   const amber::hir::Program program = lower_ok("def describe(name):\n"
                                                "  \"hello #{name}\"\n");
@@ -1884,6 +1914,7 @@ int main() {
   test_kernel_watch_lowering();
   test_collection_literal_lowering();
   test_inline_conditional_and_conditional_literal_lowering();
+  test_conditional_chain_lowering();
   test_string_interpolation_lowering();
   test_shadowed_send_stays_call();
   test_w13_operator_lowering();

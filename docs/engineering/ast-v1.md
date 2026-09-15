@@ -17,6 +17,11 @@ Postfix syntax is represented as a surface-faithful chain instead of being
 lowered into ordinary call/member nodes:
 
 - `AstPostfixChain` has a `base` node and ordered `tails`;
+- a conditional segment attaches `condition = AstChainCondition(kind, expr)`
+  to its first tail; `kind` preserves `if` / `unless`, and `guard_tail_count`
+  is a decimal string counting consecutive guarded tails (including the block);
+  the condition span includes its keyword and predicate. A spaced/line-leading
+  dot starts a segment, while adjacent dots remain in the same segment;
 - member tails are `AstTailDotMember` and `AstTailSafeMember`;
 - call tails are `AstTailCall` and `AstTailSafeCall`, with `call_style` set to
   `paren` or `bare` where applicable;

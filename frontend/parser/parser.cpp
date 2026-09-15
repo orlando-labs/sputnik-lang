@@ -3317,9 +3317,19 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
                                                     StopMode stop_mode) {
   std::unique_ptr<ast::Expr> left = parse_prefix(stop_mode);
   int expression_continuation_depth = 0;
-  const bool header_mode = stop_mode == StopMode::ControlHeader;
+  const bool header_mode = stop_mode == StopMode::ControlHeader ||
+                           stop_mode == StopMode::ChainGuard;
+  std::size_t segment_start = 0;
+  bool has_segment = false;
 
   while (true) {
+    // A guard or inline block ends before the next outer segment, even when newlines
+    // have been suppressed by surrounding parentheses/collection delimiters.
+    if ((stop_mode == StopMode::ChainGuard ||
+         stop_mode == StopMode::InlineBlock) &&
+        (check(lexer::TokenKind::Newline) || starts_chain_segment())) {
+      break;
+    }
     if (starts_indented_postfix_continuation() ||
         starts_indented_boolean_continuation(min_precedence)) {
       advance();
@@ -3337,12 +3347,70 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       break;
     }
 
+    if (has_segment && left->kind == "AstPostfixChain" && !header_mode &&
+        stop_mode != StopMode::CollectionElement &&
+        (check(lexer::TokenKind::KeywordIf) ||
+         check(lexer::TokenKind::KeywordUnless)) &&
+        left->span.end.line == current().span.start.line) {
+      const lexer::Token keyword = advance();
+      const ast::Expr *last = last_postfix_tail(*left);
+      if (last != nullptr && (last->kind == "AstTailBlockSuffix" ||
+                              last->kind == "AstTailMultiblockSuffix")) {
+        error_code(keyword, "AMB_CHAIN_GUARD_POSITION",
+                   "place the segment condition before its block suffix");
+      }
+      if (is_stop_token(StopMode::ChainGuard) || starts_chain_segment()) {
+        error_code(current(), "AMB_CHAIN_GUARD_CONDITION",
+                   "a conditional chain segment requires a condition");
+        break;
+      }
+      auto condition_expr = parse_expression(1, StopMode::ChainGuard);
+      auto condition = ast::make_expr(
+          "AstChainCondition",
+          ast::join_spans(keyword.span, condition_expr->span));
+      condition->string_field("kind", keyword.lexeme);
+      condition->node_field("expr", std::move(condition_expr));
+      const lexer::Span condition_span = condition->span;
+      if (check(lexer::TokenKind::Pipe) || check(lexer::TokenKind::Colon)) {
+        if (!(can_accept_direct_block_suffix(*left) ||
+              (has_completed_call_segment(*left) &&
+               !has_anonymous_block_channel(*left)))) {
+          error_code(current(), "AMB_CHAIN_GUARD_BLOCK",
+                     "a guarded block must follow a call without a block");
+        }
+        auto block = parse_block_suffix(stop_mode);
+        auto tail = ast::make_expr("AstTailBlockSuffix", block->span);
+        tail->node_field("block", std::move(block));
+        append_postfix_tail(*left, std::move(tail));
+      } else {
+        left->span = ast::join_spans(left->span, condition_span);
+      }
+      ast::ListField *tails = find_list_field(*left, "tails");
+      ast::Expr &first = *tails->values[segment_start];
+      first.node_field("condition", std::move(condition));
+      first.string_field("guard_tail_count",
+                         std::to_string(tails->values.size() - segment_start));
+      has_segment = false;
+      if (check(lexer::TokenKind::KeywordIf) ||
+          check(lexer::TokenKind::KeywordUnless)) {
+        error_code(current(), "AMB_CHAIN_GUARD_DUPLICATE",
+                   "combine segment conditions with `and`/`or`");
+        break;
+      }
+      continue;
+    }
+
     if (starts_multiblock_suffix() || check(lexer::TokenKind::Dot) ||
         check(lexer::TokenKind::ChainDot) ||
         check(lexer::TokenKind::SafeDot) || check(lexer::TokenKind::LParen) ||
         check(lexer::TokenKind::LBracket) ||
         (!header_mode && check(lexer::TokenKind::Colon)) ||
         check(lexer::TokenKind::Pipe) || starts_bare_arg()) {
+      if (starts_chain_segment()) {
+        const ast::ListField *tails = find_list_field(*left, "tails");
+        segment_start = tails == nullptr ? 0U : tails->values.size();
+        has_segment = true;
+      }
       const std::size_t before = current_;
       left = parse_postfix(std::move(left), stop_mode);
       if (current_ != before) {
@@ -3383,6 +3451,7 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       assign->node_field("left", std::move(left));
       assign->node_field("right", std::move(right));
       left = std::move(assign);
+      has_segment = false;
       continue;
     }
 
@@ -3404,6 +3473,7 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
     }
     if (is_chain_comparison_op(info.op)) {
       left = parse_comparison_chain(std::move(left), info, op_token, stop_mode);
+      has_segment = false;
       continue;
     }
     const int next_min =
@@ -3442,7 +3512,7 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
     }
     binary->node_field("left", std::move(left));
     binary->node_field("right", std::move(right));
-    if (range_op && stop_mode != StopMode::ControlHeader &&
+    if (range_op && !header_mode &&
         match(lexer::TokenKind::Colon)) {
       const lexer::Token colon = previous();
       std::unique_ptr<ast::Expr> step = parse_expression(1, stop_mode);
@@ -3457,6 +3527,7 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
                  "float ranges require an explicit step");
     }
     left = std::move(binary);
+    has_segment = false;
   }
 
   while (expression_continuation_depth > 0) {
@@ -3990,6 +4061,11 @@ Parser::parse_callable_reference(const lexer::Token &ampersand) {
 std::unique_ptr<ast::Expr>
 Parser::parse_paren_or_tuple_literal(const lexer::Token &open,
                                      StopMode stop_mode) {
+  if (stop_mode == StopMode::ChainGuard ||
+      stop_mode == StopMode::CollectionElement ||
+      stop_mode == StopMode::ControlHeader) {
+    stop_mode = StopMode::Normal;
+  }
   std::vector<std::unique_ptr<ast::Expr>> elements;
   bool saw_comma = false;
 
@@ -4061,6 +4137,9 @@ Parser::parse_collection_element(lexer::TokenKind closing_kind,
                                  const char *conditional_kind,
                                  StopMode stop_mode) {
   (void)closing_kind;
+  // A top-level trailing condition belongs to the element. Parentheses
+  // explicitly re-enter ordinary expression syntax for guarded chain values.
+  stop_mode = StopMode::CollectionElement;
   if (is_keyword_spread_start(current(), peek())) {
     const lexer::Token spread = advance();
     error_code(spread, "E_KWARG_SPREAD_POSITION",
@@ -4158,6 +4237,7 @@ std::unique_ptr<ast::Expr> Parser::parse_set_literal(const lexer::Token &open,
 
 std::unique_ptr<ast::Expr> Parser::parse_map_literal(const lexer::Token &open,
                                                      StopMode stop_mode) {
+  stop_mode = StopMode::CollectionElement;
   std::vector<std::unique_ptr<ast::Expr>> entries;
 
   if (match(lexer::TokenKind::RBrace)) {
@@ -4502,6 +4582,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
       auto chain = ensure_postfix_chain(std::move(expr));
       append_postfix_tail(*chain, std::move(tail));
       if (stop_mode != StopMode::ControlHeader &&
+          stop_mode != StopMode::ChainGuard &&
           (check(lexer::TokenKind::Colon) || check(lexer::TokenKind::Pipe))) {
         auto block = parse_block_suffix(stop_mode);
         auto block_tail = ast::make_expr("AstTailBlockSuffix", block->span);
@@ -4512,7 +4593,10 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
     }
     if (match(lexer::TokenKind::LBracket)) {
       const bool optional = match(lexer::TokenKind::Question);
-      std::unique_ptr<ast::Expr> index = parse_expression(1, stop_mode);
+      const StopMode index_mode =
+          stop_mode == StopMode::ChainGuard || stop_mode == StopMode::CollectionElement
+              ? StopMode::Normal : stop_mode;
+      std::unique_ptr<ast::Expr> index = parse_expression(1, index_mode);
       const lexer::Token close =
           consume(lexer::TokenKind::RBracket, "expected ']' after index");
       auto tail = ast::make_expr("AstTailSafeIndex",
@@ -4546,6 +4630,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
     auto chain = ensure_postfix_chain(std::move(expr));
     append_postfix_tail(*chain, std::move(tail));
     if (stop_mode != StopMode::ControlHeader &&
+        stop_mode != StopMode::ChainGuard &&
         (check(lexer::TokenKind::Colon) || check(lexer::TokenKind::Pipe))) {
       auto block = parse_block_suffix(stop_mode);
       auto block_tail = ast::make_expr("AstTailBlockSuffix", block->span);
@@ -4562,7 +4647,10 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
       expr->span.end.offset == current().span.start.offset) {
     const lexer::Token open = advance();
     const bool optional = match(lexer::TokenKind::Question);
-    std::unique_ptr<ast::Expr> index = parse_expression(1, stop_mode);
+    const StopMode index_mode =
+        stop_mode == StopMode::ChainGuard || stop_mode == StopMode::CollectionElement
+            ? StopMode::Normal : stop_mode;
+    std::unique_ptr<ast::Expr> index = parse_expression(1, index_mode);
     const lexer::Token close =
         consume(lexer::TokenKind::RBracket, "expected ']' after index");
     auto tail =
@@ -4576,6 +4664,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
     return chain;
   }
   if (stop_mode != StopMode::ControlHeader &&
+      stop_mode != StopMode::ChainGuard &&
       (check(lexer::TokenKind::Colon) || check(lexer::TokenKind::Pipe)) &&
       can_accept_direct_block_suffix(*expr)) {
     if (has_multiblock_suffix(*expr)) {
@@ -4602,6 +4691,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
     auto chain = ensure_postfix_chain(std::move(expr));
     append_postfix_tail(*chain, std::move(tail));
     if (stop_mode != StopMode::ControlHeader &&
+        stop_mode != StopMode::ChainGuard &&
         (check(lexer::TokenKind::Colon) || check(lexer::TokenKind::Pipe))) {
       auto block = parse_block_suffix(stop_mode);
       auto block_tail = ast::make_expr("AstTailBlockSuffix", block->span);
@@ -4856,6 +4946,10 @@ Parser::parse_call_arg(StopMode stop_mode, lexer::TokenKind closing_kind) {
 
 std::vector<std::unique_ptr<ast::Expr>>
 Parser::parse_call_arg_list(lexer::TokenKind closing_kind, StopMode stop_mode) {
+  if (stop_mode == StopMode::ChainGuard ||
+      stop_mode == StopMode::CollectionElement) {
+    stop_mode = StopMode::Normal;
+  }
   std::vector<std::unique_ptr<ast::Expr>> values;
   if (match(closing_kind)) {
     return values;
@@ -4980,12 +5074,29 @@ bool Parser::is_stop_token(StopMode stop_mode) const {
   case lexer::TokenKind::Colon:
     return true;
   case lexer::TokenKind::ChainDot:
-    return stop_mode == StopMode::InlineBlock;
+    return stop_mode == StopMode::InlineBlock ||
+           stop_mode == StopMode::ChainGuard;
+  case lexer::TokenKind::Pipe:
+    return stop_mode == StopMode::ChainGuard;
   case lexer::TokenKind::KeywordElse:
     return stop_mode == StopMode::InlineIfBranch;
   default:
     return false;
   }
+}
+
+bool Parser::starts_chain_segment() const {
+  if (!check(lexer::TokenKind::Dot) &&
+      !check(lexer::TokenKind::ChainDot) &&
+      !check(lexer::TokenKind::SafeDot)) {
+    return false;
+  }
+  return current_ > 0 &&
+         (current().span.start.line > previous().span.end.line ||
+          current().span.start.offset > previous().span.end.offset ||
+          previous().kind == lexer::TokenKind::Indent ||
+          previous().kind == lexer::TokenKind::Dedent ||
+          previous().kind == lexer::TokenKind::Newline);
 }
 
 bool Parser::starts_primary() const {

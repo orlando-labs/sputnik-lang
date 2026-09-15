@@ -1514,7 +1514,7 @@ bool native_cpp_collection_query_selector(const std::string &selector,
            selector == "take_while" || selector == "drop_while" ||
            selector == "partition" || selector == "transform") &&
           pos_count == 0U) ||
-         ((selector == "uniq" || selector == "tally" ||
+         ((selector == "uniq" || selector == "tally" || selector == "counts" ||
            selector == "each_pair") && pos_count == 0U) ||
          ((selector == "sorted" || selector == "min" ||
            selector == "max" || selector == "minmax") &&
@@ -2447,6 +2447,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
             selector == "find_index" || selector == "take_while" ||
             selector == "drop_while" || selector == "partition" ||
             selector == "count" || selector == "uniq" ||
+            selector == "tally" || selector == "counts" ||
             selector == "each_pair" || selector == "transform" ||
             selector == "sorted" || selector == "delete_if!" ||
             selector == "keep_if!" || selector == "select!" ||
@@ -3160,6 +3161,8 @@ bool native_vm_callable_pure_selector(const std::string &selector) {
       "transform_values",
       "partition",
       "count_by",
+      "tally",
+      "counts",
       // pure Math-prelude / numeric methods. `Math` resolves to a built-in
       // value independent of module init, so it is reachable in the embedded
       // bridge world, and these run the same libm as every other lane (so the
@@ -14189,6 +14192,7 @@ static void native_flatten_items(const NativeValue &value, std::int64_t depth,
   if (selector == "detect") return "find";
   if (selector == "inject") return "reduce";
   if (selector == "each_slice") return "each";
+  if (selector == "counts") return "tally";
   return selector;
 }
 
@@ -14481,16 +14485,17 @@ static NativeValue native_collection_query(
   if (selector == "tally") {
     std::vector<std::pair<NativeValue, NativeValue>> result;
     for (const NativeValue &item : items) {
+      const NativeValue key = native_normalize_map_key(
+          has_block ? amber_native_call_closure(block, {item}) : item);
       bool found = false;
       for (auto &entry : result) {
-        if (native_map_keys_equivalent(entry.first,
-                                       native_normalize_map_key(item), false)) {
+        if (native_map_keys_equivalent(entry.first, key, false)) {
           entry.second = NativeValue::integer(entry.second.scalar_value + 1);
           found = true;
           break;
         }
       }
-      if (!found) native_map_store(result, item, NativeValue::integer(1), false);
+      if (!found) native_map_store(result, key, NativeValue::integer(1), false);
     }
     return NativeValue::map_entries(std::move(result), false);
   }

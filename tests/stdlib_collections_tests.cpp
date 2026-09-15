@@ -2060,6 +2060,46 @@ void test_std001_mutation_during_iteration_edges() {
   expect_fault(result, "DestroyedAccessError", "Map mutation during iteration");
 }
 
+void test_counts_block_errors() {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+
+  for (const std::string selector : {"tally", "counts"}) {
+    BcModule module = make_collection_block_edge_module();
+    const std::uint32_t selector_id = ensure_symbol_id(&module, selector);
+    module.code_objects.push_back(make_send_code(3, selector_id, true));
+    module.code_objects.push_back(make_unary_send_code(4, selector_id));
+    BcCode keyword = make_send_code(5, selector_id, false);
+    keyword.instructions[0] = send_instr(
+        2, 0, selector_id, {}, -1, {{ensure_symbol_id(&module, "key"), 1}});
+    module.code_objects.push_back(keyword);
+    BcCode identity;
+    identity.code_id = 102;
+    identity.kind = CodeKind::Block;
+    identity.reg_count = 1;
+    identity.instructions.push_back({Opcode::Return, {{0, false}}});
+    module.code_objects.push_back(identity);
+
+    Value source = make_list_value({Value::integer(1), Value::integer(2)});
+    expect_fault(execute_code(module, 4, {source, Value::integer(1)}),
+                 "TypeError", selector + " positional argument");
+    expect_fault(execute_code(module, 5, {source, Value::integer(1)}),
+                 "TypeError", selector + " keyword argument");
+    expect_fault(execute_code(module, 3, {source, make_closure_value(100)}),
+                 "Boom", selector + " block exception");
+
+    Value invalid = make_list_value({make_symbol_map_value({})});
+    expect_fault(execute_code(module, 3, {invalid, make_closure_value(102)}),
+                 "TypeError", selector + " invalid block key");
+    expect_fault(execute_code(module, 3, {invalid, Value::null()}),
+                 "TypeError", selector + " invalid element key");
+
+    expect_fault(execute_code(module, 3,
+                              {source, make_closure_value(101, {source})}),
+                 "DestroyedAccessError", selector + " destroyed receiver");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -2076,6 +2116,7 @@ int main() {
   test_std006_collection_error_edges();
   test_std001_block_exception_propagation();
   test_std001_mutation_during_iteration_edges();
+  test_counts_block_errors();
   std::cout << "stdlib_collections_tests: ok\n";
   return 0;
 }

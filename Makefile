@@ -686,6 +686,10 @@ test: build
 	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_higher_order_core/main.am > $(BUILD_DIR)/native-higher-order-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-higher-order-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-higher-order-core.dump
+	$(BUILD_DIR)/amberc build corpus/run/collection_counts/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-collection-counts > $(BUILD_DIR)/native-collection-counts-build.json
+	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-collection-counts-build.json
+	$(BUILD_DIR)/native-collection-counts > $(BUILD_DIR)/native-collection-counts.out
+	grep -q '^42$$' $(BUILD_DIR)/native-collection-counts.out
 	$(BUILD_DIR)/amberc build tests/fixtures/native_keyed_collections_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-keyed-collections-core-build.json
 	$(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core.out

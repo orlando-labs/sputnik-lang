@@ -7826,6 +7826,7 @@ private:
     static const std::string kEach = "each";
     static const std::string kToA = "to_array";
     static const std::string kCount = "count";
+    static const std::string kTally = "tally";
     const SelectorKey key(selector);
     // Canonical selectors dominate real programs. Dispatch aliases by length
     // so `each`, `map`, `count`, etc. do not fail every alias comparison first.
@@ -7839,6 +7840,9 @@ private:
       }
       break;
     case 6:
+      if (key == "counts") {
+        return kTally;
+      }
       if (key == "filter") {
         return kSelect;
       }
@@ -8488,7 +8492,8 @@ private:
         selector == "max" || selector == "minmax" || selector == "uniq" ||
         selector == "each_pair" || selector == "each_cons" ||
         selector == "each" || selector == "partition" ||
-        selector == "each_with_index" || selector == "count";
+        selector == "each_with_index" || selector == "count" ||
+        selector == "tally";
     if (!block.is_null() && !block_allowed) {
       set_fault(frame, "TypeError",
                 "collection operation does not accept block arguments");
@@ -9019,30 +9024,37 @@ private:
         set_fault(frame, "TypeError", "wrong builtin SEND arity");
         return std::nullopt;
       }
-      std::vector<std::pair<Value, std::int64_t>> counts;
+      std::vector<MapEntry> counts;
       for (const Value &item : items) {
+        Value key_value = item;
+        if (!block.is_null()) {
+          const std::optional<Value> result =
+              call_block_to_value(frame, block, {item});
+          if (!result.has_value() ||
+              !ensure_lifecycle_access(frame, receiver)) {
+            return std::nullopt;
+          }
+          key_value = *result;
+        }
         CollectionKeyError error;
-        const std::optional<Value> key = normalize_map_key(item, &error);
+        const std::optional<Value> key = normalize_map_key(key_value, &error);
         if (!key.has_value()) {
           set_fault(frame, error.error_name, error.message);
           return std::nullopt;
         }
+        MapEntry candidate =
+            make_canonical_map_entry(*key, Value::integer(1), false);
         auto found =
             std::find_if(counts.begin(), counts.end(), [&](const auto &entry) {
-              return collection_keys_equal(entry.first, *key);
+              return map_entries_same_key(entry, candidate, false);
             });
         if (found == counts.end()) {
-          counts.push_back({*key, 1});
+          counts.push_back(std::move(candidate));
         } else {
-          ++found->second;
+          found->value = Value::integer(found->value.as_integer() + 1);
         }
       }
-      std::vector<MapEntry> entries;
-      entries.reserve(counts.size());
-      for (const auto &entry : counts) {
-        entries.push_back({entry.first, Value::integer(entry.second)});
-      }
-      return make_symbol_map_value(std::move(entries));
+      return make_symbol_map_value(std::move(counts));
     }
 
     if (selector == "each_with_index") {

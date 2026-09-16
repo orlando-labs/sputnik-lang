@@ -1441,6 +1441,40 @@ void test_std016_threaded_collection_scatter_policies_bound_task_count() {
          "item threaded scatter should expose one task id per item");
 }
 
+void test_std016_threaded_cancellation_joins_running_callbacks() {
+  for (const auto policy : {amber::runtime::RuntimeFlowPartitionPolicy::Atomic,
+                            amber::runtime::RuntimeFlowPartitionPolicy::Chunks,
+                            amber::runtime::RuntimeFlowPartitionPolicy::Stride}) {
+    amber::runtime::RuntimeTaskModule tasks(1);
+    amber::runtime::RuntimeThreadedCollection threaded(
+        {amber::runtime::Value::integer(1)}, 1,
+        amber::runtime::RuntimeFlowOptions{}, policy);
+    std::atomic<bool> entered{false};
+    std::atomic<bool> completed{false};
+    const auto parent = tasks.spawn([&]() {
+      const auto result = threaded.map([&](const auto &value, std::size_t) {
+        entered.store(true);
+        // Simulate cleanup in a callback that cannot stop immediately.
+        while (!amber::runtime::current_runtime_task_cancel_requested())
+          std::this_thread::yield();
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        completed.store(true);
+        return value;
+      });
+      expect(result.cancelled, "threaded gather should observe cancellation");
+      expect(completed.load(),
+             "cancelled gather must join callbacks before releasing their stack");
+      return amber::runtime::Value::null();
+    });
+    expect(wait_for_condition([&]() { return entered.load(); },
+                              std::chrono::milliseconds(2000)),
+           "threaded callback should start before cancellation");
+    expect(parent.cancel(), "threaded parent should accept cancellation");
+    expect(parent.wait(std::chrono::milliseconds(2000)).ready,
+           "cancelled threaded operation should finish cleanup");
+  }
+}
+
 void test_std016_threaded_collection_combination_and_permutation() {
   std::vector<amber::runtime::Value> items = {
       amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
@@ -2342,6 +2376,7 @@ int main() {
   test_std015_flow_isolation_checked_and_unchecked();
   test_std016_threaded_collection_iteration_and_transforms();
   test_std016_threaded_collection_scatter_policies_bound_task_count();
+  test_std016_threaded_cancellation_joins_running_callbacks();
   test_std016_threaded_collection_combination_and_permutation();
   test_std016_threaded_collection_failure_and_isolation();
   test_std017_source_level_task_sync_stack_compiles_and_runs();

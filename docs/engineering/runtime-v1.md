@@ -228,13 +228,18 @@ Current implemented slice:
   collection, and checked/unchecked isolation in `stdlib_task_tests`;
 - `STD-016` auto-parallel collection facade with `RuntimeThreadedCollection`
   over `RuntimeFlowModule`, covering ordered `each`, `map`, `select`, `reject`,
-  `flat_map`, `combination(count)`, and `permutation(count)` for future
-  `[...].threaded(workers)` lowering; checked mode validates inputs and worker
+  `filter_map`, `flat_map`, `combination(count)`, and `permutation(count)` for
+  `[...].threaded(workers)` lowering in the VM and full native builds; the native
+  adapter in `runtime/threaded_native.inc` invokes C++ closures directly and
+  preserves shared capture cells with synchronized reads and writes (compound
+  updates still require `Atomic` or `Mutex`); checked mode validates inputs and worker
   results with `IsolationError`, unchecked mode delegates responsibility to the
   caller, `each` discards block results and returns the original items in input
   order by default, matching sequential `each`; flow failure policies are
   preserved, and `stdlib_task_tests` covers
-  ordered transforms, generated rows, failure collection, and isolation edges;
+  ordered transforms, generated rows, failure collection, isolation edges, and
+  cancellation cleanup; `tests/threaded_backend_test.py` checks VM/native parity
+  and strict native coverage, including the 10,000-process/500-worker workload;
 - `W8.4` conformance gate in `tools/ambertest` with deterministic fixture
   discovery, focused mismatch rendering, phase aliases for
   `lower`/`compile`/`disasm`, positive `check`/`run`/`load` lanes, and

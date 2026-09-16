@@ -1275,6 +1275,7 @@ struct NativeCppBuildPlan {
   bool uses_native_stdlib_bridge = false;
   bool uses_native_http_server_runtime = false;
   bool uses_native_system_runtime = false;
+  bool uses_native_threaded_runtime = false;
 };
 
 struct NativeExecutableBuildResult {
@@ -2005,7 +2006,7 @@ bool native_cpp_lookup_const_supported(
       "Bool",         "Symbol",       "Null",        "Object",
       "Array",        "Tuple",        "Set",         "Map",
       "StrictMap",
-      "Amber",        "Ok",           "Err",         "desc",
+      "Amber",        "Ok",           "Err",         "desc", "print",
       "Math",         "Json",         "Yaml",        "Bytes",
       "Base64",       "Base64Url",    "Hex",         "Digest",
       "Benchmark",    "Url",          "ArgParser",   "Regexp",
@@ -2966,6 +2967,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           "pid", "running?", "status", "success?", "exit_code", "signal", "signaled?",
           "terminate", "kill", "read!", "read_all!", "each_chunk", "write!", "write_all!"
       }.count(selector) != 0;
+      const bool threaded_send = selector == "threaded" || selector == "parallel";
       if (!scalar && !native_cpp_collection_selector(selector, pos_count) &&
           !native_cpp_collection_mutator_selector(selector, pos_count) &&
           !native_cpp_collection_query_selector(selector, pos_count,
@@ -2978,7 +2980,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !atomic_send && !mutex_send &&
           !channel_send && !io_send && !task_send && !http_send &&
-          !system_send && !amber_send && !result_send &&
+          !system_send && !threaded_send && !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send) {
         *reason = "unsupported SEND selector '" + selector + "' at pc " +
@@ -2990,7 +2992,7 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !atomic_send && !mutex_send &&
           !channel_send && !io_send && !task_send && !http_send &&
-          !system_send && !amber_send && !result_send &&
+          !system_send && !threaded_send && !amber_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send &&
           !map_get_or_set_send && !array_factory_send && !data_path_send &&
@@ -5413,6 +5415,8 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
             native_module_expr = "NativeValue::result_constructor(false)";
           } else if (name == "desc") {
             native_module_expr = "NativeValue::desc_function()";
+          } else if (name == "print") {
+            native_module_expr = "NativeValue::print_function()";
           } else if (name == "Math") {
             native_module_expr = "NativeValue::math_module()";
           } else if (name == "Json") {
@@ -6553,6 +6557,12 @@ emit_native_cpp_code_function(const amber::bytecode::BcModule &module,
                        "native_string_reverse(" + read_reg_expr(recv) + ")");
       } else if (selector == "chars") {
         write_reg_stmt(dst, "native_string_chars(" + read_reg_expr(recv) + ")");
+      } else if (selector == "threaded" || selector == "parallel") {
+        write_reg_stmt(dst, "native_threaded_create(" + read_reg_expr(recv) +
+                                ", " + pos_args_expr(0U) + ", " +
+                                call_kw_args_expr() + ", " +
+                                (has_block ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                                           : "NativeValue::nullv()") + ")");
       } else if (selector == "times") {
         write_reg_stmt(
             dst, "native_integer_times(" + read_reg_expr(recv) + ", " +
@@ -7949,6 +7959,9 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
                       const std::vector<amber::pkg::PackageNativeExtension>
                           &native_extensions = {}) {
   NativeCppBuildPlan plan;
+  plan.uses_native_threaded_runtime =
+      std::find(module.symbols.begin(), module.symbols.end(), "threaded") != module.symbols.end() ||
+      std::find(module.symbols.begin(), module.symbols.end(), "parallel") != module.symbols.end();
   bool uses_ambiguous_net_namespace = false;
   for (std::uint32_t const_id = 0;
        const_id < static_cast<std::uint32_t>(module.const_pool.size());
@@ -8351,7 +8364,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "SecureRandomModule, UuidModule, "
          "RangeModule, TimeModule, "
          "TimePeriodModule, MutexModule, AtomicModule, ResultOkFunction, "
-         "ResultErrFunction, DescFunction, ErrorClass, Class, "
+         "ResultErrFunction, DescFunction, PrintFunction, ErrorClass, Class, "
          "Bytes, List, "
          "Tuple, Set, "
          "Map, Range, "
@@ -8462,6 +8475,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "Tag::ResultErrFunction; out.scalar_value = 0; return out; }\n";
   out << "  static NativeValue desc_function() { NativeValue out; out.tag = "
          "Tag::DescFunction; out.scalar_value = 0; return out; }\n";
+  out << "  static NativeValue print_function() { NativeValue out; out.tag = "
+         "Tag::PrintFunction; out.scalar_value = 0; return out; }\n";
   out << "  static NativeValue secure_random_module() { NativeValue out; "
          "out.tag = Tag::SecureRandomModule; out.scalar_value = 0; return "
          "out; }\n";
@@ -8781,7 +8796,9 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "overflow_ivars;\n";
   out << "  AMBER_NATIVE_POOL_NEW\n";
   out << "};\n";
-  out << "struct NativeCell : NativeRcHeader { NativeValue value; };\n";
+  out << "struct NativeCell : NativeRcHeader { NativeValue value;";
+  if (plan.uses_native_threaded_runtime) out << " mutable std::mutex mutex;";
+  out << " };\n";
   out << "static void native_cell_retain(NativeCell *cell);\n";
   out << "static void native_cell_release(NativeCell *cell);\n";
   out << "static void native_value_delete_payload("
@@ -10816,17 +10833,32 @@ static void native_require_suspendable(const char *operation) {
          "const NativeArgsView &args, "
          "const NativeKeywordArgsView &kwargs, "
          "NativeValue block);\n\n";
+  out << "static NativeValue native_threaded_create(const NativeValue &, "
+         "const NativeArgsView &, const NativeKeywordArgsView &, NativeValue);\n";
   out << "static NativeValue native_result_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, NativeValue block);\n\n";
   out << "static void native_user_init_copy_if_defined("
          "const NativeValue &copy, const NativeValue &source);\n\n";
+  out << "static NativeValue native_cell_read(const NativeCell *cell) {\n";
+  if (plan.uses_native_threaded_runtime) {
+    out << "  NativeCycleApplicationLockScope application_lock;\n";
+    out << "  std::lock_guard<std::mutex> lock(cell->mutex);\n";
+  }
+  out << "  return cell->value;\n}\n";
+  out << "static void native_cell_write(NativeCell *cell, NativeValue value) {\n";
+  if (plan.uses_native_threaded_runtime) {
+    out << "  NativeCycleApplicationLockScope application_lock;\n";
+    out << "  std::lock_guard<std::mutex> lock(cell->mutex);\n";
+  }
+  out << "  native_cycle_cell_write_barrier(cell, value);\n";
+  out << "  cell->value = std::move(value);\n}\n";
   out << "static NativeValue read_reg(const NativeFrame &frame, "
          "std::uint32_t slot) {\n";
   out << "  if (slot >= frame.reg_count) throw NativeBailout();\n";
   out << "  if (frame.local_cells != nullptr && "
          "frame.local_cells[slot] != nullptr) "
-         "return frame.local_cells[slot]->value;\n";
+         "return native_cell_read(frame.local_cells[slot]);\n";
   out << "  return frame.regs[slot];\n";
   out << "}\n";
   out << "static void write_reg(NativeFrame &frame, std::uint32_t slot, "
@@ -10835,9 +10867,7 @@ static void native_require_suspendable(const char *operation) {
   out << "  frame.regs[slot] = value;\n";
   out << "  if (frame.local_cells != nullptr && "
          "frame.local_cells[slot] != nullptr) {\n";
-  out << "    native_cycle_cell_write_barrier("
-         "frame.local_cells[slot], value);\n";
-  out << "    frame.local_cells[slot]->value = std::move(value);\n";
+  out << "    native_cell_write(frame.local_cells[slot], std::move(value));\n";
   out << "  }\n";
   out << "}\n";
   out << "static void native_seed_handler_frame("
@@ -10882,13 +10912,11 @@ static void native_require_suspendable(const char *operation) {
   out << "  return frame.closure->captures[slot];\n";
   out << "}\n";
   out << "static NativeValue read_capture(const NativeFrame &frame, "
-         "std::uint32_t slot) { return capture_cell(frame, slot)->value; }\n";
+         "std::uint32_t slot) { return native_cell_read(capture_cell(frame, slot)); }\n";
   out << "static void write_capture(const NativeFrame &frame, std::uint32_t "
          "slot, "
          "NativeValue value) {\n";
-  out << "  NativeCell *cell = capture_cell(frame, slot);\n";
-  out << "  native_cycle_cell_write_barrier(cell, value);\n";
-  out << "  cell->value = std::move(value);\n";
+  out << "  native_cell_write(capture_cell(frame, slot), std::move(value));\n";
   out << "}\n\n";
   out << "static AMBER_NATIVE_ALWAYS_INLINE std::int64_t "
          "as_int(const NativeValue &value) {\n";
@@ -11332,6 +11360,7 @@ static void native_append_keyword_call_spread(
   out << "  case NativeValue::Tag::ResultOkFunction: return \"Ok\";\n";
   out << "  case NativeValue::Tag::ResultErrFunction: return \"Err\";\n";
   out << "  case NativeValue::Tag::DescFunction: return \"desc\";\n";
+  out << "  case NativeValue::Tag::PrintFunction: return \"print\";\n";
   out << "  case NativeValue::Tag::SecureRandomModule: return "
          "\"SecureRandom\";\n";
   out << "  case NativeValue::Tag::UuidModule: return \"Uuid\";\n";
@@ -20491,6 +20520,22 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "block.tag != NativeValue::Tag::Null) throw NativeBailout();\n";
   out << "    return NativeValue::tuple({value, *args.begin()});\n";
   out << "  }\n";
+  out << R"AMBERCPP(  if (value.tag == NativeValue::Tag::PrintFunction) {
+    if (block.tag != NativeValue::Tag::Null || kwargs.size() > 1U ||
+        (!kwargs.empty() && (kwargs[0].name != "to" ||
+                             kwargs[0].value.tag != NativeValue::Tag::TextWriter)))
+      throw NativeRaised{native_named_error("TypeError", "invalid print arguments")};
+    auto writer = kwargs.empty() ? amber::runtime::current_runtime_stdout()
+                                 : as_native_text_writer(kwargs[0].value).value;
+    native_commit_effect();
+    if (args.empty()) native_check_text_write(writer->write_str("\n"));
+    for (const auto &arg : args) {
+      native_check_text_write(writer->write_str(native_value_to_display_string(arg)));
+      native_check_text_write(writer->write_str("\n"));
+    }
+    return NativeValue::nullv();
+  }
+)AMBERCPP";
   out << "  if (value.tag == NativeValue::Tag::ErrorClass) {\n";
   out << "    if (kwargs.size() != 0U) throw NativeRaised{native_named_error("
          "\"TypeError\", \"error constructor does not accept keywords\")};\n";
@@ -22369,7 +22414,8 @@ static NativeValue native_channel_send(
   out << "  static amber::runtime::RuntimeTaskModule runtime;\n";
   out << "  return runtime;\n";
   out << "}\n";
-  if (plan.uses_native_system_runtime) out << "#include \"runtime/system_native_task.inc\"\n";
+  if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime)
+    out << "#include \"runtime/system_native_task.inc\"\n";
   out << "static std::chrono::milliseconds native_task_duration("
          "const NativeValue &value) {\n";
   out << "  if (value.tag == NativeValue::Tag::Integer) return "
@@ -22455,15 +22501,13 @@ static NativeValue native_channel_send(
   out << "        }\n";
   out << "        return amber::runtime::Value::null();\n";
   out << "      };\n";
-  if (plan.uses_native_system_runtime) {
+  if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime) {
     out << "      auto driver = native_system_task_driver(std::move(function));\n";
-  }
-  if (plan.uses_native_system_runtime) {
     out << "      amber::runtime::RuntimeTaskHandle handle = native_task_runtime().spawn_resumable(std::move(driver));\n";
   } else out << "      amber::runtime::RuntimeTaskHandle handle = "
          "selector == \"async\" "
-         "? native_task_runtime().async(std::move(" << (plan.uses_native_system_runtime ? "driver" : "function") << ")) "
-         ": native_task_runtime().spawn(std::move(" << (plan.uses_native_system_runtime ? "driver" : "function") << "));\n";
+         "? native_task_runtime().async(std::move(function)) "
+         ": native_task_runtime().spawn(std::move(function));\n";
   out << "      return NativeValue::task("
          "std::move(handle), std::move(state));\n";
   out << "    }\n";
@@ -22751,6 +22795,7 @@ static NativeValue native_channel_send(
   // bloats the translation unit and pushes hot builtin code out of the
   // instruction cache.
   out << "#include \"runtime/system_native.inc\"\n";
+  out << "#include \"runtime/threaded_native.inc\"\n";
   out << "static NativeValue native_special_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
@@ -22763,6 +22808,7 @@ static NativeValue native_channel_send(
          "    return native_error_send(receiver, selector, args, block);\n"
          "  case NativeValue::Tag::RuntimeHandle:\n"
          "    if (native_system_receiver(receiver)) return native_system_send(receiver, selector, args, kwargs, block);\n"
+         "    if (as_native_runtime_handle(receiver)->value.is_threaded_collection()) return native_threaded_send(receiver, selector, args, kwargs, block);\n"
          "    return native_http_send(receiver, selector, args, kwargs, block);\n"
          "  case NativeValue::Tag::IoModule:\n"
          "  case NativeValue::Tag::TextBufferType:\n"
@@ -22923,6 +22969,7 @@ static NativeValue native_channel_send(
   case NativeValue::Tag::ResultOkFunction:
   case NativeValue::Tag::ResultErrFunction:
   case NativeValue::Tag::DescFunction:
+  case NativeValue::Tag::PrintFunction:
   case NativeValue::Tag::StrType:
   case NativeValue::Tag::IntType:
   case NativeValue::Tag::BigIntType:
@@ -24515,6 +24562,7 @@ static NativeValue amber_native_extension_invoke(
   out << "  case NativeValue::Tag::ResultOkFunction: return \"Ok\";\n";
   out << "  case NativeValue::Tag::ResultErrFunction: return \"Err\";\n";
   out << "  case NativeValue::Tag::DescFunction: return \"desc\";\n";
+  out << "  case NativeValue::Tag::PrintFunction: return \"print\";\n";
   out << "  case NativeValue::Tag::SecureRandomModule: return "
          "\"SecureRandom\";\n";
   out << "  case NativeValue::Tag::UuidModule: return \"Uuid\";\n";
@@ -24615,6 +24663,7 @@ static NativeValue amber_native_extension_invoke(
   out << R"AMBERCPP(static std::string native_value_to_display_string(
     const NativeValue &value) {
   if (native_value_is_string(value)) return native_string_text(value);
+  if (value.tag == NativeValue::Tag::Symbol) return native_symbol_text(value.scalar_value);
   if (value.tag == NativeValue::Tag::List) {
     const auto &items = as_list(value).items;
     std::ostringstream text;

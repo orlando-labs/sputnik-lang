@@ -4553,9 +4553,17 @@ private:
           }));
     }
 
-    RuntimeFlowGatherResult worker_result = gather(std::move(handles), options);
+    RuntimeFlowGatherResult worker_result = gather(handles, options);
     if (!worker_result.ok || worker_result.failed || worker_result.timed_out ||
         worker_result.cancelled) {
+      // The workers borrow this operation's callbacks and options. Cancellation
+      // requests alone do not end an in-flight callback: join the operation
+      // before those stack objects (or its native closure captures) disappear.
+      for (const auto &handle : handles) {
+        while (!handle.done()) {
+          std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+      }
       return worker_result;
     }
 

@@ -36,9 +36,19 @@ command = system.cmd"/usr/bin/printf output"
 print $_
 ```
 
-The threaded collection example runs in `iamber` and `amberc run`. The native
-compiler currently rejects the general collection selector `threaded` under
-`--require-full-native`; use `task.async` for native subprocess concurrency.
+The threaded collection example runs in `iamber`, `amberc run`, and a full native
+executable. Save it as `processes.am` and build with:
+
+```sh
+amberc build processes.am --target native --entry init --require-full-native \
+  --grant process.spawn -o processes
+./processes
+```
+
+Native `.threaded(workers)` and its `.parallel(workers)` alias use the same
+ordered collection operations, scatter policies, and isolation checks as the
+VM. Worker blocks run as native closures, including nested `.threaded` calls
+and calls from `task.async`.
 
 ## Commands and string tags
 

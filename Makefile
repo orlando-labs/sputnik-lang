@@ -572,6 +572,7 @@ test: build
 	$(BUILD_DIR)/system_tests
 	$(BUILD_DIR)/stdlib_system_tests
 	python3 tests/system_backend_test.py $(BUILD_DIR)/amberc
+	python3 tests/threaded_backend_test.py $(BUILD_DIR)/amberc
 	$(BUILD_DIR)/lexer_tests
 	$(BUILD_DIR)/parser_tests
 	$(BUILD_DIR)/binder_tests

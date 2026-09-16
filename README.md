@@ -52,6 +52,10 @@ build/ambertest run corpus --bundle M11
 
 Documentation:
 
+- [Vim syntax highlighting](editors/vim/README.md) and
+  [VS Code extension](editors/vscode/README.md) - editor support for `.am` files.
+- [Amber cheat sheet](docs/cheat-sheet.md) - compact English syntax reference,
+  everyday patterns, and notes on optional profiles and spec/compiler differences.
 - [Json standard library guide](docs/stdlib-json.md) - parse/generate, JSONL,
   streaming, file I/O, and `.to_json` examples.
 - [Base64, Base64Url, and Hex guide](docs/stdlib-codecs.md) - byte/text

@@ -193,6 +193,10 @@ const char *http_error_class_name(HttpErrorKind kind) {
     return "UnexpectedEofError";
   case HttpErrorKind::Connection:
     return "ConnectionError";
+  case HttpErrorKind::Tls:
+    return "TlsError";
+  case HttpErrorKind::TlsCertificate:
+    return "TlsCertificateError";
   }
   return "";
 }

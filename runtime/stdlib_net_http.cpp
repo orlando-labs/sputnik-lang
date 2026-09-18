@@ -224,6 +224,8 @@ RuntimeNativeModuleDescriptor net_http_module_descriptor() {
        {RuntimeNativeTypeKind::NetHttpJsonPostJson, "__call__"},
        {RuntimeNativeTypeKind::NetHttpFormBody, "__call__"}},
       {{"HttpError", "Exception"},
+       {"TlsError", "HttpError"},
+       {"TlsCertificateError", "TlsError"},
        {"RequestError", "HttpError"},
        {"InvalidUrlError", "RequestError"},
        {"InvalidMethodError", "RequestError"},

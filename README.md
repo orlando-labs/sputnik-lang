@@ -7,7 +7,8 @@ Current baseline:
 - implementation language: C++17;
 - compiler toolchain: `clang++` by default, override with `make CXX=/path/to/clang++`;
 - supported host targets for now: Linux and macOS;
-- no Python, npm, Cargo, or external package dependency is required for the compiler/runtime build and conformance slice;
+- OpenSSL 1.1.1 or 3.x development headers/libraries are required for HTTP TLS;
+  `pkg-config` locates them, or set `OPENSSL_PREFIX=/path/to/openssl` (macOS: `brew install openssl@3 pkg-config`);
 - W12 documentation sync uses only the Python 3 standard library for generated anchor-map checks;
 - bytecode tooling is pure C++17 and uses the same local `clang++` toolchain.
 
@@ -17,6 +18,7 @@ Useful commands:
 make build
 make test
 make build/vm_net_http_tests
+make test-http-tls
 make conformance
 make spec-sync-check
 make fmt
@@ -290,3 +292,8 @@ artifact/container baseline for `W4.1`-`W4.4` from the implementation matrix:
   id, byte/line/column spans, and generated-span kind;
 - early token, prelude, runtime-error, bytecode section, opcode, and diagnostic
   registries plus engineering notes.
+
+HTTP supports both `http://` and `https://`. HTTPS verifies the certificate chain
+and URL hostname (including IP SANs), sends SNI for DNS names, and uses TLS 1.2
+or newer with HTTP/1.1 ALPN. Both VM and native executables use the same TLS IO.
+See [HTTP TLS](docs/engineering/http-tls.md) for configuration and full native examples.

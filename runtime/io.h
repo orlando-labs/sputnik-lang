@@ -480,6 +480,8 @@ private:
   friend class RuntimePipe;
 };
 
+class RuntimeTlsContext;
+class RuntimeTlsSession;
 class RuntimeTcpStream;
 class RuntimeTcpListener;
 class RuntimeUdpSocket;
@@ -522,6 +524,10 @@ public:
   RuntimeIoStatus close_write();
   RuntimeIoStatus
   flush(std::chrono::milliseconds timeout = std::chrono::milliseconds::max());
+  RuntimeIoStatus start_tls(std::shared_ptr<RuntimeTlsContext> context,
+                            const std::string &host = {});
+  RuntimeIoStatus tls_handshake(std::chrono::milliseconds timeout);
+  bool tls_enabled() const { return tls_ != nullptr; }
   RuntimeIoStatus set_nodelay(bool enabled);
   RuntimeIoStatus set_keepalive(bool enabled);
   RuntimeIoStatus set_recv_buffer(std::int64_t size);
@@ -535,6 +541,10 @@ private:
   explicit RuntimeTcpStream(
       int fd, RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
   int fd_ = -1;
+
+  std::unique_ptr<RuntimeTlsSession> tls_;
+  RuntimeIoStatus tls_wait(bool write,
+      std::optional<std::chrono::steady_clock::time_point> deadline);
 
   friend class RuntimeTcpListener;
 };
@@ -551,6 +561,9 @@ public:
   RuntimeTcpAcceptResult
   accept(std::chrono::milliseconds timeout = std::chrono::milliseconds::max());
   RuntimeTcpAcceptResult try_accept();
+  void set_tls_context(std::shared_ptr<RuntimeTlsContext> context) {
+    tls_context_ = std::move(context);
+  }
   RuntimeIoStatus set_reuse_addr(bool enabled);
   RuntimeIoStatus set_reuse_port(bool enabled);
   RuntimeIoStatus get_option(const std::string &name, std::int64_t *value);
@@ -558,6 +571,7 @@ public:
   RuntimeEndpoint local_endpoint() const;
 
 private:
+  std::shared_ptr<RuntimeTlsContext> tls_context_;
   RuntimeIsolationMode isolation_mode_ = RuntimeIsolationMode::Checked;
   explicit RuntimeTcpListener(
       int fd, RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);

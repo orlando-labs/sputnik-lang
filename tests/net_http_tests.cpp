@@ -148,14 +148,31 @@ void test_url_parse_strips_fragment() {
   expect(url.target == "/p?q=1", "fragment stripped from wire target");
 }
 
+void test_https_url_and_request() {
+  HttpUrl url;
+  HttpErrorKind kind = HttpErrorKind::None;
+  std::string error;
+  expect(amber::runtime::http::http_parse_url("HTTPS://Example.COM:443/p?q=1#fragment", &url, &kind, &error), "https parses");
+  expect(url.scheme == "https" && url.host == "example.com" && url.port == 443 && url.target == "/p?q=1", "https origin and target");
+  expect(amber::runtime::http::http_url_to_string(url) == "https://example.com/p?q=1", "canonical https omits port 443");
+  HttpHeaders headers;
+  HttpRequest request = build_or_die("GET", "https://example.com/", headers, "", false, "HTTPS GET");
+  expect(request.scheme == "https" && request.port == 443 && request.headers.first("host") == "example.com", "HTTPS request chooses TLS and default Host");
+  request = build_or_die("GET", "https://[::1]:80/", headers, "", false, "HTTPS IPv6 GET");
+  expect(request.headers.first("host") == "[::1]:80", "HTTPS nondefault port survives in Host");
+  std::string resolved;
+  expect(amber::runtime::http::http_resolve_location("https://example.com/a/b", "//other.example/p", &resolved, &kind, &error) && resolved == "https://other.example/p", "scheme-relative redirect preserves TLS");
+  expect(amber::runtime::http::http_resolve_location("http://example.com/a", "https://example.com:443/secure", &resolved, &kind, &error) && resolved == "https://example.com/secure", "HTTP redirects can upgrade to HTTPS");
+}
+
 void test_url_parse_rejections() {
   HttpUrl url;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(!amber::runtime::http::http_parse_url("https://example.com/", &url,
+  expect(!amber::runtime::http::http_parse_url("ftp://example.com/", &url,
                                                &kind, &error) &&
              kind == HttpErrorKind::UnsupportedScheme,
-         "https rejected as unsupported scheme");
+         "ftp rejected as unsupported scheme");
   expect(!amber::runtime::http::http_parse_url("http://user@example.com/", &url,
                                                &kind, &error) &&
              kind == HttpErrorKind::InvalidUrl,
@@ -193,10 +210,10 @@ void test_resolve_location_scheme_relative_and_unsupported() {
   expect(resolved == "http://other.example/path",
          "scheme-relative redirect keeps base scheme");
   expect(!amber::runtime::http::http_resolve_location(
-             "http://example.com/a", "https://example.com/secure", &resolved,
+             "http://example.com/a", "ftp://example.com/secure", &resolved,
              &kind, &error) &&
              kind == HttpErrorKind::UnsupportedScheme,
-         "https redirect target is unsupported in net.http v1");
+         "ftp redirect target is unsupported in net.http v1");
 }
 
 // ---------------------------------------------------------------------------
@@ -533,6 +550,7 @@ int main() {
   test_url_parse_basic();
   test_url_parse_port_and_default_path();
   test_url_parse_strips_fragment();
+  test_https_url_and_request();
   test_url_parse_rejections();
   test_resolve_location_relative();
   test_resolve_location_scheme_relative_and_unsupported();

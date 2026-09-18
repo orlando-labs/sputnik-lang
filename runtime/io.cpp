@@ -2,6 +2,7 @@
 
 #include "runtime/context.h"
 #include "runtime/reactor.h"
+#include "runtime/tls.h"
 
 #include <algorithm>
 #include <cerrno>
@@ -1809,9 +1810,37 @@ RuntimeTcpStream::connect(const RuntimeEndpoint &endpoint,
   return result;
 }
 
+RuntimeIoStatus RuntimeTcpStream::start_tls(
+    std::shared_ptr<RuntimeTlsContext> context, const std::string &host) {
+  RuntimeIoStatus status = check_access();
+  if (!status.ok) return status;
+  if (tls_ != nullptr || context == nullptr) {
+    return io_error("TlsError", "TLS is already configured or context is missing");
+  }
+  tls_ = RuntimeTlsSession::create(fd_, std::move(context), host, &status);
+  return status;
+}
+
+RuntimeIoStatus RuntimeTcpStream::tls_wait(bool write, Deadline deadline) {
+  return wait_fd(fd_, write ? POLLOUT : POLLIN, deadline, "TLS IO",
+                 resource_id(), remote_endpoint().to_string());
+}
+
+RuntimeIoStatus RuntimeTcpStream::tls_handshake(std::chrono::milliseconds timeout) {
+  RuntimeIoStatus access = check_access();
+  if (!access.ok) return access;
+  if (tls_ == nullptr) return io_error("TlsError", "TLS is not configured");
+  return tls_->handshake(make_deadline(timeout),
+      [this](bool write, Deadline deadline) { return tls_wait(write, deadline); });
+}
+
 RuntimeIoStatus RuntimeTcpStream::read(RuntimeByteBuffer &buffer,
                                        std::chrono::milliseconds timeout) {
   RuntimeIoStatus access = check_access();
+  if (access.ok && tls_ != nullptr) {
+    return tls_->read(buffer, false, make_deadline(timeout),
+        [this](bool write, Deadline deadline) { return tls_wait(write, deadline); });
+  }
   return access.ok ? fd_read_once(fd_, buffer, false, make_deadline(timeout),
                                   "TCP read", resource_id(),
                                   remote_endpoint().to_string())
@@ -1820,6 +1849,10 @@ RuntimeIoStatus RuntimeTcpStream::read(RuntimeByteBuffer &buffer,
 
 RuntimeIoStatus RuntimeTcpStream::try_read(RuntimeByteBuffer &buffer) {
   RuntimeIoStatus access = check_access();
+  if (access.ok && tls_ != nullptr) {
+    return tls_->read(buffer, true, std::nullopt,
+        [this](bool write, Deadline deadline) { return tls_wait(write, deadline); });
+  }
   return access.ok ? fd_read_once(fd_, buffer, true, std::nullopt, "TCP read")
                    : access;
 }
@@ -1827,6 +1860,10 @@ RuntimeIoStatus RuntimeTcpStream::try_read(RuntimeByteBuffer &buffer) {
 RuntimeIoStatus RuntimeTcpStream::write(const std::string &bytes,
                                         std::chrono::milliseconds timeout) {
   RuntimeIoStatus access = check_access();
+  if (access.ok && tls_ != nullptr) {
+    return tls_->write(bytes, false, make_deadline(timeout),
+        [this](bool write, Deadline deadline) { return tls_wait(write, deadline); });
+  }
   return access.ok ? fd_write_once(fd_, bytes, false, make_deadline(timeout),
                                    "TCP write", true, resource_id(),
                                    remote_endpoint().to_string())
@@ -1835,6 +1872,10 @@ RuntimeIoStatus RuntimeTcpStream::write(const std::string &bytes,
 
 RuntimeIoStatus RuntimeTcpStream::try_write(const std::string &bytes) {
   RuntimeIoStatus access = check_access();
+  if (access.ok && tls_ != nullptr) {
+    return tls_->write(bytes, true, std::nullopt,
+        [this](bool write, Deadline deadline) { return tls_wait(write, deadline); });
+  }
   return access.ok
              ? fd_write_once(fd_, bytes, true, std::nullopt, "TCP write", true)
              : access;
@@ -1843,6 +1884,17 @@ RuntimeIoStatus RuntimeTcpStream::try_write(const std::string &bytes) {
 RuntimeIoStatus RuntimeTcpStream::write_all(const std::string &bytes,
                                             std::chrono::milliseconds timeout) {
   RuntimeIoStatus access = check_access();
+  if (access.ok && tls_ != nullptr) {
+    const Deadline deadline = make_deadline(timeout);
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+      RuntimeIoStatus status = tls_->write(bytes.substr(offset), false, deadline,
+          [this](bool write, Deadline limit) { return tls_wait(write, limit); });
+      if (!status.ok || status.eof) { status.count += offset; return status; }
+      offset += status.count;
+    }
+    return io_ok(offset);
+  }
   return access.ok ? fd_write_all(fd_, bytes, timeout, "TCP write", true,
                                   resource_id(), remote_endpoint().to_string())
                    : access;
@@ -1962,6 +2014,7 @@ RuntimeIoStatus RuntimeTcpStream::close() {
     return io_ok();
   }
   const int fd = fd_;
+  if (tls_ != nullptr) tls_->close();
   fd_ = -1;
   mark_closed();
   if (fd >= 0) {
@@ -2050,6 +2103,14 @@ RuntimeTcpListener::accept(std::chrono::milliseconds timeout) {
       result.ok = true;
       result.stream = std::shared_ptr<RuntimeTcpStream>(
           new RuntimeTcpStream(client, isolation_mode_));
+      if (tls_context_ != nullptr) {
+        RuntimeIoStatus status = result.stream->start_tls(tls_context_);
+        if (!status.ok) {
+          (void)result.stream->close();
+          result.stream.reset();
+          static_cast<RuntimeIoStatus &>(result) = std::move(status);
+        }
+      }
       return result;
     }
     if (errno == EINTR) {

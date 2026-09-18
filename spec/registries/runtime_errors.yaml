@@ -167,6 +167,10 @@ errors:
     default_exit_code: 0
   - name: HttpError
     parent: Exception
+  - name: TlsError
+    parent: HttpError
+  - name: TlsCertificateError
+    parent: TlsError
   - name: RequestError
     parent: HttpError
   - name: InvalidUrlError

@@ -1,14 +1,12 @@
 #pragma once
 
-// Plaintext TCP connector for net.http (DESIGN-stdlib-net-http-io-2026-06-20
-// Phase 2, the default implementation of the D2 transport seam). Bridges the
-// VM-independent HttpTransport interface to runtime/io.h's RuntimeTcpStream.
-// This is the only net.http source that depends on the io subsystem; the
-// codec and exchange core stay free of it. A future net.https TlsConnector is
-// a sibling of this file behind the same HttpTransport interface.
+// HTTP(S) connector for the VM-independent exchange/streaming transport seam.
+// TLS sessions live on RuntimeTcpStream, so HTTP framing and pooling are
+// shared.
 
 #include "runtime/io.h"
 #include "runtime/net_http.h"
+#include "runtime/tls.h"
 
 #include <chrono>
 #include <cstdint>
@@ -28,6 +26,7 @@ public:
   bool write_all(const std::string &data, std::string *error) override;
   long read_some(std::string *chunk, std::string *error) override;
   void close() override;
+  HttpErrorKind error_kind() const override { return error_kind_; }
 
   const std::shared_ptr<RuntimeTcpStream> &stream() const { return stream_; }
 
@@ -35,6 +34,7 @@ private:
   std::shared_ptr<RuntimeTcpStream> stream_;
   std::chrono::milliseconds timeout_;
   RuntimeByteBuffer read_buffer_;
+  HttpErrorKind error_kind_ = HttpErrorKind::Connection;
 };
 
 // Connect a plaintext TCP transport to host:port (the connect phase of an
@@ -45,5 +45,12 @@ std::unique_ptr<TcpHttpTransport>
 http_tcp_connect(const std::string &host, std::uint16_t port,
                  std::chrono::milliseconds timeout, HttpErrorKind *kind,
                  std::string *error);
+
+// HTTPS uses the same transport seam, streaming codec and connection leases.
+std::unique_ptr<HttpTransport> http_connect(const HttpRequest &request,
+                                            std::chrono::milliseconds timeout,
+                                            const RuntimeTlsOptions &tls,
+                                            HttpErrorKind *kind,
+                                            std::string *error);
 
 } // namespace amber::runtime::http

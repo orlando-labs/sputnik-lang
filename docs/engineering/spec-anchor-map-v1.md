@@ -23,6 +23,7 @@ Check with `make spec-sync-check`.
 | `docs/engineering/effects-v1.md` | 1 |
 | `docs/engineering/full-native-implementation-plan-v1.md` | 28 |
 | `docs/engineering/hir-v1.md` | 1 |
+| `docs/engineering/http-tls.md` | 3 |
 | `docs/engineering/image-v1.md` | 4 |
 | `docs/engineering/implementation-status-v1.md` | 4 |
 | `docs/engineering/loader-v1.md` | 1 |
@@ -50,7 +51,7 @@ Check with `make spec-sync-check`.
 | `spec/registries/diagnostics.yaml` | 111 | `fe0aaed4de73b6307c372ffcb957124d2b548f15b93f27bc6faafd7ebd703862` |
 | `spec/registries/opcodes.yaml` | 194 | `0546d31b062a926190382cf1b9711ee80ad6ad8d312e9f6426a8a69769664e67` |
 | `spec/registries/prelude.yaml` | 469 | `7637c3af5f5b9090b90bfd89d9e289bc1cf623201b60a9b6d8b7e0878a1d9602` |
-| `spec/registries/runtime_errors.yaml` | 279 | `f5c3b50bd751296878c6517569c6b2f748e27d5dab5904428f7f3478ef2c0182` |
+| `spec/registries/runtime_errors.yaml` | 283 | `fe6dfb3774be4651608a9d07184019cc6230055ce38c2a4f1ec1ea621cccadeb` |
 | `spec/registries/tokens.yaml` | 127 | `8f625d0ae80376759b848e935282dca05065e1d7b742c69b6371d611f1a42fab` |
 
 ## Anchor Map
@@ -187,6 +188,9 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 904 | 2 | [`open-decisions`](../../docs/engineering/full-native-implementation-plan-v1.md#open-decisions) | Open Decisions |
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 917 | 2 | [`completion-checklist`](../../docs/engineering/full-native-implementation-plan-v1.md#completion-checklist) | Completion Checklist |
 | [`docs/engineering/hir-v1.md`](../../docs/engineering/hir-v1.md) | 1 | 1 | [`amberhirv1`](../../docs/engineering/hir-v1.md#amberhirv1) | amber.hir.v1 |
+| [`docs/engineering/http-tls.md`](../../docs/engineering/http-tls.md) | 1 | 1 | [`http-tls`](../../docs/engineering/http-tls.md#http-tls) | HTTP TLS |
+| [`docs/engineering/http-tls.md`](../../docs/engineering/http-tls.md) | 62 | 2 | [`native-builds`](../../docs/engineering/http-tls.md#native-builds) | Native builds |
+| [`docs/engineering/http-tls.md`](../../docs/engineering/http-tls.md) | 76 | 2 | [`build-and-tests`](../../docs/engineering/http-tls.md#build-and-tests) | Build and tests |
 | [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 1 | 1 | [`amberimagev1`](../../docs/engineering/image-v1.md#amberimagev1) | amber.image.v1 |
 | [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 24 | 2 | [`artifact-layout`](../../docs/engineering/image-v1.md#artifact-layout) | Artifact Layout |
 | [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 43 | 2 | [`verification`](../../docs/engineering/image-v1.md#verification) | Verification |

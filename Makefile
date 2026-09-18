@@ -10,6 +10,20 @@ CPPFLAGS += -I.
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -O2 -g
 LDFLAGS ?=
 
+# TLS is shared by the VM and native runtime. On macOS OpenSSL is keg-only;
+# pkg-config (or OPENSSL_PREFIX) locates its headers and libraries.
+OPENSSL_PREFIX ?=
+OPENSSL_INCLUDE_DIR ?= $(if $(strip $(OPENSSL_PREFIX)),$(OPENSSL_PREFIX)/include,$(shell pkg-config --variable=includedir openssl 2>/dev/null))
+OPENSSL_LIB_DIR ?= $(if $(strip $(OPENSSL_PREFIX)),$(OPENSSL_PREFIX)/lib,$(shell pkg-config --variable=libdir openssl 2>/dev/null))
+ifneq ($(strip $(OPENSSL_INCLUDE_DIR)),)
+CPPFLAGS += -I$(OPENSSL_INCLUDE_DIR) '-DAMBER_OPENSSL_INCLUDE_DIR="$(OPENSSL_INCLUDE_DIR)"'
+endif
+ifneq ($(strip $(OPENSSL_LIB_DIR)),)
+LDFLAGS += -L$(OPENSSL_LIB_DIR)
+CPPFLAGS += '-DAMBER_OPENSSL_LIB_DIR="$(OPENSSL_LIB_DIR)"'
+endif
+LDFLAGS += -lssl -lcrypto
+
 # --- Allocator selection -----------------------------------------------------
 # MALLOC selects the C/C++ allocator the binaries link against (RESEARCH heap
 # fragmentation, §10 step 1). Flavors:
@@ -121,7 +135,7 @@ FROZEN_SRCS := frozen/image.cpp
 PROFILE_SRCS := profile/capabilities.cpp profile/effects.cpp profile/replay.cpp profile/data.cpp profile/wasm_accel.cpp profile/modern.cpp
 BUILD_SRCS := buildsys/build.cpp
 BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp bytecode/graph_linker.cpp
-IO_SRCS := runtime/io.cpp runtime/reactor.cpp
+IO_SRCS := runtime/io.cpp runtime/reactor.cpp runtime/tls.cpp
 DIGEST_SRCS := runtime/digest.cpp
 HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_server.cpp runtime/net_http_transport.cpp
 STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
@@ -246,6 +260,10 @@ FORMAT_FILES := \
 	runtime/net_http.h \
 	runtime/net_http_transport.cpp \
 	runtime/net_http_transport.h \
+	runtime/tls.cpp \
+	runtime/tls.h \
+	runtime/net_http_client.h \
+	runtime/net_http_client_native.inc \
 	runtime/digest.cpp \
 	runtime/digest.h \
 	runtime/text.cpp \
@@ -920,3 +938,13 @@ fmt:
 
 clean:
 	rm -rf $(BUILD_DIR)
+
+.PHONY: test-http-tls
+test-http-tls: $(BUILD_DIR)/amberc $(BUILD_DIR)/vm_net_http_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests
+	$(BUILD_DIR)/net_http_tests
+	$(BUILD_DIR)/net_http_tcp_tests
+	$(BUILD_DIR)/vm_net_http_tests
+	python3 tests/http_tls_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/http-tls
+
+# The TLS resource state and canonical error list affect runtime ABI/dispatch.
+$(BUILD_DIR)/amberc $(BUILD_DIR)/vm_net_http_tests: runtime/tls.h runtime/net_http_client.h spec/registries/runtime_errors.def

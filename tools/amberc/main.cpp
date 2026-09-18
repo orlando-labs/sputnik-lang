@@ -1273,7 +1273,7 @@ struct NativeCppBuildPlan {
   bool entry_native = false;
   bool uses_bytecode_fallback = true;
   bool uses_native_stdlib_bridge = false;
-  bool uses_native_http_server_runtime = false;
+  bool uses_native_http_runtime = false;
   bool uses_native_system_runtime = false;
   bool uses_native_threaded_runtime = false;
 };
@@ -2844,12 +2844,13 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
                 : kw_allowed({"timeout", "pool_timeout", "idle_timeout",
                               "max_idle_connections", "max_idle_per_origin",
                               "max_active_per_origin", "redirects",
-                              "max_redirects"});
+                              "max_redirects", "tls_ca_file", "tls_ca_path",
+                              "tls_cert_file", "tls_key_file"});
       } else if (selector == "connect" && pos_count == 2U && no_block) {
         http_send = kw_count == 0U;
       } else if ((selector == "get" || selector == "head" ||
                   selector == "delete") &&
-                 pos_count == 1U && no_block) {
+                 pos_count == 1U) {
         http_send = kw_allowed({"headers", "timeout", "pool_timeout"});
       } else if ((selector == "query" || selector == "post" ||
                   selector == "put" || selector == "patch") &&
@@ -2877,6 +2878,15 @@ bool native_cpp_code_supported(const amber::bytecode::BcModule &module,
         http_send = selector == "body_text"
                         ? kw_allowed({"limit", "encoding"})
                         : kw_allowed({"limit"});
+      } else if ((selector == "read" || selector == "text" ||
+                  selector == "bytes" || selector == "json" ||
+                  selector == "discard!") && pos_count == 0U && no_block) {
+        http_send = selector == "read" ? kw_allowed({"max_bytes"})
+                    : selector == "text" ? kw_allowed({"limit", "encoding"})
+                    : kw_allowed({"limit"});
+      } else if (selector == "expect_status!" && pos_count > 0U &&
+                 kw_count == 0U && no_block) {
+        http_send = true;
       } else if (selector == "read_chunk" && pos_count == 0U &&
                  no_block) {
         http_send = kw_allowed({"max_bytes"});
@@ -7963,18 +7973,22 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
       std::find(module.symbols.begin(), module.symbols.end(), "threaded") != module.symbols.end() ||
       std::find(module.symbols.begin(), module.symbols.end(), "parallel") != module.symbols.end();
   bool uses_ambiguous_net_namespace = false;
+  const auto has_symbol = [&](const char *name) {
+    return std::find(module.symbols.begin(), module.symbols.end(), name) != module.symbols.end();
+  };
   for (std::uint32_t const_id = 0;
        const_id < static_cast<std::uint32_t>(module.const_pool.size());
        ++const_id) {
     const std::string path = native_cpp_constant_path_text(module, const_id);
     if (path == "system") plan.uses_native_system_runtime = true;
-    if (path == "net.http.Server" ||
+    if (path == "net.http.Client" ||
+        path == "net.http.Server" ||
         path == "net.http.ServerRequest" ||
         path == "net.http.ServerRequestBody" ||
         path == "net.http.ServerRequestChunk" ||
         path == "net.http.ServerResponse" ||
         path == "net.http.ServerResponseWriter") {
-      plan.uses_native_http_server_runtime = true;
+      plan.uses_native_http_runtime = true;
       continue;
     }
     if (path == "net" || path == "net.http") {
@@ -7985,9 +7999,20 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
       plan.uses_native_stdlib_bridge = true;
     }
   }
+  if (uses_ambiguous_net_namespace && (has_symbol("Client") || has_symbol("Server")) &&
+      !has_symbol("tcp") && !has_symbol("udp") && !has_symbol("RequestBody") &&
+      !has_symbol("Request") && !has_symbol("get_json") &&
+      !has_symbol("post_json") && !has_symbol("form")) {
+    plan.uses_native_http_runtime = true;
+  }
   if (uses_ambiguous_net_namespace &&
-      !plan.uses_native_http_server_runtime) {
+      !plan.uses_native_http_runtime) {
     plan.uses_native_stdlib_bridge = true;
+  }
+  // Executable request producers and the richer client helpers still use the
+  // existing stdlib bridge; ordinary requests and response streams are direct.
+  if (has_symbol("trace") || has_symbol("begin_request")) {
+    if (plan.uses_native_http_runtime) plan.uses_native_stdlib_bridge = true;
   }
   std::string first_reason;
   const NativeCppNumericProfile numeric_profile =
@@ -8230,6 +8255,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include \"runtime/io.h\"\n";
   out << "#include \"runtime/system.h\"\n";
   out << "#include \"runtime/net_http_server.h\"\n";
+  out << "#include \"runtime/net_http_client.h\"\n";
+  out << "#include \"runtime/net_http_transport.h\"\n";
   out << "#include \"runtime/stdlib_registry.h\"\n";
   out << "#include \"runtime/stdlib_url.h\"\n";
   out << "#include \"runtime/text.h\"\n";
@@ -20646,7 +20673,7 @@ static AMBER_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "struct AmberNativeHttpParked {};\n\n";
-  if (plan.uses_native_http_server_runtime) {
+  if (plan.uses_native_http_runtime) {
     out << R"AMBERCPP(class AmberNativeHttpBlock final
     : public amber::runtime::RuntimeNativeBlock {
 public:
@@ -21027,8 +21054,8 @@ private:
     out << "};\n\n";
   }
   if (plan.uses_native_stdlib_bridge &&
-      !plan.uses_native_http_server_runtime) {
-    // Client-only net.http graphs retain the VM stdlib bridge and therefore
+      !plan.uses_native_http_runtime) {
+    // Client graphs with request producers retain the VM stdlib bridge and therefore
     // emit AmberNativeBlock rather than the VM-independent server adapter.
     // The unreachable server fast-path code below still needs a concrete
     // adapter type so the generated translation unit remains well-formed.
@@ -21650,6 +21677,16 @@ static bool native_http_try_fast_server_construct(
       } else {
         return false;
       }
+    } else if (keyword.name == "tls_cert_file" || keyword.name == "tls_key_file") {
+      if (value.tag == NativeValue::Tag::Null) continue;
+      if (!native_value_is_string(value)) {
+        throw NativeRaised{native_named_error("TypeError", keyword.name + " must be a Str or null")};
+      }
+      const std::string path = native_string_text(value);
+      if (path.empty() || path.find('\0') != std::string::npos) {
+        throw NativeRaised{native_named_error("ArgumentError", keyword.name + " must be a nonempty path")};
+      }
+      (keyword.name == "tls_cert_file" ? options.tls.cert_file : options.tls.key_file) = path;
     } else if (keyword.name == "port") {
       if (value.tag != NativeValue::Tag::Integer ||
           value.scalar_value < 0 || value.scalar_value > 65535) {
@@ -22180,6 +22217,8 @@ static NativeValue native_channel_send(
 }
 
 )AMBERCPP";
+  out << "#define AMBER_NATIVE_HTTP_CLIENT_DIRECT " << (!plan.uses_native_stdlib_bridge ? 1 : 0) << "\n";
+  out << "#include \"runtime/net_http_client_native.inc\"\n";
   out << "static NativeValue native_http_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
@@ -22196,10 +22235,11 @@ static NativeValue native_channel_send(
          "kwargs, block);\n"
          "    }\n"
          "  }\n";
-  if (plan.uses_native_http_server_runtime ||
+  if (plan.uses_native_http_runtime ||
       plan.uses_native_stdlib_bridge) {
     out << "  NativeValue fast_result;\n";
-    out << "  if (native_http_try_fast_headers_send(receiver, selector, "
+    out << "  if (native_http_try_client_send(receiver, selector, args, kwargs, block, &fast_result) || "
+           "native_http_try_fast_headers_send(receiver, selector, "
            "args, kwargs, block, &fast_result) || "
            "native_http_try_fast_request_send(receiver, selector, "
            "args, kwargs, block, &fast_result) || "
@@ -25096,6 +25136,7 @@ native_runtime_sources(const std::filesystem::path &root) {
       "runtime/concurrency.cpp",
       "runtime/world.cpp",
       "runtime/io.cpp",
+      "runtime/tls.cpp",
       "runtime/system.cpp",
       "runtime/reactor.cpp",
       "runtime/digest.cpp",
@@ -25147,6 +25188,9 @@ const std::vector<std::string> &native_runtime_compile_flags() {
       "-DNDEBUG",
       "-ffunction-sections",
       "-fdata-sections",
+#ifdef AMBER_OPENSSL_INCLUDE_DIR
+      "-I" AMBER_OPENSSL_INCLUDE_DIR,
+#endif
 #ifdef AMBER_VALUE_REPR_TAGGED
       // Propagate the host amberc's Value representation (PLAN Phase 4
       // prototype) so the native runtime archive and the generated C++ share
@@ -25482,6 +25526,11 @@ NativeExecutableBuildResult build_native_executable(
   for (const std::string &library : link_libraries) {
     command.push_back("-l" + library);
   }
+#ifdef AMBER_OPENSSL_LIB_DIR
+  command.push_back("-L" AMBER_OPENSSL_LIB_DIR);
+#endif
+  command.push_back("-lssl");
+  command.push_back("-lcrypto");
   command.push_back("-pthread");
   command.push_back("-o");
   command.push_back(output_path.string());

@@ -985,13 +985,13 @@ void test_redirect_unsupported_scheme_raises() {
       run_with_server("import net\n"
                       "client = net.http.Client(redirects: :safe)\n"
                       "client.get(\"http://127.0.0.1:%PORT%/start\")\n",
-                      "HTTP/1.1 302 Found\r\nLocation: https://example.com/\r\n"
+                      "HTTP/1.1 302 Found\r\nLocation: ftp://example.com/\r\n"
                       "Content-Length: 0\r\n\r\n",
                       &server_error);
   expect(server_error.empty(), "server error: " + server_error);
   expect(!result.ok() && result.fault.has_value() &&
              result.fault->error_name == "UnsupportedSchemeError",
-         "safe redirect to https -> UnsupportedSchemeError");
+         "safe redirect to ftp -> UnsupportedSchemeError");
 }
 
 void test_redirect_max_redirects_raises() {
@@ -1419,10 +1419,10 @@ void test_unsupported_scheme_raises() {
   // No server needed; the URL is rejected before any connection.
   const amber::runtime::ExecutionResult result =
       execute_source("import net\n"
-                     "net.http.Client().get(\"https://127.0.0.1/\")\n");
-  expect(!result.ok() && result.fault.has_value(), "https get should fault");
+                     "net.http.Client().get(\"ftp://127.0.0.1/\")\n");
+  expect(!result.ok() && result.fault.has_value(), "ftp get should fault");
   expect(result.fault->error_name == "UnsupportedSchemeError",
-         "https -> UnsupportedSchemeError, got " +
+         "ftp -> UnsupportedSchemeError, got " +
              (result.fault.has_value() ? result.fault->error_name : ""));
 }
 
@@ -1449,7 +1449,7 @@ void test_rescue_unsupported_scheme() {
       execute_source("import net\n"
                      "caught = 0\n"
                      "try:\n"
-                     "  net.http.Client().get(\"https://127.0.0.1/\")\n"
+                     "  net.http.Client().get(\"ftp://127.0.0.1/\")\n"
                      "rescue HttpError:\n"
                      "  caught = 1\n"
                      "caught\n");
@@ -1512,10 +1512,10 @@ void test_request_invalid_method() {
 void test_request_invalid_url_scheme() {
   const amber::runtime::ExecutionResult result =
       execute_source("import net\n"
-                     "net.http.Request(method: :get, url: \"https://h/x\")\n");
+                     "net.http.Request(method: :get, url: \"ftp://h/x\")\n");
   expect(!result.ok() && result.fault.has_value() &&
              result.fault->error_name == "UnsupportedSchemeError",
-         "https Request -> UnsupportedSchemeError, got " +
+         "ftp Request -> UnsupportedSchemeError, got " +
              (result.fault.has_value() ? result.fault->error_name : ""));
 }
 

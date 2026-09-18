@@ -41,6 +41,8 @@ enum class HttpErrorKind {
   UnexpectedEof,
   // Transport failure surfaced during an exchange (§21.2 ConnectionError).
   Connection,
+  Tls,
+  TlsCertificate,
 };
 
 // The §21.1 error class name a kind maps to (e.g. "ChunkError"). "None" yields

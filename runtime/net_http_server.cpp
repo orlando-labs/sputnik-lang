@@ -963,6 +963,15 @@ runtime_http_server_open(RuntimeHttpServerOptions options) {
     return result;
   }
 
+  std::shared_ptr<RuntimeTlsContext> tls_context;
+  if (!options.tls.cert_file.empty() || !options.tls.key_file.empty()) {
+    RuntimeIoStatus status;
+    tls_context = RuntimeTlsContext::create(options.tls, true, &status);
+    if (!status.ok) {
+      static_cast<RuntimeIoStatus &>(result) = std::move(status);
+      return result;
+    }
+  }
   auto server = std::make_shared<RuntimeHttpServer>();
   server->host = std::move(options.host);
   server->port = options.port;
@@ -986,6 +995,7 @@ runtime_http_server_open(RuntimeHttpServerOptions options) {
   }
 
   server->listener = std::move(listening.listener);
+  server->listener->set_tls_context(std::move(tls_context));
   server->port = server->listener->local_endpoint().port;
   // Cooperative server IO multiplexes admitted connections; the scheduler's
   // OS-thread count is independent from the hard connection capacity.

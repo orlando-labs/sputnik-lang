@@ -88,7 +88,7 @@ std::string strip_fragment(std::string text) {
 
 std::string http_url_authority(const HttpUrl &url) {
   std::string authority = url.host;
-  if (url.port != 80) {
+  if (url.port != (url.scheme == "https" ? 443 : 80)) {
     authority += ":" + std::to_string(url.port);
   }
   return authority;
@@ -164,9 +164,9 @@ bool http_parse_url(const std::string &url, HttpUrl *out, HttpErrorKind *kind,
     *error = "URL is missing a scheme";
     return false;
   }
-  if (scheme != "http") {
+  if (scheme != "http" && scheme != "https") {
     *kind = HttpErrorKind::UnsupportedScheme;
-    *error = "net.http v1 supports only the http scheme, got: " + scheme;
+    *error = "net.http supports only http and https schemes, got: " + scheme;
     return false;
   }
 
@@ -190,7 +190,7 @@ bool http_parse_url(const std::string &url, HttpUrl *out, HttpErrorKind *kind,
 
   // host[:port] — bracketed IPv6 literals keep their brackets in `host`.
   std::string host;
-  std::uint16_t port = 80;
+  std::uint16_t port = scheme == "https" ? 443 : 80;
   if (authority.front() == '[') {
     const std::size_t close = authority.find(']');
     if (close == std::string::npos) {
@@ -347,10 +347,10 @@ bool http_build_request(const std::string &method, const std::string &url,
   HttpHeaders headers = user_headers;
 
   // Host: synthesize from the URL authority when absent. A non-default port is
-  // included; port 80 is omitted (§17.1 origin canonicalization).
+  // included; HTTP 80 / HTTPS 443 are omitted (§17.1 origin canonicalization).
   if (auto_host && !headers.contains("host")) {
     std::string host_value = parsed.host;
-    if (parsed.port != 80) {
+    if (parsed.port != (parsed.scheme == "https" ? 443 : 80)) {
       host_value += ":" + std::to_string(parsed.port);
     }
     std::string host_error;
@@ -382,6 +382,7 @@ bool http_build_request(const std::string &method, const std::string &url,
   }
 
   out->method = std::move(normalized_method);
+  out->scheme = parsed.scheme;
   out->host = parsed.host;
   out->port = parsed.port;
   out->target = parsed.target;
@@ -421,7 +422,7 @@ bool http_build_streaming_request(const std::string &method,
 
   if (auto_host && !headers.contains("host")) {
     std::string host_value = parsed.host;
-    if (parsed.port != 80) {
+    if (parsed.port != (parsed.scheme == "https" ? 443 : 80)) {
       host_value += ":" + std::to_string(parsed.port);
     }
     std::string host_error;
@@ -467,6 +468,7 @@ bool http_build_streaming_request(const std::string &method,
   }
 
   out->method = std::move(normalized_method);
+  out->scheme = parsed.scheme;
   out->host = parsed.host;
   out->port = parsed.port;
   out->target = parsed.target;
@@ -485,7 +487,7 @@ bool http_write_request_head(HttpTransport &transport,
       request.method, request.target, request.headers);
   std::string transport_error;
   if (!transport.write_all(wire, &transport_error)) {
-    *kind = HttpErrorKind::Connection;
+    *kind = transport.error_kind();
     *error =
         transport_error.empty() ? "failed to write request" : transport_error;
     return false;
@@ -519,7 +521,7 @@ bool http_write_request_body_chunk(HttpTransport &transport,
       request.chunked_body ? http_encode_chunk(bytes) : bytes;
   std::string transport_error;
   if (!transport.write_all(wire, &transport_error)) {
-    *kind = HttpErrorKind::Connection;
+    *kind = transport.error_kind();
     *error = transport_error.empty() ? "failed to write request body"
                                      : transport_error;
     return false;
@@ -545,7 +547,7 @@ bool http_finish_request_body(HttpTransport &transport,
   }
   std::string transport_error;
   if (!transport.write_all(http_encode_last_chunk(), &transport_error)) {
-    *kind = HttpErrorKind::Connection;
+    *kind = transport.error_kind();
     *error = transport_error.empty() ? "failed to finish chunked request body"
                                      : transport_error;
     return false;
@@ -603,7 +605,7 @@ bool HttpResponseBodyStream::fill_pending(HttpErrorKind *kind,
     std::string transport_error;
     const long n = transport_->read_some(&chunk, &transport_error);
     if (n < 0) {
-      *kind = HttpErrorKind::Connection;
+      *kind = transport_->error_kind();
       *error = transport_error.empty() ? "failed to read response body"
                                        : transport_error;
       close();
@@ -717,7 +719,7 @@ http_read_response_start(std::unique_ptr<HttpTransport> transport,
     chunk.clear();
     const long n = transport->read_some(&chunk, &transport_error);
     if (n < 0) {
-      result.error_kind = HttpErrorKind::Connection;
+      result.error_kind = transport->error_kind();
       result.error_message =
           transport_error.empty() ? "failed to read response" : transport_error;
       transport->close();
@@ -772,7 +774,7 @@ HttpExchangeResult http_perform(HttpTransport &transport,
 
   std::string transport_error;
   if (!transport.write_all(wire, &transport_error)) {
-    result.error_kind = HttpErrorKind::Connection;
+    result.error_kind = transport.error_kind();
     result.error_message =
         transport_error.empty() ? "failed to write request" : transport_error;
     return result;
@@ -787,7 +789,7 @@ HttpExchangeResult http_perform(HttpTransport &transport,
     chunk.clear();
     const long n = transport.read_some(&chunk, &transport_error);
     if (n < 0) {
-      result.error_kind = HttpErrorKind::Connection;
+      result.error_kind = transport.error_kind();
       result.error_message =
           transport_error.empty() ? "failed to read response" : transport_error;
       return result;

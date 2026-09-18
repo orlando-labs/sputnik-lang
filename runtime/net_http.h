@@ -19,31 +19,29 @@
 
 namespace amber::runtime::http {
 
-// Parsed origin + origin-form request target for an http:// URL (§19). v1
-// accepts only the http scheme; userinfo is rejected and the fragment is
-// stripped (never sent on the wire). `target` is path + optional "?query"
+// Parsed origin + origin-form request target for an HTTP(S) URL (§19).
+// Userinfo is rejected and the fragment is stripped (never sent on the wire). `target` is path + optional "?query"
 // with a default path of "/".
 struct HttpUrl {
-  std::string scheme; // always "http" in v1
+  std::string scheme; // "http" or "https"
   std::string host;
   std::uint16_t port = 80;
   std::string target; // origin-form: path[?query]
 };
 
-// Parse and validate an http:// URL. Returns false and sets *kind/*error on a
-// malformed URL (InvalidUrl), a non-http scheme (UnsupportedScheme), userinfo,
+// Parse and validate an HTTP(S) URL. Returns false and sets *kind/*error on a
+// malformed URL (InvalidUrl), another scheme (UnsupportedScheme), userinfo,
 // or a missing host.
 bool http_parse_url(const std::string &url, HttpUrl *out, HttpErrorKind *kind,
                     std::string *error);
 
-// Serialize a parsed v1 URL back to its canonical absolute form. The default
-// port 80 is omitted and `target` is emitted as path[?query].
+// Serialize a parsed URL back to its canonical absolute form. The default
+// port (HTTP 80, HTTPS 443) is omitted; `target` is path[?query].
 std::string http_url_to_string(const HttpUrl &url);
 
 // Resolve an HTTP Location field against a base absolute URL (§16.4). Absolute
-// and scheme-relative targets are parsed through http_parse_url, so redirects
-// to https:// report UnsupportedScheme in v1. Relative references are resolved
-// against the current path and fragments are stripped.
+// and scheme-relative targets are parsed through http_parse_url. Relative
+// references resolve against the current path; fragments are stripped.
 bool http_resolve_location(const std::string &base_url,
                            const std::string &location, std::string *out,
                            HttpErrorKind *kind, std::string *error);
@@ -52,6 +50,7 @@ bool http_resolve_location(const std::string &base_url,
 // (Host, Content-Length) and validation happen in http_build_request; this
 // struct is what http_perform writes to the wire.
 struct HttpRequest {
+  std::string scheme = "http";
   std::string method; // normalized uppercase token
   std::string host;   // origin host (for connect + Host header)
   std::uint16_t port = 80;
@@ -106,6 +105,7 @@ public:
 
   // Release the transport. Idempotent.
   virtual void close() = 0;
+  virtual HttpErrorKind error_kind() const { return HttpErrorKind::Connection; }
 };
 
 // Write the serialized request head. For non-chunked static requests,

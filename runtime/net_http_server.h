@@ -8,6 +8,7 @@
 #include "runtime/concurrency.h"
 #include "runtime/http_codec.h"
 #include "runtime/io.h"
+#include "runtime/tls.h"
 #include "runtime/value.h"
 
 #include <atomic>
@@ -40,6 +41,7 @@ struct RuntimeHttpServerStats {
 };
 
 struct RuntimeHttpServerOptions {
+  RuntimeTlsOptions tls;
   std::string host = "127.0.0.1";
   std::uint16_t port = 0;
   std::size_t workers = 1;

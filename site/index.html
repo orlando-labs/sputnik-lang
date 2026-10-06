@@ -27,7 +27,7 @@ More meaning." >Меньше церемоний.
 Больше смысла.</h2><p data-ru="Коллекции, блоки и функции остаются рядом с задачей. Последнее выражение становится результатом." data-en="Collections, blocks and functions stay close to the problem. The last expression becomes the result." >Коллекции, блоки и функции остаются рядом с задачей. Последнее выражение становится результатом.</p>
 </div><div class="code-window"><div class="code-window-bar"><span>orbit.s</span><button type="button" data-copy-target="orbit-code"><span data-i18n="common.copy">Копировать</span>
 </button>
-</div><pre id="orbit-code"><code><span class="tok-key">def</span> square(x):
+</div><pre id="orbit-code"><code class="language-sputnik"><span class="tok-key">def</span> square(x):
   x * x
 
 squares = [1, 2, 3, 4].map: square(_1)
@@ -55,7 +55,7 @@ squares
 </section><section id="start" class="start-section"><div><p class="eyebrow">04 / LAUNCH SEQUENCE</p><h2 data-ru="Попробовать Sputnik" data-en="Try Sputnik" >Попробовать Sputnik</h2><p data-ru="Нужны C++17, make и OpenSSL. Обычный make собирает пользовательский CLI; тесты запускаются отдельно." data-en="You need C++17, make and OpenSSL. Plain make builds the user CLI; tests are opt-in." >Нужны C++17, make и OpenSSL. Обычный make собирает пользовательский CLI; тесты запускаются отдельно.</p><p data-ru="Выбирайте .s для повседневного кода, .spu для Sputnik Program Unit или .sputnik для выразительного имени. Семантика одинакова." data-en="Choose .s for everyday code, .spu for Sputnik Program Unit or .sputnik for a distinctive filename. The semantics are identical." >Выбирайте .s для повседневного кода, .spu для Sputnik Program Unit или .sputnik для выразительного имени. Семантика одинакова.</p>
 </div><div class="code-window"><div class="code-window-bar"><span>TERMINAL</span><button type="button" data-copy-target="start-code"><span data-i18n="common.copy">Копировать</span>
 </button>
-</div><pre id="start-code"><code>git clone https://github.com/orlando-labs/amber-lang.git sputnik-lang
+</div><pre id="start-code"><code class="language-sh">git clone https://github.com/orlando-labs/amber-lang.git sputnik-lang
 cd sputnik-lang
 make -j4
 
@@ -68,7 +68,8 @@ build/sputnik build hello.s -o hello
 </section>
 </main><footer><a class="brand" href="./index.html">Sputnik</a><span>TECHNICAL PREVIEW</span><a href="https://github.com/orlando-labs/amber-lang"><span data-ru="Исходный код ↗" data-en="Source code ↗" >Исходный код ↗</span>
 </a>
-</footer><script src="./app.js">
+</footer><script src="./syntax-highlight.js"></script>
+    <script src="./app.js">
 </script>
 </body>
 </html>

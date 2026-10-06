@@ -300,7 +300,7 @@ def display(user): user.name
 export display, Person as User       # private by default; explicit re-export
 ```
 
-Imports are static, top-level, before ordinary declarations/statements. Imported names are live, read-only aliases. `.s` and `.sputnik` source files are accepted. From the repository root: `build/sputnik program.s` runs a file; `build/sputnik parse program.s` inspects syntax.
+Imports are static, top-level, before ordinary declarations/statements. Imported names are live, read-only aliases. `.s`, `.spu`, and `.sputnik` source files are accepted. From the repository root: `build/sputnik program.s` runs a file; `build/sputnik parse program.s` inspects syntax.
 
 ## 12. Optional profiles and reference additions
 

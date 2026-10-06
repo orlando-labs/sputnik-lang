@@ -30,12 +30,12 @@
 
     <main class="docs-main">
       <section class="docs-hero">
-        <div class="eyebrow"><span class="eyebrow-dot"></span><span data-i18n="cheatsheet.eyebrow">Technical preview · EN</span></div>
+        <div class="eyebrow"><span class="eyebrow-dot"></span><span data-i18n="cheatsheet.eyebrow">Technical preview · RU</span></div>
         <h1 data-i18n="cheatsheet.title">Шпаргалка Sputnik</h1>
-        <p data-i18n="cheatsheet.lead">Синтаксис и повседневные рецепты в одном документе: от первых выражений до блоков, коллекций, pattern matching и задач. Исходная шпаргалка — на английском.</p>
+        <p data-i18n="cheatsheet.lead">Синтаксис и повседневные рецепты в одном документе: от первых выражений до блоков, коллекций, сопоставления с образцом и задач.</p>
         <div class="spec-hero-actions">
-          <a class="button button-primary" href="#1-essentials"><span data-i18n="cheatsheet.read">Начать с основ</span><span aria-hidden="true">↓</span></a>
-          <a class="button button-ghost" href="./cheat-sheet.md" download><span data-i18n="cheatsheet.source">Скачать Markdown</span><span aria-hidden="true">↗</span></a>
+          <a class="button button-primary" href="#1-essentials" data-cheat-sheet-start><span data-i18n="cheatsheet.read">Начать с основ</span><span aria-hidden="true">↓</span></a>
+          <a class="button button-ghost" href="./cheat-sheet.ru.md" data-cheat-sheet-source download><span data-i18n="cheatsheet.source">Скачать Markdown</span><span aria-hidden="true">↗</span></a>
         </div>
       </section>
 
@@ -49,10 +49,10 @@
             <span aria-hidden="true">⌕</span>
             <input id="spec-search" type="search" autocomplete="off" placeholder="Найти раздел" aria-label="Найти раздел" data-i18n-placeholder="spec.search" data-i18n-aria-label="spec.search" />
           </div>
-          <nav id="spec-toc" class="spec-toc" lang="en" aria-label="Cheat sheet table of contents"></nav>
-          <a class="spec-source-link" href="./cheat-sheet.md"><span data-i18n="spec.sourceShort">Markdown source</span> ↗</a>
+          <nav id="spec-toc" class="spec-toc" lang="ru" aria-label="Оглавление" data-i18n-aria-label="spec.toc"></nav>
+          <a class="spec-source-link" href="./cheat-sheet.ru.md" data-cheat-sheet-source><span data-i18n="spec.sourceShort">Markdown source</span> ↗</a>
         </aside>
-        <article id="spec-content" class="spec-content" lang="en" data-source="./cheat-sheet.md" aria-live="polite">
+        <article id="spec-content" class="spec-content" lang="ru" data-source="./cheat-sheet.md" data-source-ru="./cheat-sheet.ru.md" aria-live="polite">
           <div class="spec-loading"><p data-i18n="cheatsheet.loading">Загружаю шпаргалку…</p></div>
         </article>
       </div>
@@ -63,6 +63,7 @@
       <p data-i18n="footer.text">No-GIL runtime. Expressive surface. Native path.</p>
       <span>Technical preview</span>
     </footer>
+    <script src="./syntax-highlight.js"></script>
     <script src="./app.js"></script>
     <script src="./md-render.js"></script>
     <script src="./spec-page.js"></script>

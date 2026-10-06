@@ -18,9 +18,9 @@
         loading: "Загружаю Гид…"
       },
       cheatsheet: {
-        eyebrow: "Technical preview · EN",
+        eyebrow: "Technical preview · RU",
         title: "Шпаргалка Sputnik",
-        lead: "Синтаксис и повседневные рецепты в одном документе: от первых выражений до блоков, коллекций, pattern matching и задач. Исходная шпаргалка — на английском.",
+        lead: "Синтаксис и повседневные рецепты в одном документе: от первых выражений до блоков, коллекций, сопоставления с образцом и задач.",
         read: "Начать с основ",
         source: "Скачать Markdown",
         loading: "Загружаю шпаргалку…"
@@ -176,7 +176,7 @@
         toc: "Оглавление",
         sections: "разделов",
         search: "Найти раздел",
-        sourceShort: "Markdown source",
+        sourceShort: "Исходный Markdown",
         loading: "Рендерю Markdown-спеку…"
       }
     },
@@ -393,28 +393,18 @@
     });
     if (document.body.classList.contains("module-page")) {
       window.renderSputnikModulePage?.(state.lang);
+    } else if (document.body.classList.contains("cheat-sheet-page")) {
+      document.title = state.lang === "ru" ? "Sputnik — шпаргалка" : "Sputnik — cheat sheet";
+      window.renderSputnikCheatSheetPage?.(state.lang);
     } else if (document.body.classList.contains("guide-page")) {
       window.renderSputnikGuidePage?.(state.lang);
     } else {
-      document.title = document.body.classList.contains("cheat-sheet-page")
-        ? (state.lang === "ru" ? "Sputnik — шпаргалка" : "Sputnik — cheat sheet")
-        : document.body.classList.contains("spec-page")
+      document.title = document.body.classList.contains("spec-page")
         ? (state.lang === "ru" ? "Sputnik — спецификация" : "Sputnik — specification")
         : document.body.classList.contains("docs-page")
         ? (state.lang === "ru" ? "Sputnik — модули VM" : "Sputnik — VM modules")
         : (state.lang === "ru" ? "Sputnik — Technical Preview" : "Sputnik — Technical Preview");
     }
-  };
-
-  const highlightSputnik = (source) => {
-    const escaped = source
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
-    return escaped
-      .replace(/(&quot;|")(.*?)(\1)/g, '<span class="tok-str">$1$2$3</span>')
-      .replace(/\b(def|case|when|else|if|unless|true|false|null|as|or|and)\b/g, '<span class="tok-key">$1</span>')
-      .replace(/\b(\d+)\b/g, '<span class="tok-num">$1</span>');
   };
 
   const methodCountLabel = (count) => {
@@ -563,4 +553,5 @@
   applyTranslations();
   initExampleCarousel();
   renderModules();
+  window.SputnikSyntax.highlightAll();
 })();

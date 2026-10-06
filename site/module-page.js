@@ -56,17 +56,6 @@
     }
   };
 
-  const highlightSputnik = (source) => {
-    const escaped = source
-      .replaceAll("&", "&amp;")
-      .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
-    return escaped
-      .replace(/("(?:\\.|[^"\\])*")/g, '<span class="tok-str">$1</span>')
-      .replace(/\b(def|case|when|else|if|unless|true|false|null|as|or|and|rescue)\b/g, '<span class="tok-key">$1</span>')
-      .replace(/\b(\d[\d_]*)\b/g, '<span class="tok-num">$1</span>');
-  };
-
   const copyText = async (text) => {
     if (navigator.clipboard?.writeText) {
       try {
@@ -138,7 +127,7 @@
                   <button type="button" data-copy-method="${methodIndex}">
                     ${labels[lang].copy}
                   </button>
-                  <pre><code>${highlightSputnik(item.example)}</code></pre>
+                  <pre><code class="language-sputnik" data-syntax-highlighted>${window.SputnikSyntax.highlight(item.example, "sputnik")}</code></pre>
                 </div>
               </section>
             `).join("")}

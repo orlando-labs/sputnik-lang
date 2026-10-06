@@ -13,6 +13,7 @@
 //     render as admonition callouts.
 //
 // Exposes `window.SputnikMarkdown.render(markdown, options) -> { html, headings }`.
+// `options.headingId(text, level)` can supply stable anchors across translations.
 // `options.resolveHref(href)` maps non-standard link targets (e.g. `spec:` and
 // `guide:` schemes, or relative spec paths); it defaults to identity.
 (() => {
@@ -114,6 +115,14 @@
         </table>
       </div>
     `;
+  };
+
+  const renderCode = (code) => {
+    const source = code.lines.join("\n");
+    const highlighted = window.SputnikSyntax
+      ? window.SputnikSyntax.highlight(source, code.lang)
+      : escapeHtml(source);
+    return `<pre><code class="language-${escapeHtml(code.lang)}" data-syntax-highlighted>${highlighted}</code></pre>`;
   };
 
   const render = (markdown, options = {}) => {
@@ -218,11 +227,7 @@
         const closes = fence && fence[1][0] === code.marker &&
           fence[1].length >= code.length && !fence[2].trim();
         if (closes) {
-          html.push(
-            `<pre><code class="language-${escapeHtml(
-              code.lang
-            )}">${escapeHtml(code.lines.join("\n"))}</code></pre>`
-          );
+          html.push(renderCode(code));
           code = null;
         } else {
           code.lines.push(line);
@@ -251,7 +256,7 @@
         flushBlocks();
         const level = heading[1].length;
         const text = stripInline(heading[2]);
-        const id = makeSlug(heading[2], slugCounts);
+        const id = options.headingId?.(text, level) || makeSlug(heading[2], slugCounts);
         headings.push({ id, level, text });
         html.push(
           `<h${level} id="${id}"><a href="#${id}" aria-hidden="true">#</a>${inline(
@@ -309,11 +314,7 @@
     }
 
     if (code) {
-      html.push(
-        `<pre><code class="language-${escapeHtml(code.lang)}">${escapeHtml(
-          code.lines.join("\n")
-        )}</code></pre>`
-      );
+      html.push(renderCode(code));
     }
     flushBlocks();
 

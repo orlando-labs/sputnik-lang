@@ -8,8 +8,8 @@ Three generated documentation surfaces feed the website (`site/`):
    modules, generated from the runtime source of truth plus curated examples
    (`site/modules.html`).
 3. **The cheat sheet** — the compact syntax reference and everyday recipes from
-   `docs/cheat-sheet.md`, published at `site/cheat-sheet.html` and linked in every
-   page's main menu. The document is in English; its page navigation is bilingual.
+   `docs/cheat-sheet.md` and `docs/cheat-sheet.ru.md`, published at
+   `site/cheat-sheet.html` and linked in every page's main menu. RU/EN switches both the document and the page navigation.
 
 Markdown documents render client-side through the shared Markdown renderer in
 `site/md-render.js` (no build step, no third-party deps).
@@ -182,18 +182,40 @@ module reference depends on the spec.
 
 ## 4. Publishing the cheat sheet
 
-Edit `docs/cheat-sheet.md`, the canonical source, then publish its byte-for-byte
-copy for the static website:
+Edit the canonical English source `docs/cheat-sheet.md` and Russian translation
+`docs/cheat-sheet.ru.md`, then publish their byte-for-byte copies to the static website:
 
 ```sh
 python3 tools/sync_cheat_sheet.py
 python3 tools/sync_cheat_sheet.py --check
 ```
 
-CI checks that the published copy is current. The page shares `spec-page.js`
-with the specification: section anchors, a searchable table of contents, and
+CI checks that both published translations are current. Section anchors are
+shared across languages, so changing RU/EN preserves a link to the selected
+section. The page shares `spec-page.js` with the specification: section anchors, a searchable table of contents, and
 active-section tracking. Links to the main spec stay on the website; references
 to other repository documents or corpus examples point to GitHub.
+
+---
+
+## 5. Syntax highlighting
+
+Every HTML page loads `site/syntax-highlight.js` before its renderer. Static
+examples use `SputnikSyntax.highlightAll()`; module examples and Markdown fences
+use the same `SputnikSyntax.highlight(source, language)` function. Add the
+language to a Markdown fence or a `language-*` class to a static `pre > code`.
+
+Sputnik, shell (`sh`, `bash`, `zsh`), JSON, TOML and EBNF have lexical highlighting;
+`text` fences keep diagrams and plain output literal. Sputnik highlighting
+preserves method references, whitespace-sensitive comments, escaped strings,
+interpolation, numeric bases, symbols and placeholders. The light reference
+surfaces and dark landing-page terminal share token classes and use separate
+CSS colour palettes. Highlighting changes markup only; code text and clipboard
+contents remain intact.
+
+Run `node tools/check_site_syntax.js` to verify literal code text, HTML escaping,
+Sputnik comment/method-reference rules, interpolation, and matching executable
+examples in both cheat sheet translations.
 
 ---
 
@@ -201,10 +223,11 @@ to other repository documents or corpus examples point to GitHub.
 
 | Concern | File |
 | --- | --- |
-| Cheat sheet source | `docs/cheat-sheet.md` |
-| Cheat sheet page / published copy | `site/cheat-sheet.html`, `site/cheat-sheet.md` |
+| Cheat sheet sources | `docs/cheat-sheet.md`, `docs/cheat-sheet.ru.md` |
+| Cheat sheet page / published copies | `site/cheat-sheet.html`, `site/cheat-sheet*.md` |
 | Spec and cheat sheet renderer | `site/spec-page.js` |
 | Cheat sheet publisher | `tools/sync_cheat_sheet.py` |
+| Shared syntax highlighting | `site/syntax-highlight.js` |
 | Shared Markdown renderer | `site/md-render.js` |
 | Guide page shell / renderer | `site/learn.html`, `site/guide-page.js` |
 | Guide content | `site/guide/content/**/*.{ru,en}.md` |

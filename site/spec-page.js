@@ -7,7 +7,23 @@
   if (!content || !toc) return;
 
   const isCheatSheet = document.body.classList.contains("cheat-sheet-page");
-  const sourcePath = content.dataset.source || "./spec/sputnik_unified_final_spec.md";
+  const defaultSource = content.dataset.source || "./spec/sputnik_unified_final_spec.md";
+  const sources = {en: defaultSource, ru: content.dataset.sourceRu || defaultSource};
+  const cache = new Map();
+  let renderRevision = 0;
+  let headingObserver;
+  // Keep existing deep links and the selected section across RU/EN switches.
+  const cheatSheetAnchors = [
+    "1-essentials", "2-collections-ranges-and-absence", "3-blocks-and-chains-spaces-matter",
+    "4-functions-types-and-callable-values", "5-classes-properties-and-composition",
+    "6-pattern-matching-and-multi-clause-functions", "7-conditions-and-control-flow",
+    "8-everyday-collection-recipes", "9-errors-cleanup-and-explicit-results",
+    "10-concurrency-and-output", "11-modules", "12-optional-profiles-and-reference-additions"
+  ];
+  const headingId = (text, level) => {
+    const number = text.match(/^(\d+)\./);
+    return level === 2 && number ? cheatSheetAnchors[Number(number[1]) - 1] : undefined;
+  };
 
   const escapeHtml = window.SputnikMarkdown.escapeHtml;
 
@@ -42,23 +58,23 @@
       )
       .join("");
     if (count) count.textContent = String(visibleHeadings.length);
+    filterToc();
   };
 
-  const wireTocSearch = () => {
-    if (!search) return;
-    search.addEventListener("input", () => {
-      const query = search.value.trim().toLocaleLowerCase();
-      toc.querySelectorAll("a").forEach((link) => {
-        link.hidden = Boolean(query) && !link.dataset.tocText.includes(query);
-      });
+  const filterToc = () => {
+    const query = (search?.value || "").trim().toLocaleLowerCase();
+    toc.querySelectorAll("a").forEach((link) => {
+      link.hidden = Boolean(query) && !link.dataset.tocText.includes(query);
     });
   };
+  search?.addEventListener("input", filterToc);
 
   const wireActiveHeadings = () => {
     const tocLinks = new Map(
       [...toc.querySelectorAll("a")].map((link) => [link.hash.slice(1), link])
     );
-    const observer = new IntersectionObserver(
+    headingObserver?.disconnect();
+    headingObserver = new IntersectionObserver(
       (entries) => {
         const visible = entries
           .filter((entry) => entry.isIntersecting)
@@ -72,20 +88,42 @@
 
     content
       .querySelectorAll("h1[id], h2[id], h3[id]")
-      .forEach((heading) => observer.observe(heading));
+      .forEach((heading) => headingObserver.observe(heading));
   };
 
-  const load = async () => {
+  const fetchMarkdown = (path) => {
+    if (!cache.has(path)) {
+      cache.set(path, fetch(path).then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.text();
+      }).catch((error) => { cache.delete(path); throw error; }));
+    }
+    return cache.get(path);
+  };
+
+  const load = async (lang = document.documentElement.lang) => {
+    const revision = ++renderRevision;
+    const sourcePath = isCheatSheet ? sources[lang] || sources.en : defaultSource;
+    content.setAttribute("aria-busy", "true");
+    if (isCheatSheet) {
+      document.querySelectorAll("[data-cheat-sheet-source]").forEach((link) => { link.href = sourcePath; });
+      if (search && content.lang !== lang) search.value = "";
+    }
     try {
-      const response = await fetch(sourcePath);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const source = await response.text();
+      const source = await fetchMarkdown(sourcePath);
+      // A slower fetch for an earlier language must not replace the current one.
+      if (revision !== renderRevision) return;
       // The page hero already supplies the cheat sheet's title.
       const markdown = isCheatSheet ? source.replace(/^# [^\n]+\n/, "") : source;
-      const rendered = window.SputnikMarkdown.render(markdown, { resolveHref });
+      const rendered = window.SputnikMarkdown.render(markdown, {resolveHref, headingId: isCheatSheet ? headingId : undefined});
       content.innerHTML = rendered.html;
+      content.setAttribute("aria-busy", "false");
+      if (isCheatSheet) {
+        content.lang = lang;
+        toc.lang = lang;
+        content.dataset.renderedLanguage = lang;
+      }
       renderToc(rendered.headings);
-      wireTocSearch();
       wireActiveHeadings();
       // A direct section URL must also work after the async Markdown load.
       const anchor = rendered.headings.find((heading) =>
@@ -93,6 +131,8 @@
       );
       if (anchor) document.getElementById(anchor.id)?.scrollIntoView();
     } catch (error) {
+      if (revision !== renderRevision) return;
+      content.setAttribute("aria-busy", "false");
       const isEnglish = document.documentElement.lang === "en";
       content.innerHTML = `
         <div class="spec-error">
@@ -105,5 +145,6 @@
     }
   };
 
+  if (isCheatSheet) window.renderSputnikCheatSheetPage = load;
   void load();
 })();

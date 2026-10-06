@@ -19,22 +19,12 @@ pre .tok-key{color:var(--syntax-key)}pre .tok-str{color:var(--syntax-str)}pre .t
 /* The notebook photograph leaves a quiet field for the language introduction. */
 .launch {
   position: relative;
-  isolation: isolate;
   display: flex;
   align-items: center;
   min-height: clamp(620px, 50vw, 760px);
   margin-inline: -48px;
   padding: 68px 64px;
-  background: #deddd9;
-}
-.launch-background {
-  position: absolute;
-  inset: 0;
-  z-index: -1;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  object-position: center;
+  background: #deddd9 url("./assets/hero-notebook.png") center / cover no-repeat;
 }
 .launch-copy { width: min(36%, 410px); min-width: 0; }
 .launch .eyebrow { margin-bottom: 26px; font-size: 10px; }
@@ -58,39 +48,24 @@ pre .tok-key{color:var(--syntax-key)}pre .tok-str{color:var(--syntax-str)}pre .t
 .launch .button { padding: 12px 18px; }
 .launch .text-link { font-size: 12px; }
 @media (max-width: 1100px) and (min-width: 1001px) {
-  .launch { padding-inline: 48px; }
+  .launch { padding-inline: 48px; background-position: left center; }
   .launch-copy { width: 35%; }
   .launch-lead { font-size: 14px; }
   .launch .hero-actions { gap: 16px; }
 }
 @media (max-width: 1000px) {
-  .launch {
-    --hero-art-height: clamp(240px, 43vw, 390px);
-    display: block;
-    min-height: 0;
-    padding: 54px 48px calc(var(--hero-art-height) + 32px);
-  }
-  .launch-copy { width: 100%; max-width: 540px; }
-  .launch h1 { font-size: 104px; }
-  .launch-title { font-size: 32px; }
-  .launch-lead { max-width: 420px; }
-  .launch-background { inset: auto 0 0; height: var(--hero-art-height); object-position: right center; }
-  .launch::after {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    inset-inline: 0;
-    bottom: calc(var(--hero-art-height) - 72px);
-    height: 72px;
-    background: linear-gradient(#deddd9, transparent);
-    pointer-events: none;
-  }
+  .launch { min-height: 660px; padding: 54px 48px; background-position: left center; }
+  .launch-copy { width: 100%; max-width: 340px; }
+  .launch h1 { font-size: 100px; }
+  .launch-title { font-size: 30px; }
+  .launch-lead { max-width: 335px; }
 }
 @media (max-width: 760px) {
-  .launch { margin-inline: -22px; padding: 42px 22px calc(var(--hero-art-height) + 28px); }
+  .launch { min-height: 560px; margin-inline: -22px; padding: 42px 22px; }
+  .launch-copy { max-width: 320px; }
   .launch .eyebrow { margin-bottom: 24px; font-size: 9px; }
   .launch h1 { margin-bottom: 22px; font-size: clamp(78px, 22vw, 104px); }
   .launch-title { margin-bottom: 18px; font-size: 29px; }
-  .launch-lead { max-width: 380px; font-size: 14px; line-height: 1.65; }
+  .launch-lead { font-size: 14px; line-height: 1.65; }
   .launch .hero-actions { margin-top: 26px; gap: 16px 22px; }
 }

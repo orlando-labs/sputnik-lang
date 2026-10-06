@@ -43,6 +43,7 @@
       copied: "Готово",
       previous: "Предыдущий",
       next: "Следующий",
+      library: "Sputnik · стандартная библиотека",
       missing: "Модуль не найден"
     },
     en: {
@@ -52,6 +53,7 @@
       copied: "Copied",
       previous: "Previous",
       next: "Next",
+      library: "Sputnik · standard library",
       missing: "Module not found"
     }
   };
@@ -106,13 +108,13 @@
         <header class="module-reference-head">
           <div class="module-icon module-icon-large">${module.icon}</div>
           <div>
-            <p>Sputnik VM · prelude</p>
+            <p>${labels[lang].library}</p>
             <h1>${module.title}</h1>
             <div class="module-reference-description">${module.description[lang]}</div>
           </div>
         </header>
 
-        <div class="module-note">${module.note[lang]}</div>
+        <div id="module-note" class="module-note">${module.note[lang]}</div>
 
         <section class="method-reference">
           <h2>${labels[lang].methods}</h2>

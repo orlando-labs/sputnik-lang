@@ -1,0 +1,28 @@
+id: benchmark
+path: benchmark.html
+title: Benchmark
+icon: ns
+source: runtime/stdlib_benchmark.cpp
+description.ru: Измерение времени выполнения блоков и форматирование результатов.
+description.en: Measure block execution time and format the results.
+note.ru: Доступен из prelude. Измерение содержит результат блока и время; значения времени зависят от хоста и нагрузки.
+note.en: Available from the prelude. Measurements contain the block result and elapsed time; timing depends on the host and load.
+drift_ignore: cases compare data elapsed elapsed_ns fastest find format from_json from_map inspect iterations kind label map max max_ns mean mean_ns min min_ns ops_per_second p50 p50_ns p90 p90_ns p95 p95_ns p99 p99_ns per_iteration per_iteration_ns profile relative run sample_ns sample_times samples section slowest spans summary table time to_json to_map to_str total total_ns value
+
+method: Benchmark.measure(label)
+ru: Выполняет блок и возвращает измерение.
+en: Runs a block and returns a measurement.
+example:
+measurement = Benchmark.measure("calc"):
+  21 * 2
+measurement.value
+.end
+
+method: measurement.pretty(unit: :ns)
+ru: Форматирует измерение с выбранной единицей времени.
+en: Formats the measurement in the chosen time unit.
+example:
+measurement = Benchmark.measure("calc"):
+  21 * 2
+measurement.pretty(unit: :ns)
+.end

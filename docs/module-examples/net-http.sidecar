@@ -1,0 +1,31 @@
+id: net-http
+path: net-http.html
+title: net.http / TLS
+icon: HTTP
+source: runtime/stdlib_net_http.cpp
+description.ru: HTTP-клиент с чтением тела ответа и HTTPS через проверяемое TLS-соединение.
+description.en: HTTP client, response body reads and HTTPS over verified TLS connections.
+note.ru: Client импортируется из net.http. HTTPS использует OpenSSL, проверяет цепочку сертификатов и имя хоста; проверка не отключается. Свой CA задаётся через tls_ca_file или tls_ca_path; клиентский сертификат и ключ — через tls_cert_file и tls_key_file. Нужен доступ к сети.
+note.en: Import Client from net.http. HTTPS uses OpenSSL and verifies the certificate chain and hostname; verification cannot be disabled. Set a custom CA with tls_ca_file or tls_ca_path, and a client certificate/key with tls_cert_file and tls_key_file. Network access is required.
+drift_ignore: Client FormBody Headers Request RequestBody Server ServerRequest ServerResponse __call__ form get_json json new post_json trace
+
+method: Client(timeout: 10)
+ru: Создаёт HTTP-клиент с таймаутом.
+en: Constructs an HTTP client with a timeout.
+example:
+from net.http import Client
+client = Client(timeout: 10)
+client.close!()
+.end
+
+method: client.get(url)
+ru: Выполняет GET-запрос; https включает проверку TLS.
+en: Performs a GET request; https enables TLS verification.
+example:
+from net.http import Client
+client = Client(timeout: 10)
+response = client.get("https://example.com/")
+text = response.body_text()
+client.close!()
+text
+.end

@@ -1,0 +1,34 @@
+id: io
+path: io.html
+title: IO
+icon: IO
+source: runtime/stdlib_io.cpp
+description.ru: Байтовые буферы и общий интерфейс ввода-вывода для файлов, процессов и сети.
+description.en: Byte buffers and shared I/O interfaces for files, processes and networking.
+note.ru: Типы импортируются из io. ByteBuffer хранит байты; bytes() создаёт снимок содержимого.
+note.en: Import types from io. ByteBuffer stores bytes; bytes() snapshots its contents.
+drift_ignore: Buffer ByteBuffer Logger Pipe __call__ buffered bytes capacity close copy_bytes count current_stderr current_stdout debug error fatal flush get_at hex info limit log owner position read_slice reader remaining slice stable_hash stderr stdout str to_str warn warning with_output write_line write_slice write_str writer
+
+method: ByteBuffer.new(capacity)
+ru: Создаёт байтовый буфер заданной ёмкости.
+en: Creates a byte buffer with the requested capacity.
+example:
+from io import ByteBuffer
+buffer = ByteBuffer.new(8)
+buffer.capacity()
+.end
+
+method: buffer.put_all!(bytes)
+ru: Добавляет байты в буфер.
+en: Appends bytes to the buffer.
+example:
+from io import ByteBuffer
+buffer = ByteBuffer.new(8)
+buffer.put_all!("hi".bytes())
+buffer.bytes().to_str()
+.end
+
+method: Worked example — byte buffer
+ru: Проверенный пример импорта, записи и чтения буфера из корпуса.
+en: A corpus example covering buffer imports, writes and reads.
+corpus: io_byte_buffer

@@ -1,0 +1,32 @@
+id: regexp
+path: regexp.html
+title: Regexp
+icon: .*
+source: runtime/stdlib_regexp.cpp
+description.ru: Регулярные выражения, поиск совпадений и экранирование буквального текста.
+description.en: Regular expressions, match searches and escaping literal text.
+note.ru: Regexp доступен из prelude. Неверный шаблон поднимает RegexpCompileError.
+note.en: Regexp is available from the prelude. Invalid patterns raise RegexpCompileError.
+drift_ignore: __call__ captures count end find finish full_match group inspect length new pattern r size source start text to_str
+
+method: Regexp.compile(pattern, flags: "")
+ru: Компилирует строковый шаблон.
+en: Compiles a pattern string.
+example:
+pattern = Regexp.compile("[0-9]+")
+pattern.match?("id=42")
+.end
+
+method: pattern.match?(text)
+ru: Проверяет наличие совпадения в строке.
+en: Tests whether the text contains a match.
+example:
+Regexp.compile("orbit").match?("Sputnik in orbit")
+.end
+
+method: Regexp.escape(text)
+ru: Экранирует метасимволы для буквального поиска.
+en: Escapes metacharacters for a literal search.
+example:
+Regexp.escape("a+b[c]")
+.end

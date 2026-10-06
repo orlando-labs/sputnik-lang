@@ -1,0 +1,26 @@
+id: net-tcp
+path: net-tcp.html
+title: net.tcp
+icon: TCP
+source: runtime/stdlib_net.cpp
+description.ru: TCP-соединения, слушающие сокеты и чтение или запись потоков байтов.
+description.en: TCP connections, listeners and byte-stream reads and writes.
+note.ru: Нужен import net. Хост должен разрешить соответствующие сетевые операции. Сокеты закрываются через close!().
+note.en: Requires import net. The host must grant the corresponding network operations. Close sockets with close!().
+drift_ignore: bind connect family host http local_endpoint new open parse port tcp to_str udp
+
+method: net.tcp.listen(host, port)
+ru: Создаёт TCP listener. Порт 0 выбирает свободный порт.
+en: Creates a TCP listener. Port 0 selects an available port.
+example:
+import net
+listener = net.tcp.listen("127.0.0.1", 0)
+port = listener.local_endpoint().port()
+listener.close!()
+port
+.end
+
+method: Worked example — TCP loopback
+ru: Проверенный пример listener/connect, записи и чтения из корпуса.
+en: A corpus example covering listen/connect, writes and reads.
+corpus: net_tcp_loopback

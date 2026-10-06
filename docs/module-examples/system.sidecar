@@ -1,0 +1,28 @@
+id: system
+path: system.html
+title: System
+icon: >_
+source: runtime/system.cpp
+description.ru: Запуск дочерних процессов с отдельными аргументами и сбор их вывода.
+description.en: Start child processes with explicit argument vectors and capture their output.
+note.ru: Нужен import system. Создание команды не запускает процесс; запуск требует process.spawn. Аргументы передаются отдельно, без неявного shell.
+note.en: Requires import system. Constructing a command does not start a process; execution requires process.spawn. Arguments are separate, with no implicit shell.
+drift_ignore: close communicate each_chunk output run spawn wait
+
+method: system.command(program, *arguments)
+ru: Создаёт переиспользуемую команду.
+en: Constructs a reusable command.
+example:
+import system
+command = system.command("/usr/bin/printf", "hello")
+command.argv
+.end
+
+method: command.capture(timeout: 30.0)
+ru: Запускает команду и собирает stdout, stderr и статус завершения.
+en: Runs the command and collects stdout, stderr and exit status.
+example:
+import system
+result = system.command("/usr/bin/printf", "hello").capture(timeout: 30.0)
+result.stdout.to_str()
+.end

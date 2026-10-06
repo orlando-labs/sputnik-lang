@@ -1,0 +1,37 @@
+id: fs
+path: fs.html
+title: fs
+icon: /
+source: runtime/stdlib_fs.cpp
+description.ru: Чтение файлов как текста или байтов, пути и файловые метаданные.
+description.en: Read files as text or bytes and inspect paths and filesystem metadata.
+note.ru: Нужен import fs. Чтение требует соответствующего доступа fs.read; операции с метаданными — fs.metadata. В примерах используется существующий config.yaml.
+note.en: Requires import fs. Reads require the corresponding fs.read access; metadata operations require fs.metadata. Examples use an existing config.yaml file.
+drift_ignore: File Path basename extname join mkdir mkdir_p normalize parent path rename size to_str write_text
+
+method: fs.read_text(path)
+ru: Читает содержимое файла в Str.
+en: Reads file contents into a Str.
+example:
+import fs
+text = fs.read_text("config.yaml")
+text
+.end
+
+method: fs.read_bytes(path)
+ru: Читает содержимое файла как байты.
+en: Reads file contents as bytes.
+example:
+import fs
+bytes = fs.read_bytes("config.yaml")
+bytes
+.end
+
+method: fs.metadata(path)
+ru: Возвращает метаданные файлового объекта.
+en: Returns filesystem object metadata.
+example:
+import fs
+info = fs.metadata("config.yaml")
+info.size
+.end

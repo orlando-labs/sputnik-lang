@@ -48,6 +48,29 @@ window.SPUTNIK_MODULES = [
     ]
   },
   {
+    id: "benchmark",
+    path: "benchmark.html",
+    title: "Benchmark",
+    icon: "ns",
+    description: { ru: "Измерение времени выполнения блоков и форматирование результатов.", en: "Measure block execution time and format the results." },
+    note: { ru: "Доступен из prelude. Измерение содержит результат блока и время; значения времени зависят от хоста и нагрузки.", en: "Available from the prelude. Measurements contain the block result and elapsed time; timing depends on the host and load." },
+    methods: [
+      method("Benchmark.measure(label)", "Выполняет блок и возвращает измерение.", "Runs a block and returns a measurement.", "measurement = Benchmark.measure(\"calc\"):\n  21 * 2\nmeasurement.value"),
+      method("measurement.pretty(unit: :ns)", "Форматирует измерение с выбранной единицей времени.", "Formats the measurement in the chosen time unit.", "measurement = Benchmark.measure(\"calc\"):\n  21 * 2\nmeasurement.pretty(unit: :ns)"),
+    ]
+  },
+  {
+    id: "bool",
+    path: "bool.html",
+    title: "Bool",
+    icon: "TF",
+    description: { ru: "Строгий разбор логических значений из текста конфигурации и аргументов CLI.", en: "Strict boolean parsing for configuration text and CLI arguments." },
+    note: { ru: "Доступен из prelude. Регистр и пробелы по краям игнорируются. Принимает true/t/1/yes/on и false/f/0/no/off/null; прочий текст — ValueError, другие типы — TypeError.", en: "Available from the prelude. Ignores case and surrounding whitespace. Accepts true/t/1/yes/on and false/f/0/no/off/null; other text raises ValueError, other types raise TypeError." },
+    methods: [
+      method("Bool.parse(text)", "Строго разбирает строку, не используя обычную истинность значения.", "Strictly parses a string without ordinary truthiness conversion.", "Bool.parse(\" YES \")\nBool.parse(\"NULL\")"),
+    ]
+  },
+  {
     id: "digest",
     path: "digest.html",
     title: "Digest",
@@ -71,6 +94,19 @@ window.SPUTNIK_MODULES = [
     ]
   },
   {
+    id: "fs",
+    path: "fs.html",
+    title: "fs",
+    icon: "/",
+    description: { ru: "Чтение файлов как текста или байтов, пути и файловые метаданные.", en: "Read files as text or bytes and inspect paths and filesystem metadata." },
+    note: { ru: "Нужен import fs. Чтение требует соответствующего доступа fs.read; операции с метаданными — fs.metadata. В примерах используется существующий config.yaml.", en: "Requires import fs. Reads require the corresponding fs.read access; metadata operations require fs.metadata. Examples use an existing config.yaml file." },
+    methods: [
+      method("fs.read_text(path)", "Читает содержимое файла в Str.", "Reads file contents into a Str.", "import fs\ntext = fs.read_text(\"config.yaml\")\ntext"),
+      method("fs.read_bytes(path)", "Читает содержимое файла как байты.", "Reads file contents as bytes.", "import fs\nbytes = fs.read_bytes(\"config.yaml\")\nbytes"),
+      method("fs.metadata(path)", "Возвращает метаданные файлового объекта.", "Returns filesystem object metadata.", "import fs\ninfo = fs.metadata(\"config.yaml\")\ninfo.size"),
+    ]
+  },
+  {
     id: "hex",
     path: "hex.html",
     title: "Hex",
@@ -80,6 +116,19 @@ window.SPUTNIK_MODULES = [
     methods: [
       method("Hex.encode(bytes)", "Кодирует байты в lowercase hex.", "Encodes bytes as lowercase hex.", "text = Hex.encode(Bytes.new(\"hi\"))\n# => \"6869\""),
       method("Hex.decode(text, mode: :strict)", "Декодирует hex-текст в Bytes.", "Decodes hex text into Bytes.", "text = Hex.decode(\"68 69\", mode: :lenient).to_str()\n# => \"hi\""),
+    ]
+  },
+  {
+    id: "io",
+    path: "io.html",
+    title: "IO",
+    icon: "IO",
+    description: { ru: "Байтовые буферы и общий интерфейс ввода-вывода для файлов, процессов и сети.", en: "Byte buffers and shared I/O interfaces for files, processes and networking." },
+    note: { ru: "Типы импортируются из io. ByteBuffer хранит байты; bytes() создаёт снимок содержимого.", en: "Import types from io. ByteBuffer stores bytes; bytes() snapshots its contents." },
+    methods: [
+      method("ByteBuffer.new(capacity)", "Создаёт байтовый буфер заданной ёмкости.", "Creates a byte buffer with the requested capacity.", "from io import ByteBuffer\nbuffer = ByteBuffer.new(8)\nbuffer.capacity()"),
+      method("buffer.put_all!(bytes)", "Добавляет байты в буфер.", "Appends bytes to the buffer.", "from io import ByteBuffer\nbuffer = ByteBuffer.new(8)\nbuffer.put_all!(\"hi\".bytes())\nbuffer.bytes().to_str()"),
+      method("Worked example — byte buffer", "Проверенный пример импорта, записи и чтения буфера из корпуса.", "A corpus example covering buffer imports, writes and reads.", "from io import ByteBuffer\n\n# `from io import ByteBuffer` resolves to the io.ByteBuffer native type.\n# put_all! appends the raw octets of a string; bytes() snapshots what was\n# written, so the buffer round-trips the payload while reporting its capacity.\ndef probe():\n  b = ByteBuffer.new(8)\n  b.put_all!(\"hi\".bytes())\n  \"#{b.capacity()}:#{b.count()}:#{b.bytes().to_str()}\"\n\nprobe()\n# => \"8:2:hi\""),
     ]
   },
   {
@@ -140,6 +189,43 @@ window.SPUTNIK_MODULES = [
     ]
   },
   {
+    id: "net-http",
+    path: "net-http.html",
+    title: "net.http / TLS",
+    icon: "HTTP",
+    description: { ru: "HTTP-клиент с чтением тела ответа и HTTPS через проверяемое TLS-соединение.", en: "HTTP client, response body reads and HTTPS over verified TLS connections." },
+    note: { ru: "Client импортируется из net.http. HTTPS использует OpenSSL, проверяет цепочку сертификатов и имя хоста; проверка не отключается. Свой CA задаётся через tls_ca_file или tls_ca_path; клиентский сертификат и ключ — через tls_cert_file и tls_key_file. Нужен доступ к сети.", en: "Import Client from net.http. HTTPS uses OpenSSL and verifies the certificate chain and hostname; verification cannot be disabled. Set a custom CA with tls_ca_file or tls_ca_path, and a client certificate/key with tls_cert_file and tls_key_file. Network access is required." },
+    methods: [
+      method("Client(timeout: 10)", "Создаёт HTTP-клиент с таймаутом.", "Constructs an HTTP client with a timeout.", "from net.http import Client\nclient = Client(timeout: 10)\nclient.close!()"),
+      method("client.get(url)", "Выполняет GET-запрос; https включает проверку TLS.", "Performs a GET request; https enables TLS verification.", "from net.http import Client\nclient = Client(timeout: 10)\nresponse = client.get(\"https://example.com/\")\ntext = response.body_text()\nclient.close!()\ntext"),
+    ]
+  },
+  {
+    id: "net-tcp",
+    path: "net-tcp.html",
+    title: "net.tcp",
+    icon: "TCP",
+    description: { ru: "TCP-соединения, слушающие сокеты и чтение или запись потоков байтов.", en: "TCP connections, listeners and byte-stream reads and writes." },
+    note: { ru: "Нужен import net. Хост должен разрешить соответствующие сетевые операции. Сокеты закрываются через close!().", en: "Requires import net. The host must grant the corresponding network operations. Close sockets with close!()." },
+    methods: [
+      method("net.tcp.listen(host, port)", "Создаёт TCP listener. Порт 0 выбирает свободный порт.", "Creates a TCP listener. Port 0 selects an available port.", "import net\nlistener = net.tcp.listen(\"127.0.0.1\", 0)\nport = listener.local_endpoint().port()\nlistener.close!()\nport"),
+      method("Worked example — TCP loopback", "Проверенный пример listener/connect, записи и чтения из корпуса.", "A corpus example covering listen/connect, writes and reads.", "import net\nfrom io import ByteBuffer\n\n# Loopback TCP round-trip on a single strand: listen on an ephemeral port,\n# connect, write, accept, and read the payload back. Exercises the net.tcp\n# namespace (listen/connect), the listener (accept!/local_endpoint), and the\n# stream reader/writer (write_all!/read!) end to end from Sputnik source.\ndef probe():\n  listener = net.tcp.listen(\"127.0.0.1\", 0)\n  port = listener.local_endpoint().port()\n  client = net.tcp.connect(\"127.0.0.1\", port)\n  client.write_all!(\"ping\".bytes())\n  server = listener.accept!()\n  buf = ByteBuffer.new(4)\n  n = server.read!(buf)\n  client.close!()\n  server.close!()\n  listener.close!()\n  \"#{port > 0}:#{n}:#{buf.bytes().to_str()}\"\n\nprobe()\n# => \"true:4:ping\""),
+    ]
+  },
+  {
+    id: "regexp",
+    path: "regexp.html",
+    title: "Regexp",
+    icon: ".*",
+    description: { ru: "Регулярные выражения, поиск совпадений и экранирование буквального текста.", en: "Regular expressions, match searches and escaping literal text." },
+    note: { ru: "Regexp доступен из prelude. Неверный шаблон поднимает RegexpCompileError.", en: "Regexp is available from the prelude. Invalid patterns raise RegexpCompileError." },
+    methods: [
+      method("Regexp.compile(pattern, flags: \"\")", "Компилирует строковый шаблон.", "Compiles a pattern string.", "pattern = Regexp.compile(\"[0-9]+\")\npattern.match?(\"id=42\")"),
+      method("pattern.match?(text)", "Проверяет наличие совпадения в строке.", "Tests whether the text contains a match.", "Regexp.compile(\"orbit\").match?(\"Sputnik in orbit\")"),
+      method("Regexp.escape(text)", "Экранирует метасимволы для буквального поиска.", "Escapes metacharacters for a literal search.", "Regexp.escape(\"a+b[c]\")"),
+    ]
+  },
+  {
     id: "secure-random",
     path: "secure-random.html",
     title: "SecureRandom",
@@ -168,6 +254,18 @@ window.SPUTNIK_MODULES = [
       method("Signature.sign(algorithm, private_key, message)", "Подписать бинарное сообщение.", "Sign a binary message.", "signature = Signature.sign(:ed25519, keys[\"private_key\"], Bytes.new(\"sputnik\"))"),
       method("Signature.verify(algorithm, public_key, message, signature)", "Проверить подпись; изменённое сообщение возвращает false.", "Verify a signature; a changed message returns false.", "valid = Signature.verify(:ed25519, keys[\"public_key\"], Bytes.new(\"sputnik\"), signature)"),
       method("Signature.available?(algorithm)", "Проверить, доступен ли алгоритм в данной сборке.", "Check whether an algorithm is available in this build.", "gost_enabled = Signature.available?(:gost2012_256)"),
+    ]
+  },
+  {
+    id: "system",
+    path: "system.html",
+    title: "System",
+    icon: ">_",
+    description: { ru: "Запуск дочерних процессов с отдельными аргументами и сбор их вывода.", en: "Start child processes with explicit argument vectors and capture their output." },
+    note: { ru: "Нужен import system. Создание команды не запускает процесс; запуск требует process.spawn. Аргументы передаются отдельно, без неявного shell.", en: "Requires import system. Constructing a command does not start a process; execution requires process.spawn. Arguments are separate, with no implicit shell." },
+    methods: [
+      method("system.command(program, *arguments)", "Создаёт переиспользуемую команду.", "Constructs a reusable command.", "import system\ncommand = system.command(\"/usr/bin/printf\", \"hello\")\ncommand.argv"),
+      method("command.capture(timeout: 30.0)", "Запускает команду и собирает stdout, stderr и статус завершения.", "Runs the command and collects stdout, stderr and exit status.", "import system\nresult = system.command(\"/usr/bin/printf\", \"hello\").capture(timeout: 30.0)\nresult.stdout.to_str()"),
     ]
   },
   {
@@ -269,6 +367,19 @@ window.SPUTNIK_MODULES = [
       method("uuid.inspect", "Возвращает canonical text для inspection.", "Returns canonical text for inspection.", "text = Uuid.v7().inspect"),
       method("uuid.version", "Возвращает version nibble.", "Returns the version nibble.", "version = Uuid.v7().version\n# 7"),
       method("uuid.to_json", "Сериализует UUID как JSON string.", "Serializes the UUID as a JSON string.", "json = Uuid.v4().to_json\n# \"\\\"…\\\"\""),
+    ]
+  },
+  {
+    id: "yaml",
+    path: "yaml.html",
+    title: "Yaml",
+    icon: "Y",
+    description: { ru: "Разбор и генерация YAML: коллекции, вложенные структуры и скалярные значения.", en: "Parse and generate YAML collections, nested structures and scalar values." },
+    note: { ru: "Yaml доступен из prelude. Map поддерживает доступ по строковым и символьным именам ключей.", en: "Yaml is available from the prelude. Maps support string and symbol name keys." },
+    methods: [
+      method("Yaml.parse(text)", "Разбирает строку YAML в значения Sputnik.", "Parses YAML text into Sputnik values.", "cfg = Yaml.parse(\"name: Ada\\nactive: true\\n\")\ncfg[:name]"),
+      method("Yaml.generate(value)", "Преобразует значение в текст YAML.", "Converts a value to YAML text.", "Yaml.generate({name: \"Ada\", active: true})"),
+      method("Worked example — parse, match, round-trip", "Проверенный пример из корпуса: вложенные данные, типы скаляров и обратная сериализация.", "A corpus example covering nested data, scalar types and round-trip serialization.", "# Yaml.parse -> name-indifferent Map (dual symbol/string access + named-key\n# pattern matching, spec §8) over a block mapping/sequence document, round-trips\n# through Yaml.generate, and types scalars per the core schema (Int vs Float vs\n# Str vs Bool vs null).\ndef probe():\n  cfg = Yaml.parse(\"name: Ada\\nage: 42\\nactive: true\\nratio: 0.5\\nscores:\\n  - 10\\n  - 20\\nmeta:\\n  role: admin\\ntags: [a, b]\\n\")\n  round = Yaml.parse(Yaml.generate(cfg))\n  matched = 0\n  case cfg:\n    when {name: n, age: a}:\n      matched = a\n    else:\n      matched = -1\n  if cfg[:name] == \"Ada\" and cfg[\"age\"] == 42 and cfg[:ratio] == 0.5 and cfg[:scores][1] == 20 and cfg[:active] == true and cfg[:meta][:role] == \"admin\" and cfg[:tags][0] == \"a\" and round[:name] == \"Ada\" and round[:scores][1] == 20 and matched == 42 and Yaml.generate([1, 2]) == \"- 1\\n- 2\\n\":\n    42\n  else:\n    0\n\nprobe()\n# => 42"),
     ]
   },
 ];

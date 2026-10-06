@@ -1,0 +1,18 @@
+id: bool
+path: bool.html
+title: Bool
+icon: TF
+source: runtime/stdlib_bool.cpp
+description.ru: Строгий разбор логических значений из текста конфигурации и аргументов CLI.
+description.en: Strict boolean parsing for configuration text and CLI arguments.
+note.ru: Доступен из prelude. Регистр и пробелы по краям игнорируются. Принимает true/t/1/yes/on и false/f/0/no/off/null; прочий текст — ValueError, другие типы — TypeError.
+note.en: Available from the prelude. Ignores case and surrounding whitespace. Accepts true/t/1/yes/on and false/f/0/no/off/null; other text raises ValueError, other types raise TypeError.
+drift_ignore: 
+
+method: Bool.parse(text)
+ru: Строго разбирает строку, не используя обычную истинность значения.
+en: Strictly parses a string without ordinary truthiness conversion.
+example:
+Bool.parse(" YES ")
+Bool.parse("NULL")
+.end

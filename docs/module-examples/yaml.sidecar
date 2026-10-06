@@ -1,0 +1,30 @@
+id: yaml
+path: yaml.html
+title: Yaml
+icon: Y
+source: runtime/stdlib_yaml.cpp
+description.ru: Разбор и генерация YAML: коллекции, вложенные структуры и скалярные значения.
+description.en: Parse and generate YAML collections, nested structures and scalar values.
+note.ru: Yaml доступен из prelude. Map поддерживает доступ по строковым и символьным именам ключей.
+note.en: Yaml is available from the prelude. Maps support string and symbol name keys.
+drift_ignore: load_from_file save_to_file
+
+method: Yaml.parse(text)
+ru: Разбирает строку YAML в значения Sputnik.
+en: Parses YAML text into Sputnik values.
+example:
+cfg = Yaml.parse("name: Ada\nactive: true\n")
+cfg[:name]
+.end
+
+method: Yaml.generate(value)
+ru: Преобразует значение в текст YAML.
+en: Converts a value to YAML text.
+example:
+Yaml.generate({name: "Ada", active: true})
+.end
+
+method: Worked example — parse, match, round-trip
+ru: Проверенный пример из корпуса: вложенные данные, типы скаляров и обратная сериализация.
+en: A corpus example covering nested data, scalar types and round-trip serialization.
+corpus: yaml_parse_generate

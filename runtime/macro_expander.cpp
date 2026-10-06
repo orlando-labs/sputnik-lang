@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::macros {
+namespace sputnik::macros {
 namespace {
 
 constexpr int kExpansionDepthLimit = 128;
@@ -117,7 +117,7 @@ bool is_kernel_style_body(const std::vector<std::unique_ptr<ast::Expr>> &body) {
   if (body.empty()) {
     return true;
   }
-  // `return` is an expression in Amber, so a return statement arrives as
+  // `return` is an expression in Sputnik, so a return statement arrives as
   // AstExprStmt{AstReturn}; unwrap the statement wrapper before checking.
   const auto statement_expr = [](const ast::Expr &stmt) -> const ast::Expr * {
     if (stmt.kind == "AstExprStmt") {
@@ -1629,8 +1629,28 @@ bool compile_macro_module(const std::vector<const ast::Expr *> &macro_defs,
                           const std::string &module_name,
                           bytecode::BcModule *out, std::string *error) {
   std::vector<std::unique_ptr<ast::Expr>> items;
+  std::set<std::string> definition_spans;
   for (const ast::Expr *def : macro_defs) {
     std::unique_ptr<ast::Expr> copy = ast::clone_expr(*def);
+    // The same provider may be imported both by name and through a module
+    // alias. Give duplicate clones distinct source identities so binder/HIR
+    // span lookups cannot resolve one function's locals in the other clone.
+    const std::string span_key = def->span.file + ":" +
+                                std::to_string(def->span.start.offset);
+    if (!definition_spans.insert(span_key).second) {
+      const std::string *selector = string_field(*copy, "name");
+      const std::string suffix = " [macro " +
+          (selector ? *selector : std::to_string(items.size())) + "]";
+      const auto distinguish = [&](auto &&self, ast::Expr &node) -> void {
+        node.span.file += suffix;
+        for (auto &field : node.node_fields)
+          if (field.value) self(self, *field.value);
+        for (auto &field : node.list_fields)
+          for (auto &value : field.values)
+            if (value) self(self, *value);
+      };
+      distinguish(distinguish, *copy);
+    }
     copy->bool_fields.erase(
         std::remove_if(copy->bool_fields.begin(), copy->bool_fields.end(),
                        [](const ast::BoolField &field) {
@@ -1652,7 +1672,7 @@ bool compile_macro_module(const std::vector<const ast::Expr *> &macro_defs,
   hir::Program program = hir::lower_module(items, module_name, bind.graph);
   bytecode::EmitResult emit = bytecode::emit_program(program, module_name);
   if (!emit.ok()) {
-    *error = "macro definitions failed to compile";
+    *error = "macro definitions failed to compile: " + lexer::diagnostics_to_json(emit.diagnostics);
     return false;
   }
   const std::vector<std::uint8_t> bytes =
@@ -1856,7 +1876,7 @@ std::string serialize_macro_exports(const std::vector<MacroExport> &exports,
       valid.push_back(&entry);
     }
   }
-  std::string out = "amber.macro.exports.v2\n";
+  std::string out = "sputnik.macro.exports.v2\n";
   out += std::to_string(valid.size()) + "\n";
   for (const MacroExport *entry : valid) {
     const lexer::Span &span = entry->def->span;
@@ -1961,11 +1981,11 @@ std::vector<MacroExport> parse_macro_exports(const std::string &payload,
   std::size_t cursor = 0;
   std::string line;
   if (!read_payload_line(payload, &cursor, &line) ||
-      (line != "amber.macro.exports.v1" &&
-       line != "amber.macro.exports.v2")) {
+      (line != "sputnik.macro.exports.v1" &&
+       line != "sputnik.macro.exports.v2")) {
     return malformed("unknown schema");
   }
-  const bool v2 = line == "amber.macro.exports.v2";
+  const bool v2 = line == "sputnik.macro.exports.v2";
   std::size_t count = 0;
   if (!read_payload_line(payload, &cursor, &line) ||
       !parse_payload_number(line, &count)) {
@@ -2067,7 +2087,7 @@ ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
   // Interpolants are inserted as expressions exactly once; static fragments
   // are parsed by the shared process engine, never by a shell.
   static const std::vector<MacroExport> system_exports = [] {
-    const std::string source = R"AMBER(
+    const std::string source = R"SPUTNIK(
 string_tag macro def cmd(t):
   parts = []
   text = ""
@@ -2087,7 +2107,7 @@ string_tag macro def cmd(t):
     ]
   })
 export macro cmd
-)AMBER";
+)SPUTNIK";
     lexer::Lexer lexer(source, "<stdlib/system>");
     auto lexed = lexer.lex(); parser::Parser parser(lexed.tokens);
     auto parsed = parser.parse_module_unit();
@@ -2378,4 +2398,4 @@ export macro cmd
   return ExpandResult{};
 }
 
-} // namespace amber::macros
+} // namespace sputnik::macros

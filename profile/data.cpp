@@ -11,7 +11,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::data {
+namespace sputnik::data {
 
 namespace {
 
@@ -781,7 +781,7 @@ std::string schema_version_id(const SchemaDefinition &schema) {
 std::string table_plan_fingerprint(const TablePlan &plan) {
   const TablePlan normalized = normalize_table_plan(plan);
   std::ostringstream body;
-  body << "amber.table.plan.v1\n";
+  body << "sputnik.table.plan.v1\n";
   body << "id=" << normalized.plan_id << "\n";
   body << "op=" << normalized.op << "\n";
   body << "flags=" << normalized.flags << "\n";
@@ -803,10 +803,10 @@ std::string table_plan_fingerprint(const TablePlan &plan) {
 SchemaDocumentParseResult parse_schema_document(const std::string &source) {
   SchemaDocumentParseResult result;
   const std::map<std::string, std::string> values = parse_lines(source);
-  if (value_or_empty(values, "schema") != "amber.schema.v1") {
+  if (value_or_empty(values, "schema") != "sputnik.schema.v1") {
     result.diagnostics.push_back(
         diagnostic("DataProfileParseError",
-                   "schema document must start with amber.schema.v1"));
+                   "schema document must start with sputnik.schema.v1"));
   }
 
   std::uint32_t schema_count = 0;
@@ -881,10 +881,10 @@ SchemaDocumentParseResult parse_schema_document(const std::string &source) {
 TablePlanParseResult parse_table_plan_document(const std::string &source) {
   TablePlanParseResult result;
   const std::map<std::string, std::string> values = parse_lines(source);
-  if (value_or_empty(values, "schema") != "amber.table.v1") {
+  if (value_or_empty(values, "schema") != "sputnik.table.v1") {
     result.diagnostics.push_back(
         diagnostic("DataProfileParseError",
-                   "table document must start with amber.table.v1"));
+                   "table document must start with sputnik.table.v1"));
   }
   std::uint32_t plan_count = 0;
   read_count(values, "plan.count", &plan_count, &result.diagnostics);
@@ -941,7 +941,7 @@ TablePlanParseResult parse_table_plan_document(const std::string &source) {
 std::string schema_validation_to_json(const SchemaValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.schema.validation.v1\",\n";
+  out << "  \"schema\": \"sputnik.schema.validation.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   emit_schema_array(out, result.schemas);
   out << ",\n";
@@ -956,7 +956,7 @@ std::string
 table_plan_validation_to_json(const TablePlanValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.table.validation.v1\",\n";
+  out << "  \"schema\": \"sputnik.table.validation.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   emit_plan_array(out, result.plans, true);
   out << ",\n";
@@ -968,10 +968,10 @@ table_plan_validation_to_json(const TablePlanValidationResult &result) {
 std::string table_plans_to_json(const std::vector<TablePlan> &plans) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.table.explain.v1\",\n";
+  out << "  \"schema\": \"sputnik.table.explain.v1\",\n";
   emit_plan_array(out, plans, true);
   out << "\n}\n";
   return out.str();
 }
 
-} // namespace amber::data
+} // namespace sputnik::data

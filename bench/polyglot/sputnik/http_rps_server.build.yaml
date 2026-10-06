@@ -1,0 +1,48 @@
+schema: sputnik.build.v1
+name: sputnik.bench.polyglot.http_rps_server
+root: sputnik.bench.polyglot.http_rps_server
+
+profiles:
+  required: [core.v1, ffi.v1, macro.v1]
+  optional: []
+  forbidden: []
+
+modules:
+  - name: sqlite3
+    path: ../../../../ember/.build/dependencies/sqlite3-sputnik/src/sqlite3.s
+  - name: orm
+    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm.s
+  - name: orm.pool
+    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/pool.s
+  - name: orm.sqlite3.adapter
+    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/sqlite3/adapter.s
+  - name: orm.sqlite3.pool
+    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/sqlite3/pool.s
+  - name: orm.sqlite3
+    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/sqlite3.s
+  - name: ember
+    path: ../../../../ember/src/ember.s
+  - name: ember.telemetry
+    path: ../../../../ember/src/ember/telemetry.s
+  - name: ember.integrations.orm
+    path: ../../../../ember/packages/ember-orm/src/ember/integrations/orm.s
+  - name: sputnik.bench.polyglot.http_rps_server
+    path: http_rps_server.s
+
+native_extensions:
+  - name: sqlite3
+    language: c
+    sources:
+      - ../../../../ember/.build/dependencies/sqlite3-sputnik/native/sqlite3_ext.c
+      - ../../../../ember/.build/dependencies/sqlite3-sputnik/native/sqlite3.c
+    headers:
+      - ../../../../ember/.build/dependencies/sqlite3-sputnik/native/sqlite3.h
+    blocking_symbols:
+      - amsq_pool_acquire_wait
+    defines:
+      - SQLITE_THREADSAFE=1
+      - SQLITE_ENABLE_COLUMN_METADATA=1
+      - SQLITE_ENABLE_FTS5=1
+      - SQLITE_ENABLE_JSON1=1
+      - SQLITE_DQS=0
+      - SQLITE_OMIT_LOAD_EXTENSION=1

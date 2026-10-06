@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 std::string runtime_ast_node_kind(const RuntimeAstNode &node) {
   return node.node != nullptr ? node.node->kind : std::string{};
@@ -89,8 +89,8 @@ const char *native_type_name(RuntimeNativeTypeKind kind) {
     return "io.Buffer";
   case RuntimeNativeTypeKind::Logger:
     return "io.Logger";
-  case RuntimeNativeTypeKind::Amber:
-    return "Amber";
+  case RuntimeNativeTypeKind::Sputnik:
+    return "Sputnik";
   case RuntimeNativeTypeKind::Ast:
     return "Ast";
   case RuntimeNativeTypeKind::Str:
@@ -237,7 +237,7 @@ Value make_result_value(bool is_ok, Value payload) {
   return Value::result(std::move(result));
 }
 
-#ifndef AMBER_VALUE_REPR_TAGGED
+#ifndef SPUTNIK_VALUE_REPR_TAGGED
 // ==== Variant Value method bodies (legacy 24-byte representation) ==========
 void Value::reset() noexcept { payload.emplace<std::monostate>(); }
 
@@ -791,7 +791,7 @@ const std::int64_t *Value::integer_if() const {
   return std::get_if<std::int64_t>(&payload);
 }
 
-#else // AMBER_VALUE_REPR_TAGGED
+#else // SPUTNIK_VALUE_REPR_TAGGED
 // ==== Tagged Value method bodies (default 16-byte representation) ===========
 
 // Refcounted box for the cold tail kinds. One heap allocation per tail value;
@@ -1004,7 +1004,7 @@ NativeErrorClassValue Value::as_native_error_class() const {
     runtime_heap_add_ref(p);                                                   \
     return IntrusivePtr<Type>(p, typename IntrusivePtr<Type>::Adopt{});        \
   }
-AMBER_VALUE_HEAP_KINDS(X)
+SPUTNIK_VALUE_HEAP_KINDS(X)
 #undef X
 
 // Tail kinds: boxed behind a refcounted ValueTailBox; the box's ValueTailKind
@@ -1020,7 +1020,7 @@ AMBER_VALUE_HEAP_KINDS(X)
   std::shared_ptr<Type> Value::as_fn() const {                                 \
     return std::static_pointer_cast<Type>(u_.tail->ptr);                       \
   }
-AMBER_VALUE_TAIL_KINDS(X)
+SPUTNIK_VALUE_TAIL_KINDS(X)
 #undef X
 
 const ResultValue *Value::result_ptr() const {
@@ -1051,6 +1051,6 @@ const std::int64_t *Value::integer_if() const {
   return tag_ == ValueTag::Int ? &u_.i : nullptr;
 }
 
-#endif // AMBER_VALUE_REPR_TAGGED
+#endif // SPUTNIK_VALUE_REPR_TAGGED
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

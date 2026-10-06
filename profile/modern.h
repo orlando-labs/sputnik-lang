@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::modern {
+namespace sputnik::modern {
 
 inline constexpr std::uint32_t kAgentPatchFlagChecked = 0x1U;
 inline constexpr std::uint32_t kAgentPatchFlagApplied = 0x2U;
@@ -245,4 +245,4 @@ std::string workflow_validation_to_json(const WorkflowValidationResult &result);
 std::string explain_result_to_json(const AgentValidationResult &symbols,
                                    const SourceLocation &source);
 
-} // namespace amber::modern
+} // namespace sputnik::modern

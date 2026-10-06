@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::wasm_accel {
+namespace sputnik::wasm_accel {
 
 namespace {
 
@@ -850,7 +850,7 @@ std::string
 wasm_component_validation_to_json(const WasmComponentValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.wasm_component.v1\",\n";
+  out << "  \"schema\": \"sputnik.wasm_component.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   out << "  \"components\": [";
   for (std::size_t i = 0; i < result.components.size(); ++i) {
@@ -911,7 +911,7 @@ std::string
 accelerator_validation_to_json(const AcceleratorValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.accelerator.v1\",\n";
+  out << "  \"schema\": \"sputnik.accelerator.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   out << "  \"kernels\": [";
   for (std::size_t i = 0; i < result.kernels.size(); ++i) {
@@ -971,4 +971,4 @@ accelerator_validation_to_json(const AcceleratorValidationResult &result) {
   return out.str();
 }
 
-} // namespace amber::wasm_accel
+} // namespace sputnik::wasm_accel

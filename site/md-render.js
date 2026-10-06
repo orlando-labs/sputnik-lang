@@ -1,4 +1,4 @@
-// Shared Markdown renderer for the Amber site.
+// Shared Markdown renderer for the Sputnik site.
 //
 // Extracted from the original inline renderer in `spec-page.js` so the spec
 // page and the Guide page (`guide-page.js`) share one implementation. The
@@ -12,7 +12,7 @@
 //   * blockquotes whose first line is `[!note] / [!warn] / [!spec] / [!tip]`
 //     render as admonition callouts.
 //
-// Exposes `window.AmberMarkdown.render(markdown, options) -> { html, headings }`.
+// Exposes `window.SputnikMarkdown.render(markdown, options) -> { html, headings }`.
 // `options.resolveHref(href)` maps non-standard link targets (e.g. `spec:` and
 // `guide:` schemes, or relative spec paths); it defaults to identity.
 (() => {
@@ -198,10 +198,12 @@
 
     for (let index = 0; index < lines.length; index += 1) {
       const line = lines[index];
-      const fence = line.match(/^```([A-Za-z0-9_-]*)\s*$/);
+      const fence = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
 
-      if (fence) {
-        if (code) {
+      if (code) {
+        const closes = fence && fence[1][0] === code.marker &&
+          fence[1].length >= code.length && !fence[2].trim();
+        if (closes) {
           html.push(
             `<pre><code class="language-${escapeHtml(
               code.lang
@@ -209,14 +211,16 @@
           );
           code = null;
         } else {
-          flushBlocks();
-          code = { lang: fence[1] || "text", lines: [] };
+          code.lines.push(line);
         }
         continue;
       }
 
-      if (code) {
-        code.lines.push(line);
+      if (fence) {
+        flushBlocks();
+        const language = fence[2].trim().match(/^[A-Za-z0-9_+-]+/);
+        code = { lang: language ? language[0] : "text", lines: [],
+          marker: fence[1][0], length: fence[1].length };
         continue;
       }
 
@@ -302,5 +306,5 @@
     return { html: html.join("\n"), headings };
   };
 
-  window.AmberMarkdown = { render, slugify, escapeHtml, stripInline };
+  window.SputnikMarkdown = { render, slugify, escapeHtml, stripInline };
 })();

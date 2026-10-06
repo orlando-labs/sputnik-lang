@@ -17,7 +17,7 @@
 #include <optional>
 #include <string>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -237,4 +237,4 @@ void register_secure_random_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

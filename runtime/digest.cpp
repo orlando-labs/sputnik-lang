@@ -10,7 +10,7 @@
 #include <string_view>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -555,4 +555,4 @@ std::string digest_streebog512(std::string_view bytes) {
   return streebog_hash(bytes, 64U);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

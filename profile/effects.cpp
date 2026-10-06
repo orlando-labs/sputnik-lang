@@ -7,7 +7,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::effect {
+namespace sputnik::effect {
 
 namespace {
 
@@ -339,7 +339,7 @@ validate_effect_summaries(const std::vector<EffectSummary> &summaries,
 std::string validation_to_json(const EffectValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.effects.v1\",\n";
+  out << "  \"schema\": \"sputnik.effects.v1\",\n";
   out << "  \"status\": \"" << (result.ok ? "ok" : "error") << "\",\n";
   emit_effect_array(out, "summaries", result.summaries, true);
   emit_string_array(out, "allowed_effects", result.allowed_effects, true);
@@ -359,4 +359,4 @@ std::string validation_to_json(const EffectValidationResult &result) {
   return out.str();
 }
 
-} // namespace amber::effect
+} // namespace sputnik::effect

@@ -1,6 +1,6 @@
 #include "runtime/vm.h"
 #include "frontend/ast/expr.h"
-#include "runtime/amber_ext_runtime.h"
+#include "runtime/sputnik_ext_runtime.h"
 #include "runtime/context.h"
 #include "runtime/http_codec.h"
 #include "runtime/io.h"
@@ -46,7 +46,7 @@
 #include <stdlib.h>
 #endif
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -463,33 +463,33 @@ struct IoParkGuard {
 
 namespace {
 
-using amber::bytecode::BcCode;
-using amber::bytecode::BcModule;
-using amber::bytecode::CodeKind;
-using amber::bytecode::Constant;
-using amber::bytecode::ConstantKind;
-using amber::bytecode::handler_exception_slot;
-using amber::bytecode::handler_kind;
-using amber::bytecode::handler_result_slot;
-using amber::bytecode::Instruction;
-using amber::bytecode::kHandlerKindCatch;
-using amber::bytecode::kHandlerKindEnsure;
-using amber::bytecode::kHandlerKindLegacyRescue;
-using amber::bytecode::kHandlerKindRescue;
-using amber::bytecode::Opcode;
-using amber::bytecode::SlotLayoutEntry;
+using sputnik::bytecode::BcCode;
+using sputnik::bytecode::BcModule;
+using sputnik::bytecode::CodeKind;
+using sputnik::bytecode::Constant;
+using sputnik::bytecode::ConstantKind;
+using sputnik::bytecode::handler_exception_slot;
+using sputnik::bytecode::handler_kind;
+using sputnik::bytecode::handler_result_slot;
+using sputnik::bytecode::Instruction;
+using sputnik::bytecode::kHandlerKindCatch;
+using sputnik::bytecode::kHandlerKindEnsure;
+using sputnik::bytecode::kHandlerKindLegacyRescue;
+using sputnik::bytecode::kHandlerKindRescue;
+using sputnik::bytecode::Opcode;
+using sputnik::bytecode::SlotLayoutEntry;
 
 constexpr std::uint32_t kMethodFlagInstance =
-    amber::bytecode::kMethodFlagInstance;
-constexpr std::uint32_t kMethodFlagClass = amber::bytecode::kMethodFlagClass;
+    sputnik::bytecode::kMethodFlagInstance;
+constexpr std::uint32_t kMethodFlagClass = sputnik::bytecode::kMethodFlagClass;
 constexpr std::uint32_t kMethodFlagPropertyGetter =
-    amber::bytecode::kMethodFlagPropertyGetter;
+    sputnik::bytecode::kMethodFlagPropertyGetter;
 constexpr std::uint32_t kMethodFlagPropertySetter =
-    amber::bytecode::kMethodFlagPropertySetter;
+    sputnik::bytecode::kMethodFlagPropertySetter;
 constexpr std::uint32_t kMethodFlagClauseFallback =
-    amber::bytecode::kMethodFlagClauseFallback;
+    sputnik::bytecode::kMethodFlagClauseFallback;
 constexpr std::uint32_t kMethodFlagAttrReader =
-    amber::bytecode::kMethodFlagAttrReader;
+    sputnik::bytecode::kMethodFlagAttrReader;
 constexpr std::int64_t kPatternFailModeSoft = 0;
 constexpr std::int64_t kPatternFailModeMatchError = 1;
 
@@ -1349,9 +1349,9 @@ public:
     std::string overflow;
     for (const bytecode::AttrEntry &attr : module_.attrs) {
       const std::string key = string_or_empty(attr.key_str_id);
-      if (key == "amber.numeric.int") {
+      if (key == "sputnik.numeric.int") {
         int_type = string_or_empty(attr.value_str_id);
-      } else if (key == "amber.numeric.overflow") {
+      } else if (key == "sputnik.numeric.overflow") {
         overflow = string_or_empty(attr.value_str_id);
       }
     }
@@ -1445,7 +1445,7 @@ public:
     }
     // Native-extension entry: when the native lane's per-function VM bridge
     // calls execute() for a native-bound code object, route it straight to the
-    // registered thunk instead of running the Amber fallback body (5c-ii).
+    // registered thunk instead of running the Sputnik fallback body (5c-ii).
     {
       Value native_out = Value::null();
       bool native_faulted = false;
@@ -1705,7 +1705,7 @@ private:
 
   std::optional<std::string>
   merged_init_module_name(std::uint32_t code_id) const {
-    const std::string key = "amber.merged.init:" + std::to_string(code_id);
+    const std::string key = "sputnik.merged.init:" + std::to_string(code_id);
     for (const bytecode::AttrEntry &attr : module_.attrs) {
       if (string_or_empty(attr.key_str_id) == key) {
         return string_or_empty(attr.value_str_id);
@@ -1715,7 +1715,7 @@ private:
   }
 
   bool is_merged_init_wrapper(std::uint32_t code_id) const {
-    const std::string key = "amber.merged.wrapper:" + std::to_string(code_id);
+    const std::string key = "sputnik.merged.wrapper:" + std::to_string(code_id);
     for (const bytecode::AttrEntry &attr : module_.attrs) {
       if (string_or_empty(attr.key_str_id) == key) {
         return true;
@@ -1999,7 +1999,7 @@ private:
   // its deterministic teardown runs the manifest-declared destructor through
   // the ABI rather than the ObjHeader lifecycle. destroy! and memory.dealloc
   // both route here: teardown runs at most once (the tombstone), and the
-  // destructor receives a live AmberCtx so an `owned` teardown has full runtime
+  // destructor receives a live SputnikCtx so an `owned` teardown has full runtime
   // context.
   bool foreign_handle_lifecycle_teardown(Frame &frame, const Value &value,
                                          bool *changed) {
@@ -2013,10 +2013,10 @@ private:
     if (!handle->live) {
       return true; // already torn down: a no-op, matching heap idempotence.
     }
-    AmberCtx *ctx = amber_ext_ctx_open(*this, &frame,
+    SputnikCtx *ctx = sputnik_ext_ctx_open(*this, &frame,
                                        type_registry().native_package_tags());
     *changed = handle->destroy(ctx);
-    amber_ext_ctx_close(ctx);
+    sputnik_ext_ctx_close(ctx);
     return !fault_.has_value();
   }
 
@@ -2960,7 +2960,7 @@ private:
 
   Value json_stop_tag_value() {
     return Value::symbol(intern_runtime_symbol("\x1f"
-                                               "amber.Json.stop"));
+                                               "sputnik.Json.stop"));
   }
 
   StdlibBlockResult call_stream_block_to_result(const Frame &frame,
@@ -5340,7 +5340,7 @@ private:
   // execute(code_id, args) when its parameter list needs full call-shaping --
   // rest/keyword-rest packs, keyword arguments, and defaulted parameters.
   // Callers are the native lane's per-function VM bridge
-  // (amber_vm_fallback_call) and the macro expander (which is what passes
+  // (sputnik_vm_fallback_call) and the macro expander (which is what passes
   // keyword arguments). The raw push_frame positional copy packs a trailing
   // rest but leaves the after-rest parameters of a mid-position rest
   // (`def f(*head, tail)`) unbound and binds neither keywords nor defaults,
@@ -6669,7 +6669,7 @@ private:
 
   void resolve_constant_lookup(const Frame &frame, const Constant &constant,
                                ConstantLookupCache &entry) {
-    // Preserve the existing precedence: Amber classes (above), exact native
+    // Preserve the existing precedence: Sputnik classes (above), exact native
     // error, exact builtin, error namespace, live module binding, class fallback.
     // In particular ArgParser is both a callable builtin and an error prefix.
     if (const auto error_id = error_registry().error_id(entry.path)) {
@@ -7381,7 +7381,7 @@ private:
         selector == "summary" || selector == "find" || selector == "to_str" ||
         selector == "inspect";
     if (!benchmark_selector ||
-        !map_has_schema(frame, receiver, "amber.benchmark.v1")) {
+        !map_has_schema(frame, receiver, "sputnik.benchmark.v1")) {
       return fault_.has_value() ? SendStatus::Faulted : SendStatus::NotHandled;
     }
     const std::string benchmark_selector_name =
@@ -7397,7 +7397,7 @@ private:
     if (selector != "section" || !receiver.is_map()) {
       return SendStatus::NotHandled;
     }
-    if (!map_has_schema(frame, receiver, "amber.benchmark.profiler.v1")) {
+    if (!map_has_schema(frame, receiver, "sputnik.benchmark.profiler.v1")) {
       return fault_.has_value() ? SendStatus::Faulted : SendStatus::NotHandled;
     }
     return apply_benchmark_module_method(frame, receiver, args, block, kw_args,
@@ -9612,7 +9612,7 @@ private:
     if (instance == nullptr) {
       return false;
     }
-    const auto marker = instance->ivars.find("__amber_lazy_seq");
+    const auto marker = instance->ivars.find("__sputnik_lazy_seq");
     return marker != instance->ivars.end() && marker->second.is_bool() &&
            marker->second.as_bool();
   }
@@ -9651,9 +9651,9 @@ private:
                             const std::vector<LazySeqOp> &ops) {
     IntrusivePtr<InstanceValue> instance =
         make_instance_value(kNativeSyntheticClassIndex);
-    instance->ivars["__amber_lazy_seq"] = Value::boolean(true);
-    instance->ivars["__amber_lazy_source"] = source;
-    instance->ivars["__amber_lazy_ops"] = encode_lazy_seq_ops(ops);
+    instance->ivars["__sputnik_lazy_seq"] = Value::boolean(true);
+    instance->ivars["__sputnik_lazy_source"] = source;
+    instance->ivars["__sputnik_lazy_ops"] = encode_lazy_seq_ops(ops);
     return Value::instance(std::move(instance));
   }
 
@@ -9666,8 +9666,8 @@ private:
       return std::nullopt;
     }
     const IntrusivePtr<InstanceValue> instance = value.as_instance_object();
-    const auto source_it = instance->ivars.find("__amber_lazy_source");
-    const auto ops_it = instance->ivars.find("__amber_lazy_ops");
+    const auto source_it = instance->ivars.find("__sputnik_lazy_source");
+    const auto ops_it = instance->ivars.find("__sputnik_lazy_ops");
     if (source_it == instance->ivars.end() || ops_it == instance->ivars.end()) {
       set_fault(frame, "VMError", "LazySeq state is missing");
       return std::nullopt;
@@ -12182,9 +12182,9 @@ private:
       return false; // bytecode build: a native-only ctor falls through and the
                     // synthesized NativeRequiredError body runs.
     }
-    NativeExtCallOutcome outcome = amber_ext_invoke_free(
+    NativeExtCallOutcome outcome = sputnik_ext_invoke_free(
         *this, &frame, type_registry().native_package_tags(),
-        reinterpret_cast<AmberFreeFn>(fn), pos_args);
+        reinterpret_cast<SputnikFreeFn>(fn), pos_args);
     if (!outcome.ok || fault_.has_value()) {
       *ok = false;
       return true;
@@ -12315,17 +12315,17 @@ private:
                 std::string exception_message;
                 try {
                   NativeExtCallOutcome outcome =
-                      method ? amber_ext_invoke_method(
+                      method ? sputnik_ext_invoke_method(
                                    *vm_owner, caller_ptr,
                                    vm_owner->type_registry()
                                        .native_package_tags(),
-                                   reinterpret_cast<AmberMethodFn>(fn), self,
+                                   reinterpret_cast<SputnikMethodFn>(fn), self,
                                    pos_args)
-                             : amber_ext_invoke_free(
+                             : sputnik_ext_invoke_free(
                                    *vm_owner, caller_ptr,
                                    vm_owner->type_registry()
                                        .native_package_tags(),
-                                   reinterpret_cast<AmberFreeFn>(fn), pos_args);
+                                   reinterpret_cast<SputnikFreeFn>(fn), pos_args);
                   ok = outcome.ok;
                   value = std::move(outcome.value);
                 } catch (const RuntimeTaskCancelled &) {
@@ -12359,9 +12359,9 @@ private:
   }
 
   // If `method` is native-bound and a thunk is registered for its logical
-  // symbol, bridge the call across the amber_ext.h ABI to that C thunk and
+  // symbol, bridge the call across the sputnik_ext.h ABI to that C thunk and
   // report the result in `*out`. Returns true when handled natively (the caller
-  // must not run the Amber body), with `*faulted` set if the thunk faulted;
+  // must not run the Sputnik body), with `*faulted` set if the thunk faulted;
   // returns false when no thunk is registered, i.e. a bytecode build that
   // should run the fallback body. The frame is the boundary: an effectful
   // native-only leaf is a direct call here, never replayed (design §10.2).
@@ -12377,7 +12377,7 @@ private:
   }
 
   // Same dispatch keyed directly on an entry code object. RuntimeWorld's
-  // native-extension entry uses this path without pushing or stepping an Amber
+  // native-extension entry uses this path without pushing or stepping an Sputnik
   // bytecode frame; execute() also uses it before considering a fallback body.
   bool try_dispatch_native_extension_code(Frame &caller, std::uint32_t code_id,
                                           const std::vector<Value> &pos_args,
@@ -12395,7 +12395,7 @@ private:
     }
     void *fn = dispatch_registry().native_package_thunk(binding->logical);
     if (fn == nullptr) {
-      return false; // bytecode build: fall back to the Amber body.
+      return false; // bytecode build: fall back to the Sputnik body.
     }
     if (allow_park && parkable_ && task_module_ != nullptr &&
         dispatch_registry().native_package_thunk_is_blocking(binding->logical)) {
@@ -12406,12 +12406,12 @@ private:
     }
     NativeExtCallOutcome outcome =
         binding->method
-            ? amber_ext_invoke_method(
+            ? sputnik_ext_invoke_method(
                   *this, &caller, type_registry().native_package_tags(),
-                  reinterpret_cast<AmberMethodFn>(fn), self, pos_args)
-            : amber_ext_invoke_free(
+                  reinterpret_cast<SputnikMethodFn>(fn), self, pos_args)
+            : sputnik_ext_invoke_free(
                   *this, &caller, type_registry().native_package_tags(),
-                  reinterpret_cast<AmberFreeFn>(fn), pos_args);
+                  reinterpret_cast<SputnikFreeFn>(fn), pos_args);
     if (!outcome.ok || fault_.has_value()) {
       *faulted = true;
       return true;
@@ -13336,7 +13336,7 @@ private:
       return nullptr;
     }
     const bytecode::BcClass &mixin = module_.classes[mixin_index];
-    if ((mixin.flags & amber::bytecode::kClassFlagMixin) == 0U) {
+    if ((mixin.flags & sputnik::bytecode::kClassFlagMixin) == 0U) {
       set_fault(frame, "TypeError", "include/extend target is not a mixin");
       return nullptr;
     }
@@ -15005,7 +15005,7 @@ private:
     }
     if (!mode_text.has_value()) {
       set_fault(frame, "TypeError",
-                "Amber.stringify mode must be :display, :inspect, or :pretty");
+                "Sputnik.stringify mode must be :display, :inspect, or :pretty");
       return std::nullopt;
     }
     if (*mode_text == "display") {
@@ -15018,7 +15018,7 @@ private:
       return RuntimeStringifyMode::Pretty;
     }
     set_fault(frame, "TypeError",
-              "Amber.stringify mode must be :display, :inspect, or :pretty");
+              "Sputnik.stringify mode must be :display, :inspect, or :pretty");
     return std::nullopt;
   }
 
@@ -16142,7 +16142,7 @@ private:
     return !fault_.has_value();
   }
 
-  // Convert an Amber Str-keyed/Str-valued Map -- or a net.http.Headers value --
+  // Convert an Sputnik Str-keyed/Str-valued Map -- or a net.http.Headers value --
   // into validated wire headers.
   bool http_headers_from_value(const Frame &frame, const Value &headers_value,
                                http::HttpHeaders *out) {
@@ -16347,7 +16347,7 @@ private:
     return std::nullopt;
   }
 
-  bool http_form_query_value_from_amber(const Frame &frame, const Value &value,
+  bool http_form_query_value_from_sputnik(const Frame &frame, const Value &value,
                                         RuntimeUrlQueryValue *out) {
     if (value.is_list()) {
       std::vector<Value> items;
@@ -16358,7 +16358,7 @@ private:
       converted.reserve(items.size());
       for (const Value &item : items) {
         RuntimeUrlQueryValue child;
-        if (!http_form_query_value_from_amber(frame, item, &child)) {
+        if (!http_form_query_value_from_sputnik(frame, item, &child)) {
           return false;
         }
         converted.push_back(std::move(child));
@@ -16382,7 +16382,7 @@ private:
           return false;
         }
         RuntimeUrlQueryValue child;
-        if (!http_form_query_value_from_amber(frame, entry.value, &child)) {
+        if (!http_form_query_value_from_sputnik(frame, entry.value, &child)) {
           return false;
         }
         converted.push_back({*key, std::move(child)});
@@ -16420,7 +16420,7 @@ private:
         return false;
       }
       RuntimeUrlQueryValue child;
-      if (!http_form_query_value_from_amber(frame, entry.value, &child)) {
+      if (!http_form_query_value_from_sputnik(frame, entry.value, &child)) {
         return false;
       }
       out->push_back({*key, std::move(child)});
@@ -21595,7 +21595,7 @@ private:
         return SendStatus::Matched;
       }
       // Generic Ast introspection (DESIGN-macro-system §17 Q6): a nullary
-      // selector reads the node's amber.ast.v1 field of that name — Str for
+      // selector reads the node's sputnik.ast.v1 field of that name — Str for
       // string fields, Bool for bool fields, Ast for child nodes, List[Ast]
       // for node lists. Child Ast values alias the shared immutable root (no
       // clone); they keep the source handle so `.source` still works on
@@ -21689,7 +21689,7 @@ private:
           return status;
         }
       }
-      if (kind == RuntimeNativeTypeKind::Amber) {
+      if (kind == RuntimeNativeTypeKind::Sputnik) {
         if (selector != "stringify") {
           return SendStatus::NotHandled;
         }
@@ -25051,6 +25051,13 @@ private:
     }
     if (selector == "to_json" && !receiver.is_instance_object() &&
         !receiver.is_class_object()) {
+      // Benchmark records are Maps with a specialized JSON contract.
+      // Preserve that dispatch before the generic collection fast path.
+      const SendStatus benchmark_status = apply_benchmark_result_method(
+          frame, receiver, selector_text, args, block, kw_args, out);
+      if (benchmark_status != SendStatus::NotHandled) {
+        return benchmark_status;
+      }
       if (args.size() != 0U) {
         set_fault(frame, "TypeError", "to_json accepts no arguments");
         return SendStatus::Faulted;
@@ -25501,7 +25508,7 @@ private:
       }
     }
 
-    // BigInt arithmetic (amber.numeric-profile.v1): explicit BigInt operands
+    // BigInt arithmetic (sputnik.numeric-profile.v1): explicit BigInt operands
     // only; an expression mixing Int and BigInt produces BigInt because the
     // arbitrary-precision choice was already explicit in the source.
     if (receiver.is_big_int() ||
@@ -26337,7 +26344,7 @@ private:
         receiver.is_list() || receiver.is_tuple() || receiver.is_set() ||
         receiver_is_range || receiver_is_lazy_seq;
     // Optional collection adapter. The implementation and policy live in the
-    // imported Amber package, not in the VM; constructing it never enumerates
+    // imported Sputnik package, not in the VM; constructing it never enumerates
     // a lazy/infinite sequence. No class is loaded or installed implicitly.
     if (receiver_is_sequence_like && selector == "with_progress") {
       if (!args.empty() || !block.is_null()) {
@@ -30761,7 +30768,7 @@ private:
 
     // A registered native thunk owns parking and ABI marshalling. Let the
     // generic path handle it; a native declaration without a loaded thunk may
-    // still execute its Amber fallback body through the simple path below.
+    // still execute its Sputnik fallback body through the simple path below.
     const RuntimeNativePackageCodeBindingDescriptor *binding =
         dispatch_registry().native_package_code_binding(method.entry_code_id);
     if (binding != nullptr &&
@@ -30961,7 +30968,7 @@ private:
           current_runtime_task_context();
       if (local == nullptr || context == nullptr) {
         set_fault(frame, "TaskLocalError",
-                  "TaskLocal.with requires an active logical Amber task");
+                  "TaskLocal.with requires an active logical Sputnik task");
         return false;
       }
       std::uint64_t token = 0;
@@ -30988,7 +30995,7 @@ private:
       return true;
     }
     // A bare native destructor is a nullary call, but its thunk has the
-    // destructor ABI rather than AmberMethodFn. Route both spellings through
+    // destructor ABI rather than SputnikMethodFn. Route both spellings through
     // teardown so ownership, context and the tombstone stay identical.
     if (!property_assignment && selector_key == "destroy!" &&
         (!property_access || receiver.is_foreign_handle())) {
@@ -31073,9 +31080,9 @@ private:
           ++frame.pc;
           return true;
         }
-        const NativeExtCallOutcome outcome = amber_ext_invoke_method(
+        const NativeExtCallOutcome outcome = sputnik_ext_invoke_method(
             *this, &frame, type_registry().native_package_tags(),
-            reinterpret_cast<AmberMethodFn>(fn), receiver, args);
+            reinterpret_cast<SputnikMethodFn>(fn), receiver, args);
         if (!outcome.ok || fault_.has_value()) {
           return false;
         }
@@ -31522,7 +31529,7 @@ private:
         const auto hint = kHints.find(*selector);
         if (hint != kHints.end()) {
           message = "`" + *selector + "` is not a collection method; use " +
-                    hint->second + ". Amber marks receiver mutation with `!`";
+                    hint->second + ". Sputnik marks receiver mutation with `!`";
         }
       }
       set_fault(frame, "NoMethodError", message);
@@ -34082,8 +34089,8 @@ private:
   // Pooled block Vms set this false: block results flow through
   // final_value_ and nothing consumes their completed-frame snapshots.
   bool capture_completed_frames_ = true;
-  // Module numeric profile (amber.numeric-profile.v1) resolved from module
-  // attrs ("amber.numeric.int"/"amber.numeric.overflow"); defaults describe
+  // Module numeric profile (sputnik.numeric-profile.v1) resolved from module
+  // attrs ("sputnik.numeric.int"/"sputnik.numeric.overflow"); defaults describe
   // the default profile Int64/checked. `numeric_profile_error_` carries an
   // unsupported-profile message reported at execute() entry.
   NumericPolicy numeric_policy_;
@@ -34328,4 +34335,4 @@ ExecutionResult execute_code(const bytecode::BcModule &module,
                             std::move(self), std::move(block));
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

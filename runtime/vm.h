@@ -25,16 +25,16 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 bool runtime_keyword_identifier_text(const std::string &text);
 
 // Per-(package,type) descriptor for a `native class`: the dispatch tag plus the
 // ownership and reclaim resolved from the manifest [[native.types]] and the
 // linked extension symbols. The native binary registers one per type at
-// startup; amber_make_handle(cx, tag, ptr) looks it up by tag to build a
+// startup; sputnik_make_handle(cx, tag, ptr) looks it up by tag to build a
 // correctly-owned RuntimeForeignHandle. The ctx is type-erased to void* so this
-// stays free of the amber_ext.h C ABI types.
+// stays free of the sputnik_ext.h C ABI types.
 struct NativeTypeDescriptor {
   std::string tag;
   RuntimeForeignHandle::Ownership ownership =
@@ -110,4 +110,4 @@ ExecutionResult execute_code(const bytecode::BcModule &module,
                              Value self = Value::null(),
                              Value block = Value::null());
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

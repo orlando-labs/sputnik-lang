@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Immutable, VM-independent copies. Neither a UI snapshot nor a parked task
 // can retain a live graph or a mutable sort key through this boundary.
@@ -66,7 +66,7 @@ struct NotebookDisplay {
 };
 
 // One synchronous cell run. Calls from detached/parallel work are rejected;
-// synchronous nested Amber calls share the collector on its owner thread.
+// synchronous nested Sputnik calls share the collector on its owner thread.
 // Closed collectors cannot leak output into a subsequent evaluation.
 class NotebookDisplayCollector {
 public:
@@ -121,4 +121,4 @@ private:
   std::size_t bytes_ = 0;
   std::vector<Entry> entries_;
 };
-} // namespace amber::runtime
+} // namespace sputnik::runtime

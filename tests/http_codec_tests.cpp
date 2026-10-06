@@ -13,11 +13,11 @@
 
 namespace {
 
-using amber::runtime::http::HttpErrorKind;
-using amber::runtime::http::HttpChunkExtension;
-using amber::runtime::http::HttpHeaders;
-using amber::runtime::http::HttpResponseParser;
-using amber::runtime::http::HttpResponseParserLimits;
+using sputnik::runtime::http::HttpErrorKind;
+using sputnik::runtime::http::HttpChunkExtension;
+using sputnik::runtime::http::HttpHeaders;
+using sputnik::runtime::http::HttpResponseParser;
+using sputnik::runtime::http::HttpResponseParserLimits;
 
 int g_checks = 0;
 
@@ -407,9 +407,9 @@ void test_serialize_request_head() {
   std::string error;
   headers.add("Host", "example.com", &error);
   headers.add("Accept", "*/*", &error);
-  const std::string head = amber::runtime::http::http_serialize_request_head(
-      "GET", "/items?q=amber", headers);
-  expect(head == "GET /items?q=amber HTTP/1.1\r\n"
+  const std::string head = sputnik::runtime::http::http_serialize_request_head(
+      "GET", "/items?q=sputnik", headers);
+  expect(head == "GET /items?q=sputnik HTTP/1.1\r\n"
                  "host: example.com\r\n"
                  "accept: */*\r\n"
                  "\r\n",
@@ -418,24 +418,24 @@ void test_serialize_request_head() {
 
 void test_normalize_method() {
   std::string out;
-  expect(amber::runtime::http::http_normalize_method("post", &out) &&
+  expect(sputnik::runtime::http::http_normalize_method("post", &out) &&
              out == "POST",
          "method uppercased");
-  expect(!amber::runtime::http::http_normalize_method("bad method", &out),
+  expect(!sputnik::runtime::http::http_normalize_method("bad method", &out),
          "method with space rejected");
-  expect(!amber::runtime::http::http_normalize_method("", &out),
+  expect(!sputnik::runtime::http::http_normalize_method("", &out),
          "empty method rejected");
 }
 
 void test_encode_chunks() {
-  expect(amber::runtime::http::http_encode_chunk("hello") == "5\r\nhello\r\n",
+  expect(sputnik::runtime::http::http_encode_chunk("hello") == "5\r\nhello\r\n",
          "chunk encoded with hex size");
-  expect(amber::runtime::http::http_encode_chunk("").empty(),
+  expect(sputnik::runtime::http::http_encode_chunk("").empty(),
          "empty data encodes to nothing");
-  expect(amber::runtime::http::http_encode_last_chunk() == "0\r\n\r\n",
+  expect(sputnik::runtime::http::http_encode_last_chunk() == "0\r\n\r\n",
          "last chunk terminator");
   // 16-byte chunk -> hex "10".
-  expect(amber::runtime::http::http_encode_chunk(std::string(16, 'a'))
+  expect(sputnik::runtime::http::http_encode_chunk(std::string(16, 'a'))
                  .rfind("10\r\n", 0) == 0,
          "16-byte chunk uses hex size 10");
 }
@@ -447,7 +447,7 @@ void test_chunk_extensions_and_trailers() {
       {"trace", std::string("quoted value\\\"")}};
   std::string wire;
   std::string error;
-  expect(amber::runtime::http::http_encode_chunk("data", extensions, &wire,
+  expect(sputnik::runtime::http::http_encode_chunk("data", extensions, &wire,
                                                  &error),
          "chunk with extensions encodes");
   expect(wire ==
@@ -457,7 +457,7 @@ void test_chunk_extensions_and_trailers() {
   const std::size_t crlf = wire.find("\r\n");
   const std::size_t semi = wire.find(';');
   std::vector<HttpChunkExtension> parsed;
-  expect(amber::runtime::http::http_parse_chunk_extensions(
+  expect(sputnik::runtime::http::http_parse_chunk_extensions(
              wire.substr(semi, crlf - semi), &parsed, &error),
          "encoded extensions parse");
   expect(parsed.size() == 3U && parsed[0].name == "trace" &&
@@ -465,14 +465,14 @@ void test_chunk_extensions_and_trailers() {
              !parsed[1].value.has_value() && parsed[2].name == "trace" &&
              parsed[2].value == "quoted value\\\"",
          "extension parser decodes ordered values");
-  expect(!amber::runtime::http::http_parse_chunk_extensions(
+  expect(!sputnik::runtime::http::http_parse_chunk_extensions(
              ";bad=\"x\r\ny\"", &parsed, &error),
          "extension parser rejects CRLF injection");
 
   HttpHeaders trailers;
   expect(trailers.add("Digest", "sha-256=xyz", &error),
          "valid trailer added");
-  expect(amber::runtime::http::http_encode_last_chunk(trailers, &wire, &error),
+  expect(sputnik::runtime::http::http_encode_last_chunk(trailers, &wire, &error),
          "last chunk with trailers encodes");
   expect(wire == "0\r\ndigest: sha-256=xyz\r\n\r\n",
          "trailer wire follows terminating chunk");
@@ -482,9 +482,9 @@ void test_roundtrip_serialize_then_parse_chunked() {
   // Build a chunked request body and feed it back through the parser as if it
   // were a chunked response body, proving the encoder/decoder agree.
   std::string wire = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
-  wire += amber::runtime::http::http_encode_chunk("part-one ");
-  wire += amber::runtime::http::http_encode_chunk("part-two");
-  wire += amber::runtime::http::http_encode_last_chunk();
+  wire += sputnik::runtime::http::http_encode_chunk("part-one ");
+  wire += sputnik::runtime::http::http_encode_chunk("part-two");
+  wire += sputnik::runtime::http::http_encode_last_chunk();
   HttpResponseParser parser = parse_all(wire);
   expect(!parser.has_error(), "roundtrip no error");
   expect(parser.body() == "part-one part-two", "roundtrip body matches");

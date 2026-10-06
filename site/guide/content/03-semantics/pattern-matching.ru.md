@@ -24,7 +24,7 @@ spec_refs:
 
 Имя типа в `when` совпадает, если значение этого типа:
 
-```amber
+```sputnik
 def label(v):
   case v:
     when Int:
@@ -48,7 +48,7 @@ probe()
 Клаузы проверяются по порядку, поэтому более узкий матчер ставят выше. Литералы
 и диапазоны тоже допустимы в `when`:
 
-```amber
+```sputnik
 def classify(n):
   case n:
     when 1..5:
@@ -72,7 +72,7 @@ probe()
 `when` умеет разбирать map по именованным ключам и связывать их со свежими
 именами. Это работает вместе с name-indifferent-доступом (`:key` и `"key"`):
 
-```amber
+```sputnik
 def probe():
   p = Json.parse("{\"user_id\": 42, \"name\": \"Ada\"}")
   case p:

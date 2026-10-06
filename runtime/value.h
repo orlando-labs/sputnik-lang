@@ -10,11 +10,11 @@
 #include <variant>
 #include <vector>
 
-namespace amber::ast {
+namespace sputnik::ast {
 struct Expr; // homoiconic AST node reused as the macro `Ast` value model
-} // namespace amber::ast
+} // namespace sputnik::ast
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct ClosureValue;
 struct InstanceValue;
@@ -38,7 +38,7 @@ struct RuntimeArgParserValue;
 struct RuntimeHeapStringValue;
 
 // First-class macro `Ast` value (macro.v1 profile, DESIGN-macro-system §4).
-// Immutable wrapper over a parsed/expanded `amber.ast.v1` node. `node` is an
+// Immutable wrapper over a parsed/expanded `sputnik.ast.v1` node. `node` is an
 // aliasing shared_ptr into a tree owned by `root`, so subtrees are shareable
 // without copying; `source` (may be null) is the original module text so
 // `.source` / `.to_source` can return the verbatim span slice.
@@ -50,7 +50,7 @@ struct RuntimeAstNode {
 
 // Accessors implemented in value.cpp (the one runtime TU that includes the AST
 // header), so other runtime files can render/introspect an Ast value without
-// depending on frontend/ast. `kind` returns the node's `amber.ast.v1` kind
+// depending on frontend/ast. `kind` returns the node's `sputnik.ast.v1` kind
 // string; `source` returns the verbatim source-text slice for the node's span
 // (empty when no source is retained).
 std::string runtime_ast_node_kind(const RuntimeAstNode &node);
@@ -230,7 +230,7 @@ enum class RuntimeNativeTypeKind {
   Io,
   TextBuffer,
   Logger,
-  Amber,
+  Sputnik,
   Ast,
   Str,
   Int,
@@ -309,7 +309,7 @@ struct NativeErrorNamespaceValue {
   std::string path;
 };
 
-// Arbitrary-precision integer per amber.numeric-profile.v1: explicit BigInt
+// Arbitrary-precision integer per sputnik.numeric-profile.v1: explicit BigInt
 // values only; fixed-width Int arithmetic never promotes into this type.
 // Canonical form: little-endian base-2^64 magnitude with no trailing zero
 // limbs; zero is an empty magnitude with negative == false.
@@ -358,8 +358,8 @@ struct RuntimeForeignHandle {
   Ownership ownership = Ownership::Borrowed;
   // Reclaim callback: the context-free reclaim for `collected`, a ctx-bound
   // closure supplied by the ABI layer for `owned`, and empty for `borrowed`.
-  // The ctx is the AmberCtx supplied at deterministic destroy!-time,
-  // type-erased to void* so this header stays free of the amber_ext.h C ABI
+  // The ctx is the SputnikCtx supplied at deterministic destroy!-time,
+  // type-erased to void* so this header stays free of the sputnik_ext.h C ABI
   // types; an `owned` destructor uses it, a `collected` reclaim ignores it. The
   // GC reclaim path passes nullptr (collected only, context-free by
   // construction).
@@ -372,7 +372,7 @@ struct RuntimeForeignHandle {
 
   // Deterministic destroy! / memory.dealloc: runs teardown once for an owning
   // handle, flips the tombstone, and reports whether this call destroyed it.
-  // `ctx` is the live AmberCtx the destructor may use (owned); a collected
+  // `ctx` is the live SputnikCtx the destructor may use (owned); a collected
   // reclaim ignores it. A bytecode-only destroy! with no extension context
   // passes nullptr.
   bool destroy(void *ctx = nullptr) {
@@ -389,7 +389,7 @@ struct RuntimeForeignHandle {
   // GC reclamation: only a `collected` handle runs teardown here (the opt-in
   // finalizer). An `owned` handle never runs its destructor from the collector
   // (the leak is surfaced by a backstop diagnostic elsewhere); `borrowed` never
-  // frees. The collector has no AmberCtx, so it passes nullptr -- sound because
+  // frees. The collector has no SputnikCtx, so it passes nullptr -- sound because
   // a `collected` reclaim is context-free by construction (design §7.4).
   ~RuntimeForeignHandle() {
     if (live && ownership == Ownership::Collected && teardown) {
@@ -411,7 +411,7 @@ struct RuntimeForeignHandle {
 // lockstep (value.cpp). Heap kinds (the six ObjHeader-bearing types, stored
 // inline) take a ValueTag enumerator; tail kinds (the cold shared_ptr types,
 // boxed) take a ValueTailKind enumerator.
-#define AMBER_VALUE_HEAP_KINDS(X)                                              \
+#define SPUTNIK_VALUE_HEAP_KINDS(X)                                              \
   X(closure, is_closure, as_closure, ClosureValue, Closure)                    \
   X(instance, is_instance_object, as_instance_object, InstanceValue, Instance) \
   X(list, is_list, as_list, ListValue, List)                                   \
@@ -419,7 +419,7 @@ struct RuntimeForeignHandle {
   X(set, is_set, as_set, SetValue, Set)                                        \
   X(map, is_map, as_map, MapValue, Map)
 
-#define AMBER_VALUE_TAIL_KINDS(X)                                              \
+#define SPUTNIK_VALUE_TAIL_KINDS(X)                                              \
   X(heap_string, is_heap_string, as_heap_string, RuntimeHeapStringValue,       \
     HeapString)                                                               \
   X(error_instance, is_error_instance, as_error_instance, ErrorInstanceValue,  \
@@ -463,7 +463,7 @@ struct RuntimeForeignHandle {
   X(ast_node, is_ast_node, as_ast_node, RuntimeAstNode, AstNode)               \
   X(time_zone, is_time_zone, as_time_zone, RuntimeTimeZoneValue, TimeZone)
 
-#ifndef AMBER_VALUE_REPR_TAGGED
+#ifndef SPUTNIK_VALUE_REPR_TAGGED
 // ---- Variant representation (default, 24 bytes) ---------------------------
 struct Value {
   using Payload = std::variant<
@@ -888,7 +888,7 @@ private:
   static void release_payload(ValueTag tag, Storage &storage) noexcept;
 };
 static_assert(sizeof(Value) <= 16, "tagged Value must fit in 16 bytes");
-#endif // AMBER_VALUE_REPR_TAGGED
+#endif // SPUTNIK_VALUE_REPR_TAGGED
 
 // Value-based Result[T,E] (Ok/Err). A cold tail kind: a single payload slot
 // holds either the Ok value or the Err value, discriminated by `is_ok`.
@@ -906,4 +906,4 @@ struct ErrorInstanceValue {
 // Wrap a payload into an Ok (is_ok=true) or Err (is_ok=false) Result value.
 Value make_result_value(bool is_ok, Value payload);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

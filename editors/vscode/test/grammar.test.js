@@ -10,7 +10,7 @@ const extensionRoot = path.resolve(__dirname, "..");
 const grammarPath = path.join(
   extensionRoot,
   "syntaxes",
-  "amber.tmLanguage.json",
+  "sputnik.tmLanguage.json",
 );
 
 function onigLib() {
@@ -35,7 +35,7 @@ async function loadGrammar() {
   const registry = new textmate.Registry({
     onigLib: Promise.resolve(onigLib()),
     loadGrammar: async (scopeName) => {
-      if (scopeName !== "source.amber") {
+      if (scopeName !== "source.sputnik") {
         return null;
       }
       return textmate.parseRawGrammar(
@@ -44,7 +44,7 @@ async function loadGrammar() {
       );
     },
   });
-  return registry.loadGrammar("source.amber");
+  return registry.loadGrammar("source.sputnik");
 }
 
 function tokenize(grammar, source) {
@@ -105,7 +105,7 @@ function assertNoScopePrefix(
 
 async function main() {
   const grammar = await loadGrammar();
-  assert.ok(grammar, "Amber grammar failed to load");
+  assert.ok(grammar, "Sputnik grammar failed to load");
 
   const conditionals = tokenize(
     grammar,
@@ -119,22 +119,22 @@ async function main() {
     conditionals,
     0,
     "if",
-    "keyword.control.conditional.amber",
+    "keyword.control.conditional.sputnik",
   );
   assertScope(
     conditionals,
     0,
     "then",
-    "keyword.control.conditional.amber",
+    "keyword.control.conditional.sputnik",
   );
   assertScope(
     conditionals,
     0,
     "else",
-    "keyword.control.conditional.amber",
+    "keyword.control.conditional.sputnik",
   );
-  assertScope(conditionals, 0, "Bytes", "entity.name.type.amber");
-  assertScope(conditionals, 0, "===", "keyword.operator.amber");
+  assertScope(conditionals, 0, "Bytes", "entity.name.type.sputnik");
+  assertScope(conditionals, 0, "===", "keyword.operator.sputnik");
   assertNoScopePrefix(conditionals, 1, "then", "keyword.control");
   assertNoScopePrefix(conditionals, 2, "if_ready?", "keyword.control");
 
@@ -142,10 +142,10 @@ async function main() {
     grammar,
     "ready and enabled or fallback\nnot empty? and item in items",
   );
-  assertScope(logical, 0, "and", "keyword.operator.logical.amber");
-  assertScope(logical, 0, "or", "keyword.operator.logical.amber");
-  assertScope(logical, 1, "not", "keyword.operator.logical.amber");
-  assertScope(logical, 1, "in", "keyword.operator.relational.amber");
+  assertScope(logical, 0, "and", "keyword.operator.logical.sputnik");
+  assertScope(logical, 0, "or", "keyword.operator.logical.sputnik");
+  assertScope(logical, 1, "not", "keyword.operator.logical.sputnik");
+  assertScope(logical, 1, "in", "keyword.operator.relational.sputnik");
 
   const controls = tokenize(
     grammar,
@@ -158,12 +158,12 @@ async function main() {
       " throw :done, 42",
     ].join("\n"),
   );
-  assertScope(controls, 0, "if", "keyword.control.amber");
-  assertScope(controls, 1, "raise", "keyword.control.exception.amber");
-  assertScope(controls, 2, "else", "keyword.control.amber");
-  assertScope(controls, 3, "return", "keyword.control.amber");
-  assertScope(controls, 4, "catch", "keyword.control.exception.amber");
-  assertScope(controls, 5, "throw", "keyword.control.exception.amber");
+  assertScope(controls, 0, "if", "keyword.control.sputnik");
+  assertScope(controls, 1, "raise", "keyword.control.exception.sputnik");
+  assertScope(controls, 2, "else", "keyword.control.sputnik");
+  assertScope(controls, 3, "return", "keyword.control.sputnik");
+  assertScope(controls, 4, "catch", "keyword.control.exception.sputnik");
+  assertScope(controls, 5, "throw", "keyword.control.exception.sputnik");
 
   const references = tokenize(
     grammar,
@@ -179,57 +179,57 @@ async function main() {
     references,
     0,
     "get",
-    "entity.name.function.call.amber",
+    "entity.name.function.call.sputnik",
   );
   assertScope(
     references,
     0,
     "&",
-    "keyword.operator.reference.amber",
+    "keyword.operator.reference.sputnik",
   );
   assertScope(
     references,
     0,
     "Items",
-    "entity.name.type.receiver.amber",
+    "entity.name.type.receiver.sputnik",
   );
   assertScope(
     references,
     0,
     "#",
-    "punctuation.accessor.unbound.amber",
+    "punctuation.accessor.unbound.sputnik",
   );
   assertScope(
     references,
     0,
     "index",
-    "entity.name.function.reference.amber",
+    "entity.name.function.reference.sputnik",
   );
   assertNoScopePrefix(references, 0, "index", "comment");
   assertScope(
     references,
     0,
     "route handler",
-    "comment.line.number-sign.amber",
+    "comment.line.number-sign.sputnik",
   );
   assertScope(
     references,
     1,
     "liveness",
-    "entity.name.function.reference.amber",
+    "entity.name.function.reference.sputnik",
   );
   assertScope(
     references,
     2,
     "find",
-    "entity.name.function.reference.amber",
+    "entity.name.function.reference.sputnik",
   );
   assertNoScopePrefix(references, 3, "#", "comment");
   assertScope(
     references,
     4,
     "ordinary comment",
-    "comment.line.number-sign.amber",
+    "comment.line.number-sign.sputnik",
   );
 
   const literals = tokenize(
@@ -249,45 +249,45 @@ async function main() {
     literals,
     0,
     "42",
-    "constant.numeric.integer.decimal.amber",
+    "constant.numeric.integer.decimal.sputnik",
   );
   assertScope(
     literals,
     0,
     "1_000",
-    "constant.numeric.integer.decimal.amber",
+    "constant.numeric.integer.decimal.sputnik",
   );
-  assertScope(literals, 0, "1.5", "constant.numeric.float.amber");
-  assertScope(literals, 0, "2e3", "constant.numeric.float.amber");
-  assertScope(literals, 0, "0xFF", "constant.numeric.hex.amber");
-  assertScope(literals, 1, "ready", "constant.other.symbol.amber");
-  assertScope(literals, 2, "fast", "constant.other.symbol.amber");
-  assertScope(literals, 3, "$_", "variable.language.last-value.amber");
+  assertScope(literals, 0, "1.5", "constant.numeric.float.sputnik");
+  assertScope(literals, 0, "2e3", "constant.numeric.float.sputnik");
+  assertScope(literals, 0, "0xFF", "constant.numeric.hex.sputnik");
+  assertScope(literals, 1, "ready", "constant.other.symbol.sputnik");
+  assertScope(literals, 2, "fast", "constant.other.symbol.sputnik");
+  assertScope(literals, 3, "$_", "variable.language.last-value.sputnik");
   assertScope(
     literals,
     4,
     "$it",
-    "variable.parameter.placeholder.amber",
+    "variable.parameter.placeholder.sputnik",
   );
   assertScope(
     literals,
     4,
     "$it1",
-    "variable.parameter.placeholder.amber",
+    "variable.parameter.placeholder.sputnik",
   );
   assertScope(
     literals,
     4,
     "$it2",
-    "variable.parameter.placeholder.amber",
+    "variable.parameter.placeholder.sputnik",
   );
   assertScope(
     literals,
     4,
     "_1",
-    "variable.parameter.placeholder.amber",
+    "variable.parameter.placeholder.sputnik",
   );
-  assertScope(literals, 6, "_", "variable.language.wildcard.amber");
+  assertScope(literals, 6, "_", "variable.language.wildcard.sputnik");
 
   const placeholderOperators = tokenize(
     grammar,
@@ -298,7 +298,7 @@ async function main() {
       placeholderOperators,
       line,
       alias,
-      "variable.parameter.placeholder.amber",
+      "variable.parameter.placeholder.sputnik",
     );
   }
   for (const invalid of [
@@ -308,7 +308,7 @@ async function main() {
     const [{ tokens }] = tokenize(grammar, invalid);
     assert.ok(
       tokens.every(
-        (token) => !token.scopes.includes("variable.parameter.placeholder.amber"),
+        (token) => !token.scopes.includes("variable.parameter.placeholder.sputnik"),
       ),
       `${invalid} must not be highlighted as a placeholder`,
     );
@@ -329,36 +329,36 @@ async function main() {
       "def []=(key, value): value",
     ].join("\n"),
   );
-  assertScope(operators, 0, "+=", "keyword.operator.amber");
+  assertScope(operators, 0, "+=", "keyword.operator.sputnik");
   for (const operator of ["**", "//", "%", "<=>"]) {
-    assertScope(operators, 1, operator, "keyword.operator.amber");
+    assertScope(operators, 1, operator, "keyword.operator.sputnik");
   }
-  assertScope(operators, 2, "=~", "keyword.operator.amber");
-  assertScope(operators, 2, "!~", "keyword.operator.amber");
-  assertScope(operators, 3, "<<", "keyword.operator.amber");
-  assertScope(operators, 3, ">>", "keyword.operator.amber");
-  assertScope(operators, 4, "..", "keyword.operator.range.amber");
-  assertScope(operators, 5, "...", "keyword.operator.range.amber");
+  assertScope(operators, 2, "=~", "keyword.operator.sputnik");
+  assertScope(operators, 2, "!~", "keyword.operator.sputnik");
+  assertScope(operators, 3, "<<", "keyword.operator.sputnik");
+  assertScope(operators, 3, ">>", "keyword.operator.sputnik");
+  assertScope(operators, 4, "..", "keyword.operator.range.sputnik");
+  assertScope(operators, 5, "...", "keyword.operator.range.sputnik");
   assertScope(
     operators,
     6,
     ".?.",
-    "keyword.operator.navigation.safe.amber",
+    "keyword.operator.navigation.safe.sputnik",
   );
   assertScope(
     operators,
     6,
     "member",
-    "entity.name.function.call.member.amber",
+    "entity.name.function.call.member.sputnik",
   );
   assertScope(
     operators,
     7,
     "?",
-    "keyword.operator.optional-access.amber",
+    "keyword.operator.optional-access.sputnik",
   );
-  assertScope(operators, 8, "<=>", "entity.name.function.amber");
-  assertScope(operators, 9, "[]=", "entity.name.function.amber");
+  assertScope(operators, 8, "<=>", "entity.name.function.sputnik");
+  assertScope(operators, 9, "[]=", "entity.name.function.sputnik");
 
   const declarations = tokenize(
     grammar,
@@ -375,35 +375,35 @@ async function main() {
       "next = item",
     ].join("\n"),
   );
-  assertScope(declarations, 0, "native", "storage.modifier.native.amber");
-  assertScope(declarations, 0, "read", "entity.name.function.amber");
+  assertScope(declarations, 0, "native", "storage.modifier.native.sputnik");
+  assertScope(declarations, 0, "read", "entity.name.function.sputnik");
   assertScope(
     declarations,
     0,
     "as",
-    "keyword.operator.type.annotation.amber",
+    "keyword.operator.type.annotation.sputnik",
   );
-  assertScope(declarations, 1, "Handle", "entity.name.type.amber");
-  assertScope(declarations, 1, "owned", "storage.modifier.ownership.amber");
-  assertScope(declarations, 2, "prop", "storage.type.property.amber");
+  assertScope(declarations, 1, "Handle", "entity.name.type.sputnik");
+  assertScope(declarations, 1, "owned", "storage.modifier.ownership.sputnik");
+  assertScope(declarations, 2, "prop", "storage.type.property.sputnik");
   assertScope(
     declarations,
     2,
     "name",
-    "entity.name.function.property.amber",
+    "entity.name.function.property.sputnik",
   );
-  assertScope(declarations, 3, "get", "storage.modifier.property.amber");
-  assertScope(declarations, 4, "set", "storage.modifier.property.amber");
-  assertScope(declarations, 5, "var", "storage.modifier.property.amber");
+  assertScope(declarations, 3, "get", "storage.modifier.property.sputnik");
+  assertScope(declarations, 4, "set", "storage.modifier.property.sputnik");
+  assertScope(declarations, 5, "var", "storage.modifier.property.sputnik");
   assertNoScopePrefix(declarations, 6, "pass", "keyword");
   assertNoScopePrefix(declarations, 6, "noop", "keyword");
   assertScope(
     declarations,
     7,
     "as",
-    "keyword.operator.type.annotation.amber",
+    "keyword.operator.type.annotation.sputnik",
   );
-  assertScope(declarations, 8, "next", "keyword.control.amber");
+  assertScope(declarations, 8, "next", "keyword.control.sputnik");
   assertNoScopePrefix(declarations, 9, "next", "keyword.control");
 
   const strings = tokenize(
@@ -416,22 +416,22 @@ async function main() {
       ' """',
     ].join("\n"),
   );
-  assertScope(strings, 0, "message", "source.amber");
+  assertScope(strings, 0, "message", "source.sputnik");
   assertScope(
     strings,
     0,
     "then",
-    "keyword.control.conditional.amber",
+    "keyword.control.conditional.sputnik",
   );
-  assertScope(strings, 1, "r", "entity.name.function.macro.string-tag.amber");
+  assertScope(strings, 1, "r", "entity.name.function.macro.string-tag.sputnik");
   assertNoScopePrefix(strings, 1, "#not-a-comment", "comment");
   assertScope(
     strings,
     2,
     "sql",
-    "entity.name.function.macro.string-tag.amber",
+    "entity.name.function.macro.string-tag.sputnik",
   );
-  assertScope(strings, 3, "id", "meta.interpolation.amber", 1);
+  assertScope(strings, 3, "id", "meta.interpolation.sputnik", 1);
 
   const macros = tokenize(
     grammar,
@@ -442,11 +442,11 @@ async function main() {
       "# outside macro",
     ].join("\n"),
   );
-  assertScope(macros, 0, "macro", "storage.modifier.macro.amber");
-  assertScope(macros, 0, "assert", "entity.name.function.macro.amber");
-  assertScope(macros, 1, "#{", "punctuation.section.embedded.begin.amber");
+  assertScope(macros, 0, "macro", "storage.modifier.macro.sputnik");
+  assertScope(macros, 0, "assert", "entity.name.function.macro.sputnik");
+  assertScope(macros, 1, "#{", "punctuation.section.embedded.begin.sputnik");
   assertNoScopePrefix(macros, 1, "#{", "comment");
-  assertScope(macros, 3, "outside macro", "comment.line.number-sign.amber");
+  assertScope(macros, 3, "outside macro", "comment.line.number-sign.sputnik");
 
   console.log("grammar tests: ok");
 }

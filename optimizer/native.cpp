@@ -6,7 +6,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::native {
+namespace sputnik::native {
 
 namespace {
 
@@ -84,27 +84,27 @@ bool is_conditional_jump_opcode(bytecode::Opcode opcode) {
 
 std::string helper_for_stub_kind(const std::string &kind) {
   if (kind == "send") {
-    return "amber_runtime_call_packet_send";
+    return "sputnik_runtime_call_packet_send";
   }
   if (kind == "send_dyn") {
-    return "amber_runtime_reflective_send_dyn";
+    return "sputnik_runtime_reflective_send_dyn";
   }
   if (kind == "call") {
-    return "amber_runtime_call_packet_call";
+    return "sputnik_runtime_call_packet_call";
   }
   if (kind == "type_hook") {
-    return "amber_runtime_type_hook";
+    return "sputnik_runtime_type_hook";
   }
   if (kind == "pattern_protocol") {
-    return "amber_runtime_pattern_protocol";
+    return "sputnik_runtime_pattern_protocol";
   }
   if (kind == "raise") {
-    return "amber_runtime_raise";
+    return "sputnik_runtime_raise";
   }
   if (kind == "throw") {
-    return "amber_runtime_throw";
+    return "sputnik_runtime_throw";
   }
-  return "amber_runtime_slow_stub";
+  return "sputnik_runtime_slow_stub";
 }
 
 std::string symbol_or_empty(const bytecode::BcModule &module,
@@ -327,12 +327,12 @@ std::string slowpath_reason_for_stub_kind(const std::string &kind) {
 
 std::string patchpoint_helper_for_kind(const std::string &kind) {
   if (kind == "ivar_ic") {
-    return "amber_runtime_ivar_slowpath";
+    return "sputnik_runtime_ivar_slowpath";
   }
   if (kind == "reflective_send_dyn") {
-    return "amber_runtime_reflective_send_dyn";
+    return "sputnik_runtime_reflective_send_dyn";
   }
-  return "amber_runtime_patchpoint_guard_miss";
+  return "sputnik_runtime_patchpoint_guard_miss";
 }
 
 void append_slowpath(NativeCodeObject *out, std::uint32_t source_pc,
@@ -366,7 +366,7 @@ void append_slowpaths(const bytecode::BcCode &code, NativeCodeObject *out) {
         out, 0, "assumption_invalidation",
         "stale frozen-world assumptions discard native code and re-enter "
         "bytecode at a safe boundary",
-        "amber_runtime_reenter_bytecode_after_native_invalidation", true, true);
+        "sputnik_runtime_reenter_bytecode_after_native_invalidation", true, true);
   }
 }
 
@@ -492,7 +492,7 @@ NativeModule compile_native_module(const bytecode::BcModule &bytecode_module,
     object.source_bc_code_id = code.code_id;
     object.source_code_kind = bytecode::code_kind_name(code.kind);
     object.machine_code_blob =
-        "trampoline:amber.native.v1:bc=" + std::to_string(code.code_id) +
+        "trampoline:sputnik.native.v1:bc=" + std::to_string(code.code_id) +
         ":insns=" + std::to_string(code.instructions.size());
     object.bytecode_trampoline = true;
     object.requires_frozen_world = options.requires_frozen_world;
@@ -798,7 +798,7 @@ std::string module_to_json(const NativeModule &module,
 std::string module_to_dump(const NativeModule &module,
                            const std::string &source_hash) {
   std::ostringstream out;
-  out << "; amber.native.v1 sha256=" << source_hash << "\n";
+  out << "; sputnik.native.v1 sha256=" << source_hash << "\n";
   out << ".module ";
   if (module.module_name.empty()) {
     out << "<none>";
@@ -873,7 +873,7 @@ std::string module_to_dump(const NativeModule &module,
 std::string
 diagnostics_to_json(const std::vector<NativeDiagnostic> &diagnostics) {
   std::ostringstream out;
-  out << "{\n  \"format\": \"amber.native.diagnostics.v1\",\n";
+  out << "{\n  \"format\": \"sputnik.native.diagnostics.v1\",\n";
   out << "  \"errors\": [\n";
   for (std::size_t i = 0; i < diagnostics.size(); ++i) {
     if (i != 0U) {
@@ -889,4 +889,4 @@ diagnostics_to_json(const std::vector<NativeDiagnostic> &diagnostics) {
   return out.str();
 }
 
-} // namespace amber::native
+} // namespace sputnik::native

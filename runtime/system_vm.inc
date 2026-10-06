@@ -229,7 +229,7 @@ apply_system_send(const Frame &source_frame, const Value &receiver,
                         strand](std::shared_ptr<Vm> vm) mutable {
         // A bounded FFI pool can deadlock when all its slots await input
         // from another subprocess. Preserve each operation's host stack
-        // independently while its Amber strand is parked.
+        // independently while its Sputnik strand is parked.
         std::thread([pending, call = std::move(call), task, strand,
                      vm = std::move(vm)]() mutable {
           RuntimeStrandScope strand_scope(strand);

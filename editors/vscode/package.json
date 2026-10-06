@@ -1,9 +1,9 @@
 {
-  "name": "amber-lang",
-  "displayName": "Amber",
-  "description": "Syntax highlighting and run/build tasks for the Amber programming language.",
+  "name": "sputnik-lang",
+  "displayName": "Sputnik",
+  "description": "Syntax highlighting and run/build tasks for the Sputnik programming language.",
   "version": "0.1.0",
-  "publisher": "amber-lang",
+  "publisher": "sputnik-lang",
   "repository": {
     "type": "git",
     "url": "https://github.com/orlando-labs/amber-lang.git"
@@ -15,80 +15,82 @@
     "Programming Languages"
   ],
   "keywords": [
-    "amber",
-    "amberc"
+    "sputnik",
+    "programming-language"
   ],
   "main": "./out/extension.js",
   "activationEvents": [
-    "onLanguage:amber"
+    "onLanguage:sputnik"
   ],
   "contributes": {
     "languages": [
       {
-        "id": "amber",
+        "id": "sputnik",
         "aliases": [
-          "Amber",
-          "amber"
+          "Sputnik",
+          "sputnik"
         ],
         "extensions": [
-          ".am"
+          ".s",
+          ".spu",
+          ".sputnik"
         ],
         "configuration": "./language-configuration.json"
       }
     ],
     "grammars": [
       {
-        "language": "amber",
-        "scopeName": "source.amber",
-        "path": "./syntaxes/amber.tmLanguage.json"
+        "language": "sputnik",
+        "scopeName": "source.sputnik",
+        "path": "./syntaxes/sputnik.tmLanguage.json"
       }
     ],
     "commands": [
       {
-        "command": "amber.runFile",
-        "title": "Amber: Run File",
-        "category": "Amber"
+        "command": "sputnik.runFile",
+        "title": "Sputnik: Run File",
+        "category": "Sputnik"
       },
       {
-        "command": "amber.buildFile",
-        "title": "Amber: Build File",
-        "category": "Amber"
+        "command": "sputnik.buildFile",
+        "title": "Sputnik: Build File",
+        "category": "Sputnik"
       }
     ],
     "menus": {
       "editor/title/run": [
         {
-          "command": "amber.runFile",
-          "when": "resourceLangId == amber",
+          "command": "sputnik.runFile",
+          "when": "resourceLangId == sputnik",
           "group": "navigation@1"
         }
       ],
       "editor/context": [
         {
-          "command": "amber.runFile",
-          "when": "resourceLangId == amber",
-          "group": "amber@1"
+          "command": "sputnik.runFile",
+          "when": "resourceLangId == sputnik",
+          "group": "sputnik@1"
         },
         {
-          "command": "amber.buildFile",
-          "when": "resourceLangId == amber",
-          "group": "amber@2"
+          "command": "sputnik.buildFile",
+          "when": "resourceLangId == sputnik",
+          "group": "sputnik@2"
         }
       ],
       "commandPalette": [
         {
-          "command": "amber.runFile",
-          "when": "resourceLangId == amber"
+          "command": "sputnik.runFile",
+          "when": "resourceLangId == sputnik"
         },
         {
-          "command": "amber.buildFile",
-          "when": "resourceLangId == amber"
+          "command": "sputnik.buildFile",
+          "when": "resourceLangId == sputnik"
         }
       ]
     },
     "taskDefinitions": [
       {
-        "type": "amber",
+        "type": "sputnik",
         "required": [
           "command"
         ],
@@ -99,31 +101,31 @@
               "run",
               "build"
             ],
-            "description": "Which amberc action to perform for this task."
+            "description": "Which sputnik action to perform for this task."
           },
           "file": {
             "type": "string",
-            "description": "Path to the .am file. Defaults to the active editor's file."
+            "description": "Path to the .s file. Defaults to the active editor's file."
           },
           "args": {
             "type": "array",
             "items": {
               "type": "string"
             },
-            "description": "Extra arguments passed to amberc."
+            "description": "Extra arguments passed to sputnik."
           }
         }
       }
     ],
     "configuration": {
-      "title": "Amber",
+      "title": "Sputnik",
       "properties": {
-        "amber.compilerPath": {
+        "sputnik.compilerPath": {
           "type": "string",
-          "default": "amberc",
-          "description": "Path to the amberc executable. If not absolute and not found on PATH, the extension falls back to '<workspace>/build/amberc'."
+          "default": "sputnik",
+          "description": "Path to the sputnik executable. If not absolute and not found on PATH, the extension falls back to '<workspace>/build/sputnik'."
         },
-        "amber.build.target": {
+        "sputnik.build.target": {
           "type": "string",
           "enum": [
             "native",
@@ -131,20 +133,20 @@
             "bytecode-wrapper"
           ],
           "default": "native",
-          "description": "Target passed to 'amberc build --target'."
+          "description": "Target passed to 'sputnik build --target'."
         },
-        "amber.build.outDir": {
+        "sputnik.build.outDir": {
           "type": "string",
           "default": "build",
           "description": "Directory (relative to the workspace folder, or absolute) where build artifacts are written."
         },
-        "amber.run.args": {
+        "sputnik.run.args": {
           "type": "array",
           "items": {
             "type": "string"
           },
           "default": [],
-          "description": "Extra arguments appended when running a file with 'amberc <file>'."
+          "description": "Extra arguments appended when running a file with 'sputnik <file>'."
         }
       }
     }

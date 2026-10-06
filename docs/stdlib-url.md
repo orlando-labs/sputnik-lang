@@ -1,21 +1,21 @@
-# Url in Amber
+# Url in Sputnik
 
 `Url` is a native standard-library module for RFC-style URL parsing, building,
 percent coding, and query string maps.
 
 ## Parse And Build
 
-```amber
-u = Url.parse("https://user@example.com:8443/api?q=amber#top")
+```sputnik
+u = Url.parse("https://user@example.com:8443/api?q=sputnik#top")
 
 u["scheme"]   # "https"
 u["host"]     # "example.com"
 u["port"]     # 8443
 u["path"]     # "/api"
-u["query"]    # "q=amber"
+u["query"]    # "q=sputnik"
 u["fragment"] # "top"
 
-Url.build(u)  # "https://user@example.com:8443/api?q=amber#top"
+Url.build(u)  # "https://user@example.com:8443/api?q=sputnik#top"
 ```
 
 `Url.parse` returns a Map with these keys:
@@ -37,7 +37,7 @@ build the query string from `query_map`.
 
 ## Percent Coding
 
-```amber
+```sputnik
 Url.percent_encode("a b/!")       # "a%20b%2F%21"
 Url.percent_decode("a%20b%2F%21") # "a b/!"
 ```
@@ -46,7 +46,7 @@ Invalid percent escapes raise `UrlDecodeError`.
 
 ## Query Maps
 
-```amber
+```sputnik
 query = Url.build_query({"q": ["a b", "x/y"], "empty": ""})
 # "q[]=a+b&q[]=x%2Fy&empty="
 

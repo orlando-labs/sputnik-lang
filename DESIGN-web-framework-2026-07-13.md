@@ -1,8 +1,8 @@
-# DESIGN: Ember — единый web framework для Amber
+# DESIGN: Ember — единый web framework для Sputnik
 
-Date: 2026-07-13  
-Status: consolidated design proposal; no implementation in this document  
-Target: external Amber package `ember` over the existing `net.http.Server`
+Date: 2026-07-13
+Status: consolidated design proposal; no implementation in this document
+Target: external Sputnik package `ember` over the existing `net.http.Server`
 
 This document supersedes the design direction of:
 
@@ -12,8 +12,8 @@ This document supersedes the design direction of:
 Those files remain useful as historical sketches, but this document is the
 single source of truth for the proposed framework shape. In particular, it
 removes handler-local route annotations, unifies the minimal and MVC variants,
-uses the real Amber callable-reference semantics, and accounts for the current
-`amber-orm` and `sqlite3-amber` concurrency constraints.
+uses the real Sputnik callable-reference semantics, and accounts for the current
+`sputnik-orm` and `sqlite3-sputnik` concurrency constraints.
 
 ---
 
@@ -24,7 +24,7 @@ application:
 
 1. A small application binds routes directly to module functions.
 2. An MVC-shaped application binds the same routes to controller instance
-   methods and keeps the root route declaration in `config/routes.am`.
+   methods and keeps the root route declaration in `config/routes.s`.
 
 There is no separate "light" and "heavy" runtime. Controllers, views,
 resources, ORM integration, generators, and directory conventions are layers
@@ -32,7 +32,7 @@ over the same `App`, `Routes`, `Request`, `Response`, and middleware contracts.
 
 The canonical route declaration is:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/", to: &handler
 ```
@@ -41,9 +41,9 @@ routes = ember.routes:
 macro that returns an immutable `ember.Routes` value. It does not mutate a
 package-global registry and does not attach metadata to handler declarations.
 
-Controller actions use Amber's unbound instance-method reference syntax:
+Controller actions use Sputnik's unbound instance-method reference syntax:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/", to: &Home#landing
 
@@ -59,7 +59,7 @@ A URL backed by a mutable database entity does not require a mutable route
 table. The router keeps a static shape such as `/people/:slug`; the captured
 slug is resolved through a repository at request time:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/people/:slug", to: &People#show, as: :person
 ```
@@ -73,7 +73,7 @@ resolves the full normalized path through the database.
 
 ## 1. Grounded substrate
 
-This design builds on implementation that already exists in the Amber
+This design builds on implementation that already exists in the Sputnik
 workspace:
 
 - block-suffix, `use`, annotation, and string-tag macro surfaces exist under
@@ -84,14 +84,14 @@ workspace:
   `ServerResponse`-compatible value;
 - the server runs request hooks cooperatively and may have multiple concurrent
   requests;
-- `amber-orm` implements its P0 model, validation, query, and adapter surfaces,
+- `sputnik-orm` implements its P0 model, validation, query, and adapter surfaces,
   plus a thin SQLite pool facade, one-time model binding, and model-level
   transactions;
-- `sqlite3-amber` implements database access, safe parameterized SQL, and a
+- `sqlite3-sputnik` implements database access, safe parameterized SQL, and a
   shareable connection pool with exclusive leases, cooperative waiting, and a
   non-inheritable logical-task-local current-connection context.
 
-Ember is therefore primarily an Amber package plus macros. It should not add a
+Ember is therefore primarily an Sputnik package plus macros. It should not add a
 second HTTP scheduler, runtime metaprogramming layer, or socket implementation.
 
 The low-level server currently remains intentionally small: plaintext HTTP/1.1,
@@ -111,7 +111,7 @@ They are not attributes of handler definitions.
 
 Rejected:
 
-```amber
+```sputnik
 route GET, "/posts/:id"
 def show(request, id):
   # ...
@@ -119,7 +119,7 @@ def show(request, id):
 
 Canonical:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/posts/:id", to: &show
 ```
@@ -134,23 +134,23 @@ as `before database_request`: that annotation wraps every invocation of the
 function and does not mutate `Routes`. Route-specific middleware remains in the
 central route declaration.
 
-### 2.2. Macros generate ordinary Amber
+### 2.2. Macros generate ordinary Sputnik
 
 `ember.routes` and its nested DSL forms consume AST during F1.5 and generate
 ordinary declarations, route descriptors, target wrappers, and constructors.
-The binder, typed checker, HIR, and runtime see ordinary Amber after expansion.
+The binder, typed checker, HIR, and runtime see ordinary Sputnik after expansion.
 
 Macros are not used for request-time dispatch. Runtime routing operates over a
 prebuilt immutable matcher.
 
 ### 2.3. No runtime `load`
 
-`config/routes.am` is an ordinary Amber module. It is included in the build
+`config/routes.s` is an ordinary Sputnik module. It is included in the build
 manifest and imported statically. Ember does not reproduce Ruby's `load`,
 caller-scope evaluation, or repeated source execution.
 
 Convention may decide which module an application generator imports, but the
-semantic edge remains a normal Amber import.
+semantic edge remains a normal Sputnik import.
 
 ### 2.4. No ambient current request
 
@@ -188,17 +188,17 @@ frameworks:
 
 ```text
 src/
-  ember.am                  App, Request, Response, render
-  ember/router.am           Routes, matcher, route macros
-  ember/controller.am       Controller and `use ember.controller`
-  ember/middleware.am       middleware composition
-  ember/html.am             Html value and html string-tag macro
-  ember/testing.am          in-memory request helpers
-  ember/session.am          later phase
-  ember/security.am         later cookies/CSRF/security headers
+  ember.s                  App, Request, Response, render
+  ember/router.s           Routes, matcher, route macros
+  ember/controller.s       Controller and `use ember.controller`
+  ember/middleware.s       middleware composition
+  ember/html.s             Html value and html string-tag macro
+  ember/testing.s          in-memory request helpers
+  ember/session.s          later phase
+  ember/security.s         later cookies/CSRF/security headers
 
 integrations/
-  orm.am                    optional ORM integration
+  orm.s                    optional ORM integration
 ```
 
 The minimal import must not force SQLite, FFI, ORM, templates, sessions, or a
@@ -217,7 +217,7 @@ the core web package remains source-only and database-neutral.
 
 `ember.routes` is a block-suffix macro returning `ember.Routes`:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/", to: &home
   post "/sessions", to: &create_session
@@ -229,7 +229,7 @@ one router. A bare unused `ember.routes:` statement should be diagnosed as
 
 A conventional routes module is:
 
-```amber
+```sputnik
 package app.routes
 
 import ember
@@ -245,7 +245,7 @@ routes = ember.routes:
 
 The application entry imports it normally:
 
-```amber
+```sputnik
 from app.routes import routes
 import ember
 
@@ -267,7 +267,7 @@ app = ember.App(routes: routes)
 There is no mutable `ember.__routes` singleton. `App` receives routes through
 its constructor:
 
-```amber
+```sputnik
 app = ember.App(routes: routes)
 ```
 
@@ -275,7 +275,7 @@ app = ember.App(routes: routes)
 
 The first useful surface is intentionally small:
 
-```amber
+```sputnik
 routes = ember.routes:
   get     "/items",     to: &items_index, as: :items
   get     "/items/:id", to: &Items#show,  as: :item
@@ -291,7 +291,7 @@ route is an application option and must not be left implicit in the matcher.
 
 ### 4.4. Scope, middleware, and composition
 
-```amber
+```sputnik
 routes = ember.routes:
   scope "/api", before: [&request_id, &json_errors]:
     scope "/v1", before: [&authenticate]:
@@ -311,7 +311,7 @@ split across subrouters.
 
 The MVC layer may provide:
 
-```amber
+```sputnik
 routes = ember.routes:
   resources(:posts, controller: Posts,
     only: [:index, :show, :create, :update, :destroy])
@@ -331,9 +331,9 @@ semantics.
 
 ### 5.1. Callable-reference semantics
 
-Amber distinguishes:
+Sputnik distinguishes:
 
-```amber
+```sputnik
 &home                 # module/top-level function
 &Home.landing         # class-side method
 &Home#landing         # unbound instance method
@@ -341,13 +341,13 @@ Amber distinguishes:
 
 Therefore the canonical controller target is:
 
-```amber
+```sputnik
 get "/", to: &Home#landing
 ```
 
 For this class:
 
-```amber
+```sputnik
 class Home < ember.Controller:
   def landing():
     # ...
@@ -355,7 +355,7 @@ class Home < ember.Controller:
 
 The dot form is valid only when the action is actually class-side:
 
-```amber
+```sputnik
 class Health:
   class_method def show(request):
     ember.render text: "ok"
@@ -365,7 +365,7 @@ routes = ember.routes:
 ```
 
 Ember does not reinterpret `&Class.method` as an instance action. Doing so
-would contradict core Amber syntax and make ordinary callable references
+would contradict core Sputnik syntax and make ordinary callable references
 framework-dependent.
 
 ### 5.2. Target normalization
@@ -400,7 +400,7 @@ explicitly requests it.
 
 A controller is instantiated once per request dispatch:
 
-```amber
+```sputnik
 controller = Home(request)
 result = controller.landing
 ```
@@ -419,14 +419,14 @@ Controller instances are never pooled or shared.
 
 The canonical composition form is inheritance:
 
-```amber
+```sputnik
 class Home < ember.Controller:
 ```
 
 An alternative injection macro may be supplied for a class that already needs
 another superclass:
 
-```amber
+```sputnik
 class Home < ApplicationObject:
   use ember.controller
 ```
@@ -464,7 +464,7 @@ low-level `ServerRequest`.
 
 ### 6.2. Minimal function handler
 
-```amber
+```sputnik
 import ember
 
 def handler(request):
@@ -476,7 +476,7 @@ read a hidden current request.
 
 The following free-function spelling is deliberately not supported:
 
-```amber
+```sputnik
 def handler(request):
   status :ok
   render text: "o hai"
@@ -490,7 +490,7 @@ Both mechanisms conflict with the central-routing and explicit-state design.
 
 Controller methods may use receiver-local response state:
 
-```amber
+```sputnik
 class Home < ember.Controller:
   def landing():
     status :ok
@@ -501,7 +501,7 @@ class Home < ember.Controller:
 `render` returns a completed `ember.Response`. It does not perform an implicit
 language-level return. An early response is explicit:
 
-```amber
+```sputnik
 return render text: "invalid", status: :unprocessable_entity
 ```
 
@@ -523,7 +523,7 @@ The framework boundary accepts a deliberately small response-like set:
 Maps and arbitrary model objects are not implicitly serialized as JSON. JSON
 must be explicit:
 
-```amber
+```sputnik
 ember.render json: {message: "ok"}, status: :ok
 ```
 
@@ -588,7 +588,7 @@ literal > parameter > wildcard
 
 Consequences:
 
-```amber
+```sputnik
 get "/people/new",   to: &People#new_
 get "/people/:slug", to: &People#show
 ```
@@ -598,7 +598,7 @@ written first.
 
 Routes with the same normalized shape are ambiguous and fail at build time:
 
-```amber
+```sputnik
 get "/people/:id",   to: &People#by_id
 get "/people/:slug", to: &People#by_slug
 ```
@@ -607,7 +607,7 @@ Parameter names do not make matcher shapes different.
 
 Parameter conversion types do not make matcher shapes different either:
 
-```amber
+```sputnik
 get "/people/:value", to: &People#by_id, params: {value: Int}
 get "/people/:slug",  to: &People#by_slug
 ```
@@ -646,7 +646,7 @@ or remain explicit handler parsing.
 
 Recommended explicit form:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/people/:id",
     to: &People#show,
@@ -654,7 +654,7 @@ routes = ember.routes:
     as: :person
 ```
 
-```amber
+```sputnik
 class People < ember.Controller:
   def show(id as Int):
     # `id` is already Int
@@ -666,7 +666,7 @@ call against the action signature.
 
 An untyped string parameter is the default:
 
-```amber
+```sputnik
 get "/people/:slug", to: &People#show
 ```
 
@@ -676,7 +676,7 @@ code.
 The route macro can always validate literal route grammar, duplicate shapes,
 unknown parameter declarations, and target-reference form. Full signature and
 return-type guarantees require the typed profile; the dynamic profile retains
-ordinary Amber runtime errors where static proof is unavailable.
+ordinary Sputnik runtime errors where static proof is unavailable.
 
 ---
 
@@ -687,7 +687,7 @@ ordinary Amber runtime errors where static proof is unavailable.
 When a database entity has a mutable human-readable URL, the route shape is
 normally static and only the capture value is dynamic:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/people/:slug", to: &People#show, as: :person
 ```
@@ -705,7 +705,7 @@ wrapper asks the repository to resolve the slug.
 
 Conceptual action:
 
-```amber
+```sputnik
 class People < ember.Controller:
   def show(slug as Str):
     repo = service(:people)
@@ -760,7 +760,7 @@ Changing `ada-lovelace` to `ada-king` should atomically:
 A request to the historical path resolves the entity and redirects to the
 current named route:
 
-```amber
+```sputnik
 redirect to: path(:person, slug: person.slug),
   status: :permanent_redirect
 ```
@@ -778,7 +778,7 @@ the current canonical URL, and path updates must not create cycles.
 
 An application may intentionally place entity slugs at the root:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/login", to: &Sessions#new_
   get "/about", to: &Static#about
@@ -805,7 +805,7 @@ A CMS may allow `/about`, `/docs/install`, and `/products/widget` to refer to
 different database rows. Registering each path as a mutable route is still
 unnecessary. Use one lowest-precedence wildcard resolver:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/assets/*path", to: &Assets#show
   get "/api/*path",    to: &Api#dispatch
@@ -887,12 +887,12 @@ sent through `send` or `method_missing` on the request hot path.
 
 Named routes provide one canonical way to create URLs:
 
-```amber
+```sputnik
 routes = ember.routes:
   get "/people/:slug", to: &People#show, as: :person
 ```
 
-```amber
+```sputnik
 routes.path(:person, slug: person.slug)
 # => "/people/ada-lovelace"
 ```
@@ -900,13 +900,13 @@ routes.path(:person, slug: person.slug)
 Inside a controller the same operation is available without importing the
 routes module:
 
-```amber
+```sputnik
 path(:person, slug: person.slug)
 ```
 
 A module-function handler uses the explicit request context:
 
-```amber
+```sputnik
 request.routes.path(:person, slug: person.slug)
 ```
 
@@ -919,7 +919,7 @@ request.routes.path(:person, slug: person.slug)
 
 `url` additionally applies an explicit or configured origin:
 
-```amber
+```sputnik
 routes.url(:person, slug: person.slug, origin: request.origin)
 ```
 
@@ -943,7 +943,7 @@ Middleware has one ordinary callable contract:
 
 Example:
 
-```amber
+```sputnik
 def authenticate(request, next):
   if request.user:
     next(request)
@@ -976,9 +976,9 @@ contract raises.
 ### 11.1. Function-intrinsic `before` annotation
 
 Middleware that is an invariant of a module function, rather than policy of one
-particular route, may be attached with Amber's annotation macro surface:
+particular route, may be attached with Sputnik's annotation macro surface:
 
-```amber
+```sputnik
 from ember.middleware import before
 import ember.integrations.orm as ember_orm
 
@@ -993,7 +993,7 @@ def create(request):
 syntax and the annotated declaration `Ast`, then returns one replacement
 declaration whose body invokes the middleware around the original body:
 
-```amber
+```sputnik
 macro def before(middleware as Ast, declaration as Ast) -> Ast:
   # Validate AstDefStmt, preserve the declaration signature, wrap its body.
   ...
@@ -1006,7 +1006,7 @@ such as `&create` remain unchanged.
 
 P0 accepts one middleware or one ordered list:
 
-```amber
+```sputnik
 before [&request_id, &authenticate, database_request]
 def create(request):
   ...
@@ -1024,7 +1024,7 @@ This is not a handler-local route declaration:
 - it applies to every direct invocation of the function, including tests;
 - policy that differs between routes stays in `routes` via `before:`;
 - a blank line between the annotation and `def` breaks attachment by the normal
-  Amber annotation rule.
+  Sputnik annotation rule.
 
 ---
 
@@ -1034,13 +1034,13 @@ This is not a handler-local route declaration:
 
 Controllers render values, not string paths:
 
-```amber
+```sputnik
 render Views.posts.index(posts: posts)
 ```
 
 Rejected:
 
-```amber
+```sputnik
 render "posts/index"
 render :index
 ```
@@ -1048,12 +1048,12 @@ render :index
 A missing view binding, missing argument, or incorrect argument type should be
 reported by ordinary binding/type checking.
 
-### 12.2. First implementation: Amber modules
+### 12.2. First implementation: Sputnik modules
 
-The first view implementation can use ordinary `.am` modules and an inline
+The first view implementation can use ordinary `.s` modules and an inline
 HTML string-tag macro:
 
-```amber
+```sputnik
 package app.views.posts
 
 from ember.html import html
@@ -1081,11 +1081,11 @@ an Ember macro. The build layer must:
 - declare external files as build inputs;
 - map suffixes to exported string-tag macro providers;
 - construct `Ast.StringTemplate` values with external source spans;
-- generate virtual Amber modules under a mounted namespace;
+- generate virtual Sputnik modules under a mounted namespace;
 - include provider and input digests in build cache keys;
 - report parser, binder, and type errors against the external file.
 
-This should become a general Amber source-format registry usable by HTML, SQL,
+This should become a general Sputnik source-format registry usable by HTML, SQL,
 GraphQL, protobuf, and other packages. It should not be hard-coded into the
 web framework.
 
@@ -1095,7 +1095,7 @@ implementable package-only macro.
 
 SQL template providers may safely parameterize interpolations, but declaring a
 typed result such as `List[Post]` additionally requires schema/result-shape
-validation that `sqlite3-amber` does not currently provide.
+validation that `sqlite3-sputnik` does not currently provide.
 
 ---
 
@@ -1104,21 +1104,21 @@ validation that `sqlite3-amber` does not currently provide.
 ### 13.1. Core Ember is ORM-neutral
 
 Ember's router, request, response, middleware, and controller contracts do not
-depend on `amber-orm`. A handler may use raw SQLite, a repository, an HTTP
+depend on `sputnik-orm`. A handler may use raw SQLite, a repository, an HTTP
 service, an in-memory store, or no persistence.
 
 ### 13.2. One-time model binding to a shareable pool
 
 Binding a shared model to a confined physical `Database` remains unsafe:
 
-```amber
+```sputnik
 User.bind!(orm_sqlite.adapter(confined_database))
 ```
 
 The web shape binds models once, before concurrent serving, to an ORM facade
 over the shareable low-level pool:
 
-```amber
+```sputnik
 database = orm_sqlite.pool("data/app.db", max_size: 8)
 database.bind!(Person, EntityPath).or_raise
 ```
@@ -1138,7 +1138,7 @@ surfaces; it does not add a second pool implementation.
 
 The optional ORM integration owns the controller execution scope:
 
-```amber
+```sputnik
 app = ember.App(
   routes: routes,
   integrations: [ember_orm.pool(database)]
@@ -1147,7 +1147,7 @@ app = ember.App(
 
 Conceptually it decorates a controller target as:
 
-```amber
+```sputnik
 database.with_connection:
   controller = People(request)
   result = controller.show(id)
@@ -1156,7 +1156,7 @@ database.with_connection:
 
 The action remains ordinary model code:
 
-```amber
+```sputnik
 class People < ember.Controller:
   def show(id as Int):
     match Person.find(id):
@@ -1209,7 +1209,7 @@ lifecycle.
 
 ### 13.6. SQLite concurrency and transaction boundary
 
-`sqlite3-amber` now reports `pool: true`, `pool_affinity: :lease`, and
+`sqlite3-sputnik` now reports `pool: true`, `pool_affinity: :lease`, and
 `pool_context: :task_local`. Its non-inheritable task-local binding survives
 suspension and worker migration; a `task.spawn` child obtains a separate lease.
 Open statements are finalized and unfinished transactions rolled back on
@@ -1235,7 +1235,7 @@ cannot give the compiler field information retroactively.
 
 `App` is a callable request pipeline independent of socket ownership:
 
-```amber
+```sputnik
 app = ember.App(
   routes: routes,
   middleware: [&request_id, &access_log],
@@ -1247,14 +1247,14 @@ response = app.call(request)
 
 The HTTP adapter is thin:
 
-```amber
+```sputnik
 server.serve |server_request|:
   app.call(ember.Request.from_server(server_request)).to_server_response
 ```
 
 Convenience may construct the current low-level server:
 
-```amber
+```sputnik
 app.run(
   host: "127.0.0.1",
   port: 3000,
@@ -1293,7 +1293,7 @@ progress.
 Selecting a streaming body is the response commitment point. A controller
 shape may be:
 
-```amber
+```sputnik
 class Events < ember.Controller:
   def index():
     stream(
@@ -1417,7 +1417,7 @@ and is not presented as an HTTP chunk.
 The server-side API can consume either framing without first buffering it into
 `body_bytes`:
 
-```amber
+```sputnik
 def ingest(request):
   request.body_stream.each_chunk |chunk|:
     process(chunk.data, extensions: chunk.extensions)
@@ -1458,7 +1458,7 @@ an Ember requirement. HTTP request input and response output are independent
 halves of one exchange. A handler may select a `StreamingResponse` immediately,
 and its deferred producer may interleave cooperative reads and writes:
 
-```amber
+```sputnik
 def mirror(request):
   ember.stream(
     status: :ok,
@@ -1562,7 +1562,7 @@ progress on one cooperative worker.
 
 Most framework tests should not open a socket:
 
-```amber
+```sputnik
 response = app.call(ember.testing.get("/people/ada-lovelace"))
 
 expect(response.status).to_equal(200)
@@ -1665,7 +1665,7 @@ routing paths.
 
 ### 18.1. Single-file application
 
-```amber
+```sputnik
 package hello
 
 import ember
@@ -1687,20 +1687,20 @@ def main():
 ```text
 app/
   controllers/
-    home.am
-    people.am
+    home.s
+    people.s
   models/
-    person.am
+    person.s
   services/
   views/
 config/
-  routes.am
-app.am
+  routes.s
+app.s
 ```
 
-`config/routes.am`:
+`config/routes.s`:
 
-```amber
+```sputnik
 package app.routes
 
 import ember
@@ -1770,7 +1770,7 @@ responsibilities.
 ### Phase 5 — HTML and external views
 
 - inline `Html` string-tag macro and escaping model;
-- typed Amber-module views;
+- typed Sputnik-module views;
 - compiler-level external source-format RFC;
 - `.amv` mounting only after the compiler contract exists.
 
@@ -1816,9 +1816,9 @@ responsibilities.
 3. The canonical use is `routes = ember.routes:` and returns immutable
    `ember.Routes`.
 4. Routes are central and never declared by handler annotations.
-5. Separate route files are static Amber modules, not Ruby-style runtime loads.
+5. Separate route files are static Sputnik modules, not Ruby-style runtime loads.
 6. Function targets use `&handler`; controller actions use `&Class#method`.
-7. `&Class.method` retains its Amber class-side meaning.
+7. `&Class.method` retains its Sputnik class-side meaning.
 8. Controllers are per-request instances.
 9. Free handlers construct responses explicitly; there is no ambient current
    response.

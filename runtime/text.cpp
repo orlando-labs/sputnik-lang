@@ -16,7 +16,7 @@
 #include <unistd.h>
 #endif
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -549,4 +549,4 @@ RuntimeLogLevel RuntimeLogger::level() const {
   return impl_ == nullptr ? RuntimeLogLevel::Info : impl_->level();
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

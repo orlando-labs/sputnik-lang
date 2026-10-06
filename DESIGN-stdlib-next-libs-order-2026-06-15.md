@@ -5,7 +5,7 @@ Status: design / decision-made — no code change in this doc
 Scope: new native libraries above the runtime-facing layer — `Json`, `Encoding`,
 `SecureRandom`, `Uuid`, `Time`, `Digest`, `Url`, `net.http`; their registration
 in `runtime/vm.cpp` and `runtime/vm.h`
-Follows: `amber_unified_final_spec.md` Part III ("Stdlib: план и приоритеты
+Follows: `sputnik_unified_final_spec.md` Part III ("Stdlib: план и приоритеты
 слоя", S1–S7 / STD-001…STD-042). The S-series runtime layers (collections,
 task/sync, watch, io, low-level net) are done or functional; this doc orders the
 *application-level* libraries that sit on top of them.
@@ -54,7 +54,7 @@ client-first, "TLS feature-gated"), `Time` and `UUID` as type-annotation forms.
 
 ### 2.4 Implementation substrate
 
-There is no `.am`-source stdlib shipping path; libraries are native C++. Each
+There is no `.s`-source stdlib shipping path; libraries are native C++. Each
 new library is three edits:
 
 1. a `RuntimeNativeTypeKind` enum value (`runtime/vm.h:218`);
@@ -63,7 +63,7 @@ new library is three edits:
 3. a selector-dispatch handler (pattern: the `Math` handler at
    `runtime/vm.cpp:18922`).
 
-Errors normalize into existing/added Amber error classes via the error registry,
+Errors normalize into existing/added Sputnik error classes via the error registry,
 exactly as the io/net layers do.
 
 Both of those edits land in two ~4,000- and ~40-branch `if`-chains inside the
@@ -105,7 +105,7 @@ parallel hand-written chains, both inside the 1.1 MB `vm.cpp`:
 - **Dispatch:** `try_apply_native_stdlib_send` (`runtime/vm.cpp:18841`) — a single
   ~4,000-line member function that is one long `if (kind ==
   RuntimeNativeTypeKind::X) { … }` per native type. Method bodies for `Math`,
-  `Amber`, `io`, `net`, the scalar/collection types, etc. all live inline here.
+  `Sputnik`, `io`, `net`, the scalar/collection types, etc. all live inline here.
 - **Name resolution:** `lookup_native_prelude_constant` (`runtime/vm.cpp:12598`)
   — a ~40-branch `if (path == "Json") return Value::native_type(…)` chain that
   maps a source path (`"Math"`, `"io.ByteBuffer"`, `"net.tcp"`) to a

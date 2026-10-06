@@ -9,88 +9,88 @@
 
 namespace {
 
-amber::binder::BindResult bind_ok(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::binder::BindResult bind_ok(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
   return bind_result;
 }
 
-amber::binder::BindResult bind_any(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::binder::BindResult bind_any(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  return amber::binder::bind_module(parse_result.items,
+  return sputnik::binder::bind_module(parse_result.items,
                                     parse_result.module_name);
 }
 
-std::vector<amber::lexer::Diagnostic>
+std::vector<sputnik::lexer::Diagnostic>
 unresolved_name_diagnostics_for(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  return amber::binder::unresolved_name_diagnostics(parse_result.items,
+  return sputnik::binder::unresolved_name_diagnostics(parse_result.items,
                                                     bind_result.graph);
 }
 
-std::unique_ptr<amber::ast::Expr> parse_expr_ok(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<expr>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+std::unique_ptr<sputnik::ast::Expr> parse_expr_ok(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<expr>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseResult parse_result = parser.parse_expression_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseResult parse_result = parser.parse_expression_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
@@ -104,10 +104,10 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-const amber::binder::Scope *
-scope_by_kind_owner(const amber::binder::BindGraph &graph,
+const sputnik::binder::Scope *
+scope_by_kind_owner(const sputnik::binder::BindGraph &graph,
                     const std::string &kind, const std::string &owner) {
-  for (const amber::binder::Scope &scope : graph.scopes) {
+  for (const sputnik::binder::Scope &scope : graph.scopes) {
     if (scope.kind == kind && scope.owner == owner) {
       return &scope;
     }
@@ -115,9 +115,9 @@ scope_by_kind_owner(const amber::binder::BindGraph &graph,
   return nullptr;
 }
 
-const amber::binder::Binding *
-binding_by_id(const amber::binder::BindGraph &graph, const std::string &id) {
-  for (const amber::binder::Binding &binding : graph.bindings) {
+const sputnik::binder::Binding *
+binding_by_id(const sputnik::binder::BindGraph &graph, const std::string &id) {
+  for (const sputnik::binder::Binding &binding : graph.bindings) {
     if (binding.id == id) {
       return &binding;
     }
@@ -125,11 +125,11 @@ binding_by_id(const amber::binder::BindGraph &graph, const std::string &id) {
   return nullptr;
 }
 
-const amber::binder::Binding *
-binding_in_scope(const amber::binder::BindGraph &graph,
-                 const amber::binder::Scope &scope, const std::string &name) {
+const sputnik::binder::Binding *
+binding_in_scope(const sputnik::binder::BindGraph &graph,
+                 const sputnik::binder::Scope &scope, const std::string &name) {
   for (const std::string &binding_id : scope.bindings) {
-    const amber::binder::Binding *binding = binding_by_id(graph, binding_id);
+    const sputnik::binder::Binding *binding = binding_by_id(graph, binding_id);
     if (binding != nullptr && binding->name == name) {
       return binding;
     }
@@ -137,10 +137,10 @@ binding_in_scope(const amber::binder::BindGraph &graph,
   return nullptr;
 }
 
-const amber::binder::Signature *
-signature_by_owner(const amber::binder::BindGraph &graph,
+const sputnik::binder::Signature *
+signature_by_owner(const sputnik::binder::BindGraph &graph,
                    const std::string &owner) {
-  for (const amber::binder::Signature &signature : graph.signatures) {
+  for (const sputnik::binder::Signature &signature : graph.signatures) {
     if (signature.owner == owner) {
       return &signature;
     }
@@ -148,10 +148,10 @@ signature_by_owner(const amber::binder::BindGraph &graph,
   return nullptr;
 }
 
-bool has_resolved_reference(const amber::binder::BindGraph &graph,
+bool has_resolved_reference(const sputnik::binder::BindGraph &graph,
                             const std::string &name,
                             const std::string &binding_id) {
-  for (const amber::binder::Reference &ref : graph.references) {
+  for (const sputnik::binder::Reference &ref : graph.references) {
     if (ref.name == name && ref.resolved && ref.binding_id == binding_id) {
       return true;
     }
@@ -159,9 +159,9 @@ bool has_resolved_reference(const amber::binder::BindGraph &graph,
   return false;
 }
 
-void expect_diagnostic_code(const amber::binder::BindResult &result,
+void expect_diagnostic_code(const sputnik::binder::BindResult &result,
                             const std::string &code) {
-  for (const amber::lexer::Diagnostic &diagnostic : result.diagnostics) {
+  for (const sputnik::lexer::Diagnostic &diagnostic : result.diagnostics) {
     if (diagnostic.code == code) {
       return;
     }
@@ -170,9 +170,9 @@ void expect_diagnostic_code(const amber::binder::BindResult &result,
   std::exit(1);
 }
 
-void expect_no_diagnostic_code(const amber::binder::BindResult &result,
+void expect_no_diagnostic_code(const sputnik::binder::BindResult &result,
                                const std::string &code) {
-  for (const amber::lexer::Diagnostic &diagnostic : result.diagnostics) {
+  for (const sputnik::lexer::Diagnostic &diagnostic : result.diagnostics) {
     if (diagnostic.code == code) {
       std::cerr << "unexpected diagnostic " << code << "\n";
       std::exit(1);
@@ -180,9 +180,9 @@ void expect_no_diagnostic_code(const amber::binder::BindResult &result,
   }
 }
 
-void expect_call_diagnostic_code(const amber::binder::CallBindResult &result,
+void expect_call_diagnostic_code(const sputnik::binder::CallBindResult &result,
                                  const std::string &code) {
-  for (const amber::lexer::Diagnostic &diagnostic : result.diagnostics) {
+  for (const sputnik::lexer::Diagnostic &diagnostic : result.diagnostics) {
     if (diagnostic.code == code) {
       return;
     }
@@ -191,8 +191,8 @@ void expect_call_diagnostic_code(const amber::binder::CallBindResult &result,
   std::exit(1);
 }
 
-amber::lexer::Span test_span(std::size_t offset) {
-  amber::lexer::Span span;
+sputnik::lexer::Span test_span(std::size_t offset) {
+  sputnik::lexer::Span span;
   span.file = "<call>";
   span.start.line = 1;
   span.start.col = offset + 1;
@@ -203,15 +203,15 @@ amber::lexer::Span test_span(std::size_t offset) {
   return span;
 }
 
-amber::binder::CallArgShape positional_arg(std::size_t offset) {
-  amber::binder::CallArgShape arg;
+sputnik::binder::CallArgShape positional_arg(std::size_t offset) {
+  sputnik::binder::CallArgShape arg;
   arg.span = test_span(offset);
   return arg;
 }
 
-amber::binder::CallArgShape keyword_arg(const std::string &name,
+sputnik::binder::CallArgShape keyword_arg(const std::string &name,
                                         std::size_t offset) {
-  amber::binder::CallArgShape arg;
+  sputnik::binder::CallArgShape arg;
   arg.keyword_name = name;
   arg.span = test_span(offset);
   return arg;
@@ -232,16 +232,16 @@ void test_module_class_and_unicode_bindings() {
                              "    id\n"
                              "  def init(@масса, α = 1)\n";
 
-  amber::binder::BindResult result = bind_ok(source);
-  const amber::binder::BindGraph &graph = result.graph;
+  sputnik::binder::BindResult result = bind_ok(source);
+  const sputnik::binder::BindGraph &graph = result.graph;
 
-  const amber::binder::Scope *module = scope_by_kind_owner(graph, "module", "");
+  const sputnik::binder::Scope *module = scope_by_kind_owner(graph, "module", "");
   expect(module != nullptr, "module scope exists");
   expect(binding_in_scope(graph, *module, "consts") != nullptr,
          "module import alias binding");
   expect(binding_in_scope(graph, *module, "Метр") != nullptr,
          "unicode from-import binding");
-  const amber::binder::Binding *particle =
+  const sputnik::binder::Binding *particle =
       binding_in_scope(graph, *module, "Particle");
   expect(particle != nullptr && particle->kind == "constant" &&
              particle->role == "class",
@@ -252,12 +252,12 @@ void test_module_class_and_unicode_bindings() {
              graph.exports[0].binding_id == particle->id,
          "forward export resolves to class binding");
 
-  const amber::binder::Scope *class_scope =
+  const sputnik::binder::Scope *class_scope =
       scope_by_kind_owner(graph, "class", "Particle");
   expect(class_scope != nullptr, "class scope exists");
   expect(binding_in_scope(graph, *class_scope, "@масса") != nullptr,
          "unicode ivar binding from auto-assign");
-  const amber::binder::Signature *init_signature =
+  const sputnik::binder::Signature *init_signature =
       signature_by_owner(graph, "init");
   expect(init_signature != nullptr, "init signature descriptor");
   expect(init_signature->params.size() == 2, "init signature param count");
@@ -271,10 +271,10 @@ void test_module_class_and_unicode_bindings() {
   expect(init_signature->params[1].default_kind == "AstLiteral",
          "default kind metadata");
 
-  const amber::binder::Scope *find_scope =
+  const sputnik::binder::Scope *find_scope =
       scope_by_kind_owner(graph, "class_method", "find");
   expect(find_scope != nullptr, "class method scope exists");
-  const amber::binder::Binding *id_param =
+  const sputnik::binder::Binding *id_param =
       binding_in_scope(graph, *find_scope, "id");
   expect(id_param != nullptr && id_param->role == "param", "param binding");
   expect(has_resolved_reference(graph, "id", id_param->id),
@@ -282,14 +282,14 @@ void test_module_class_and_unicode_bindings() {
 }
 
 void test_top_level_assignment_predeclaration() {
-  amber::binder::BindResult result = bind_ok("export value\n"
+  sputnik::binder::BindResult result = bind_ok("export value\n"
                                              "value = 1\n"
                                              "def read():\n"
                                              "  value\n");
-  const amber::binder::BindGraph &graph = result.graph;
-  const amber::binder::Scope *module = scope_by_kind_owner(graph, "module", "");
+  const sputnik::binder::BindGraph &graph = result.graph;
+  const sputnik::binder::Scope *module = scope_by_kind_owner(graph, "module", "");
   expect(module != nullptr, "module scope exists");
-  const amber::binder::Binding *value =
+  const sputnik::binder::Binding *value =
       binding_in_scope(graph, *module, "value");
   expect(value != nullptr && value->kind == "local" &&
              value->role == "module_cell",
@@ -305,39 +305,39 @@ void test_implicit_block_placeholders() {
   const std::string source = "def map(xs):\n"
                              "  xs.map: _1 + _2\n";
 
-  amber::binder::BindResult result = bind_ok(source);
-  const amber::binder::BindGraph &graph = result.graph;
+  sputnik::binder::BindResult result = bind_ok(source);
+  const sputnik::binder::BindGraph &graph = result.graph;
 
-  const amber::binder::Scope *function_scope =
+  const sputnik::binder::Scope *function_scope =
       scope_by_kind_owner(graph, "function", "map");
   expect(function_scope != nullptr, "function scope exists");
-  const amber::binder::Binding *xs_param =
+  const sputnik::binder::Binding *xs_param =
       binding_in_scope(graph, *function_scope, "xs");
   expect(xs_param != nullptr, "function param binding");
   expect(has_resolved_reference(graph, "xs", xs_param->id),
          "postfix base resolves to param");
 
-  const amber::binder::Scope *block_scope =
+  const sputnik::binder::Scope *block_scope =
       scope_by_kind_owner(graph, "block", "block_suffix");
   expect(block_scope != nullptr, "block suffix scope exists");
-  const amber::binder::Binding *first =
+  const sputnik::binder::Binding *first =
       binding_in_scope(graph, *block_scope, "_1");
-  const amber::binder::Binding *second =
+  const sputnik::binder::Binding *second =
       binding_in_scope(graph, *block_scope, "_2");
   expect(first != nullptr && first->kind == "placeholder", "_1 binding");
   expect(second != nullptr && second->kind == "placeholder", "_2 binding");
   expect(has_resolved_reference(graph, "_1", first->id), "_1 resolves");
   expect(has_resolved_reference(graph, "_2", second->id), "_2 resolves");
 
-  amber::binder::BindResult aliases =
+  sputnik::binder::BindResult aliases =
       bind_ok("def combine(xs):\n"
               "  xs.map: _1 + $it + $it1 + $it2\n");
-  const amber::binder::Scope *alias_block =
+  const sputnik::binder::Scope *alias_block =
       scope_by_kind_owner(aliases.graph, "block", "block_suffix");
   expect(alias_block != nullptr, "placeholder alias block scope exists");
-  const amber::binder::Binding *alias_first =
+  const sputnik::binder::Binding *alias_first =
       binding_in_scope(aliases.graph, *alias_block, "_1");
-  const amber::binder::Binding *alias_second =
+  const sputnik::binder::Binding *alias_second =
       binding_in_scope(aliases.graph, *alias_block, "_2");
   expect(alias_first != nullptr && alias_second != nullptr,
          "$it aliases share canonical numbered bindings");
@@ -350,33 +350,33 @@ void test_assignment_to_import_alias_is_error() {
   const std::string source = "import math.constants as consts\n"
                              "consts = 1\n";
 
-  amber::binder::BindResult result = bind_any(source);
+  sputnik::binder::BindResult result = bind_any(source);
   expect(!result.ok(), "import alias write is rejected");
   expect_diagnostic_code(result, "E2007");
 }
 
 void test_placeholder_diagnostics() {
-  amber::binder::BindResult mixed = bind_any("def f(xs):\n"
+  sputnik::binder::BindResult mixed = bind_any("def f(xs):\n"
                                              "  xs.map |x|: _1\n");
   expect(!mixed.ok(), "explicit block params reject placeholders");
   expect_diagnostic_code(mixed, "E1005");
 
-  amber::binder::BindResult sparse = bind_any("def f(xs):\n"
+  sputnik::binder::BindResult sparse = bind_any("def f(xs):\n"
                                               "  xs.map: _2\n");
   expect(!sparse.ok(), "sparse placeholders rejected");
   expect_diagnostic_code(sparse, "E1006");
 
-  amber::binder::BindResult alias_mixed = bind_any("def f(xs):\n"
+  sputnik::binder::BindResult alias_mixed = bind_any("def f(xs):\n"
                                                    "  xs.map |x|: $it\n");
   expect(!alias_mixed.ok(), "explicit block params reject $it aliases");
   expect_diagnostic_code(alias_mixed, "E1005");
 
-  amber::binder::BindResult alias_sparse = bind_any("def f(xs):\n"
+  sputnik::binder::BindResult alias_sparse = bind_any("def f(xs):\n"
                                                     "  xs.map: $it2\n");
   expect(!alias_sparse.ok(), "sparse $it aliases rejected");
   expect_diagnostic_code(alias_sparse, "E1006");
 
-  amber::binder::BindResult nested_explicit =
+  sputnik::binder::BindResult nested_explicit =
       bind_any("def f(xs):\n"
                "  xs.map:\n"
                "    outer = $it\n"
@@ -387,11 +387,11 @@ void test_placeholder_diagnostics() {
 }
 
 void test_duplicate_binding_diagnostics() {
-  amber::binder::BindResult duplicate_param = bind_any("def f(x, x)\n");
+  sputnik::binder::BindResult duplicate_param = bind_any("def f(x, x)\n");
   expect(!duplicate_param.ok(), "duplicate params rejected");
   expect_diagnostic_code(duplicate_param, "B0001");
 
-  amber::binder::BindResult import_collision =
+  sputnik::binder::BindResult import_collision =
       bind_any("import a.b as item\n"
                "from c import D as item\n");
   expect(!import_collision.ok(), "import alias collisions rejected");
@@ -399,26 +399,26 @@ void test_duplicate_binding_diagnostics() {
 }
 
 void test_wildcard_name_diagnostics() {
-  amber::binder::BindResult read = bind_any("def f():\n"
+  sputnik::binder::BindResult read = bind_any("def f():\n"
                                             "  _\n");
   expect(!read.ok(), "wildcard read rejected");
   expect_diagnostic_code(read, "B0002");
 
-  amber::binder::BindResult write = bind_any("def f():\n"
+  sputnik::binder::BindResult write = bind_any("def f():\n"
                                              "  _ = 1\n");
   expect(!write.ok(), "wildcard write rejected");
   expect_diagnostic_code(write, "B0002");
 }
 
 void test_unresolved_name_diagnostics() {
-  std::vector<amber::lexer::Diagnostic> bare =
+  std::vector<sputnik::lexer::Diagnostic> bare =
       unresolved_name_diagnostics_for("x\n");
   expect(bare.size() == 1U, "bare unresolved name gets one diagnostic");
   expect(bare[0].code == "E2012", "bare unresolved name diagnostic code");
   expect(bare[0].message == "undefined name 'x'",
          "bare unresolved name diagnostic message");
 
-  std::vector<amber::lexer::Diagnostic> call =
+  std::vector<sputnik::lexer::Diagnostic> call =
       unresolved_name_diagnostics_for("f(x)\n");
   expect(call.size() == 2U, "call unresolved names get two diagnostics");
   expect(call[0].message == "undefined callable 'f'",
@@ -426,21 +426,21 @@ void test_unresolved_name_diagnostics() {
   expect(call[1].message == "undefined name 'x'",
          "call arg diagnostic remains ordinary name-specific");
 
-  std::vector<amber::lexer::Diagnostic> literal_call =
+  std::vector<sputnik::lexer::Diagnostic> literal_call =
       unresolved_name_diagnostics_for("f(1)\n");
   expect(literal_call.size() == 1U,
          "literal call unresolved callable gets one diagnostic");
   expect(literal_call[0].message == "undefined callable 'f'",
          "literal call diagnostic is callable-specific");
 
-  std::vector<amber::lexer::Diagnostic> inherited_bare =
+  std::vector<sputnik::lexer::Diagnostic> inherited_bare =
       unresolved_name_diagnostics_for("class Child:\n"
                                       "  def action():\n"
                                       "    params\n");
   expect(inherited_bare.empty(),
          "unresolved bare name in object method is an implicit self send");
 
-  std::vector<amber::lexer::Diagnostic> inherited_call =
+  std::vector<sputnik::lexer::Diagnostic> inherited_call =
       unresolved_name_diagnostics_for("class Child:\n"
                                       "  def action():\n"
                                       "    render(text: \"ok\")\n");
@@ -455,24 +455,24 @@ void test_unresolved_name_diagnostics() {
   expect(unresolved_name_diagnostics_for("fs\nnotebook\n").empty(),
          "registered fs namespace and notebook builtin are prelude names");
 
-  std::vector<amber::lexer::Diagnostic> module_function_bare =
+  std::vector<sputnik::lexer::Diagnostic> module_function_bare =
       unresolved_name_diagnostics_for("def action():\n"
                                       "  params\n");
   expect(module_function_bare.size() == 1U &&
              module_function_bare[0].message == "undefined name 'params'",
          "module function without object self keeps undefined-name error");
 
-  std::vector<amber::lexer::Diagnostic> reflective_send =
+  std::vector<sputnik::lexer::Diagnostic> reflective_send =
       unresolved_name_diagnostics_for("receiver = 1\n"
                                       "send(receiver, \"tick\")\n");
   expect(reflective_send.empty(),
          "reflective send builtin is not reported as undefined");
 
-  std::vector<amber::lexer::Diagnostic> native_prelude =
+  std::vector<sputnik::lexer::Diagnostic> native_prelude =
       unresolved_name_diagnostics_for("print \"hello\"\n"
                                       "p(\"debug\")\n"
                                       "pp([1, 2])\n"
-                                      "Amber.stringify(123)\n"
+                                      "Sputnik.stringify(123)\n"
                                       "io.Buffer.new()\n"
                                       "Range.new(1, 2, inclusive_end: true)\n"
                                       "Str(42)\n");
@@ -481,21 +481,21 @@ void test_unresolved_name_diagnostics() {
 }
 
 void test_default_ordering_diagnostics() {
-  amber::binder::BindResult rightward = bind_any("def f(x = y, y)\n");
+  sputnik::binder::BindResult rightward = bind_any("def f(x = y, y)\n");
   expect(!rightward.ok(), "rightward default reference rejected");
   expect_diagnostic_code(rightward, "E1007");
 
-  amber::binder::BindResult self = bind_any("def f(x = x)\n");
+  sputnik::binder::BindResult self = bind_any("def f(x = x)\n");
   expect(!self.ok(), "self default reference rejected");
   expect_diagnostic_code(self, "E1007");
 
-  amber::binder::BindResult leftward = bind_any("def f(x, y = x)\n");
+  sputnik::binder::BindResult leftward = bind_any("def f(x, y = x)\n");
   expect(leftward.ok(), "leftward default reference accepted");
   expect_no_diagnostic_code(leftward, "E1007");
 }
 
 void test_auto_assign_default_warning() {
-  amber::binder::BindResult warning =
+  sputnik::binder::BindResult warning =
       bind_any("class Timer:\n"
                "  def update(@timeout = @timeout)\n");
   expect(warning.ok(), "auto-assign field read is warning-only");
@@ -503,7 +503,7 @@ void test_auto_assign_default_warning() {
 }
 
 void test_clause_def_bindings() {
-  amber::binder::BindResult result = bind_ok("def area(shape):\n"
+  sputnik::binder::BindResult result = bind_ok("def area(shape):\n"
                                              "  when Point(x, y):\n"
                                              "    x * y\n"
                                              "  when Rect(w:, h:):\n"
@@ -513,28 +513,28 @@ void test_clause_def_bindings() {
                                              "\n"
                                              "def fact(0): 1\n"
                                              "def fact(n) if n > 0: n\n");
-  const amber::binder::BindGraph &graph = result.graph;
+  const sputnik::binder::BindGraph &graph = result.graph;
 
-  const amber::binder::Scope *area_scope =
+  const sputnik::binder::Scope *area_scope =
       scope_by_kind_owner(graph, "function", "area");
   expect(area_scope != nullptr, "area function scope exists");
-  const amber::binder::Binding *shape_param =
+  const sputnik::binder::Binding *shape_param =
       binding_in_scope(graph, *area_scope, "shape");
   expect(shape_param != nullptr, "area param binding exists");
 
-  const amber::binder::Scope *area_first_clause =
+  const sputnik::binder::Scope *area_first_clause =
       scope_by_kind_owner(graph, "block", "area.when.0");
   expect(area_first_clause != nullptr, "area first clause scope exists");
-  const amber::binder::Binding *x_binding =
+  const sputnik::binder::Binding *x_binding =
       binding_in_scope(graph, *area_first_clause, "x");
-  const amber::binder::Binding *y_binding =
+  const sputnik::binder::Binding *y_binding =
       binding_in_scope(graph, *area_first_clause, "y");
   expect(x_binding != nullptr && y_binding != nullptr,
          "head pattern bindings exist");
   expect(has_resolved_reference(graph, "x", x_binding->id), "x resolves");
   expect(has_resolved_reference(graph, "y", y_binding->id), "y resolves");
 
-  const amber::binder::Scope *area_second_clause =
+  const sputnik::binder::Scope *area_second_clause =
       scope_by_kind_owner(graph, "block", "area.when.1");
   expect(area_second_clause != nullptr, "area second clause scope exists");
   expect(binding_in_scope(graph, *area_second_clause, "w") != nullptr,
@@ -542,23 +542,23 @@ void test_clause_def_bindings() {
   expect(binding_in_scope(graph, *area_second_clause, "h") != nullptr,
          "keyword head h binding");
 
-  const amber::binder::Scope *area_else =
+  const sputnik::binder::Scope *area_else =
       scope_by_kind_owner(graph, "block", "area.else");
   expect(area_else != nullptr, "area else scope exists");
   expect(has_resolved_reference(graph, "shape", shape_param->id),
          "else body resolves outer param");
 
-  const amber::binder::Signature *fact_signature =
+  const sputnik::binder::Signature *fact_signature =
       signature_by_owner(graph, "fact");
   expect(fact_signature != nullptr, "fact signature exists");
   expect(fact_signature->params.size() == 1, "fact synthetic arity");
   expect(fact_signature->params[0].local_name == "__arg0",
          "fact synthetic local");
 
-  const amber::binder::Scope *fact_clause =
+  const sputnik::binder::Scope *fact_clause =
       scope_by_kind_owner(graph, "block", "fact.when.1");
   expect(fact_clause != nullptr, "fact clause scope exists");
-  const amber::binder::Binding *n_binding =
+  const sputnik::binder::Binding *n_binding =
       binding_in_scope(graph, *fact_clause, "n");
   expect(n_binding != nullptr, "fact pattern binding exists");
   expect(has_resolved_reference(graph, "n", n_binding->id),
@@ -566,17 +566,17 @@ void test_clause_def_bindings() {
 }
 
 void test_case_pattern_bindings() {
-  amber::binder::BindResult result = bind_ok("def choose(x):\n"
+  sputnik::binder::BindResult result = bind_ok("def choose(x):\n"
                                              "  case! x:\n"
                                              "    when n if n > 0:\n"
                                              "      n\n"
                                              "    else:\n"
                                              "      x\n");
-  const amber::binder::BindGraph &graph = result.graph;
-  const amber::binder::Scope *arm_scope =
+  const sputnik::binder::BindGraph &graph = result.graph;
+  const sputnik::binder::Scope *arm_scope =
       scope_by_kind_owner(graph, "block", "case.when.0");
   expect(arm_scope != nullptr, "case arm scope exists");
-  const amber::binder::Binding *n_binding =
+  const sputnik::binder::Binding *n_binding =
       binding_in_scope(graph, *arm_scope, "n");
   expect(n_binding != nullptr && n_binding->role == "pattern",
          "case arm pattern binding");
@@ -585,19 +585,19 @@ void test_case_pattern_bindings() {
 }
 
 void test_block_param_pattern_bindings() {
-  amber::binder::BindResult result =
+  sputnik::binder::BindResult result =
       bind_ok("def transform(xs, factor):\n"
               "  xs.map |Point(^factor, y), [head, *tail]|: y\n");
-  const amber::binder::BindGraph &graph = result.graph;
+  const sputnik::binder::BindGraph &graph = result.graph;
 
-  const amber::binder::Scope *function_scope =
+  const sputnik::binder::Scope *function_scope =
       scope_by_kind_owner(graph, "function", "transform");
   expect(function_scope != nullptr, "transform function scope exists");
-  const amber::binder::Binding *factor_binding =
+  const sputnik::binder::Binding *factor_binding =
       binding_in_scope(graph, *function_scope, "factor");
   expect(factor_binding != nullptr, "outer factor binding exists");
 
-  const amber::binder::Scope *block_scope =
+  const sputnik::binder::Scope *block_scope =
       scope_by_kind_owner(graph, "block", "block_suffix");
   expect(block_scope != nullptr, "pattern block scope exists");
   expect(binding_in_scope(graph, *block_scope, "y") != nullptr,
@@ -611,18 +611,18 @@ void test_block_param_pattern_bindings() {
 }
 
 void test_pattern_assignment_bindings() {
-  amber::binder::BindResult result = bind_ok("def unpack(values):\n"
+  sputnik::binder::BindResult result = bind_ok("def unpack(values):\n"
                                              "  [head, *tail] = values\n"
                                              "  head\n");
-  const amber::binder::BindGraph &graph = result.graph;
-  const amber::binder::Scope *function_scope =
+  const sputnik::binder::BindGraph &graph = result.graph;
+  const sputnik::binder::Scope *function_scope =
       scope_by_kind_owner(graph, "function", "unpack");
   expect(function_scope != nullptr, "unpack function scope exists");
   expect(binding_in_scope(graph, *function_scope, "head") != nullptr,
          "pattern assignment head binding");
   expect(binding_in_scope(graph, *function_scope, "tail") != nullptr,
          "pattern assignment tail binding");
-  const amber::binder::Binding *values_binding =
+  const sputnik::binder::Binding *values_binding =
       binding_in_scope(graph, *function_scope, "values");
   expect(values_binding != nullptr, "values param exists");
   expect(has_resolved_reference(graph, "values", values_binding->id),
@@ -630,7 +630,7 @@ void test_pattern_assignment_bindings() {
 }
 
 void test_duplicate_pattern_binding_diagnostic() {
-  amber::binder::BindResult result = bind_any("def area(shape):\n"
+  sputnik::binder::BindResult result = bind_any("def area(shape):\n"
                                               "  when Point(x, x):\n"
                                               "    x\n");
   expect(!result.ok(), "duplicate pattern bindings rejected");
@@ -638,7 +638,7 @@ void test_duplicate_pattern_binding_diagnostic() {
 }
 
 void test_or_pattern_binding_set_diagnostic() {
-  amber::binder::BindResult result = bind_any("def choose(x):\n"
+  sputnik::binder::BindResult result = bind_any("def choose(x):\n"
                                               "  when (n | 0):\n"
                                               "    x\n");
   expect(!result.ok(), "or-pattern binding set mismatch rejected");
@@ -646,7 +646,7 @@ void test_or_pattern_binding_set_diagnostic() {
 }
 
 void test_map_rest_position_diagnostic() {
-  amber::binder::BindResult result = bind_any("def choose(x):\n"
+  sputnik::binder::BindResult result = bind_any("def choose(x):\n"
                                               "  when {a:, **rest, b:}:\n"
                                               "    x\n");
   expect(!result.ok(), "map rest outside tail position rejected");
@@ -654,7 +654,7 @@ void test_map_rest_position_diagnostic() {
 }
 
 void test_dynamic_pattern_same_pattern_reference_diagnostic() {
-  amber::binder::BindResult result =
+  sputnik::binder::BindResult result =
       bind_any("def classify(shape):\n"
                "  case shape:\n"
                "    when pattern(route(id)) with {id:, **null}:\n"
@@ -666,7 +666,7 @@ void test_dynamic_pattern_same_pattern_reference_diagnostic() {
 }
 
 void test_dynamic_pattern_outer_scope_reference_ok() {
-  amber::binder::BindResult result =
+  sputnik::binder::BindResult result =
       bind_ok("def classify(shape):\n"
               "  case shape:\n"
               "    when pattern(route(shape)) with {id:, **null}:\n"
@@ -677,18 +677,18 @@ void test_dynamic_pattern_outer_scope_reference_ok() {
 }
 
 void test_invalid_pattern_context_diagnostics() {
-  amber::binder::BindResult matcher_assign = bind_any("def unpack(values):\n"
+  sputnik::binder::BindResult matcher_assign = bind_any("def unpack(values):\n"
                                                       "  x + 1 = values\n");
   expect(!matcher_assign.ok(), "bare matcher pattern assignment rejected");
   expect_diagnostic_code(matcher_assign, "E1008");
 
-  amber::binder::BindResult dynamic_block =
+  sputnik::binder::BindResult dynamic_block =
       bind_any("def scan(xs, route):\n"
                "  xs.map |pattern(route(xs))|: xs\n");
   expect(!dynamic_block.ok(), "dynamic block param pattern rejected");
   expect_diagnostic_code(dynamic_block, "E1009");
 
-  amber::binder::BindResult dynamic_assign =
+  sputnik::binder::BindResult dynamic_assign =
       bind_any("def scan(xs, route):\n"
                "  pattern(route(xs)) = xs\n");
   expect(!dynamic_assign.ok(), "dynamic pattern assignment rejected");
@@ -696,13 +696,13 @@ void test_invalid_pattern_context_diagnostics() {
 }
 
 void test_bind_call_shape_success() {
-  amber::binder::BindResult bind_result =
+  sputnik::binder::BindResult bind_result =
       bind_ok("def configure(x, y = 1, α:, β: 2)\n");
-  const amber::binder::Signature *signature =
+  const sputnik::binder::Signature *signature =
       signature_by_owner(bind_result.graph, "configure");
   expect(signature != nullptr, "configure signature exists");
 
-  amber::binder::CallBindResult call = amber::binder::bind_call_shape(
+  sputnik::binder::CallBindResult call = sputnik::binder::bind_call_shape(
       *signature, {positional_arg(0), keyword_arg("α", 2)});
   expect(call.ok(), "call shape bind accepts valid arguments");
   expect(call.slots.size() == 4, "call shape slot count");
@@ -726,10 +726,10 @@ void test_bind_call_shape_success() {
 }
 
 void test_extract_call_shape_from_ast() {
-  std::unique_ptr<amber::ast::Expr> paren_call =
+  std::unique_ptr<sputnik::ast::Expr> paren_call =
       parse_expr_ok("configure(1, α: 2)\n");
-  amber::binder::CallSiteShape paren_shape =
-      amber::binder::extract_call_shape(*paren_call);
+  sputnik::binder::CallSiteShape paren_shape =
+      sputnik::binder::extract_call_shape(*paren_call);
   expect(paren_shape.found, "paren call shape extracted");
   expect(paren_shape.call_kind == "call", "ordinary call kind");
   expect(paren_shape.call_style == "paren", "paren call style");
@@ -737,10 +737,10 @@ void test_extract_call_shape_from_ast() {
   expect(paren_shape.args[0].keyword_name.empty(), "first arg positional");
   expect(paren_shape.args[1].keyword_name == "α", "unicode keyword extracted");
 
-  std::unique_ptr<amber::ast::Expr> bare_call =
+  std::unique_ptr<sputnik::ast::Expr> bare_call =
       parse_expr_ok("configure 1, α: 2\n");
-  amber::binder::CallSiteShape bare_shape =
-      amber::binder::extract_call_shape(*bare_call);
+  sputnik::binder::CallSiteShape bare_shape =
+      sputnik::binder::extract_call_shape(*bare_call);
   expect(bare_shape.found, "bare call shape extracted");
   expect(bare_shape.call_style == "bare", "bare call style");
   expect(bare_shape.args.size() == 2, "bare arg count");
@@ -749,20 +749,20 @@ void test_extract_call_shape_from_ast() {
 }
 
 void test_bind_call_shape_from_ast_args() {
-  amber::binder::BindResult bind_result =
+  sputnik::binder::BindResult bind_result =
       bind_ok("def configure(x, α:, β: 2)\n");
-  const amber::binder::Signature *signature =
+  const sputnik::binder::Signature *signature =
       signature_by_owner(bind_result.graph, "configure");
   expect(signature != nullptr, "configure signature for ast-arg bind exists");
 
-  std::unique_ptr<amber::ast::Expr> call_expr =
+  std::unique_ptr<sputnik::ast::Expr> call_expr =
       parse_expr_ok("configure 1, α: 2\n");
-  amber::binder::CallSiteShape call_shape =
-      amber::binder::extract_call_shape(*call_expr);
+  sputnik::binder::CallSiteShape call_shape =
+      sputnik::binder::extract_call_shape(*call_expr);
   expect(call_shape.found, "call-site shape for ast bind extracted");
 
-  amber::binder::CallBindResult call =
-      amber::binder::bind_call_shape(*signature, call_shape.args);
+  sputnik::binder::CallBindResult call =
+      sputnik::binder::bind_call_shape(*signature, call_shape.args);
   expect(call.ok(), "bind_call_shape accepts extracted ast args");
   expect(call.slots.size() == 3, "ast bind slot count");
   expect(call.slots[0].source_kind == "positional", "ast positional bind");
@@ -773,14 +773,14 @@ void test_bind_call_shape_from_ast_args() {
 }
 
 void test_bind_call_auto_assign_plan() {
-  amber::binder::BindResult bind_result =
+  sputnik::binder::BindResult bind_result =
       bind_ok("def init(@масса, α = 1, @@ρ: 2)\n");
-  const amber::binder::Signature *signature =
+  const sputnik::binder::Signature *signature =
       signature_by_owner(bind_result.graph, "init");
   expect(signature != nullptr, "init signature exists");
 
-  amber::binder::CallBindResult call =
-      amber::binder::bind_call_shape(*signature, {positional_arg(0)});
+  sputnik::binder::CallBindResult call =
+      sputnik::binder::bind_call_shape(*signature, {positional_arg(0)});
   expect(call.ok(), "auto-assign call plan accepts valid arguments");
   expect(call.pending_auto_assigns.size() == 2, "pending auto-assign count");
   expect(call.pending_auto_assigns[0].slot_index == 0 &&
@@ -797,28 +797,28 @@ void test_bind_call_auto_assign_plan() {
 }
 
 void test_bind_call_shape_diagnostics() {
-  amber::binder::BindResult positional_bind = bind_ok("def add(x)\n");
-  const amber::binder::Signature *positional_signature =
+  sputnik::binder::BindResult positional_bind = bind_ok("def add(x)\n");
+  const sputnik::binder::Signature *positional_signature =
       signature_by_owner(positional_bind.graph, "add");
   expect(positional_signature != nullptr, "add signature exists");
 
-  amber::binder::CallBindResult too_many = amber::binder::bind_call_shape(
+  sputnik::binder::CallBindResult too_many = sputnik::binder::bind_call_shape(
       *positional_signature, {positional_arg(0), positional_arg(2)});
   expect(!too_many.ok(), "too many positional args rejected");
   expect_call_diagnostic_code(too_many, "E2010");
 
-  amber::binder::BindResult keyword_bind = bind_ok("def route(x, α:, β: 2)\n");
-  const amber::binder::Signature *keyword_signature =
+  sputnik::binder::BindResult keyword_bind = bind_ok("def route(x, α:, β: 2)\n");
+  const sputnik::binder::Signature *keyword_signature =
       signature_by_owner(keyword_bind.graph, "route");
   expect(keyword_signature != nullptr, "route signature exists");
 
-  amber::binder::CallBindResult duplicate = amber::binder::bind_call_shape(
+  sputnik::binder::CallBindResult duplicate = sputnik::binder::bind_call_shape(
       *keyword_signature,
       {positional_arg(0), keyword_arg("α", 2), keyword_arg("α", 4)});
   expect(!duplicate.ok(), "duplicate keyword args rejected");
   expect_call_diagnostic_code(duplicate, "E2008");
 
-  amber::binder::CallBindResult unknown = amber::binder::bind_call_shape(
+  sputnik::binder::CallBindResult unknown = sputnik::binder::bind_call_shape(
       *keyword_signature, {positional_arg(0), keyword_arg("γ", 6)});
   expect(!unknown.ok(), "unknown keyword args rejected");
   expect_call_diagnostic_code(unknown, "E2009");
@@ -826,9 +826,9 @@ void test_bind_call_shape_diagnostics() {
 }
 
 void test_v20_9_named_multiblock_binding() {
-  amber::binder::BindResult bind_result =
+  sputnik::binder::BindResult bind_result =
       bind_ok("def request(url, &success:, &error: null)\n");
-  const amber::binder::Signature *signature =
+  const sputnik::binder::Signature *signature =
       signature_by_owner(bind_result.graph, "request");
   expect(signature != nullptr && signature->params.size() == 3,
          "named callable signature is bound");
@@ -840,19 +840,19 @@ void test_v20_9_named_multiblock_binding() {
              signature->params[2].has_default,
          "named callable contract metadata survives binding");
 
-  amber::binder::CallBindResult missing = amber::binder::bind_call_shape(
+  sputnik::binder::CallBindResult missing = sputnik::binder::bind_call_shape(
       *signature, {positional_arg(0)});
   expect(!missing.ok(), "required named callable is required by call shape");
   expect_call_diagnostic_code(missing, "AMB_NAMED_CALLABLE_MISSING");
 
-  std::unique_ptr<amber::ast::Expr> multiblock = parse_expr_ok(
+  std::unique_ptr<sputnik::ast::Expr> multiblock = parse_expr_ok(
       "request(1) with:\n"
       "  success:\n"
       "    _1\n"
       "  error |problem|:\n"
       "    problem\n");
-  amber::binder::CallSiteShape shape =
-      amber::binder::extract_call_shape(*multiblock);
+  sputnik::binder::CallSiteShape shape =
+      sputnik::binder::extract_call_shape(*multiblock);
   expect(shape.found && shape.args.size() == 3,
          "multiblock entries participate in ordinary call shape");
   expect(shape.args[1].keyword_name == "success" &&
@@ -860,10 +860,10 @@ void test_v20_9_named_multiblock_binding() {
              shape.args[2].keyword_name == "error" &&
              shape.args[2].source_multiblock,
          "multiblock call shape preserves entry names and provenance");
-  expect(amber::binder::bind_call_shape(*signature, shape.args).ok(),
+  expect(sputnik::binder::bind_call_shape(*signature, shape.args).ok(),
          "multiblock call shape satisfies named callable parameters");
 
-  amber::binder::BindResult duplicate = bind_any(
+  sputnik::binder::BindResult duplicate = bind_any(
       "request() with:\n"
       "  success:\n"
       "    null\n"
@@ -871,18 +871,18 @@ void test_v20_9_named_multiblock_binding() {
       "    null\n");
   expect_diagnostic_code(duplicate, "AMB_MULTIBLOCK_DUPLICATE");
 
-  amber::binder::BindResult explicit_collision = bind_any(
+  sputnik::binder::BindResult explicit_collision = bind_any(
       "request(success: null) with:\n"
       "  success:\n"
       "    null\n");
   expect_diagnostic_code(explicit_collision,
                          "AMB_MULTIBLOCK_KEYWORD_DUPLICATE");
 
-  amber::binder::BindResult placeholder_scope = bind_ok(
+  sputnik::binder::BindResult placeholder_scope = bind_ok(
       "request() with:\n"
       "  success:\n"
       "    _1 + _2\n");
-  const amber::binder::Scope *block =
+  const sputnik::binder::Scope *block =
       scope_by_kind_owner(placeholder_scope.graph, "block", "block_suffix");
   expect(block != nullptr && binding_in_scope(placeholder_scope.graph, *block,
                                               "_1") != nullptr &&
@@ -892,77 +892,77 @@ void test_v20_9_named_multiblock_binding() {
 }
 
 void test_property_bindings_and_conflicts() {
-  amber::binder::BindResult bound = bind_ok("prop answer: 42\n"
+  sputnik::binder::BindResult bound = bind_ok("prop answer: 42\n"
                                             "answer\n");
-  const amber::binder::Scope *module =
+  const sputnik::binder::Scope *module =
       scope_by_kind_owner(bound.graph, "module", "");
   expect(module != nullptr, "module scope exists for property");
-  const amber::binder::Binding *answer =
+  const sputnik::binder::Binding *answer =
       binding_in_scope(bound.graph, *module, "answer");
   expect(answer != nullptr && answer->role == "property" &&
              answer->read_only,
          "property binding metadata");
-  const amber::binder::Signature *signature =
+  const sputnik::binder::Signature *signature =
       signature_by_owner(bound.graph, "answer");
   expect(signature != nullptr && signature->params.empty(),
          "property getter zero-arg signature");
   expect(has_resolved_reference(bound.graph, "answer", answer->id),
          "property read resolves to property binding");
 
-  amber::binder::BindResult method_conflict =
+  sputnik::binder::BindResult method_conflict =
       bind_any("class User:\n"
                "  prop name: @name\n"
                "  def name(): @name\n");
   expect_diagnostic_code(method_conflict, "E_MEMBER_NAME_CONFLICT");
 
-  amber::binder::BindResult storage_separation =
+  sputnik::binder::BindResult storage_separation =
       bind_any("class User:\n"
                "  attr name\n"
                "  def init(@name)\n");
   if (!storage_separation.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(
+    std::cerr << sputnik::lexer::diagnostics_to_json(
         storage_separation.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult missing_setter = bind_any("prop answer: 42\n"
+  sputnik::binder::BindResult missing_setter = bind_any("prop answer: 42\n"
                                                       "answer = 7\n");
   expect_diagnostic_code(missing_setter, "AMB_PROP_MISSING_SETTER");
 
-  amber::binder::BindResult top_level_setter =
+  sputnik::binder::BindResult top_level_setter =
       bind_any("prop answer:\n"
                "  get: 42\n"
                "  set(value): null\n");
   expect_diagnostic_code(top_level_setter, "AMB_PROP_TOP_LEVEL_SETTER");
 
-  amber::binder::BindResult setter_property =
+  sputnik::binder::BindResult setter_property =
       bind_ok("class Box:\n"
               "  prop value:\n"
               "    get: @value\n"
               "    set(value): @value = value\n");
-  const amber::binder::Scope *box_scope =
+  const sputnik::binder::Scope *box_scope =
       scope_by_kind_owner(setter_property.graph, "class", "Box");
   expect(box_scope != nullptr, "box scope exists for property setter");
-  const amber::binder::Binding *value =
+  const sputnik::binder::Binding *value =
       binding_in_scope(setter_property.graph, *box_scope, "value");
   expect(value != nullptr && value->property_has_getter &&
              value->property_has_setter && !value->read_only,
          "read-write property binding metadata");
-  const amber::binder::Scope *setter_scope =
+  const sputnik::binder::Scope *setter_scope =
       scope_by_kind_owner(setter_property.graph, "property_setter", "value=");
   expect(setter_scope != nullptr, "property setter scope exists");
-  const amber::binder::Signature *setter_signature =
+  const sputnik::binder::Signature *setter_signature =
       signature_by_owner(setter_property.graph, "value=");
   expect(setter_signature != nullptr && setter_signature->params.size() == 1 &&
              setter_signature->params[0].local_name == "value",
          "property setter one-arg signature");
 
-  amber::binder::BindResult attr_conflict = bind_any("class User:\n"
+  sputnik::binder::BindResult attr_conflict = bind_any("class User:\n"
                                                      "  attr email\n"
                                                      "  prop email: @email\n");
   expect_diagnostic_code(attr_conflict, "E_MEMBER_NAME_CONFLICT");
 
-  amber::binder::BindResult attr_attr_conflict =
+  sputnik::binder::BindResult attr_attr_conflict =
       bind_any("class User:\n"
                "  attr email\n"
                "  attr var email\n");
@@ -970,30 +970,30 @@ void test_property_bindings_and_conflicts() {
 }
 
 void test_bare_nullary_diagnostics() {
-  amber::binder::BindResult prop_called =
+  sputnik::binder::BindResult prop_called =
       bind_any("prop answer: 42\n"
                "answer()\n");
   expect_diagnostic_code(prop_called, "AMB_PROP_CALLED_AS_METHOD");
 
-  amber::binder::BindResult bare_bang = bind_ok("cache = 1\n"
+  sputnik::binder::BindResult bare_bang = bind_ok("cache = 1\n"
                                                 "cache.clear!\n");
   expect(bare_bang.diagnostics.empty(),
          "bare bang member access is an ordinary nullary send");
 
-  amber::binder::BindResult module_block =
+  sputnik::binder::BindResult module_block =
       bind_ok("package app\n"
               "import provider as sqlite3\n"
               "def probe():\n"
               "  sqlite3.memory |db|:\n"
               "    db\n");
-  const amber::binder::Scope *module_block_scope =
+  const sputnik::binder::Scope *module_block_scope =
       scope_by_kind_owner(module_block.graph, "block", "block_suffix");
   expect(module_block_scope != nullptr &&
              binding_in_scope(module_block.graph, *module_block_scope, "db") !=
                  nullptr,
          "bare imported-module call binds its explicit block parameter");
 
-  amber::binder::BindResult parameterless_block =
+  sputnik::binder::BindResult parameterless_block =
       bind_ok("def invoke(&blk):\n"
               "  blk()\n"
               "def probe():\n"

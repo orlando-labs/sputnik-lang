@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::frozen {
+namespace sputnik::frozen {
 
 struct FrozenImageDiagnostic {
   std::string error_name;
@@ -29,7 +29,7 @@ struct FrozenImageBuildOptions {
 struct FrozenImageNativeModule {
   std::string module_name;
   std::string module_path;
-  std::string format = "amber.native.v1";
+  std::string format = "sputnik.native.v1";
   bool requires_frozen_world = true;
   std::uint32_t code_object_count = 0;
   std::string metadata_digest;
@@ -38,7 +38,7 @@ struct FrozenImageNativeModule {
 };
 
 struct FrozenImageArtifact {
-  std::string format = "amber.image.v1";
+  std::string format = "sputnik.image.v1";
   std::string image_digest;
   std::string package_digest;
   std::string serialized_package;
@@ -99,4 +99,4 @@ std::string verify_result_to_json(const FrozenImageVerifyResult &result);
 std::string
 diagnostics_to_json(const std::vector<FrozenImageDiagnostic> &diagnostics);
 
-} // namespace amber::frozen
+} // namespace sputnik::frozen

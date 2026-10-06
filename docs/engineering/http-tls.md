@@ -11,7 +11,7 @@ names instead of DNS matching or SNI. ALPN advertises HTTP/1.1. There is no
 option to disable certificate verification. Unexpected TLS EOF is an error,
 including for HTTP responses whose body is delimited by connection close.
 
-```amber
+```sputnik
 from net.http import Client
 
 client = Client(timeout: 10)
@@ -35,7 +35,7 @@ provided together. Explicit CA paths replace the default trust store. Trust
 is configured per client, so connections cannot be reused across clients with
 different TLS settings.
 
-```amber
+```sputnik
 from net.http import Server, ServerResponse
 
 server = Server(
@@ -65,7 +65,7 @@ Ordinary `Client` requests (static Str/Bytes bodies), response streams, and
 `Server` use direct native dispatch. For a package exporting `main`:
 
 ```sh
-build/amberc build client.am --target native --entry main-only \
+build/sputnik build client.s --target native --entry main-only \
   --require-full-native --grant net.connect -o client
 ```
 
@@ -77,7 +77,7 @@ builds; those programs support HTTPS, but do not satisfy `--require-full-native`
 
 Install OpenSSL development headers and libraries. The Makefile finds them
 through `pkg-config`; `OPENSSL_PREFIX`, `OPENSSL_INCLUDE_DIR`, and
-`OPENSSL_LIB_DIR` provide overrides. `amberc` propagates the discovered include
+`OPENSSL_LIB_DIR` provide overrides. `sputnik` propagates the discovered include
 and library locations into native runtime compilation and linking.
 
 ```sh

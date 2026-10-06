@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Call-local values use index handles, so overflow need not move the inline
 // entries. Construct only occupied slots: initializing/destroying a full array
@@ -72,4 +72,4 @@ private:
   std::vector<T> overflow_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

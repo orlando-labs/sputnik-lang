@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::parser {
+namespace sputnik::parser {
 
 struct ParseResult {
   std::unique_ptr<ast::Expr> expr;
@@ -247,4 +247,4 @@ private:
   lexer::Token synthetic_error_token_;
 };
 
-} // namespace amber::parser
+} // namespace sputnik::parser

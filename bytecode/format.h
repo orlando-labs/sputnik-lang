@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 
 struct Version {
   std::uint16_t major = 1;
@@ -327,7 +327,7 @@ inline constexpr std::uint32_t kMethodParamFlagRest = 0x8U;
 // argument not bound to a declared keyword parameter into a frozen, name-
 // indifferent Map. At most one per signature.
 inline constexpr std::uint32_t kMethodParamFlagKwRest = 0x10U;
-// Amber v20.9 named callable keyword parameters (`&name:`). They use the
+// Sputnik v20.9 named callable keyword parameters (`&name:`). They use the
 // ordinary keyword slot/ABI and add a pre-body callable contract check.
 inline constexpr std::uint32_t kMethodParamFlagNamedCallable = 0x20U;
 inline constexpr std::uint32_t kMethodParamFlagNamedCallableNullable = 0x40U;
@@ -394,7 +394,7 @@ inline constexpr std::uint32_t kClassFlagException = 0x2U;
 inline constexpr std::uint32_t kClassFlagNativeError = 0x4U;
 
 // A NBMD sidecar is meaningful only on an image explicitly marked as a
-// notebook-only image. Ordinary .amberbc modules keep the historical header
+// notebook-only image. Ordinary .sputnikbc modules keep the historical header
 // and section set unchanged.
 inline constexpr std::uint32_t kFileFlagNotebookOnly = 0x1U;
 
@@ -573,4 +573,4 @@ std::string module_to_disasm(const BcModule &module,
                              const std::string &source_hash);
 std::string verify_errors_to_json(const std::vector<VerifyError> &errors);
 
-} // namespace amber::bytecode
+} // namespace sputnik::bytecode

@@ -7,7 +7,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::build {
+namespace sputnik::build {
 
 namespace {
 
@@ -992,7 +992,7 @@ void emit_module_array(std::ostringstream &out, const char *name,
 
 bool read_native_extensions(
     const JsonValue &root, const std::string &path,
-    std::vector<amber::pkg::PackageNativeExtension> *out,
+    std::vector<sputnik::pkg::PackageNativeExtension> *out,
     std::vector<BuildDiagnostic> *diagnostics) {
   const JsonValue *value = member(root, "native_extensions");
   if (value == nullptr) {
@@ -1010,7 +1010,7 @@ bool read_native_extensions(
           path));
       return false;
     }
-    amber::pkg::PackageNativeExtension extension;
+    sputnik::pkg::PackageNativeExtension extension;
     read_string_member(item, "name", &extension.name);
     read_string_member(item, "language", &extension.language);
     read_string_array_member(item, "sources", &extension.sources);
@@ -1033,7 +1033,7 @@ bool read_native_extensions(
     }
     if (const JsonValue *symbols = member(item, "symbols")) {
       for (const JsonValue &entry : symbols->array_value) {
-        amber::pkg::PackageNativeSymbol symbol;
+        sputnik::pkg::PackageNativeSymbol symbol;
         read_string_member(entry, "logical", &symbol.logical);
         read_string_member(entry, "symbol", &symbol.symbol);
         extension.symbols.push_back(std::move(symbol));
@@ -1041,8 +1041,8 @@ bool read_native_extensions(
     }
     if (const JsonValue *types = member(item, "types")) {
       for (const JsonValue &entry : types->array_value) {
-        amber::pkg::PackageNativeType type;
-        read_string_member(entry, "amber", &type.amber);
+        sputnik::pkg::PackageNativeType type;
+        read_string_member(entry, "sputnik", &type.sputnik);
         read_string_member(entry, "tag", &type.tag);
         read_string_member(entry, "ownership", &type.ownership);
         read_string_member(entry, "destructor", &type.destructor);
@@ -1051,7 +1051,7 @@ bool read_native_extensions(
     }
     if (const JsonValue *errors = member(item, "errors")) {
       for (const JsonValue &entry : errors->array_value) {
-        amber::pkg::PackageNativeError error;
+        sputnik::pkg::PackageNativeError error;
         read_string_member(entry, "name", &error.name);
         read_string_member(entry, "parent", &error.parent);
         read_string_member(entry, "default_message", &error.default_message);
@@ -1065,7 +1065,7 @@ bool read_native_extensions(
           "BuildManifestError", "native extension entries require a name",
           path));
     }
-    for (const amber::pkg::PackageNativeError &error : extension.errors) {
+    for (const sputnik::pkg::PackageNativeError &error : extension.errors) {
       if (error.name.empty()) {
         diagnostics->push_back(diagnostic(
             "BuildManifestError", "native extension errors require a name",
@@ -1090,7 +1090,7 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
   if (read_string_member(root, "schema", &schema)) {
     result.manifest.schema = schema;
   }
-  if (result.manifest.schema != "amber.build.v1") {
+  if (result.manifest.schema != "sputnik.build.v1") {
     result.diagnostics.push_back(diagnostic(
         "BuildManifestError",
         "unsupported build manifest schema '" + result.manifest.schema + "'",
@@ -1174,7 +1174,7 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
   // Native extensions execute foreign code, so a build that declares any must
   // opt into FFI by enabling the `ffi.v1` profile feature (native-packages
   // design §2.3/§6). A plain bytecode host leaves the package unregistered and
-  // executes Amber fallback bodies; an FFI-enabled host must additionally
+  // executes Sputnik fallback bodies; an FFI-enabled host must additionally
   // receive explicit `ffi.load`/`ffi.call` grants before loading it.
   if (!result.manifest.native_extensions.empty()) {
     bool declares_ffi = false;
@@ -1336,7 +1336,7 @@ std::string manifest_to_json(const BuildManifest &manifest) {
 std::string summary_to_json(const BuildSummary &summary) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.build.result.v2\",\n";
+  out << "  \"schema\": \"sputnik.build.result.v2\",\n";
   out << "  \"status\": \"" << (summary.ok ? "ok" : "error") << "\",\n";
   out << "  \"name\": \"" << json_escape(summary.name) << "\",\n";
   out << "  \"root\": \"" << json_escape(summary.root_module) << "\",\n";
@@ -1382,11 +1382,11 @@ std::string summary_to_json(const BuildSummary &summary) {
     if (i != 0U) {
       out << ",";
     }
-    const amber::pkg::PackageNativeExtensionMetadata &metadata =
+    const sputnik::pkg::PackageNativeExtensionMetadata &metadata =
         summary.native_extensions[i];
     out << "\n    {\"name\":\"" << json_escape(metadata.name)
-        << "\",\"amber_ext_abi_version\":"
-        << metadata.amber_ext_abi_version << ",\"target_triple\":\""
+        << "\",\"sputnik_ext_abi_version\":"
+        << metadata.sputnik_ext_abi_version << ",\"target_triple\":\""
         << json_escape(metadata.target_triple)
         << "\",\"native_source_sha256\":\""
         << json_escape(metadata.native_source_digest)
@@ -1397,7 +1397,7 @@ std::string summary_to_json(const BuildSummary &summary) {
       if (j != 0U) {
         out << ",";
       }
-      out << "{\"amber\":\"" << json_escape(metadata.types[j].amber)
+      out << "{\"sputnik\":\"" << json_escape(metadata.types[j].sputnik)
           << "\",\"tag\":\"" << json_escape(metadata.types[j].tag)
           << "\",\"ownership\":\""
           << json_escape(metadata.types[j].ownership)
@@ -1485,4 +1485,4 @@ diagnostics_to_string(const std::vector<BuildDiagnostic> &diagnostics) {
   return out.str();
 }
 
-} // namespace amber::build
+} // namespace sputnik::build

@@ -2,7 +2,7 @@
 
 #include <string_view>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 namespace {
 
 struct RuntimeErrorSpec {
@@ -17,11 +17,11 @@ struct RuntimeErrorSpec {
 // generated X-macro list, shared with the binder so expression lookup and the
 // VM agree on dotted names, ancestry, and structured fields.
 constexpr RuntimeErrorSpec kRuntimeErrorSpecs[] = {
-#define AMBER_RUNTIME_ERROR(name, parent, default_message, default_exit_code,  \
+#define SPUTNIK_RUNTIME_ERROR(name, parent, default_message, default_exit_code,  \
                             field_mask)                                        \
   {name, parent, default_message, default_exit_code, field_mask},
 #include "spec/registries/runtime_errors.def"
-#undef AMBER_RUNTIME_ERROR
+#undef SPUTNIK_RUNTIME_ERROR
 };
 
 constexpr std::uint16_t kRuntimeErrorCount = static_cast<std::uint16_t>(
@@ -143,4 +143,4 @@ std::uint32_t runtime_error_field_bit(const std::string &name) {
   return 0;
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

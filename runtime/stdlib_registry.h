@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Outcome of a SEND attempt. `NotHandled` means "not mine, keep looking" and is
 // what lets a registered handler coexist with VM-owned intrinsic behavior: an
@@ -72,7 +72,7 @@ public:
   // Raise a builtin runtime error by class name as a *rescuable* exception that
   // unwinds to the nearest handler (degrading to a terminal fault only when the
   // name is unknown or no handler exists). This is the rescuable counterpart to
-  // stdlib_set_fault, used by the native-extension ABI's amber_fault so a thunk
+  // stdlib_set_fault, used by the native-extension ABI's sputnik_fault so a thunk
   // fault is catchable by `rescue` (native-packages design §6).
   virtual void stdlib_raise_runtime_error(const void *frame,
                                           const std::string &error_class,
@@ -124,7 +124,7 @@ public:
   // already-immutable input the keepalive is the input value; for a ByteBuffer
   // it is a frozen snapshot. Faults and returns false on the wrong kind. This
   // is the zero-copy counterpart to `stdlib_bytes_of`, backing the ABI's
-  // `amber_bytes_view` (native-packages design §6); the borrowed view is the
+  // `sputnik_bytes_view` (native-packages design §6); the borrowed view is the
   // RuntimePinViewKind::ValueBuffer model -- a pointer into runtime-owned
   // buffer storage that the caller must not outlive the keepalive.
   virtual bool stdlib_bytes_view(const void *frame, const Value &value,
@@ -943,7 +943,7 @@ public:
   void register_path(std::string path, RuntimeNativeTypeKind kind);
 
   // The handler that owns `kind`, or nullptr for VM intrinsic native types
-  // such as Kernel/Amber/conversions.
+  // such as Kernel/Sputnik/conversions.
   NativeStdlibHandler handler_for(RuntimeNativeTypeKind kind) const;
 
   // The kind a source path (`"Math"`, `"io.ByteBuffer"`, ...) resolves to, or
@@ -1086,4 +1086,4 @@ void register_yaml_runtime_module(RuntimeModuleRegistry &modules,
                                   RuntimeTypeRegistry &types,
                                   RuntimeErrorRegistry *errors = nullptr);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -16,18 +16,18 @@
 #include <vector>
 
 #if defined(__APPLE__) || defined(__FreeBSD__)
-#define AMBER_REACTOR_KQUEUE 1
+#define SPUTNIK_REACTOR_KQUEUE 1
 #include <sys/event.h>
 #include <sys/types.h>
 #elif defined(__linux__)
-#define AMBER_REACTOR_EPOLL 1
+#define SPUTNIK_REACTOR_EPOLL 1
 #include <sys/epoll.h>
 #else
-#define AMBER_REACTOR_POLL 1
+#define SPUTNIK_REACTOR_POLL 1
 #include <poll.h>
 #endif
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -120,14 +120,14 @@ private:
   int wake_pipe_[2] = {-1, -1};
   std::unordered_map<int, std::pair<bool, bool>> registered_; // fd -> (r, w)
 
-#if defined(AMBER_REACTOR_KQUEUE)
+#if defined(SPUTNIK_REACTOR_KQUEUE)
   int kq_ = -1;
-#elif defined(AMBER_REACTOR_EPOLL)
+#elif defined(SPUTNIK_REACTOR_EPOLL)
   int ep_ = -1;
 #endif
 };
 
-#if defined(AMBER_REACTOR_KQUEUE)
+#if defined(SPUTNIK_REACTOR_KQUEUE)
 
 void PollBackend::init_backend() {
   kq_ = ::kqueue();
@@ -229,7 +229,7 @@ void PollBackend::poll(int timeout_ms, std::vector<ReadyFd> &out) {
   }
 }
 
-#elif defined(AMBER_REACTOR_EPOLL)
+#elif defined(SPUTNIK_REACTOR_EPOLL)
 
 void PollBackend::init_backend() {
   ep_ = ::epoll_create1(0);
@@ -295,7 +295,7 @@ void PollBackend::poll(int timeout_ms, std::vector<ReadyFd> &out) {
   }
 }
 
-#else // AMBER_REACTOR_POLL
+#else // SPUTNIK_REACTOR_POLL
 
 void PollBackend::init_backend() {}
 void PollBackend::close_backend() {}
@@ -348,7 +348,7 @@ void PollBackend::invalidate(int fd) {
   if (found == registered_.end()) {
     return;
   }
-#if defined(AMBER_REACTOR_KQUEUE)
+#if defined(SPUTNIK_REACTOR_KQUEUE)
   bool bad = false;
   if (found->second.first) {
     (void)kq_apply(kq_, fd, EVFILT_READ, EV_DELETE, &bad);
@@ -356,7 +356,7 @@ void PollBackend::invalidate(int fd) {
   if (found->second.second) {
     (void)kq_apply(kq_, fd, EVFILT_WRITE, EV_DELETE, &bad);
   }
-#elif defined(AMBER_REACTOR_EPOLL)
+#elif defined(SPUTNIK_REACTOR_EPOLL)
   (void)::epoll_ctl(ep_, EPOLL_CTL_DEL, fd, nullptr);
 #endif
   registered_.erase(found);
@@ -687,4 +687,4 @@ void RuntimeReactor::kick() { impl_->kick(); }
 
 ReactorStats RuntimeReactor::stats() const { return impl_->stats(); }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

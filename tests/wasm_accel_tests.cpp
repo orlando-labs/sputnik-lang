@@ -14,7 +14,7 @@ void expect(bool condition, const std::string &message) {
 }
 
 void test_wasm_component_profile_document() {
-  const std::string source = "schema: amber.wasm_accelerator.v1\n"
+  const std::string source = "schema: sputnik.wasm_accelerator.v1\n"
                              "wasm.count=1\n"
                              "wasm.0.name=analytics.plugin\n"
                              "wasm.0.world=analytics-plugin\n"
@@ -32,25 +32,25 @@ void test_wasm_component_profile_document() {
                              "wasm.0.export.0.type=(Order) -> Order\n"
                              "wasm.0.export.0.schema=Order\n"
                              "wasm.0.export.0.effects=!{}\n";
-  const amber::wasm_accel::WasmAccelDocumentParseResult parsed =
-      amber::wasm_accel::parse_wasm_accel_document(source);
+  const sputnik::wasm_accel::WasmAccelDocumentParseResult parsed =
+      sputnik::wasm_accel::parse_wasm_accel_document(source);
   expect(parsed.ok(), "wasm profile document should parse");
-  const amber::wasm_accel::WasmComponentValidationResult validated =
-      amber::wasm_accel::validate_wasm_components(parsed.document.components);
+  const sputnik::wasm_accel::WasmComponentValidationResult validated =
+      sputnik::wasm_accel::validate_wasm_components(parsed.document.components);
   expect(validated.ok, "wasm profile document should validate");
   expect(validated.components.size() == 1,
          "one wasm component should be exposed");
   expect(validated.components[0].imports[0].capability.name == "fs.read",
          "host import capability should be parsed");
   const std::string json =
-      amber::wasm_accel::wasm_component_validation_to_json(validated);
-  expect(json.find("\"schema\": \"amber.wasm_component.v1\"") !=
+      sputnik::wasm_accel::wasm_component_validation_to_json(validated);
+  expect(json.find("\"schema\": \"sputnik.wasm_component.v1\"") !=
              std::string::npos,
          "wasm validation JSON should expose schema");
 }
 
 void test_wasm_component_rejects_world_mutation() {
-  const std::string source = "schema: amber.wasm_accelerator.v1\n"
+  const std::string source = "schema: sputnik.wasm_accelerator.v1\n"
                              "wasm.count=1\n"
                              "wasm.0.name=bad.plugin\n"
                              "wasm.0.world=bad-world\n"
@@ -59,11 +59,11 @@ void test_wasm_component_rejects_world_mutation() {
                              "wasm.0.export.0.name=normalize\n"
                              "wasm.0.export.0.kind=func\n"
                              "wasm.0.export.0.type=(Order) -> Order\n";
-  const amber::wasm_accel::WasmAccelDocumentParseResult parsed =
-      amber::wasm_accel::parse_wasm_accel_document(source);
+  const sputnik::wasm_accel::WasmAccelDocumentParseResult parsed =
+      sputnik::wasm_accel::parse_wasm_accel_document(source);
   expect(parsed.ok(), "negative wasm document syntax should parse");
-  const amber::wasm_accel::WasmComponentValidationResult validated =
-      amber::wasm_accel::validate_wasm_components(parsed.document.components);
+  const sputnik::wasm_accel::WasmComponentValidationResult validated =
+      sputnik::wasm_accel::validate_wasm_components(parsed.document.components);
   expect(!validated.ok, "wasm profile should reject world mutation");
   expect(!validated.diagnostics.empty() &&
              validated.diagnostics[0].error_name == "WasmProfileError",
@@ -71,7 +71,7 @@ void test_wasm_component_rejects_world_mutation() {
 }
 
 void test_accelerator_kernel_profile_document() {
-  const std::string source = "schema: amber.wasm_accelerator.v1\n"
+  const std::string source = "schema: sputnik.wasm_accelerator.v1\n"
                              "kernel.count=1\n"
                              "kernel.0.id=scale.f32\n"
                              "kernel.0.entry=scale\n"
@@ -84,18 +84,18 @@ void test_accelerator_kernel_profile_document() {
                              "kernel.0.param.1.name=factor\n"
                              "kernel.0.param.1.type=F32\n"
                              "kernel.0.param.1.space=scalar\n";
-  const amber::wasm_accel::WasmAccelDocumentParseResult parsed =
-      amber::wasm_accel::parse_wasm_accel_document(source);
+  const sputnik::wasm_accel::WasmAccelDocumentParseResult parsed =
+      sputnik::wasm_accel::parse_wasm_accel_document(source);
   expect(parsed.ok(), "accelerator document should parse");
-  const amber::wasm_accel::AcceleratorValidationResult validated =
-      amber::wasm_accel::validate_accelerator_kernels(parsed.document.kernels);
+  const sputnik::wasm_accel::AcceleratorValidationResult validated =
+      sputnik::wasm_accel::validate_accelerator_kernels(parsed.document.kernels);
   expect(validated.ok, "accelerator kernel should validate");
   expect(validated.kernels[0].params.size() == 2,
          "accelerator params should be exposed");
 }
 
 void test_accelerator_rejects_dynamic_dispatch() {
-  const std::string source = "schema: amber.wasm_accelerator.v1\n"
+  const std::string source = "schema: sputnik.wasm_accelerator.v1\n"
                              "kernel.count=1\n"
                              "kernel.0.id=bad.kernel\n"
                              "kernel.0.entry=bad\n"
@@ -105,11 +105,11 @@ void test_accelerator_rejects_dynamic_dispatch() {
                              "kernel.0.param.count=1\n"
                              "kernel.0.param.0.name=xs\n"
                              "kernel.0.param.0.type=Tensor[F32]\n";
-  const amber::wasm_accel::WasmAccelDocumentParseResult parsed =
-      amber::wasm_accel::parse_wasm_accel_document(source);
+  const sputnik::wasm_accel::WasmAccelDocumentParseResult parsed =
+      sputnik::wasm_accel::parse_wasm_accel_document(source);
   expect(parsed.ok(), "negative accelerator document syntax should parse");
-  const amber::wasm_accel::AcceleratorValidationResult validated =
-      amber::wasm_accel::validate_accelerator_kernels(parsed.document.kernels);
+  const sputnik::wasm_accel::AcceleratorValidationResult validated =
+      sputnik::wasm_accel::validate_accelerator_kernels(parsed.document.kernels);
   expect(!validated.ok, "accelerator kernel should reject dynamic dispatch");
   expect(!validated.diagnostics.empty() &&
              validated.diagnostics[0].error_name == "AcceleratorError",

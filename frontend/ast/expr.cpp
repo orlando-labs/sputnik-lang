@@ -6,7 +6,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::ast {
+namespace sputnik::ast {
 namespace {
 
 std::string json_escape(const std::string &value) {
@@ -507,7 +507,7 @@ void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
         const Expr &member_tail = *tails->values.front();
         const std::string *member = find_string_field(member_tail, "name");
         if (member != nullptr && !member->empty()) {
-          const std::string synthetic = "__amber_ns__" +
+          const std::string synthetic = "__sputnik_ns__" +
                                         sanitize_ns_ident(alias_it->first) +
                                         "__" + sanitize_ns_ident(*member);
           state.injects[synthetic] = {alias_it->second, *member};
@@ -615,7 +615,7 @@ std::string ast_module_to_json(const Expr &expr,
                                const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.ast.v1\",\n";
+  out << "  \"format\": \"sputnik.ast.v1\",\n";
   out << "  \"module\": null,\n";
   out << "  \"items\": [\n";
   out << "    {\"kind\":\"AstExprStmt\",\"span\":";
@@ -634,7 +634,7 @@ std::string ast_module_to_json(const std::vector<std::unique_ptr<Expr>> &items,
                                const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.ast.v1\",\n";
+  out << "  \"format\": \"sputnik.ast.v1\",\n";
   if (module_name.empty()) {
     out << "  \"module\": null,\n";
   } else {
@@ -655,4 +655,4 @@ std::string ast_module_to_json(const std::vector<std::unique_ptr<Expr>> &items,
   return out.str();
 }
 
-} // namespace amber::ast
+} // namespace sputnik::ast

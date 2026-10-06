@@ -1,4 +1,4 @@
-# amber.replay.v1
+# sputnik.replay.v1
 
 Status: implemented for the `W11.3` observability/replay baseline.
 
@@ -7,7 +7,7 @@ The profile defines canonical semantic event names such as `task.started`,
 `loader.module.load`, `world.freeze`, and `world.mutation`. Vendor event names
 remain valid when they use a dotted multi-component namespace.
 
-`.amberbc` has optional profile metadata:
+`.sputnikbc` has optional profile metadata:
 
 - `OBSV` records observability site rows with event name, kind, owner, source,
   and flags.
@@ -15,9 +15,9 @@ remain valid when they use a dotted multi-component namespace.
   and deterministic-mode flags.
 
 Runtime hosts can enable `RuntimeWorldOptions::record_replay_trace` to collect a
-stable `amber.replay.v1` trace. The recorder assigns deterministic event ids and
+stable `sputnik.replay.v1` trace. The recorder assigns deterministic event ids and
 virtual timestamps, captures capability/effect/freeze/load boundaries, and
-serializes traces as a reproducible `.ambertrace` envelope with a content
+serializes traces as a reproducible `.sputniktrace` envelope with a content
 digest.
 
 Runtime hosts can also set `RuntimeWorldOptions::enforce_replay` with an
@@ -29,8 +29,8 @@ trace format and runtime comparison path used by later scheduler/workflow work.
 The CLI preflights are:
 
 ```sh
-amberc replay-check run.ambertrace
-amberc trace-inspect run.ambertrace
+sputnik replay-check run.sputniktrace
+sputnik trace-inspect run.sputniktrace
 ```
 
 `replay-check` validates the envelope and event stream. `trace-inspect` emits

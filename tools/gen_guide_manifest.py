@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Guide knowledge-graph manifest for the Amber website.
+"""Generate the Guide knowledge-graph manifest for the Sputnik website.
 
 The Guide is a set of bilingual Markdown nodes under
 ``site/guide/content/<NN-category>/<id>.<lang>.md``. Each file carries a small
@@ -256,7 +256,7 @@ def main() -> int:
         return 1
 
     manifest = {
-        "schema": "amber.guide.manifest.v1",
+        "schema": "sputnik.guide.manifest.v1",
         "show_spec_refs": True,
         "categories": categories,
         "nodes": nodes,

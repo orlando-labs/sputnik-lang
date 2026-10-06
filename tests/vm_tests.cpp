@@ -68,134 +68,134 @@ std::size_t count_occurrences(const std::string &text,
   return count;
 }
 
-amber::bytecode::EmitResult emit_ok(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::EmitResult emit_ok(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   if (!emit_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(emit_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(emit_result.diagnostics);
     std::exit(1);
   }
   return emit_result;
 }
 
-const amber::bytecode::BcMethod *
-method_by_name(const amber::bytecode::BcModule &module,
+const sputnik::bytecode::BcMethod *
+method_by_name(const sputnik::bytecode::BcModule &module,
                const std::string &name);
-std::uint32_t symbol_id_or_die(const amber::bytecode::BcModule &module,
+std::uint32_t symbol_id_or_die(const sputnik::bytecode::BcModule &module,
                                const std::string &name);
-std::uint32_t append_integer_const(amber::bytecode::BcModule *module,
+std::uint32_t append_integer_const(sputnik::bytecode::BcModule *module,
                                    std::int64_t value);
-const amber::runtime::ExecutionLocal *
-execution_local_by_name(const amber::runtime::ExecutionResult &result,
+const sputnik::runtime::ExecutionLocal *
+execution_local_by_name(const sputnik::runtime::ExecutionResult &result,
                         const std::string &name);
 std::string
-string_value_text_or_die(const amber::runtime::Value &value,
-                         const amber::bytecode::BcModule &module,
-                         const amber::runtime::ExecutionResult &result);
-amber::runtime::ExecutionResult execute_emitted_init(const std::string &source);
-void expect_integer_list(const amber::runtime::Value &value,
+string_value_text_or_die(const sputnik::runtime::Value &value,
+                         const sputnik::bytecode::BcModule &module,
+                         const sputnik::runtime::ExecutionResult &result);
+sputnik::runtime::ExecutionResult execute_emitted_init(const std::string &source);
+void expect_integer_list(const sputnik::runtime::Value &value,
                          const std::vector<std::int64_t> &expected,
                          const std::string &message);
 
-amber::runtime::RuntimeIoProviderStatus provider_ok() {
-  amber::runtime::RuntimeIoProviderStatus status;
+sputnik::runtime::RuntimeIoProviderStatus provider_ok() {
+  sputnik::runtime::RuntimeIoProviderStatus status;
   status.handled = true;
   status.ok = true;
   return status;
 }
 
-class TestIoProvider final : public amber::runtime::RuntimeIoProvider {
+class TestIoProvider final : public sputnik::runtime::RuntimeIoProvider {
 public:
   std::unordered_map<std::string, std::string> files;
 
-  amber::runtime::RuntimeIoProviderStatus
+  sputnik::runtime::RuntimeIoProviderStatus
   fs_exists(const std::string &path) override {
-    amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+    sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
     status.boolean = files.find(path) != files.end();
     return status;
   }
 
-  amber::runtime::RuntimeIoProviderStatus
+  sputnik::runtime::RuntimeIoProviderStatus
   fs_file(const std::string &path) override {
     return fs_exists(path);
   }
 
-  amber::runtime::RuntimeIoProviderStatus
+  sputnik::runtime::RuntimeIoProviderStatus
   fs_dir(const std::string &path) override {
     (void)path;
-    amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+    sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
     status.boolean = false;
     return status;
   }
 
-  amber::runtime::RuntimeIoProviderStatus
+  sputnik::runtime::RuntimeIoProviderStatus
   fs_metadata(const std::string &path) override {
     auto found = files.find(path);
     if (found == files.end()) {
-      amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+      sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
       status.ok = false;
       status.error_name = "FileNotFoundError";
       status.message = "provider file not found";
       return status;
     }
-    amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+    sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
     status.size = found->second.size();
     status.file = true;
     return status;
   }
 
-  amber::runtime::RuntimeIoProviderStatus
+  sputnik::runtime::RuntimeIoProviderStatus
   fs_read_bytes(const std::string &path,
                 std::optional<std::size_t> limit) override {
     auto found = files.find(path);
     if (found == files.end()) {
-      amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+      sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
       status.ok = false;
       status.error_name = "FileNotFoundError";
       status.message = "provider file not found";
       return status;
     }
     if (limit.has_value() && found->second.size() > *limit) {
-      amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+      sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
       status.ok = false;
       status.error_name = "ArgumentError";
       status.message = "read_bytes limit exceeded";
       return status;
     }
-    amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+    sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
     status.bytes = found->second;
     status.count = status.bytes.size();
     return status;
   }
 
-  amber::runtime::RuntimeIoProviderStatus
+  sputnik::runtime::RuntimeIoProviderStatus
   fs_write_bytes(const std::string &path, const std::string &bytes, bool create,
                  bool truncate, bool append = false) override {
     (void)create;
-    amber::runtime::RuntimeIoProviderStatus status = provider_ok();
+    sputnik::runtime::RuntimeIoProviderStatus status = provider_ok();
     if (append && !truncate) {
       files[path] += bytes;
     } else {
@@ -207,37 +207,37 @@ public:
 };
 
 void test_execute_emitted_method() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def echo(x):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def echo(x):\n"
                                                           "  x\n");
   expect(emit_result.module.methods.size() == 1, "expected one method");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.methods[0].entry_code_id,
-      {amber::runtime::Value::integer(7)});
+      {sputnik::runtime::Value::integer(7)});
   expect(exec.ok(), "echo execution failed");
   expect(exec.value.is_integer(), "echo should return integer");
   expect(exec.value.as_integer() == 7, "echo should return argument");
 }
 
-// Regression for bench/polyglot/repro/direct_method_capture_failure.am:
+// Regression for bench/polyglot/repro/direct_method_capture_failure.s:
 // executing a compiled top-level method directly by its entry_code_id must
 // materialize the closure captures that module initialization would create.
 // Before the fix this faulted with "VMError: capture slot out of range"
 // because main()'s body captures the sibling helper() but direct entry never
 // ran module init to bind it.
 void test_direct_entry_materializes_sibling_captures() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def helper(value):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def helper(value):\n"
                                                           "  value + 1\n"
                                                           "\n"
                                                           "def main():\n"
                                                           "  helper(41)\n"
                                                           "\n"
                                                           "main()\n");
-  const amber::bytecode::BcMethod *main_method =
+  const sputnik::bytecode::BcMethod *main_method =
       method_by_name(emit_result.module, "main");
   expect(main_method != nullptr, "main method should exist");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, main_method->entry_code_id);
   expect(exec.ok(), "direct main entry should not fault on sibling captures");
   expect(exec.value.is_integer(), "direct main entry should return integer");
@@ -246,7 +246,7 @@ void test_direct_entry_materializes_sibling_captures() {
 }
 
 void test_execute_return_keyword() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "def early(x):\n"
       "  if x > 10:\n"
       "    return \"big\"\n"
@@ -278,7 +278,7 @@ void test_execute_return_keyword() {
 }
 
 void test_execute_return_runs_nested_ensure_inner_to_outer() {
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       execute_emitted_init("cell = [\"\"]\n"
                            "\n"
                            "def record(t):\n"
@@ -299,19 +299,19 @@ void test_execute_return_runs_nested_ensure_inner_to_outer() {
                            "r + \":\" + cell[0]\n");
   expect(exec.ok(), "return-through-ensure probe should execute");
   const std::string text =
-      string_value_text_or_die(exec.value, amber::bytecode::BcModule{}, exec);
+      string_value_text_or_die(exec.value, sputnik::bytecode::BcModule{}, exec);
   expect(text == "deep:IO",
          "return must run nested ensure bodies inner-to-outer");
 }
 
 void test_execute_zero_division_error() {
-  const amber::runtime::ExecutionResult fault_exec =
+  const sputnik::runtime::ExecutionResult fault_exec =
       execute_emitted_init("1 / 0\n");
   expect(!fault_exec.ok() && fault_exec.fault.has_value() &&
              fault_exec.fault->error_name == "ZeroDivisionError",
          "unhandled division by zero should fault as ZeroDivisionError");
 
-  const amber::runtime::ExecutionResult rescued =
+  const sputnik::runtime::ExecutionResult rescued =
       execute_emitted_init("def f():\n"
                            "  try:\n"
                            "    1 / 0\n"
@@ -321,11 +321,11 @@ void test_execute_zero_division_error() {
                            "f()\n");
   expect(rescued.ok(), "rescued division by zero should execute");
   const std::string text = string_value_text_or_die(
-      rescued.value, amber::bytecode::BcModule{}, rescued);
+      rescued.value, sputnik::bytecode::BcModule{}, rescued);
   expect(text == "division by zero",
          "ZeroDivisionError should be rescuable with message");
 
-  const amber::runtime::ExecutionResult modulo =
+  const sputnik::runtime::ExecutionResult modulo =
       execute_emitted_init("7 % 0\n");
   expect(!modulo.ok() && modulo.fault.has_value() &&
              modulo.fault->error_name == "ZeroDivisionError",
@@ -333,19 +333,19 @@ void test_execute_zero_division_error() {
 }
 
 void test_execute_checked_int_overflow() {
-  const amber::runtime::ExecutionResult add_overflow =
+  const sputnik::runtime::ExecutionResult add_overflow =
       execute_emitted_init("9223372036854775807 + 1\n");
   expect(!add_overflow.ok() && add_overflow.fault.has_value() &&
              add_overflow.fault->error_name == "OverflowError",
          "checked Int64 add overflow should raise OverflowError");
 
-  const amber::runtime::ExecutionResult mul_overflow =
+  const sputnik::runtime::ExecutionResult mul_overflow =
       execute_emitted_init("4611686018427387904 * 4\n");
   expect(!mul_overflow.ok() && mul_overflow.fault.has_value() &&
              mul_overflow.fault->error_name == "OverflowError",
          "checked Int64 mul overflow should raise OverflowError");
 
-  const amber::runtime::ExecutionResult div_overflow =
+  const sputnik::runtime::ExecutionResult div_overflow =
       execute_emitted_init("a = 0 - 9223372036854775807\n"
                            "b = a - 1\n"
                            "b / (0 - 1)\n");
@@ -353,19 +353,19 @@ void test_execute_checked_int_overflow() {
              div_overflow.fault->error_name == "OverflowError",
          "INT64_MIN / -1 should raise OverflowError");
 
-  const amber::runtime::ExecutionResult shl_overflow =
+  const sputnik::runtime::ExecutionResult shl_overflow =
       execute_emitted_init("1 << 63\n");
   expect(!shl_overflow.ok() && shl_overflow.fault.has_value() &&
              shl_overflow.fault->error_name == "OverflowError",
          "checked Int64 shift-left overflow should raise OverflowError");
 
-  const amber::runtime::ExecutionResult pow_overflow =
+  const sputnik::runtime::ExecutionResult pow_overflow =
       execute_emitted_init("3 ** 64\n");
   expect(!pow_overflow.ok() && pow_overflow.fault.has_value() &&
              pow_overflow.fault->error_name == "OverflowError",
          "checked Int64 pow overflow should raise OverflowError");
 
-  const amber::runtime::ExecutionResult rescued =
+  const sputnik::runtime::ExecutionResult rescued =
       execute_emitted_init("def f():\n"
                            "  try:\n"
                            "    9223372036854775807 + 1\n"
@@ -375,11 +375,11 @@ void test_execute_checked_int_overflow() {
                            "f()\n");
   expect(rescued.ok(), "rescued overflow should execute");
   const std::string text = string_value_text_or_die(
-      rescued.value, amber::bytecode::BcModule{}, rescued);
+      rescued.value, sputnik::bytecode::BcModule{}, rescued);
   expect(text == "caught: Int overflow in `+`",
          "OverflowError should be rescuable");
 
-  const amber::runtime::ExecutionResult in_loop =
+  const sputnik::runtime::ExecutionResult in_loop =
       execute_emitted_init("x = 9223372036854775800\n"
                            "i = 0\n"
                            "while i < 100:\n"
@@ -392,7 +392,7 @@ void test_execute_checked_int_overflow() {
 }
 
 void test_execute_numeric_profile_modes() {
-  const amber::runtime::ExecutionResult wrap =
+  const sputnik::runtime::ExecutionResult wrap =
       execute_emitted_init("numeric:\n"
                            "  int: Int64\n"
                            "  overflow: wrapping\n"
@@ -404,7 +404,7 @@ void test_execute_numeric_profile_modes() {
                  std::numeric_limits<std::int64_t>::min(),
          "wrapping Int64 overflow wraps to INT64_MIN");
 
-  const amber::runtime::ExecutionResult saturate =
+  const sputnik::runtime::ExecutionResult saturate =
       execute_emitted_init("numeric:\n"
                            "  int: Int8\n"
                            "  overflow: saturating\n"
@@ -417,7 +417,7 @@ void test_execute_numeric_profile_modes() {
          "saturating Int8: a==127, b==-128, 127*3 clamps to 127, "
          "127 + -128 == -1");
 
-  const amber::runtime::ExecutionResult narrow_checked =
+  const sputnik::runtime::ExecutionResult narrow_checked =
       execute_emitted_init("numeric:\n"
                            "  int: Int8\n"
                            "\n"
@@ -428,7 +428,7 @@ void test_execute_numeric_profile_modes() {
 }
 
 void test_execute_big_int_explicit_type() {
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       execute_emitted_init("big = BigInt(9223372036854775807)\n"
                            "square = big * big\n"
                            "mixed = 5 + BigInt(10)\n"
@@ -436,17 +436,17 @@ void test_execute_big_int_explicit_type() {
                            "\"#{square}:#{mixed}:#{back}\"\n");
   expect(exec.ok(), "BigInt probe should execute");
   const std::string text =
-      string_value_text_or_die(exec.value, amber::bytecode::BcModule{}, exec);
+      string_value_text_or_die(exec.value, sputnik::bytecode::BcModule{}, exec);
   expect(text == "85070591730234615847396907784232501249:15:42",
          "explicit BigInt arithmetic is exact and mixes with Int");
 
-  const amber::runtime::ExecutionResult to_int_overflow = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult to_int_overflow = execute_emitted_init(
       "BigInt(\"123456789012345678901234567890\").to_int()\n");
   expect(!to_int_overflow.ok() && to_int_overflow.fault.has_value() &&
              to_int_overflow.fault->error_name == "OverflowError",
          "BigInt#to_int out of Int range raises OverflowError");
 
-  const amber::runtime::ExecutionResult div_zero =
+  const sputnik::runtime::ExecutionResult div_zero =
       execute_emitted_init("BigInt(1) / BigInt(0)\n");
   expect(!div_zero.ok() && div_zero.fault.has_value() &&
              div_zero.fault->error_name == "ZeroDivisionError",
@@ -454,7 +454,7 @@ void test_execute_big_int_explicit_type() {
 }
 
 void test_execute_mixed_sign_division_semantics() {
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       execute_emitted_init("a = 7 / (0 - 2)\n"
                            "b = 7 % (0 - 2)\n"
                            "c = 7 // (0 - 2)\n"
@@ -464,24 +464,24 @@ void test_execute_mixed_sign_division_semantics() {
                            "\"#{a}:#{b}:#{c}:#{d}:#{e}:#{f}\"\n");
   expect(exec.ok(), "mixed-sign division probe should execute");
   const std::string text =
-      string_value_text_or_die(exec.value, amber::bytecode::BcModule{}, exec);
+      string_value_text_or_die(exec.value, sputnik::bytecode::BcModule{}, exec);
   expect(text == "-3:-1:-4:-3:1:-4",
          "`/` truncates while `%` and `//` floor (pinned semantics)");
 }
 
 void test_execute_module_init_calls_top_level_def() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def f(x):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def f(x):\n"
                                                     "  x + 42\n"
                                                     "\n"
                                                     "f(3)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id,
          "module init entry should exist");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "module init top-level def call failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 45,
@@ -489,12 +489,12 @@ void test_execute_module_init_calls_top_level_def() {
 }
 
 void test_execute_native_range_literal() {
-  amber::bytecode::EmitResult emit_result = emit_ok("(0..5).array\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::bytecode::EmitResult emit_result = emit_ok("(0..5).array\n");
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "native Range prelude literal execution failed");
   expect(exec.value.is_list(), "native Range literal should materialize");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> items =
       exec.value.as_list();
   expect(items != nullptr && items->items.size() == 6,
          "native Range literal materialized item count");
@@ -505,11 +505,11 @@ void test_execute_native_range_literal() {
   }
 
   emit_result = emit_ok("(5..1:-2).array\n");
-  const amber::runtime::ExecutionResult descending =
-      amber::runtime::execute_code(emit_result.module,
+  const sputnik::runtime::ExecutionResult descending =
+      sputnik::runtime::execute_code(emit_result.module,
                                    emit_result.module.init.entry_code_id);
   expect(descending.ok(), "native descending Range literal execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       descending_items = descending.value.as_list();
   expect(descending_items != nullptr && descending_items->items.size() == 3,
          "native descending Range materialized item count");
@@ -519,21 +519,21 @@ void test_execute_native_range_literal() {
          "native descending Range materialized values");
 
   emit_result = emit_ok("(0..5).lazy()\n");
-  const amber::runtime::ExecutionResult lazy = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult lazy = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(lazy.ok(), "native Range lazy conversion failed");
-  expect(amber::runtime::value_to_debug_string(lazy.value, &emit_result.module)
+  expect(sputnik::runtime::value_to_debug_string(lazy.value, &emit_result.module)
                  .find("Range") == std::string::npos,
          "native LazySeq should not be classified as a Range");
 }
 
 void test_execute_emitted_collection_literals() {
-  amber::bytecode::EmitResult list_result = emit_ok("[1, 2 + 3]\n");
-  amber::runtime::ExecutionResult list_exec = amber::runtime::execute_code(
+  sputnik::bytecode::EmitResult list_result = emit_ok("[1, 2 + 3]\n");
+  sputnik::runtime::ExecutionResult list_exec = sputnik::runtime::execute_code(
       list_result.module, list_result.module.init.entry_code_id);
   expect(list_exec.ok(), "list literal execution failed");
   expect(list_exec.value.is_list(), "list literal should return list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       list_exec.value.as_list();
   expect(list != nullptr && list->items.size() == 2, "list literal item count");
   expect(list->items[0].is_integer() && list->items[0].as_integer() == 1,
@@ -541,29 +541,29 @@ void test_execute_emitted_collection_literals() {
   expect(list->items[1].is_integer() && list->items[1].as_integer() == 5,
          "list literal evaluates nested expression");
 
-  amber::bytecode::EmitResult tuple_result = emit_ok("(1, 2)\n");
-  amber::runtime::ExecutionResult tuple_exec = amber::runtime::execute_code(
+  sputnik::bytecode::EmitResult tuple_result = emit_ok("(1, 2)\n");
+  sputnik::runtime::ExecutionResult tuple_exec = sputnik::runtime::execute_code(
       tuple_result.module, tuple_result.module.init.entry_code_id);
   expect(tuple_exec.ok(), "tuple literal execution failed");
   expect(tuple_exec.value.is_tuple(), "tuple literal should return tuple");
-  const amber::runtime::IntrusivePtr<amber::runtime::TupleValue> tuple =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::TupleValue> tuple =
       tuple_exec.value.as_tuple();
   expect(tuple != nullptr && tuple->items.size() == 2,
          "tuple literal item count");
   expect(tuple->items[1].is_integer() && tuple->items[1].as_integer() == 2,
          "tuple literal second value");
 
-  amber::bytecode::EmitResult set_result = emit_ok("{1, 1, 2}\n");
-  const amber::bytecode::DecodeResult set_decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(set_result.module));
+  sputnik::bytecode::EmitResult set_result = emit_ok("{1, 1, 2}\n");
+  const sputnik::bytecode::DecodeResult set_decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(set_result.module));
   expect(set_decoded.ok(),
-         amber::bytecode::verify_errors_to_json(set_decoded.errors));
-  amber::runtime::ExecutionResult set_exec = amber::runtime::execute_code(
+         sputnik::bytecode::verify_errors_to_json(set_decoded.errors));
+  sputnik::runtime::ExecutionResult set_exec = sputnik::runtime::execute_code(
       set_decoded.module, set_decoded.module.init.entry_code_id);
   expect(set_exec.ok(), "set literal execution failed");
   expect(set_exec.value.is_set(), "set literal should return set");
-  const amber::runtime::IntrusivePtr<amber::runtime::SetValue> set =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::SetValue> set =
       set_exec.value.as_set();
   expect(set != nullptr && set->items.size() == 2,
          "set literal collapses duplicate values");
@@ -572,13 +572,13 @@ void test_execute_emitted_collection_literals() {
   expect(set->items[1].is_integer() && set->items[1].as_integer() == 2,
          "set literal second value");
 
-  amber::bytecode::EmitResult map_result =
+  sputnik::bytecode::EmitResult map_result =
       emit_ok("{id: 1, id: 2, \"name\": :ok}\n");
-  amber::runtime::ExecutionResult map_exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult map_exec = sputnik::runtime::execute_code(
       map_result.module, map_result.module.init.entry_code_id);
   expect(map_exec.ok(), "map literal execution failed");
   expect(map_exec.value.is_map(), "map literal should return map");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> map =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> map =
       map_exec.value.as_map();
   expect(map != nullptr && map->entries.size() == 2,
          "duplicate map key is replaced");
@@ -596,15 +596,15 @@ void test_execute_emitted_collection_literals() {
                  symbol_id_or_die(map_result.module, "ok"),
          "symbol literal map value");
 
-  amber::bytecode::EmitResult same_name_map_result =
+  sputnik::bytecode::EmitResult same_name_map_result =
       emit_ok("x = 42\n"
               "{a: 100500, x:}\n");
-  amber::runtime::ExecutionResult same_name_map_exec =
-      amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult same_name_map_exec =
+      sputnik::runtime::execute_code(
           same_name_map_result.module,
           same_name_map_result.module.init.entry_code_id);
   expect(same_name_map_exec.ok(), "same-name map literal execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> same_name_map =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> same_name_map =
       same_name_map_exec.value.as_map();
   expect(same_name_map != nullptr && same_name_map->entries.size() == 2,
          "same-name map entry count");
@@ -615,18 +615,18 @@ void test_execute_emitted_collection_literals() {
              same_name_map->entries[1].value.as_integer() == 42,
          "same-name map reads local value");
 
-  amber::bytecode::EmitResult index_store_result =
+  sputnik::bytecode::EmitResult index_store_result =
       emit_ok("items = [1, 2, 3]\n"
               "items[1] = 9\n"
               "lookup = {answer: 1}\n"
               "lookup[:answer] = items[1] + 1\n"
               "[items[0], items[1], lookup[:answer]]\n");
-  amber::runtime::ExecutionResult index_store_exec =
-      amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult index_store_exec =
+      sputnik::runtime::execute_code(
           index_store_result.module,
           index_store_result.module.init.entry_code_id);
   expect(index_store_exec.ok(), "index assignment execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       index_store_items = index_store_exec.value.as_list();
   expect(index_store_items != nullptr && index_store_items->items.size() == 3,
          "index assignment result shape");
@@ -635,22 +635,22 @@ void test_execute_emitted_collection_literals() {
              index_store_items->items[2].as_integer() == 10,
          "index assignment mutates list and map");
 
-  amber::bytecode::EmitResult size_property_result =
+  sputnik::bytecode::EmitResult size_property_result =
       emit_ok("items = [1, 2, 3]\n"
               "lookup = {a: 1, b: 2}\n"
               "[items.count, items.length, items.size, items.count(), "
               "items.length(), items.size(), lookup.count, lookup.length, "
               "lookup.size]\n");
-  amber::runtime::ExecutionResult size_property_exec =
-      amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult size_property_exec =
+      sputnik::runtime::execute_code(
           size_property_result.module,
           size_property_result.module.init.entry_code_id);
   expect(size_property_exec.ok(), "collection size property execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> size_parts =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> size_parts =
       size_property_exec.value.as_list();
   expect(size_parts != nullptr && size_parts->items.size() == 9,
          "collection size property result shape");
-  for (const amber::runtime::Value &value : size_parts->items) {
+  for (const sputnik::runtime::Value &value : size_parts->items) {
     expect(value.is_integer() && value.as_integer() >= 2 &&
                value.as_integer() <= 3,
            "collection size property part");
@@ -664,7 +664,7 @@ void test_execute_emitted_collection_literals() {
            "map count/length/size property value");
   }
 
-  amber::bytecode::EmitResult member_op_result =
+  sputnik::bytecode::EmitResult member_op_result =
       emit_ok("items = [1, 2, 3]\n"
               "lookup = {alpha: 1, beta: 2}\n"
               "[2 in items, items.contains?(2), items.include?(2), "
@@ -672,10 +672,10 @@ void test_execute_emitted_collection_literals() {
               ":alpha in lookup, lookup.contains?(:alpha), "
               "lookup.include?(:alpha), lookup.member?(:alpha), "
               "lookup.includes?(:alpha), :missing in lookup]\n");
-  amber::runtime::ExecutionResult member_op_exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult member_op_exec = sputnik::runtime::execute_code(
       member_op_result.module, member_op_result.module.init.entry_code_id);
   expect(member_op_exec.ok(), "member op execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> member_parts =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> member_parts =
       member_op_exec.value.as_list();
   expect(member_parts != nullptr && member_parts->items.size() == 12,
          "member op result shape");
@@ -695,25 +695,25 @@ void test_execute_emitted_collection_literals() {
   expect(!member_parts->items[11].as_bool(),
          "map member op should reject absent key");
 
-  amber::bytecode::EmitResult inline_if_result =
+  sputnik::bytecode::EmitResult inline_if_result =
       emit_ok("if false then 1 else 2\n");
-  amber::runtime::ExecutionResult inline_if_exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult inline_if_exec = sputnik::runtime::execute_code(
       inline_if_result.module, inline_if_result.module.init.entry_code_id);
   expect(inline_if_exec.ok(), "inline conditional execution failed");
   expect(inline_if_exec.value.is_integer() &&
              inline_if_exec.value.as_integer() == 2,
          "inline conditional returns selected branch");
 
-  amber::bytecode::EmitResult conditional_list_result =
+  sputnik::bytecode::EmitResult conditional_list_result =
       emit_ok("x = 0\n"
               "[1, (x = 1) if false, 3, x]\n");
-  amber::runtime::ExecutionResult conditional_list_exec =
-      amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult conditional_list_exec =
+      sputnik::runtime::execute_code(
           conditional_list_result.module,
           conditional_list_result.module.init.entry_code_id);
   expect(conditional_list_exec.ok(),
          "conditional list literal execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       conditional_list = conditional_list_exec.value.as_list();
   expect(conditional_list != nullptr && conditional_list->items.size() == 3,
          "conditional list skips false element");
@@ -727,27 +727,27 @@ void test_execute_emitted_collection_literals() {
              conditional_list->items[2].as_integer() == 0,
          "conditional list does not evaluate skipped value");
 
-  amber::bytecode::EmitResult conditional_set_result =
+  sputnik::bytecode::EmitResult conditional_set_result =
       emit_ok("{1, 2 if false, 3 unless false}\n");
-  amber::runtime::ExecutionResult conditional_set_exec =
-      amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult conditional_set_exec =
+      sputnik::runtime::execute_code(
           conditional_set_result.module,
           conditional_set_result.module.init.entry_code_id);
   expect(conditional_set_exec.ok(), "conditional set literal execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::SetValue> conditional_set =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::SetValue> conditional_set =
       conditional_set_exec.value.as_set();
   expect(conditional_set != nullptr && conditional_set->items.size() == 2,
          "conditional set applies if and unless");
 
-  amber::bytecode::EmitResult conditional_map_result =
+  sputnik::bytecode::EmitResult conditional_map_result =
       emit_ok("x = 0\n"
               "[x, {a: 1, b: (x = 1) if false, c: 3}]\n");
-  amber::runtime::ExecutionResult conditional_map_exec =
-      amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult conditional_map_exec =
+      sputnik::runtime::execute_code(
           conditional_map_result.module,
           conditional_map_result.module.init.entry_code_id);
   expect(conditional_map_exec.ok(), "conditional map literal execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       conditional_map_pair = conditional_map_exec.value.as_list();
   expect(conditional_map_pair != nullptr &&
              conditional_map_pair->items.size() == 2,
@@ -755,7 +755,7 @@ void test_execute_emitted_collection_literals() {
   expect(conditional_map_pair->items[0].is_integer() &&
              conditional_map_pair->items[0].as_integer() == 0,
          "conditional map does not evaluate skipped value");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> conditional_map =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> conditional_map =
       conditional_map_pair->items[1].as_map();
   expect(conditional_map != nullptr && conditional_map->entries.size() == 2,
          "conditional map skips false entry");
@@ -768,20 +768,20 @@ void test_execute_emitted_collection_literals() {
 }
 
 void test_execute_emitted_v20_7_spread() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def collect(a, b, c):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def collect(a, b, c):\n"
                                                     "  [a, b, c]\n"
                                                     "\n"
                                                     "def probe():\n"
                                                     "  args = [2, 3]\n"
                                                     "  collect(1, *args)\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "positional spread probe method exists");
-  amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+  sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "positional call spread execution failed");
   expect(exec.value.is_list(), "positional call spread returns list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> call_items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> call_items =
       exec.value.as_list();
   expect(call_items != nullptr && call_items->items.size() == 3,
          "positional call spread result count");
@@ -800,7 +800,7 @@ void test_execute_emitted_v20_7_spread() {
   method = method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "keyword spread probe method exists");
   exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "keyword call spread execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 15,
          "keyword call spread binds keyword entries");
@@ -815,7 +815,7 @@ void test_execute_emitted_v20_7_spread() {
   method = method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "keyword string spread probe method exists");
   exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "keyword string-key spread execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 15,
          "keyword spread converts string keys to keyword names");
@@ -834,9 +834,9 @@ void test_execute_emitted_v20_7_spread() {
   method = method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "same-name keyword probe method exists");
   exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "same-name keyword call execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       same_name_call_items = exec.value.as_list();
   expect(same_name_call_items != nullptr &&
              same_name_call_items->items.size() == 5,
@@ -861,9 +861,9 @@ void test_execute_emitted_v20_7_spread() {
   method = method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "same-name closure keyword probe method exists");
   exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "same-name closure keyword call execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       same_name_closure_items = exec.value.as_list();
   expect(same_name_closure_items != nullptr &&
              same_name_closure_items->items.size() == 5,
@@ -876,11 +876,11 @@ void test_execute_emitted_v20_7_spread() {
          "same-name closure keyword args read locals");
 
   emit_result = emit_ok("[1, *[2, 3], *(4..5)]\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "array spread execution failed");
   expect(exec.value.is_list(), "array spread returns list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> array_items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> array_items =
       exec.value.as_list();
   expect(array_items != nullptr && array_items->items.size() == 5,
          "array spread item count");
@@ -892,21 +892,21 @@ void test_execute_emitted_v20_7_spread() {
   }
 
   emit_result = emit_ok("{1, *[1, 2, 3]}\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "set spread execution failed");
   expect(exec.value.is_set(), "set spread returns set");
-  const amber::runtime::IntrusivePtr<amber::runtime::SetValue> set_items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::SetValue> set_items =
       exec.value.as_set();
   expect(set_items != nullptr && set_items->items.size() == 3,
          "set spread collapses duplicates");
 
   emit_result = emit_ok("{a: 1, **{a: 2, b: 3}}\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "map spread execution failed");
   expect(exec.value.is_map(), "map spread returns map");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> map_items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> map_items =
       exec.value.as_map();
   expect(map_items != nullptr && map_items->entries.size() == 2,
          "map spread entry count");
@@ -920,7 +920,7 @@ void test_execute_emitted_v20_7_spread() {
          "map spread appends new key");
 
   emit_result = emit_ok("[*(1..)]\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "InfiniteCollectionError",
@@ -936,7 +936,7 @@ void test_execute_emitted_v20_7_spread() {
   method = method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "keyword spread invalid key probe exists");
   exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "KeywordArgumentError",
          "keyword spread rejects non-convertible string keys");
@@ -951,14 +951,14 @@ void test_execute_emitted_v20_7_spread() {
   method = method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "keyword spread duplicate probe exists");
   exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "KeywordArgumentError",
          "keyword spread rejects duplicate converted keys");
 }
 
 void test_execute_emitted_v20_6_value_keyed_maps() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "k = \"dyn\"\n"
       "m = {1: 10, 1.0: 20, \"name\": 30, (k): 40, [1, 2]: 50}\n"
       "s = {[1, 2], (1, 2), 1, 1.0}\n"
@@ -980,19 +980,19 @@ void test_execute_emitted_v20_6_value_keyed_maps() {
 }
 
 void test_top_level_function_closure_captures_sibling_function() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def tap(x):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def tap(x):\n"
                                                     "  x\n"
                                                     "\n"
                                                     "def describe(a):\n"
                                                     "  tap(a)\n"
                                                     "\n"
                                                     "describe(7)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "top-level function sibling capture failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
@@ -1000,7 +1000,7 @@ void test_top_level_function_closure_captures_sibling_function() {
 }
 
 void test_execute_emitted_callable_references() {
-  amber::bytecode::EmitResult emitted = emit_ok(
+  sputnik::bytecode::EmitResult emitted = emit_ok(
       "def handler(value):\n"
       "  value * 2\n"
       "\n"
@@ -1015,17 +1015,17 @@ void test_execute_emitted_callable_references() {
       "instance_target = &User#scale\n"
       "user = class_target(6)\n"
       "target(10) + instance_target(user, 3) + user.value\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emitted.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emitted.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "callable references should execute after serialization");
   expect(exec.value.is_integer() && exec.value.as_integer() == 44,
          "binding, class-side, and unbound instance refs preserve calls");
 
-  const amber::runtime::ExecutionResult wrong_receiver = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult wrong_receiver = execute_emitted_init(
       "class User:\n"
       "  def value(): 1\n"
       "class Other\n"
@@ -1037,31 +1037,31 @@ void test_execute_emitted_callable_references() {
 }
 
 void test_direct_top_level_method_entry_materializes_module_captures() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def helper(value):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def helper(value):\n"
                                                     "  value + 1\n"
                                                     "\n"
                                                     "def main():\n"
                                                     "  helper(41)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::bytecode::BcMethod *main_method =
+  const sputnik::bytecode::BcMethod *main_method =
       method_by_name(decoded.module, "main");
   expect(main_method != nullptr, "direct entry main method exists");
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(decoded.module, main_method->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(decoded.module, main_method->entry_code_id);
   expect(exec.ok(),
          "direct top-level method entry should materialize module captures");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
          "direct top-level method entry should call captured sibling helper");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
-  const amber::runtime::ExecutionResult init =
+  sputnik::runtime::RuntimeWorld world(decoded.module);
+  const sputnik::runtime::ExecutionResult init =
       world.execute(decoded.module.init.entry_code_id);
   expect(init.ok(), "module init should persist top-level bindings");
-  const amber::runtime::ExecutionResult after_init =
+  const sputnik::runtime::ExecutionResult after_init =
       world.execute(main_method->entry_code_id);
   expect(after_init.ok(),
          "direct top-level method entry should reuse persisted captures");
@@ -1070,19 +1070,19 @@ void test_direct_top_level_method_entry_materializes_module_captures() {
 }
 
 void test_top_level_function_self_recursion() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def fact(n):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def fact(n):\n"
                                                     "  if n == 0:\n"
                                                     "    1\n"
                                                     "  else:\n"
                                                     "    n * fact(n - 1)\n"
                                                     "\n"
                                                     "fact(5)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "top-level recursive function failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 120,
@@ -1090,17 +1090,17 @@ void test_top_level_function_self_recursion() {
 }
 
 void test_top_level_clause_function_self_recursion() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("def fact(0): 1\n"
               "def fact(n) if n > 0: n * fact(n - 1)\n"
               "\n"
               "fact(5)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "top-level recursive clause function failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 120,
@@ -1108,19 +1108,19 @@ void test_top_level_clause_function_self_recursion() {
 }
 
 void test_top_level_plain_def_fallback_clause_recursion() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def frac(x):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def frac(x):\n"
                                                     "  x * frac(x - 1)\n"
                                                     "\n"
                                                     "def frac(2):\n"
                                                     "  2\n"
                                                     "\n"
                                                     "frac(5)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "plain def fallback clause recursion failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 120,
@@ -1128,18 +1128,18 @@ void test_top_level_plain_def_fallback_clause_recursion() {
 }
 
 void test_top_level_guarded_clause_function_self_recursion() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def frac(x) if x > 0:\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def frac(x) if x > 0:\n"
                                                     "  x * frac(x - 1)\n"
                                                     "\n"
                                                     "def frac(0): 1\n"
                                                     "\n"
                                                     "frac(5)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "guarded recursive clause function failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 120,
@@ -1147,31 +1147,31 @@ void test_top_level_guarded_clause_function_self_recursion() {
 }
 
 void test_top_level_clause_function_self_recursion_base_one_orders() {
-  amber::bytecode::EmitResult recursive_first =
+  sputnik::bytecode::EmitResult recursive_first =
       emit_ok("def fact(x) if x > 1: x * fact(x - 1)\n"
               "def fact(1): 1\n"
               "\n"
               "fact(5)\n");
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(recursive_first.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(recursive_first.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(exec.ok(), "recursive-first base-one clause recursion failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 120,
          "recursive-first base-one clause recursion should return factorial");
 
-  amber::bytecode::EmitResult base_first =
+  sputnik::bytecode::EmitResult base_first =
       emit_ok("def fact(1): 1\n"
               "def fact(x) if x > 1: x * fact(x - 1)\n"
               "\n"
               "fact(5)\n");
-  decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(base_first.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(base_first.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  exec = amber::runtime::execute_code(decoded.module,
+  exec = sputnik::runtime::execute_code(decoded.module,
                                       decoded.module.init.entry_code_id);
   expect(exec.ok(), "base-first base-one clause recursion failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 120,
@@ -1179,17 +1179,17 @@ void test_top_level_clause_function_self_recursion_base_one_orders() {
 }
 
 void test_top_level_clause_function_miss_raises_match_error() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("def fact(x) if x > 1: x * fact(x - 1)\n"
               "def fact(0): 1\n"
               "\n"
               "fact(5)\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       decoded.module, decoded.module.init.entry_code_id);
   expect(!exec.ok(), "uncovered clause recursion should fail");
   expect(exec.fault.has_value() && exec.fault->error_name == "MatchError",
@@ -1197,76 +1197,76 @@ void test_top_level_clause_function_miss_raises_match_error() {
 }
 
 void test_runtime_capability_checks() {
-  amber::bytecode::BcModule module;
+  sputnik::bytecode::BcModule module;
   module.capabilities.push_back(
-      amber::capability::make_capability("fs.read", "./data"));
+      sputnik::capability::make_capability("fs.read", "./data"));
 
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.capability_grants.push_back(
-      amber::capability::make_capability("fs.read", "./data"));
-  amber::runtime::RuntimeWorld world(module, std::move(options));
+      sputnik::capability::make_capability("fs.read", "./data"));
+  sputnik::runtime::RuntimeWorld world(module, std::move(options));
 
-  const amber::runtime::RuntimeCapabilityCheckResult allowed =
+  const sputnik::runtime::RuntimeCapabilityCheckResult allowed =
       world.check_capability("fs.read", "./data/orders.csv");
   expect(allowed.ok, "runtime capability should allow granted path");
-  const amber::runtime::RuntimeCapabilityCheckResult denied =
+  const sputnik::runtime::RuntimeCapabilityCheckResult denied =
       world.check_capability("fs.read", "./private/orders.csv");
   expect(!denied.ok && denied.error_name == "CapabilityError",
          "runtime capability should deny ungranted path");
-  const amber::runtime::RuntimeCapabilityResolution resolution =
+  const sputnik::runtime::RuntimeCapabilityResolution resolution =
       world.capability_resolution();
   expect(resolution.ok, "runtime capability resolution should be satisfied");
 
-  amber::runtime::RuntimeWorld denied_world(module);
-  const amber::runtime::RuntimeCapabilityCheckResult missing =
+  sputnik::runtime::RuntimeWorld denied_world(module);
+  const sputnik::runtime::RuntimeCapabilityCheckResult missing =
       denied_world.check_capability("fs.read", "./data/orders.csv");
   expect(!missing.ok && missing.error_name == "CapabilityError",
          "default runtime world should deny requested host resources");
 }
 
 void test_runtime_effect_checks() {
-  amber::bytecode::BcModule module;
-  module.effects.push_back(amber::effect::make_effect_summary(
+  sputnik::bytecode::BcModule module;
+  module.effects.push_back(sputnik::effect::make_effect_summary(
       "clocky", "function", {"time"}, {"time"}, true));
 
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.enforce_effects = true;
   options.allowed_effects = {"time"};
-  amber::runtime::RuntimeWorld world(module, options);
-  const amber::runtime::RuntimeEffectValidation validation =
+  sputnik::runtime::RuntimeWorld world(module, options);
+  const sputnik::runtime::RuntimeEffectValidation validation =
       world.effect_validation();
   expect(validation.ok, "matching declared/observed effects should validate");
 
-  const amber::runtime::RuntimeEffectCheckResult allowed =
+  const sputnik::runtime::RuntimeEffectCheckResult allowed =
       world.check_effects({"time"});
   expect(allowed.ok, "runtime effect allowance should accept time");
-  const amber::runtime::RuntimeEffectCheckResult denied =
+  const sputnik::runtime::RuntimeEffectCheckResult denied =
       world.check_effects({"fs"});
   expect(!denied.ok && denied.error_name == "EffectViolationError",
          "runtime effect allowance should reject fs");
 
-  amber::bytecode::BcModule mismatch;
-  mismatch.effects.push_back(amber::effect::make_effect_summary(
+  sputnik::bytecode::BcModule mismatch;
+  mismatch.effects.push_back(sputnik::effect::make_effect_summary(
       "bad", "function", {}, {"time"}, true));
-  amber::runtime::RuntimeWorld mismatch_world(mismatch);
-  const amber::runtime::RuntimeEffectValidation mismatch_validation =
+  sputnik::runtime::RuntimeWorld mismatch_world(mismatch);
+  const sputnik::runtime::RuntimeEffectValidation mismatch_validation =
       mismatch_world.effect_validation();
   expect(!mismatch_validation.ok,
          "runtime effect validation should catch row mismatch");
 }
 
 void test_runtime_replay_trace_recording_and_divergence() {
-  amber::bytecode::BcModule module;
+  sputnik::bytecode::BcModule module;
   module.capabilities.push_back(
-      amber::capability::make_capability("fs.read", "./data"));
+      sputnik::capability::make_capability("fs.read", "./data"));
 
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.record_replay_trace = true;
   options.trace_id = "trace-test";
   options.virtual_time_start = 10;
   options.capability_grants.push_back(
-      amber::capability::make_capability("fs.read", "./data"));
-  amber::runtime::RuntimeWorld world(module, options);
+      sputnik::capability::make_capability("fs.read", "./data"));
+  sputnik::runtime::RuntimeWorld world(module, options);
 
   expect(world.check_capability("fs.read", "./data/orders.csv").ok,
          "replay trace setup capability should pass");
@@ -1274,7 +1274,7 @@ void test_runtime_replay_trace_recording_and_divergence() {
          "replay trace setup effect check should pass");
   expect(world.freeze_world().ok(), "replay trace setup freeze should pass");
 
-  const amber::runtime::RuntimeReplayTrace trace = world.replay_trace();
+  const sputnik::runtime::RuntimeReplayTrace trace = world.replay_trace();
   expect(trace.events.size() == 4, "runtime trace should record four events");
   expect(trace.events[0].name == "loader.module.load" &&
              trace.events[1].name == "capability.check" &&
@@ -1285,26 +1285,26 @@ void test_runtime_replay_trace_recording_and_divergence() {
              trace.events[3].timestamp_or_virtual_time == 13,
          "runtime trace should use deterministic virtual time");
 
-  const std::string serialized = amber::replay::serialize_trace(trace);
-  const amber::replay::ReplayTraceParseResult parsed =
-      amber::replay::parse_trace(serialized);
+  const std::string serialized = sputnik::replay::serialize_trace(trace);
+  const sputnik::replay::ReplayTraceParseResult parsed =
+      sputnik::replay::parse_trace(serialized);
   expect(parsed.ok(), "serialized runtime replay trace should parse");
-  expect(amber::replay::compare_traces(trace, parsed.trace).ok,
+  expect(sputnik::replay::compare_traces(trace, parsed.trace).ok,
          "parsed runtime trace should match original");
 
-  amber::runtime::RuntimeWorldOptions replay_options = options;
+  sputnik::runtime::RuntimeWorldOptions replay_options = options;
   replay_options.enforce_replay = true;
   replay_options.expected_replay = trace;
-  amber::runtime::RuntimeWorld replay_world(module, replay_options);
+  sputnik::runtime::RuntimeWorld replay_world(module, replay_options);
   replay_world.check_capability("fs.read", "./data/orders.csv");
   replay_world.check_effects({"time"});
   replay_world.freeze_world();
   expect(replay_world.replay_validation().ok,
          "matching runtime replay should validate");
 
-  amber::runtime::RuntimeWorld diverged_world(module, replay_options);
+  sputnik::runtime::RuntimeWorld diverged_world(module, replay_options);
   diverged_world.check_effects({"time"});
-  const amber::runtime::RuntimeReplayValidation diverged =
+  const sputnik::runtime::RuntimeReplayValidation diverged =
       diverged_world.replay_validation();
   expect(!diverged.ok && !diverged.diagnostics.empty() &&
              diverged.diagnostics[0].error_name == "ReplayDivergenceError",
@@ -1312,8 +1312,8 @@ void test_runtime_replay_trace_recording_and_divergence() {
 }
 
 void test_runtime_schema_and_table_metadata() {
-  amber::bytecode::BcModule module;
-  amber::data::SchemaDefinition order_v1;
+  sputnik::bytecode::BcModule module;
+  sputnik::data::SchemaDefinition order_v1;
   order_v1.name = "Order";
   order_v1.version = 1;
   order_v1.fields.push_back({"id",
@@ -1321,76 +1321,76 @@ void test_runtime_schema_and_table_metadata() {
                              true,
                              false,
                              {},
-                             amber::data::kSchemaFieldFlagPrimaryKey});
+                             sputnik::data::kSchemaFieldFlagPrimaryKey});
   order_v1.fields.push_back({"amount", "float", true, false, {}, 0});
-  amber::data::SchemaDefinition order_v2 = order_v1;
+  sputnik::data::SchemaDefinition order_v2 = order_v1;
   order_v2.version = 2;
   order_v2.fields.push_back({"status", "string", false, false, "new", 0});
   module.schemas = {order_v1, order_v2};
   module.schema_migrations.push_back(
       {"Order", 1, 2, "compatible",
-       amber::data::kSchemaMigrationFlagCompatible});
-  amber::data::TablePlan plan;
+       sputnik::data::kSchemaMigrationFlagCompatible});
+  sputnik::data::TablePlan plan;
   plan.plan_id = "orders.high_value";
   plan.op = "filter";
   plan.input_refs = {"orders"};
   plan.arguments = {"amount > 100"};
   plan.column_dependencies = {{"orders", "amount"}};
-  plan.flags = amber::data::kTablePlanFlagLazy;
+  plan.flags = sputnik::data::kTablePlanFlagLazy;
   module.table_plans.push_back(plan);
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   expect(world.schema_validation().ok,
          "runtime schema metadata should validate");
   expect(world.table_plan_validation().ok,
          "runtime table metadata should validate");
   expect(world.table_plan_validation().plans.size() == 1,
          "runtime table plan should be exposed");
-  expect(amber::data::table_plan_fingerprint(
+  expect(sputnik::data::table_plan_fingerprint(
              world.table_plan_validation().plans[0])
                  .size() == 64,
          "runtime table plan fingerprint should be sha256 hex");
 
-  const amber::runtime::RuntimePackageMirror mirror = world.package_mirror();
+  const sputnik::runtime::RuntimePackageMirror mirror = world.package_mirror();
   expect(mirror.schemas.size() == 2 && mirror.schema_migrations.size() == 1 &&
              mirror.table_plans.size() == 1,
          "runtime mirror should expose W11.4 metadata");
 
-  amber::bytecode::BcModule invalid = module;
+  sputnik::bytecode::BcModule invalid = module;
   invalid.schemas[1].fields.back().required = true;
   invalid.schemas[1].fields.back().default_value.clear();
-  amber::runtime::RuntimeWorld invalid_world(invalid);
+  sputnik::runtime::RuntimeWorld invalid_world(invalid);
   expect(!invalid_world.schema_validation().ok,
          "runtime schema validation should reject incompatible migration");
 }
 
 void test_runtime_wasm_and_accelerator_metadata() {
-  amber::bytecode::BcModule module;
+  sputnik::bytecode::BcModule module;
 
-  amber::wasm_accel::WasmInterfaceEntry import_entry;
+  sputnik::wasm_accel::WasmInterfaceEntry import_entry;
   import_entry.name = "fs.read";
   import_entry.kind = "resource";
   import_entry.type_signature = "resource";
   import_entry.capability =
-      amber::capability::make_capability("fs.read", "./data");
+      sputnik::capability::make_capability("fs.read", "./data");
 
-  amber::wasm_accel::WasmInterfaceEntry export_entry;
+  sputnik::wasm_accel::WasmInterfaceEntry export_entry;
   export_entry.name = "normalize";
   export_entry.kind = "func";
   export_entry.type_signature = "(Order) -> Order";
   export_entry.schema_name = "Order";
 
-  amber::wasm_accel::WasmComponent component;
+  sputnik::wasm_accel::WasmComponent component;
   component.name = "analytics.plugin";
   component.world = "analytics-plugin";
-  component.flags = amber::wasm_accel::kWasmComponentFlagFrozenWorld |
-                    amber::wasm_accel::kWasmComponentFlagRawFfiDenied |
-                    amber::wasm_accel::kWasmComponentFlagWorldMutationDenied;
+  component.flags = sputnik::wasm_accel::kWasmComponentFlagFrozenWorld |
+                    sputnik::wasm_accel::kWasmComponentFlagRawFfiDenied |
+                    sputnik::wasm_accel::kWasmComponentFlagWorldMutationDenied;
   component.imports.push_back(import_entry);
   component.exports.push_back(export_entry);
   module.wasm_components.push_back(component);
 
-  amber::wasm_accel::AcceleratorKernel kernel;
+  sputnik::wasm_accel::AcceleratorKernel kernel;
   kernel.kernel_id = "scale.f32";
   kernel.entry = "scale";
   kernel.target = "gpu";
@@ -1399,28 +1399,28 @@ void test_runtime_wasm_and_accelerator_metadata() {
   kernel.params.push_back({"factor", "F32", "scalar", 0});
   module.accelerator_kernels.push_back(kernel);
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   expect(world.wasm_validation().ok, "runtime wasm metadata should validate");
   expect(world.accelerator_validation().ok,
          "runtime accelerator metadata should validate");
 
-  const amber::runtime::RuntimePackageMirror mirror = world.package_mirror();
+  const sputnik::runtime::RuntimePackageMirror mirror = world.package_mirror();
   expect(mirror.wasm_components.size() == 1 &&
              mirror.accelerator_kernels.size() == 1,
          "runtime mirror should expose W11.5 metadata");
 
-  amber::bytecode::BcModule invalid = module;
+  sputnik::bytecode::BcModule invalid = module;
   invalid.accelerator_kernels[0].forbidden_features.push_back(
       "dynamic_dispatch");
-  amber::runtime::RuntimeWorld invalid_world(invalid);
+  sputnik::runtime::RuntimeWorld invalid_world(invalid);
   expect(!invalid_world.accelerator_validation().ok,
          "runtime accelerator validation should reject dynamic dispatch");
 }
 
 void test_runtime_modern_profile_metadata() {
-  amber::bytecode::BcModule module;
+  sputnik::bytecode::BcModule module;
 
-  amber::modern::AgentSymbol symbol;
+  sputnik::modern::AgentSymbol symbol;
   symbol.symbol_id = "main::compute";
   symbol.name = "compute";
   symbol.kind = "function";
@@ -1428,7 +1428,7 @@ void test_runtime_modern_profile_metadata() {
   symbol.visibility = "public";
   module.agent_symbols.push_back(symbol);
 
-  amber::modern::ContractSpec contract;
+  sputnik::modern::ContractSpec contract;
   contract.owner = "Account.withdraw";
   contract.kind = "require";
   contract.expression = "amount > 0";
@@ -1437,21 +1437,21 @@ void test_runtime_modern_profile_metadata() {
   module.privacy_labels.push_back({"pii", "pii", 0});
   module.privacy_policies.push_back(
       {"PrivateAudit", "redact", "pii", {}, 0, 0});
-  amber::modern::LineageNode lineage;
+  sputnik::modern::LineageNode lineage;
   lineage.node_id = "transform.users";
   lineage.kind = "transform";
   lineage.output = "users.redacted";
   lineage.labels = {"pii"};
   module.lineage_nodes.push_back(lineage);
 
-  amber::modern::WorkflowStep step;
+  sputnik::modern::WorkflowStep step;
   step.workflow = "ImportOrders";
   step.name = "commit";
   step.effect_row = {"db"};
   step.idempotency_key = "batch-1";
   module.workflow_steps.push_back(step);
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   expect(world.agent_validation().ok, "runtime agent metadata should validate");
   expect(world.contract_validation().ok,
          "runtime contract metadata should validate");
@@ -1460,21 +1460,21 @@ void test_runtime_modern_profile_metadata() {
   expect(world.workflow_validation().ok,
          "runtime workflow metadata should validate");
 
-  const amber::runtime::RuntimePackageMirror mirror = world.package_mirror();
+  const sputnik::runtime::RuntimePackageMirror mirror = world.package_mirror();
   expect(mirror.agent_symbols.size() == 1 && mirror.contracts.size() == 1 &&
              mirror.privacy_labels.size() == 1 &&
              mirror.workflow_steps.size() == 1,
          "runtime mirror should expose W11.6 metadata");
 
-  amber::bytecode::BcModule invalid = module;
+  sputnik::bytecode::BcModule invalid = module;
   invalid.workflow_steps[0].name = "";
-  amber::runtime::RuntimeWorld invalid_world(invalid);
+  sputnik::runtime::RuntimeWorld invalid_world(invalid);
   expect(!invalid_world.workflow_validation().ok,
          "runtime workflow validation should reject malformed steps");
 }
 
 void test_branching_and_last_result() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def flag(x):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def flag(x):\n"
                                                           "  if x:\n"
                                                           "    1\n"
                                                           "  else:\n"
@@ -1482,30 +1482,30 @@ void test_branching_and_last_result() {
   expect(emit_result.module.methods.size() == 1, "expected one flag method");
 
   const std::uint32_t code_id = emit_result.module.methods[0].entry_code_id;
-  const amber::runtime::ExecutionResult when_true =
-      amber::runtime::execute_code(emit_result.module, code_id,
-                                   {amber::runtime::Value::boolean(true)});
+  const sputnik::runtime::ExecutionResult when_true =
+      sputnik::runtime::execute_code(emit_result.module, code_id,
+                                   {sputnik::runtime::Value::boolean(true)});
   expect(when_true.ok(), "flag(true) execution failed");
   expect(when_true.value.is_integer() && when_true.value.as_integer() == 1,
          "flag(true) should return 1");
 
-  const amber::runtime::ExecutionResult when_false =
-      amber::runtime::execute_code(emit_result.module, code_id,
-                                   {amber::runtime::Value::boolean(false)});
+  const sputnik::runtime::ExecutionResult when_false =
+      sputnik::runtime::execute_code(emit_result.module, code_id,
+                                   {sputnik::runtime::Value::boolean(false)});
   expect(when_false.ok(), "flag(false) execution failed");
   expect(when_false.value.is_integer() && when_false.value.as_integer() == 0,
          "flag(false) should return 0");
 
-  const amber::runtime::ExecutionResult when_null =
-      amber::runtime::execute_code(emit_result.module, code_id,
-                                   {amber::runtime::Value::null()});
+  const sputnik::runtime::ExecutionResult when_null =
+      sputnik::runtime::execute_code(emit_result.module, code_id,
+                                   {sputnik::runtime::Value::null()});
   expect(when_null.ok(), "flag(null) execution failed");
   expect(when_null.value.is_integer() && when_null.value.as_integer() == 0,
          "flag(null) should treat null as falsey");
 }
 
 void test_manual_closure_call_and_capture() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant five;
@@ -1539,15 +1539,15 @@ void test_manual_closure_call_and_capture() {
 
   module.code_objects = {outer, inner};
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(exec.ok(), "manual closure execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 5,
          "manual closure should return captured integer");
 }
 
 void test_runtime_uninitialized_register_read_raises_name_error() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   BcCode code;
@@ -1558,15 +1558,15 @@ void test_runtime_uninitialized_register_read_raises_name_error() {
   code.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(!exec.ok(), "uninitialized register read should fail");
   expect(exec.fault->error_name == "NameError",
          "uninitialized register read should surface NameError");
 }
 
 void test_runtime_string_interpolation_and_conversions() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("(\"#{1 + 2}\" == \"3\") and "
               "(\"#{null}\" == \"null\") and "
               "(\"#{true}\" == \"true\") and "
@@ -1588,49 +1588,49 @@ void test_runtime_string_interpolation_and_conversions() {
               "([(:answer, 42)].map == [(:answer, 42)].to_map()) and "
               "(Int(\"123\") == 123) and "
               "(Str(42) == \"42\") and "
-              "(Amber.stringify(123, mode: :display) == \"123\")\n");
+              "(Sputnik.stringify(123, mode: :display) == \"123\")\n");
   expect(emit_result.module.init.has_entry_code_id,
          "conversion/interpolation module init exists");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "conversion/interpolation execution failed");
   expect(exec.value.is_bool() && exec.value.as_bool(),
          "conversion/interpolation predicates should all hold");
 
   emit_result = emit_ok("5.6.to_str()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "float to_str execution failed");
-  expect(amber::runtime::value_to_debug_string(
+  expect(sputnik::runtime::value_to_debug_string(
              exec.value, &emit_result.module, &exec.runtime_strings,
              &exec.runtime_symbols) == "\"5.6\"",
          "runtime-created to_str result should remain printable");
 
   emit_result = emit_ok("\"fresh-runtime-symbol\".symbol\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "symbol property conversion execution failed");
-  expect(amber::runtime::value_to_debug_string(
+  expect(sputnik::runtime::value_to_debug_string(
              exec.value, &emit_result.module, &exec.runtime_strings,
              &exec.runtime_symbols) == ":fresh-runtime-symbol",
          "runtime-created symbol result should remain printable");
 
   emit_result = emit_ok("\"abc\".to_int()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "ValueError",
          "invalid integer string should raise ValueError");
 
   emit_result = emit_ok("[].to_int()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "TypeError",
          "unsupported to_int source should raise TypeError");
 
   emit_result = emit_ok("6.str()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "NoMethodError",
@@ -1638,7 +1638,7 @@ void test_runtime_string_interpolation_and_conversions() {
 }
 
 void test_runtime_present_absent_predicates() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Item\n"
               "class Hidden:\n"
               "  def present?(): false\n"
@@ -1648,7 +1648,7 @@ void test_runtime_present_absent_predicates() {
               "true.present? and "
               "0.present? and "
               "\"\".absent? and "
-              "\"amber\".present? and "
+              "\"sputnik\".present? and "
               "[].absent? and "
               "[1].present? and "
               "{}.absent? and "
@@ -1659,7 +1659,7 @@ void test_runtime_present_absent_predicates() {
               "Hidden().absent?\n");
   expect(emit_result.module.init.has_entry_code_id,
          "present?/absent? module init exists");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "present?/absent? execution failed");
   expect(exec.value.is_bool() && exec.value.as_bool(),
@@ -1667,23 +1667,23 @@ void test_runtime_present_absent_predicates() {
 }
 
 void test_runtime_text_output_helpers_and_io_sinks() {
-  amber::bytecode::EmitResult xterm_emit =
+  sputnik::bytecode::EmitResult xterm_emit =
       emit_ok("io.Buffer.new().xterm?\n");
-  amber::runtime::ExecutionResult xterm_exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult xterm_exec = sputnik::runtime::execute_code(
       xterm_emit.module, xterm_emit.module.init.entry_code_id);
   expect(xterm_exec.ok() && xterm_exec.value.is_bool() &&
              !xterm_exec.value.as_bool(),
          "buffer writers should report that xterm output is unavailable");
 
-  amber::bytecode::EmitResult emit_result = emit_ok("print \"hello\"\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("print \"hello\"\n"
                                                     "x = p \"debug\"\n"
                                                     "pp([1, 2])\n"
                                                     "x\n");
-  std::shared_ptr<amber::runtime::RuntimeTextWriter> stdout_buffer =
-      amber::runtime::RuntimeTextWriter::buffer();
+  std::shared_ptr<sputnik::runtime::RuntimeTextWriter> stdout_buffer =
+      sputnik::runtime::RuntimeTextWriter::buffer();
   {
-    amber::runtime::RuntimeOutputScope scope(stdout_buffer, {});
-    const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+    sputnik::runtime::RuntimeOutputScope scope(stdout_buffer, {});
+    const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
         emit_result.module, emit_result.module.init.entry_code_id);
     expect(exec.ok(), "print/p/pp command-form execution failed");
     expect(exec.value.is_string(), "p should return its single argument");
@@ -1695,10 +1695,10 @@ void test_runtime_text_output_helpers_and_io_sinks() {
          "pp should write structured pretty output");
 
   emit_result = emit_ok("print()\n");
-  stdout_buffer = amber::runtime::RuntimeTextWriter::buffer();
+  stdout_buffer = sputnik::runtime::RuntimeTextWriter::buffer();
   {
-    amber::runtime::RuntimeOutputScope scope(stdout_buffer, {});
-    const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+    sputnik::runtime::RuntimeOutputScope scope(stdout_buffer, {});
+    const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
         emit_result.module, emit_result.module.init.entry_code_id);
     expect(exec.ok() && exec.value.is_null(), "print() should return null");
   }
@@ -1706,10 +1706,10 @@ void test_runtime_text_output_helpers_and_io_sinks() {
          "print() should write one newline");
 
   emit_result = emit_ok("print(\"a\", \"b\")\n");
-  stdout_buffer = amber::runtime::RuntimeTextWriter::buffer();
+  stdout_buffer = sputnik::runtime::RuntimeTextWriter::buffer();
   {
-    amber::runtime::RuntimeOutputScope scope(stdout_buffer, {});
-    const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+    sputnik::runtime::RuntimeOutputScope scope(stdout_buffer, {});
+    const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
         emit_result.module, emit_result.module.init.entry_code_id);
     expect(exec.ok() && exec.value.is_null(),
            "multi-value print should return null");
@@ -1718,20 +1718,20 @@ void test_runtime_text_output_helpers_and_io_sinks() {
          "multi-value print should write each argument on its own line");
 
   emit_result = emit_ok("p()\n");
-  stdout_buffer = amber::runtime::RuntimeTextWriter::buffer();
+  stdout_buffer = sputnik::runtime::RuntimeTextWriter::buffer();
   {
-    amber::runtime::RuntimeOutputScope scope(stdout_buffer, {});
-    const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+    sputnik::runtime::RuntimeOutputScope scope(stdout_buffer, {});
+    const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
         emit_result.module, emit_result.module.init.entry_code_id);
     expect(exec.ok() && exec.value.is_null(), "p() should return null");
   }
   expect(stdout_buffer->to_string().empty(), "p() should write nothing");
 
   emit_result = emit_ok("p(1, 2)\n");
-  stdout_buffer = amber::runtime::RuntimeTextWriter::buffer();
+  stdout_buffer = sputnik::runtime::RuntimeTextWriter::buffer();
   {
-    amber::runtime::RuntimeOutputScope scope(stdout_buffer, {});
-    const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+    sputnik::runtime::RuntimeOutputScope scope(stdout_buffer, {});
+    const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
         emit_result.module, emit_result.module.init.entry_code_id);
     expect(exec.ok() && exec.value.is_tuple(),
            "multi-value p should return tuple");
@@ -1744,7 +1744,7 @@ void test_runtime_text_output_helpers_and_io_sinks() {
   emit_result = emit_ok("buffer = io.Buffer.new()\n"
                         "p(\"x\", to: buffer)\n"
                         "buffer.to_str()\n");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "explicit buffer sink execution failed");
   expect(string_value_text_or_die(exec.value, emit_result.module, exec) ==
@@ -1755,7 +1755,7 @@ void test_runtime_text_output_helpers_and_io_sinks() {
                         "io.with_output(stdout: buffer): print \"x\"\n"
                         "io.with_output(stdout: buffer): p \"y\"\n"
                         "buffer.to_str()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "dynamic output scope execution failed");
   expect(string_value_text_or_die(exec.value, emit_result.module, exec) ==
@@ -1770,7 +1770,7 @@ void test_runtime_text_output_helpers_and_io_sinks() {
                         "  \"no error\"\n"
                         "rescue ValueError |e|:\n"
                         "  \"#{e.message()}:#{buffer.to_str()}\"\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "dynamic output scope rescue execution failed");
   expect(string_value_text_or_die(exec.value, emit_result.module, exec) ==
@@ -1782,7 +1782,7 @@ void test_runtime_text_output_helpers_and_io_sinks() {
                         "task.spawn: print \"async\"\n"
                         "handle.wait()\n"
                         "buffer.to_str()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "task output inheritance execution failed");
   expect(string_value_text_or_die(exec.value, emit_result.module, exec) ==
@@ -1790,11 +1790,11 @@ void test_runtime_text_output_helpers_and_io_sinks() {
          "task.spawn should inherit logical stdout");
 
   emit_result = emit_ok("Kernel.p(\"warning\", to: io.stderr())\n");
-  std::shared_ptr<amber::runtime::RuntimeTextWriter> stderr_buffer =
-      amber::runtime::RuntimeTextWriter::buffer();
+  std::shared_ptr<sputnik::runtime::RuntimeTextWriter> stderr_buffer =
+      sputnik::runtime::RuntimeTextWriter::buffer();
   {
-    amber::runtime::RuntimeOutputScope scope({}, stderr_buffer);
-    exec = amber::runtime::execute_code(emit_result.module,
+    sputnik::runtime::RuntimeOutputScope scope({}, stderr_buffer);
+    exec = sputnik::runtime::execute_code(emit_result.module,
                                         emit_result.module.init.entry_code_id);
     expect(exec.ok() && exec.value.is_string(),
            "explicit stderr p should return argument");
@@ -1805,27 +1805,27 @@ void test_runtime_text_output_helpers_and_io_sinks() {
   emit_result = emit_ok("buffer = io.Buffer.new()\n"
                         "buffer.close()\n"
                         "print(\"x\", to: buffer)\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "ClosedResourceError",
          "closed text writer should raise ClosedResourceError");
 
   emit_result = emit_ok("p(\"x\", to: 123)\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "TypeError",
          "invalid output sink should raise TypeError");
 
-  emit_result = emit_ok("[Amber.stringify(\"hello\", mode: :inspect), "
-                        "Amber.stringify([1, 2], mode: :pretty, "
+  emit_result = emit_ok("[Sputnik.stringify(\"hello\", mode: :inspect), "
+                        "Sputnik.stringify([1, 2], mode: :pretty, "
                         "max_items: 1)]\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok() && exec.value.is_list(),
-         "Amber.stringify inspect/pretty execution failed");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+         "Sputnik.stringify inspect/pretty execution failed");
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 2,
          "stringify result shape");
@@ -1838,7 +1838,7 @@ void test_runtime_text_output_helpers_and_io_sinks() {
 }
 
 void test_runtime_logger_source_surface_and_annotations() {
-  amber::bytecode::EmitResult emit_result = emit_ok(
+  sputnik::bytecode::EmitResult emit_result = emit_ok(
       "import task\n"
       "buffer = io.Buffer.new()\n"
       "color_buffer = io.Buffer.new()\n"
@@ -1855,11 +1855,11 @@ void test_runtime_logger_source_surface_and_annotations() {
       "color_logger.error(\"bad\")\n"
       "color_logger.flush()\n"
       "[buffer.to_str(), color_buffer.to_str()]\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "source-level logger execution failed");
   expect(exec.value.is_list(), "logger source result should be list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 2,
          "logger source result shape");
@@ -1892,11 +1892,11 @@ void test_runtime_logger_source_surface_and_annotations() {
 }
 
 void test_runtime_logger_parallel_native_threads_and_tasks() {
-  const std::shared_ptr<amber::runtime::RuntimeTextWriter> buffer =
-      amber::runtime::RuntimeTextWriter::buffer();
-  amber::runtime::RuntimeLogger logger(
-      buffer, amber::runtime::RuntimeLogLevel::Debug,
-      amber::runtime::RuntimeLogColorMode::Never);
+  const std::shared_ptr<sputnik::runtime::RuntimeTextWriter> buffer =
+      sputnik::runtime::RuntimeTextWriter::buffer();
+  sputnik::runtime::RuntimeLogger logger(
+      buffer, sputnik::runtime::RuntimeLogLevel::Debug,
+      sputnik::runtime::RuntimeLogColorMode::Never);
 
   constexpr int kThreads = 6;
   constexpr int kPerThread = 25;
@@ -1904,10 +1904,10 @@ void test_runtime_logger_parallel_native_threads_and_tasks() {
   threads.reserve(kThreads);
   for (int thread_index = 0; thread_index < kThreads; ++thread_index) {
     threads.emplace_back([&logger, thread_index]() {
-      amber::runtime::RuntimeTaskAnnotationScope annotation(
+      sputnik::runtime::RuntimeTaskAnnotationScope annotation(
           "native-" + std::to_string(thread_index));
       for (int message = 0; message < kPerThread; ++message) {
-        const amber::runtime::RuntimeTextWriteResult result =
+        const sputnik::runtime::RuntimeTextWriteResult result =
             logger.debug("message-" + std::to_string(thread_index) + "-" +
                          std::to_string(message));
         expect(result.ok, "native thread logger call should enqueue");
@@ -1918,17 +1918,17 @@ void test_runtime_logger_parallel_native_threads_and_tasks() {
     thread.join();
   }
 
-  amber::runtime::RuntimeTaskModule task(3);
-  amber::runtime::RuntimeTaskAnnotationScope parent_annotation("task-parent");
-  std::vector<amber::runtime::RuntimeTaskHandle> handles;
+  sputnik::runtime::RuntimeTaskModule task(3);
+  sputnik::runtime::RuntimeTaskAnnotationScope parent_annotation("task-parent");
+  std::vector<sputnik::runtime::RuntimeTaskHandle> handles;
   for (int index = 0; index < 4; ++index) {
     handles.push_back(task.spawn([&logger, index]() {
       logger.info("task-message-" + std::to_string(index));
-      return amber::runtime::Value::null();
+      return sputnik::runtime::Value::null();
     }));
   }
-  for (const amber::runtime::RuntimeTaskHandle &handle : handles) {
-    const amber::runtime::RuntimeTaskPublicResult result =
+  for (const sputnik::runtime::RuntimeTaskHandle &handle : handles) {
+    const sputnik::runtime::RuntimeTaskPublicResult result =
         handle.wait(std::chrono::milliseconds(1000));
     expect(result.ok, "logger task should finish");
   }
@@ -1947,7 +1947,7 @@ void test_runtime_logger_parallel_native_threads_and_tasks() {
 }
 
 void test_manual_call_invokes_object_call_method() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Callable", "call", "x"};
@@ -1990,32 +1990,32 @@ void test_manual_call_invokes_object_call_method() {
   module.code_objects = {caller, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1,
-                                   {amber::runtime::Value::instance(instance),
-                                    amber::runtime::Value::integer(7)});
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1,
+                                   {sputnik::runtime::Value::instance(instance),
+                                    sputnik::runtime::Value::integer(7)});
   expect(exec.ok(), "object CALL dispatch failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
          "object CALL should dispatch to call method");
 }
 
 void test_execute_emitted_send_method() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def add(x, y):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def add(x, y):\n"
                                                           "  x + y\n");
   expect(emit_result.module.methods.size() == 1, "expected add method");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.methods[0].entry_code_id,
-      {amber::runtime::Value::integer(9), amber::runtime::Value::integer(4)});
+      {sputnik::runtime::Value::integer(9), sputnik::runtime::Value::integer(4)});
   expect(exec.ok(), "add execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 13,
          "add should return summed integer");
 }
 
 void test_execute_emitted_class_matcher() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class Base\n"
       "class Child < Base\n"
       "base = Base()\n"
@@ -2032,7 +2032,7 @@ void test_execute_emitted_class_matcher() {
 }
 
 void test_execute_emitted_implicit_receiver_method_call() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class A:\n"
       "  def foo(x):\n"
       "    y = bar(x)\n"
@@ -2050,7 +2050,7 @@ void test_execute_emitted_implicit_receiver_method_call() {
 }
 
 void test_execute_emitted_inherited_implicit_receiver_method_call() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class Base:\n"
       "  def render(text:, status: 200):\n"
       "    text + status.to_str\n"
@@ -2059,22 +2059,22 @@ void test_execute_emitted_inherited_implicit_receiver_method_call() {
       "    render(text: \"ok\", status: 201)\n"
       "Child().call()\n");
   expect(exec.ok(), "inherited implicit receiver method call failed");
-  expect(string_value_text_or_die(exec.value, amber::bytecode::BcModule{},
+  expect(string_value_text_or_die(exec.value, sputnik::bytecode::BcModule{},
                                   exec) == "ok201",
          "unresolved bare call in an instance method should dispatch through "
          "the receiver ancestry");
 }
 
 void test_execute_emitted_exclusive_slice_end_boundary() {
-  const amber::runtime::ExecutionResult string_slice = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult string_slice = execute_emitted_init(
       "slot = \":name\"\n"
       "slot.slice(1...slot.length)\n");
   expect(string_slice.ok(), "exclusive string slice to length failed");
-  expect(string_value_text_or_die(string_slice.value, amber::bytecode::BcModule{},
+  expect(string_value_text_or_die(string_slice.value, sputnik::bytecode::BcModule{},
                                   string_slice) == "name",
          "exclusive string slice should allow end at length");
 
-  const amber::runtime::ExecutionResult list_slice =
+  const sputnik::runtime::ExecutionResult list_slice =
       execute_emitted_init("[1,2,3][1...3]\n");
   expect(list_slice.ok(), "exclusive list slice to count failed");
   expect_integer_list(list_slice.value, {2, 3},
@@ -2082,7 +2082,7 @@ void test_execute_emitted_exclusive_slice_end_boundary() {
 }
 
 void test_execute_emitted_integer_specialized_ops() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("x = 10\n"
               "y = 3\n"
               "zero = 0\n"
@@ -2091,11 +2091,11 @@ void test_execute_emitted_integer_specialized_ops() {
               "neg // y, x < y, x > 4, x <= 10, x >= y, x == 10, "
               "x != y, x <=> y, y <=> x, y <=> 3, x & y, x | y, "
               "x ^ y, x << 2, x >> 1, 2 ** 10, 2 ** -1, 2.0 ** 3]\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "specialized integer ops execution failed");
   expect(exec.value.is_list(), "specialized integer ops should return list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 25,
          "specialized integer ops list size");
@@ -2153,14 +2153,14 @@ void test_execute_emitted_integer_specialized_ops() {
 }
 
 void test_execute_emitted_numeric_equality_and_new_ops() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("[1 == 1.0, 1 != 1.0, 7.5 % 2, 7.5 // 2, 1 <=> 1.0, "
               "1 < 2 < 3, 3 > 2 > 1, 1 < 2 < 2, 3 > 3 > 1]\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "numeric equality and new ops execution failed");
   expect(exec.value.is_list(), "numeric equality result should be list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 9,
          "numeric equality list size");
@@ -2185,18 +2185,18 @@ void test_execute_emitted_numeric_equality_and_new_ops() {
 }
 
 void test_execute_emitted_integer_send_fast_path_new_ops() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("def ops(x, y):\n"
               "  [x % y, x // y, x == y, x != y, x <=> y, x & y, "
               "x | y, x ^ y, x << y, x >> 1, x ** y]\n");
   expect(emit_result.module.methods.size() == 1, "expected ops method");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.methods[0].entry_code_id,
-      {amber::runtime::Value::integer(10), amber::runtime::Value::integer(3)});
+      {sputnik::runtime::Value::integer(10), sputnik::runtime::Value::integer(3)});
   expect(exec.ok(), "integer send fast path execution failed");
   expect(exec.value.is_list(), "integer send fast path should return list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 11,
          "integer send fast path list size");
@@ -2226,7 +2226,7 @@ void test_execute_emitted_integer_send_fast_path_new_ops() {
 }
 
 void test_runtime_integer_sidecar_result_returns_materialized_value() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -2246,15 +2246,15 @@ void test_runtime_integer_sidecar_result_returns_materialized_value() {
   code.instructions.push_back({Opcode::Return, {{2, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(exec.ok(), "integer sidecar return should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
          "integer sidecar result is materialized on return");
 }
 
 void test_runtime_integer_sidecar_materializes_completed_local() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -2273,13 +2273,13 @@ void test_runtime_integer_sidecar_materializes_completed_local() {
   code.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
-  const amber::runtime::ExecutionResult exec = world.execute(code.code_id);
+  sputnik::runtime::RuntimeWorld world(module);
+  const sputnik::runtime::ExecutionResult exec = world.execute(code.code_id);
   expect(exec.ok(), "integer sidecar completed local should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "integer sidecar completed local returns updated value");
 
-  const amber::runtime::ExecutionLocal *total_local =
+  const sputnik::runtime::ExecutionLocal *total_local =
       execution_local_by_name(exec, "total");
   expect(total_local != nullptr, "integer sidecar local appears in locals");
   expect(total_local->initialized, "integer sidecar local is initialized");
@@ -2289,7 +2289,7 @@ void test_runtime_integer_sidecar_materializes_completed_local() {
 }
 
 void test_execute_emitted_compare_method() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def choose(x):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def choose(x):\n"
                                                           "  if x > 0:\n"
                                                           "    x\n"
                                                           "  else:\n"
@@ -2297,84 +2297,84 @@ void test_execute_emitted_compare_method() {
   expect(emit_result.module.methods.size() == 1, "expected choose method");
   const std::uint32_t code_id = emit_result.module.methods[0].entry_code_id;
 
-  const amber::runtime::ExecutionResult positive = amber::runtime::execute_code(
-      emit_result.module, code_id, {amber::runtime::Value::integer(3)});
+  const sputnik::runtime::ExecutionResult positive = sputnik::runtime::execute_code(
+      emit_result.module, code_id, {sputnik::runtime::Value::integer(3)});
   expect(positive.ok(), "choose(3) execution failed");
   expect(positive.value.is_integer() && positive.value.as_integer() == 3,
          "choose(3) should return input");
 
-  const amber::runtime::ExecutionResult negative = amber::runtime::execute_code(
-      emit_result.module, code_id, {amber::runtime::Value::integer(-2)});
+  const sputnik::runtime::ExecutionResult negative = sputnik::runtime::execute_code(
+      emit_result.module, code_id, {sputnik::runtime::Value::integer(-2)});
   expect(negative.ok(), "choose(-2) execution failed");
   expect(negative.value.is_integer() && negative.value.as_integer() == 0,
          "choose(-2) should return zero");
 }
 
 void test_execute_emitted_default_method() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Config:\n"
               "  class_method def build(x, y = x + 1):\n"
               "    y\n"
               "\n"
               "def probe():\n"
               "  Config.build(7)\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "defaulted probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "defaulted method execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 8,
          "default thunk should materialize y = x + 1");
 }
 
 void test_execute_emitted_keyword_method() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Config:\n"
               "  class_method def build(x, α:, β: 2):\n"
               "    x + α + β\n"
               "\n"
               "def probe():\n"
               "  Config.build(4, α: 5)\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "keyword probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "keyword method execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 11,
          "keyword shaping should bind α and materialize β default");
 }
 
 void test_execute_emitted_block_send() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Config:\n"
               "  class_method def build(x):\n"
               "    x\n"
               "\n"
               "def probe():\n"
               "  Config.build(4): 9\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "probe");
   expect(method != nullptr, "block send probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id);
   expect(exec.ok(), "block send execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 4,
          "user-defined SEND should accept forwarded block");
 }
 
 void test_execute_emitted_properties() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("counter = 0\n"
               "prop next_value:\n"
               "  counter = counter + 1\n"
               "  counter\n"
               "next_value + next_value\n");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "top-level property execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 3,
@@ -2384,7 +2384,7 @@ void test_execute_emitted_properties() {
                         "  def init(@x, @y)\n"
                         "  prop sum: @x + @y\n"
                         "Point(2, 5).sum\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "instance property execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
@@ -2393,7 +2393,7 @@ void test_execute_emitted_properties() {
   emit_result = emit_ok("class Build:\n"
                         "  class_prop version: 203\n"
                         "Build.version\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "class property execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 203,
@@ -2409,7 +2409,7 @@ void test_execute_emitted_properties() {
                         "box = Box(1)\n"
                         "assigned = (box.value = 10)\n"
                         "box.value + assigned\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "instance property setter execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 20,
@@ -2421,7 +2421,7 @@ void test_execute_emitted_properties() {
                         "    set(v): @@version = v\n"
                         "Build.version = 204\n"
                         "Build.version\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "class property setter execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 204,
@@ -2432,7 +2432,7 @@ void test_execute_emitted_properties() {
               "  def init(@email)\n"
               "  attr email\n"
               "User(\"ada@example.test\").email == \"ada@example.test\"\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "getter-only attr execution failed");
   expect(exec.value.is_bool() && exec.value.as_bool(),
@@ -2444,7 +2444,7 @@ void test_execute_emitted_properties() {
                         "box = Box(4)\n"
                         "assigned = (box.value = 9)\n"
                         "box.value + assigned\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "read-write attr execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 18,
@@ -2461,7 +2461,7 @@ void test_execute_emitted_properties() {
                         "3.times:\n"
                         "  total += counter.value\n"
                         "total\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "cached attr reader execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 21,
@@ -2471,10 +2471,10 @@ void test_execute_emitted_properties() {
 void test_bare_nullary_member_implicit_call() {
   // RFC bare-nullary: `obj.member` performs an implicit zero-argument send
   // when `member` resolves to a syntactically nullary method.
-  amber::bytecode::EmitResult emit_result = emit_ok("class Box:\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("class Box:\n"
                                                     "  def value(): 1\n"
                                                     "Box().value\n");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "bare nullary member access execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 1,
@@ -2487,7 +2487,7 @@ void test_bare_nullary_member_implicit_call() {
                         "counter = Counter()\n"
                         "counter.increment!\n"
                         "counter.value\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "bare bang nullary member execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 1,
@@ -2496,7 +2496,7 @@ void test_bare_nullary_member_implicit_call() {
   emit_result = emit_ok("class Box:\n"
                         "  def value(): 1\n"
                         "Box().value() + Box().value\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "explicit and bare nullary call execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
@@ -2505,7 +2505,7 @@ void test_bare_nullary_member_implicit_call() {
   emit_result = emit_ok("class Build:\n"
                         "  class_method def version(): 20\n"
                         "Build.version\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "bare class-side nullary access execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 20,
@@ -2513,7 +2513,7 @@ void test_bare_nullary_member_implicit_call() {
 }
 
 void test_quick_result_nullary_sends() {
-  const amber::runtime::ExecutionResult accessors = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult accessors = execute_emitted_init(
       "ok = Ok(41)\n"
       "err = Err(7)\n"
       "if ok.ok?() and ok.ok? and not ok.err?() and err.err?() and "
@@ -2526,19 +2526,19 @@ void test_quick_result_nullary_sends() {
   expect(accessors.value.is_integer() && accessors.value.as_integer() == 42,
          "quick Result accessors should preserve bare and explicit semantics");
 
-  const amber::runtime::ExecutionResult value_fault =
+  const sputnik::runtime::ExecutionResult value_fault =
       execute_emitted_init("Err(7).value()\n");
   expect(!value_fault.ok() && value_fault.fault.has_value() &&
              value_fault.fault->error_name == "ValueError",
          "quick Result.value on Err should preserve ValueError");
 
-  const amber::runtime::ExecutionResult error_fault =
+  const sputnik::runtime::ExecutionResult error_fault =
       execute_emitted_init("Ok(7).error\n");
   expect(!error_fault.ok() && error_fault.fault.has_value() &&
              error_fault.fault->error_name == "ValueError",
          "quick Result.error on Ok should preserve ValueError");
 
-  const amber::runtime::ExecutionResult fallback = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult fallback = execute_emitted_init(
       "class ResultLike:\n"
       "  def ok?(): true\n"
       "  def value(): 20\n"
@@ -2554,11 +2554,11 @@ void test_quick_result_nullary_sends() {
 }
 
 void test_bare_non_nullary_member_rejected() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Box:\n"
               "  def format(mode): mode\n"
               "Box().format\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "ArgumentError",
@@ -2661,7 +2661,7 @@ void test_bare_default_and_rest_member_calls() {
 }
 
 void test_implicit_self_bare_identifier_dispatch() {
-  amber::runtime::ExecutionResult exec = execute_emitted_init(
+  sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class Base:\n"
       "  def params(): 41\n"
       "class Child < Base:\n"
@@ -2707,10 +2707,10 @@ void test_implicit_self_bare_identifier_dispatch() {
 }
 
 void test_property_called_as_method_rejected() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("class Box:\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("class Box:\n"
                                                           "  prop value: 7\n"
                                                           "Box().value()\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "TypeError",
@@ -2720,13 +2720,13 @@ void test_property_called_as_method_rejected() {
 void test_dot_call_invokes_member_result() {
   // `obj.member.()` reads/implicitly-sends the member, then calls the
   // resulting callable value through the generic callable protocol.
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Adder:\n"
               "  def call(x): x + 1\n"
               "class Factory:\n"
               "  prop provider: Adder()\n"
               "Factory().provider.(41)\n");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "dot-call on property value execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
@@ -2737,7 +2737,7 @@ void test_dot_call_invokes_member_result() {
                         "class Factory:\n"
                         "  def provider(): Answer()\n"
                         "Factory().provider.()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(exec.ok(), "dot-call on nullary def result execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 43,
@@ -2745,7 +2745,7 @@ void test_dot_call_invokes_member_result() {
 
   emit_result = emit_ok("x = 10\n"
                         "x.()\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "TypeError",
@@ -2753,13 +2753,13 @@ void test_dot_call_invokes_member_result() {
 }
 
 void test_property_access_errors() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("class User:\n"
               "  prop password:\n"
               "    set(value): @password_hash = value\n"
               "user = User()\n"
               "user.password\n");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "WriteOnlyPropertyError",
@@ -2769,7 +2769,7 @@ void test_property_access_errors() {
                         "  prop id: 5\n"
                         "box = Box()\n"
                         "box.id = 10\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "ReadOnlyPropertyError",
@@ -2778,13 +2778,13 @@ void test_property_access_errors() {
 }
 
 void test_property_arm_is_non_suspendable() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Clock:\n"
               "  prop lazy_time:\n"
               "    task.sleep 0.01\n"
               "    42\n"
               "Clock().lazy_time\n");
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "EffectViolationError",
@@ -2793,13 +2793,13 @@ void test_property_arm_is_non_suspendable() {
 }
 
 void test_kwargs_spread_requires_property() {
-  amber::bytecode::EmitResult emit_result =
+  sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Sink:\n"
               "  class_method def show(mode: 0): mode\n"
               "class Options:\n"
               "  prop kwargs: {mode: 5}\n"
               "Sink.show(**Options())\n");
-  amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "kwargs property spread execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 5,
@@ -2810,7 +2810,7 @@ void test_kwargs_spread_requires_property() {
                         "class Options:\n"
                         "  def kwargs(): {mode: 5}\n"
                         "Sink.show(**Options())\n");
-  exec = amber::runtime::execute_code(emit_result.module,
+  exec = sputnik::runtime::execute_code(emit_result.module,
                                       emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "TypeError" &&
@@ -2821,7 +2821,7 @@ void test_kwargs_spread_requires_property() {
 }
 
 void test_manual_dynamic_send() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"+"};
@@ -2854,17 +2854,17 @@ void test_manual_dynamic_send() {
   code.instructions.push_back({Opcode::Return, {{3, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::integer(8)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::integer(8)});
   expect(exec.ok(), "dynamic send execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 10,
          "dynamic send should dispatch by symbol selector");
 }
 
-const amber::bytecode::BcMethod *
-method_by_name(const amber::bytecode::BcModule &module,
+const sputnik::bytecode::BcMethod *
+method_by_name(const sputnik::bytecode::BcModule &module,
                const std::string &name) {
-  for (const amber::bytecode::BcMethod &method : module.methods) {
+  for (const sputnik::bytecode::BcMethod &method : module.methods) {
     if (method.selector_sym_id < module.symbols.size() &&
         module.symbols[method.selector_sym_id] == name) {
       return &method;
@@ -2873,7 +2873,7 @@ method_by_name(const amber::bytecode::BcModule &module,
   return nullptr;
 }
 
-std::uint32_t symbol_id_or_die(const amber::bytecode::BcModule &module,
+std::uint32_t symbol_id_or_die(const sputnik::bytecode::BcModule &module,
                                const std::string &name) {
   for (std::uint32_t i = 0; i < module.symbols.size(); ++i) {
     if (module.symbols[i] == name) {
@@ -2884,7 +2884,7 @@ std::uint32_t symbol_id_or_die(const amber::bytecode::BcModule &module,
   std::exit(1);
 }
 
-std::uint32_t ensure_symbol_id(amber::bytecode::BcModule *module,
+std::uint32_t ensure_symbol_id(sputnik::bytecode::BcModule *module,
                                const std::string &name) {
   for (std::uint32_t i = 0; i < module->symbols.size(); ++i) {
     if (module->symbols[i] == name) {
@@ -2895,7 +2895,7 @@ std::uint32_t ensure_symbol_id(amber::bytecode::BcModule *module,
   return static_cast<std::uint32_t>(module->symbols.size() - 1U);
 }
 
-std::uint32_t append_string(amber::bytecode::BcModule *module,
+std::uint32_t append_string(sputnik::bytecode::BcModule *module,
                             const std::string &value) {
   for (std::uint32_t i = 0; i < module->strings.size(); ++i) {
     if (module->strings[i] == value) {
@@ -2906,40 +2906,40 @@ std::uint32_t append_string(amber::bytecode::BcModule *module,
   return static_cast<std::uint32_t>(module->strings.size() - 1U);
 }
 
-std::uint32_t append_path_const(amber::bytecode::BcModule *module,
+std::uint32_t append_path_const(sputnik::bytecode::BcModule *module,
                                 std::initializer_list<std::uint32_t> items) {
-  amber::bytecode::Constant path;
-  path.kind = amber::bytecode::ConstantKind::Path;
+  sputnik::bytecode::Constant path;
+  path.kind = sputnik::bytecode::ConstantKind::Path;
   path.items = items;
   module->const_pool.push_back(path);
   return static_cast<std::uint32_t>(module->const_pool.size() - 1U);
 }
 
-std::uint32_t append_integer_const(amber::bytecode::BcModule *module,
+std::uint32_t append_integer_const(sputnik::bytecode::BcModule *module,
                                    std::int64_t value) {
-  amber::bytecode::Constant constant;
-  constant.kind = amber::bytecode::ConstantKind::Integer;
+  sputnik::bytecode::Constant constant;
+  constant.kind = sputnik::bytecode::ConstantKind::Integer;
   constant.int_value = value;
   module->const_pool.push_back(constant);
   return static_cast<std::uint32_t>(module->const_pool.size() - 1U);
 }
 
-std::uint32_t append_float_const(amber::bytecode::BcModule *module,
+std::uint32_t append_float_const(sputnik::bytecode::BcModule *module,
                                  double value) {
-  amber::bytecode::Constant constant;
-  constant.kind = amber::bytecode::ConstantKind::Float;
+  sputnik::bytecode::Constant constant;
+  constant.kind = sputnik::bytecode::ConstantKind::Float;
   constant.float_value = value;
   module->const_pool.push_back(constant);
   return static_cast<std::uint32_t>(module->const_pool.size() - 1U);
 }
 
 std::string
-string_value_text_or_die(const amber::runtime::Value &value,
-                         const amber::bytecode::BcModule &module,
-                         const amber::runtime::ExecutionResult &result) {
+string_value_text_or_die(const sputnik::runtime::Value &value,
+                         const sputnik::bytecode::BcModule &module,
+                         const sputnik::runtime::ExecutionResult &result) {
   expect(value.is_string(), "expected Str value");
   if (value.is_heap_string()) {
-    const std::shared_ptr<amber::runtime::RuntimeHeapStringValue> string =
+    const std::shared_ptr<sputnik::runtime::RuntimeHeapStringValue> string =
         value.as_heap_string();
     expect(string != nullptr, "heap Str value should be present");
     return string->text;
@@ -2951,32 +2951,32 @@ string_value_text_or_die(const amber::runtime::Value &value,
   return strings[string_id];
 }
 
-amber::bytecode::Instruction
+sputnik::bytecode::Instruction
 send_instr(std::uint32_t dst, std::uint32_t recv, std::uint32_t selector,
            const std::vector<std::uint32_t> &arg_regs, std::int64_t block_reg,
            std::uint32_t site_id);
 
-amber::pkg::PackageArtifact
-make_reload_artifact(const amber::bytecode::BcModule &module,
+sputnik::pkg::PackageArtifact
+make_reload_artifact(const sputnik::bytecode::BcModule &module,
                      const std::string &version = "0.1.0") {
-  amber::pkg::PackageArtifact artifact;
+  sputnik::pkg::PackageArtifact artifact;
   artifact.manifest.name = "reload.pkg";
   artifact.manifest.version = version;
   artifact.manifest.root_module = "reload.core";
-  artifact.manifest.modules.push_back({"reload.core", "src/core.am"});
+  artifact.manifest.modules.push_back({"reload.core", "src/core.s"});
 
-  amber::pkg::PackageModuleBlob blob;
+  sputnik::pkg::PackageModuleBlob blob;
   blob.name = "reload.core";
-  blob.path = "src/core.am";
-  blob.bytes = amber::bytecode::serialize_module(module);
+  blob.path = "src/core.s";
+  blob.bytes = sputnik::bytecode::serialize_module(module);
   artifact.modules.push_back(std::move(blob));
   return artifact;
 }
 
-amber::bytecode::BcModule make_reload_module(std::int64_t value,
+sputnik::bytecode::BcModule make_reload_module(std::int64_t value,
                                              bool export_class = true,
                                              bool method_has_param = false) {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -3032,19 +3032,19 @@ amber::bytecode::BcModule make_reload_module(std::int64_t value,
   return module;
 }
 
-amber::runtime::Value make_closure_value(std::uint32_t code_id) {
-  auto closure = amber::runtime::make_intrusive<amber::runtime::ClosureValue>();
-  closure->header.kind = amber::runtime::HeapObjectKind::Closure;
+sputnik::runtime::Value make_closure_value(std::uint32_t code_id) {
+  auto closure = sputnik::runtime::make_intrusive<sputnik::runtime::ClosureValue>();
+  closure->header.kind = sputnik::runtime::HeapObjectKind::Closure;
   closure->code_id = code_id;
-  return amber::runtime::Value::closure(std::move(closure));
+  return sputnik::runtime::Value::closure(std::move(closure));
 }
 
-amber::bytecode::Instruction
+sputnik::bytecode::Instruction
 send_instr(std::uint32_t dst, std::uint32_t recv, std::uint32_t selector,
            const std::vector<std::uint32_t> &arg_regs = {},
            std::int64_t block_reg = -1, std::uint32_t site_id = 0) {
-  amber::bytecode::Instruction insn;
-  insn.opcode = amber::bytecode::Opcode::Send;
+  sputnik::bytecode::Instruction insn;
+  insn.opcode = sputnik::bytecode::Opcode::Send;
   insn.operands.push_back({dst, false});
   insn.operands.push_back({recv, false});
   insn.operands.push_back({selector, false});
@@ -3058,13 +3058,13 @@ send_instr(std::uint32_t dst, std::uint32_t recv, std::uint32_t selector,
   return insn;
 }
 
-amber::bytecode::Instruction send_kw_instr(
+sputnik::bytecode::Instruction send_kw_instr(
     std::uint32_t dst, std::uint32_t recv, std::uint32_t selector,
     const std::vector<std::uint32_t> &arg_regs,
     const std::vector<std::pair<std::uint32_t, std::uint32_t>> &kw_regs,
     std::int64_t block_reg = -1, std::uint32_t site_id = 0) {
-  amber::bytecode::Instruction insn;
-  insn.opcode = amber::bytecode::Opcode::Send;
+  sputnik::bytecode::Instruction insn;
+  insn.opcode = sputnik::bytecode::Opcode::Send;
   insn.operands.push_back({dst, false});
   insn.operands.push_back({recv, false});
   insn.operands.push_back({selector, false});
@@ -3083,7 +3083,7 @@ amber::bytecode::Instruction send_kw_instr(
 }
 
 void test_manual_integer_opcode_float_fallback() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -3103,30 +3103,30 @@ void test_manual_integer_opcode_float_fallback() {
   code.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(exec.ok(), "IADDK float fallback execution failed");
   expect(exec.value.is_float() && exec.value.as_float() == 3.5,
          "IADDK should fallback to Float#+ for non-integer lhs");
 }
 
-amber::runtime::Value make_symbol_map(
-    const amber::bytecode::BcModule &module,
-    std::initializer_list<std::pair<const char *, amber::runtime::Value>>
+sputnik::runtime::Value make_symbol_map(
+    const sputnik::bytecode::BcModule &module,
+    std::initializer_list<std::pair<const char *, sputnik::runtime::Value>>
         entries) {
-  std::vector<amber::runtime::MapEntry> map_entries;
+  std::vector<sputnik::runtime::MapEntry> map_entries;
   map_entries.reserve(entries.size());
   for (const auto &entry : entries) {
     map_entries.push_back(
         {symbol_id_or_die(module, entry.first), entry.second});
   }
-  return amber::runtime::make_symbol_map_value(std::move(map_entries));
+  return sputnik::runtime::make_symbol_map_value(std::move(map_entries));
 }
 
-const amber::runtime::RuntimeArenaStats *
-arena_stats_for(const amber::runtime::RuntimeHeapStats &stats,
+const sputnik::runtime::RuntimeArenaStats *
+arena_stats_for(const sputnik::runtime::RuntimeHeapStats &stats,
                 std::uint64_t worker_id) {
-  for (const amber::runtime::RuntimeArenaStats &arena : stats.arenas) {
+  for (const sputnik::runtime::RuntimeArenaStats &arena : stats.arenas) {
     if (arena.worker_id == worker_id) {
       return &arena;
     }
@@ -3135,7 +3135,7 @@ arena_stats_for(const amber::runtime::RuntimeHeapStats &stats,
 }
 
 void test_runtime_duplicate_keyword_values_are_read_before_duplicate_check() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   const std::uint32_t box_id = ensure_symbol_id(&module, "Box");
@@ -3177,20 +3177,20 @@ void test_runtime_duplicate_keyword_values_are_read_before_duplicate_check() {
   module.code_objects = {caller, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::ExecutionResult exec =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult exec =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(!exec.ok(), "duplicate keyword with bad value should fail");
   expect(exec.fault.has_value() && exec.fault->error_name == "NameError",
          "keyword values should be read before duplicate keyword detection");
 }
 
 void test_runtime_keyword_shape_cache_canonicalizes_keyword_order() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   const std::uint32_t box_id = ensure_symbol_id(&module, "Box");
@@ -3234,20 +3234,20 @@ void test_runtime_keyword_shape_cache_canonicalizes_keyword_order() {
   module.code_objects = {caller, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::ExecutionResult exec = world.execute(
+  const sputnik::runtime::ExecutionResult exec = world.execute(
       1,
-      {amber::runtime::Value::instance(instance),
-       amber::runtime::Value::integer(3), amber::runtime::Value::integer(4),
-       amber::runtime::Value::integer(8), amber::runtime::Value::integer(9)});
+      {sputnik::runtime::Value::instance(instance),
+       sputnik::runtime::Value::integer(3), sputnik::runtime::Value::integer(4),
+       sputnik::runtime::Value::integer(8), sputnik::runtime::Value::integer(9)});
   expect(exec.ok(), "keyword shape cache order probe failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 8,
          "reversed keyword order should still bind by name");
-  const amber::runtime::RuntimeDispatchCacheStats stats =
+  const sputnik::runtime::RuntimeDispatchCacheStats stats =
       world.dispatch_cache_stats();
   expect(stats.call_cache_entries == 1, "keyword cache should keep one entry");
   expect(stats.call_cache_misses == 1 && stats.call_cache_updates == 1 &&
@@ -3256,7 +3256,7 @@ void test_runtime_keyword_shape_cache_canonicalizes_keyword_order() {
 }
 
 void test_runtime_call_cache_distinguishes_block_presence() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   const std::uint32_t box_id = ensure_symbol_id(&module, "Box");
@@ -3300,17 +3300,17 @@ void test_runtime_call_cache_distinguishes_block_presence() {
   module.code_objects = {caller, body, block};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::ExecutionResult exec = world.execute(
-      1, {amber::runtime::Value::instance(instance), make_closure_value(3)});
+  const sputnik::runtime::ExecutionResult exec = world.execute(
+      1, {sputnik::runtime::Value::instance(instance), make_closure_value(3)});
   expect(exec.ok(), "block presence cache guard probe failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 1,
          "block-presence probe should return method value");
-  const amber::runtime::RuntimeDispatchCacheStats stats =
+  const sputnik::runtime::RuntimeDispatchCacheStats stats =
       world.dispatch_cache_stats();
   expect(stats.call_cache_entries == 1, "block guard should reuse site entry");
   expect(stats.call_cache_hits == 0 && stats.call_cache_misses == 2 &&
@@ -3319,7 +3319,7 @@ void test_runtime_call_cache_distinguishes_block_presence() {
 }
 
 void test_runtime_keyword_call_cache_invalidates_on_world_epoch() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   const std::uint32_t box_id = ensure_symbol_id(&module, "Box");
@@ -3371,18 +3371,18 @@ void test_runtime_keyword_call_cache_invalidates_on_world_epoch() {
   module.code_objects = {caller, body_one, body_two};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::instance(instance),
-                        amber::runtime::Value::integer(9)});
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::instance(instance),
+                        sputnik::runtime::Value::integer(9)});
   expect(before.ok(), "keyword cache preflight send failed");
   expect(before.value.is_integer() && before.value.as_integer() == 1,
          "initial keyword method should return original value");
-  amber::runtime::RuntimeDispatchCacheStats stats =
+  sputnik::runtime::RuntimeDispatchCacheStats stats =
       world.dispatch_cache_stats();
   expect(stats.call_cache_misses == 1 && stats.call_cache_updates == 1 &&
              stats.call_cache_hits == 0,
@@ -3391,15 +3391,15 @@ void test_runtime_keyword_call_cache_invalidates_on_world_epoch() {
   const std::uint64_t epoch_before = world.world_epoch();
   BcMethod replacement = original;
   replacement.entry_code_id = 3;
-  const amber::runtime::ExecutionResult defined =
+  const sputnik::runtime::ExecutionResult defined =
       world.define_instance_method(0, replacement);
   expect(defined.ok(), "keyword cache method replacement failed");
   expect(world.world_epoch() == epoch_before + 1,
          "keyword method replacement should bump world epoch");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance),
-                        amber::runtime::Value::integer(9)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance),
+                        sputnik::runtime::Value::integer(9)});
   expect(after.ok(), "keyword cache post-mutation send failed");
   expect(after.value.is_integer() && after.value.as_integer() == 2,
          "keyword call cache should invalidate after world mutation");
@@ -3410,30 +3410,30 @@ void test_runtime_keyword_call_cache_invalidates_on_world_epoch() {
 }
 
 void test_execute_emitted_class_method_send() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  class_method def find(id):\n"
               "    id\n"
               "\n"
               "def probe():\n"
               "  Particle.find(4)\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "probe method exists");
-  amber::runtime::RuntimeWorld table_world(emit_result.module);
+  sputnik::runtime::RuntimeWorld table_world(emit_result.module);
   expect(table_world.method_table_size(
-             0, amber::runtime::MethodTableSide::Class) == 1,
+             0, sputnik::runtime::MethodTableSide::Class) == 1,
          "class-side method table should include emitted class method");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "class-side send execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 4,
          "class-side send should return class method result");
 }
 
 void test_execute_emitted_constructor_call() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  def init(x):\n"
               "    @mass = x\n"
@@ -3442,19 +3442,19 @@ void test_execute_emitted_constructor_call() {
               "\n"
               "def probe():\n"
               "  Particle(4).mass()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "constructor probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "constructor call execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 4,
          "constructor call should return initialized ivar");
 }
 
 void test_execute_emitted_constructor_auto_assign() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  def init(@масса)\n"
               "  def масса():\n"
@@ -3462,26 +3462,26 @@ void test_execute_emitted_constructor_auto_assign() {
               "\n"
               "def probe():\n"
               "  Particle(7).масса()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "auto-assign probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "constructor auto-assign execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
          "constructor auto-assign should materialize ivar");
 }
 
 void test_after_init_and_instance_fields() {
-  std::ifstream source_file("corpus/run/instance_fields_after_init/source.am");
+  std::ifstream source_file("corpus/run/instance_fields_after_init/source.s");
   expect(source_file.good(), "object lifecycle corpus source exists");
   const std::string source((std::istreambuf_iterator<char>(source_file)),
                            std::istreambuf_iterator<char>());
   const auto emitted = emit_ok(source);
   const auto *probe = method_by_name(emitted.module, "probe");
   expect(probe != nullptr, "object lifecycle probe exists");
-  const auto result = amber::runtime::execute_code(emitted.module,
+  const auto result = sputnik::runtime::execute_code(emitted.module,
                                                   probe->entry_code_id);
   expect(result.ok(), result.fault.has_value() ? result.fault->message
                                              : "object lifecycle execution");
@@ -3505,30 +3505,30 @@ void test_after_init_and_instance_fields() {
   const auto *parked_probe = method_by_name(parked.module, "probe");
   expect(parked_probe != nullptr, "suspending constructor probe exists");
   const auto parks_before =
-      amber::runtime::runtime_cooperative_task_park_count();
-  const auto parked_result = amber::runtime::execute_code(
+      sputnik::runtime::runtime_cooperative_task_park_count();
+  const auto parked_result = sputnik::runtime::execute_code(
       parked.module, parked_probe->entry_code_id);
   expect(parked_result.ok() && parked_result.value.is_bool() &&
              parked_result.value.as_bool(),
          "constructor waits for suspended init and after_init!");
-  expect(amber::runtime::runtime_cooperative_task_park_count() - parks_before ==
+  expect(sputnik::runtime::runtime_cooperative_task_park_count() - parks_before ==
              2U,
          "both init and after_init! park and resume cooperatively");
 }
 
 void test_execute_bodyless_class_and_null_equality() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class B\n"
               "first = B()\n"
               "second = B()\n"
               "[first == null, first != null, null == first, first == first, "
               "first == second]\n");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(exec.ok(), "bodyless class and instance equality execution failed");
   expect(exec.value.is_list(), "equality probe returns a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       exec.value.as_list();
   expect(list != nullptr && list->items.size() == 5U,
          "equality probe list shape");
@@ -3545,7 +3545,7 @@ void test_execute_bodyless_class_and_null_equality() {
 }
 
 void test_execute_emitted_constructor_default() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  def init(x, y = x + 1):\n"
               "    @mass = y\n"
@@ -3554,19 +3554,19 @@ void test_execute_emitted_constructor_default() {
               "\n"
               "def probe():\n"
               "  Particle(4).mass()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "constructor default probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "constructor default execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 5,
          "constructor default should materialize trailing default param");
 }
 
 void test_execute_emitted_cvar_store_and_load() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Settings:\n"
               "  class_method def set(x):\n"
               "    @@ρ = x\n"
@@ -3576,19 +3576,19 @@ void test_execute_emitted_cvar_store_and_load() {
               "def probe():\n"
               "  Settings.set(13)\n"
               "  Settings.get()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "cvar probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "cvar store/load execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 13,
          "class variable should round-trip through emitted methods");
 }
 
 void test_execute_emitted_constructor_cvar_auto_assign() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Settings:\n"
               "  def init(@@ρ)\n"
               "  class_method def ρ():\n"
@@ -3597,19 +3597,19 @@ void test_execute_emitted_constructor_cvar_auto_assign() {
               "def probe():\n"
               "  Settings(17)\n"
               "  Settings.ρ()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "cvar auto-assign probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "cvar auto-assign execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 17,
          "constructor auto-assign should materialize class variable");
 }
 
 void test_execute_emitted_superclass_dispatch() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Base:\n"
               "  def mass():\n"
               "    11\n"
@@ -3620,19 +3620,19 @@ void test_execute_emitted_superclass_dispatch() {
               "\n"
               "def probe():\n"
               "  Particle().mass()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "superclass probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "superclass dispatch execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 11,
          "instance SEND should fall through superclass chain");
 }
 
 void test_execute_emitted_include_linearization() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("mixin Older:\n"
               "  def value():\n"
               "    1\n"
@@ -3646,19 +3646,19 @@ void test_execute_emitted_include_linearization() {
               "\n"
               "def probe():\n"
               "  Box().value()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "include probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "include dispatch execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "later include should win in instance-side lookup");
 }
 
 void test_execute_emitted_extend_linearization() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("mixin Tagged:\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("mixin Tagged:\n"
                                                           "  def label():\n"
                                                           "    23\n"
                                                           "\n"
@@ -3667,162 +3667,162 @@ void test_execute_emitted_extend_linearization() {
                                                           "\n"
                                                           "def probe():\n"
                                                           "  Box.label()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "extend probe method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "extend dispatch execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 23,
          "class-side lookup should see extended mixin methods");
 }
 
 void test_execute_emitted_method_missing_instance() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Proxy:\n"
               "  def method_missing(name, α:):\n"
               "    α\n"
               "\n"
               "def probe():\n"
               "  Proxy().unknown(α: 5)\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "instance method_missing probe exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "instance method_missing execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 5,
          "method_missing should receive forwarded keyword arguments");
 }
 
 void test_execute_emitted_method_missing_class_side() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Proxy:\n"
               "  class_method def method_missing(name):\n"
               "    29\n"
               "\n"
               "def probe():\n"
               "  Proxy.unknown()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "class method_missing probe exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(exec.ok(), "class method_missing execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 29,
          "class-side miss should fall back to class method_missing");
 }
 
 void test_method_missing_does_not_recurse() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Proxy:\n"
               "  def own():\n"
               "    0\n"
               "\n"
               "def probe():\n"
               "  Proxy().method_missing()\n");
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(emit_result.module, "probe");
   expect(probe != nullptr, "non-recursive method_missing probe exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, probe->entry_code_id);
   expect(!exec.ok(), "missing method_missing should fail");
   expect(exec.fault.has_value() && exec.fault->error_name == "NoMethodError",
          "method_missing selector should not recurse into itself");
 }
 
 void test_execute_emitted_case_literal() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def classify(x):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def classify(x):\n"
                                                           "  case x:\n"
                                                           "    when 1:\n"
                                                           "      11\n"
                                                           "    else:\n"
                                                           "      0\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "classify");
   expect(method != nullptr, "literal case method exists");
 
-  const amber::runtime::ExecutionResult hit =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id,
-                                   {amber::runtime::Value::integer(1)});
+  const sputnik::runtime::ExecutionResult hit =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id,
+                                   {sputnik::runtime::Value::integer(1)});
   expect(hit.ok(), "literal case hit failed");
   expect(hit.value.is_integer() && hit.value.as_integer() == 11,
          "literal case should take matching arm");
 
-  const amber::runtime::ExecutionResult miss =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id,
-                                   {amber::runtime::Value::integer(2)});
+  const sputnik::runtime::ExecutionResult miss =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id,
+                                   {sputnik::runtime::Value::integer(2)});
   expect(miss.ok(), "literal case miss failed");
   expect(miss.value.is_integer() && miss.value.as_integer() == 0,
          "literal case should take else arm");
 }
 
 void test_execute_emitted_case_pin() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def same(x, y):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def same(x, y):\n"
                                                           "  case y:\n"
                                                           "    when ^x:\n"
                                                           "      1\n"
                                                           "    else:\n"
                                                           "      0\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "same");
   expect(method != nullptr, "pin case method exists");
 
-  const amber::runtime::ExecutionResult hit = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult hit = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
-      {amber::runtime::Value::integer(7), amber::runtime::Value::integer(7)});
+      {sputnik::runtime::Value::integer(7), sputnik::runtime::Value::integer(7)});
   expect(hit.ok(), "pin case hit failed");
   expect(hit.value.is_integer() && hit.value.as_integer() == 1,
          "pin case should match equal value");
 
-  const amber::runtime::ExecutionResult miss = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult miss = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
-      {amber::runtime::Value::integer(7), amber::runtime::Value::integer(8)});
+      {sputnik::runtime::Value::integer(7), sputnik::runtime::Value::integer(8)});
   expect(miss.ok(), "pin case miss failed");
   expect(miss.value.is_integer() && miss.value.as_integer() == 0,
          "pin case should fall through to else");
 }
 
 void test_execute_emitted_case_bind() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def mirror(x):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def mirror(x):\n"
                                                           "  case x:\n"
                                                           "    when y:\n"
                                                           "      y\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "mirror");
   expect(method != nullptr, "bind case method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id,
-                                   {amber::runtime::Value::integer(9)});
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id,
+                                   {sputnik::runtime::Value::integer(9)});
   expect(exec.ok(), "bind case execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 9,
          "bind case should materialize bound local");
 }
 
 void test_execute_emitted_case_bang_failure() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("def classify!(x):\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("def classify!(x):\n"
                                                           "  case! x:\n"
                                                           "    when 1:\n"
                                                           "      11\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "classify!");
   expect(method != nullptr, "case! method exists");
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id,
-                                   {amber::runtime::Value::integer(2)});
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id,
+                                   {sputnik::runtime::Value::integer(2)});
   expect(!exec.ok(), "case! miss should fail");
   expect(exec.fault.has_value() && exec.fault->error_name == "MatchError",
          "case! miss should raise MatchError");
 }
 
 void test_execute_emitted_case_const_class() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("class Marker:\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("class Marker:\n"
                                                           "  def own():\n"
                                                           "    0\n"
                                                           "\n"
@@ -3832,69 +3832,69 @@ void test_execute_emitted_case_const_class() {
                                                           "      1\n"
                                                           "    else:\n"
                                                           "      0\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "classify");
   expect(method != nullptr, "const class case method exists");
   expect(!emit_result.module.classes.empty(), "marker class emitted");
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult hit =
-      amber::runtime::execute_code(emit_result.module, method->entry_code_id,
-                                   {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult hit =
+      sputnik::runtime::execute_code(emit_result.module, method->entry_code_id,
+                                   {sputnik::runtime::Value::instance(instance)});
   expect(hit.ok(), "const class case hit failed");
   expect(hit.value.is_integer() && hit.value.as_integer() == 1,
          "const class pattern should match instance of class");
 }
 
 void test_execute_emitted_case_list_exact() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("def second(values):\n"
               "  case values:\n"
               "    when [1, x]:\n"
               "      x\n"
               "    else:\n"
               "      0\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "second");
   expect(method != nullptr, "list exact case method exists");
 
-  const amber::runtime::ExecutionResult hit = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult hit = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
-      {amber::runtime::make_list_value({amber::runtime::Value::integer(1),
-                                        amber::runtime::Value::integer(9)})});
+      {sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(1),
+                                        sputnik::runtime::Value::integer(9)})});
   expect(hit.ok(), "list exact case hit failed");
   expect(hit.value.is_integer() && hit.value.as_integer() == 9,
          "list exact case should bind second element");
 
-  const amber::runtime::ExecutionResult miss = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult miss = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
-      {amber::runtime::make_list_value({amber::runtime::Value::integer(1),
-                                        amber::runtime::Value::integer(9),
-                                        amber::runtime::Value::integer(10)})});
+      {sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(1),
+                                        sputnik::runtime::Value::integer(9),
+                                        sputnik::runtime::Value::integer(10)})});
   expect(miss.ok(), "list exact case miss failed");
   expect(miss.value.is_integer() && miss.value.as_integer() == 0,
          "list exact case should reject extra elements");
 }
 
 void test_execute_emitted_pattern_assign_list_rest() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("def unpack(values):\n"
               "  [head, *tail] = values\n"
               "  tail\n");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "unpack");
   expect(method != nullptr, "pattern assignment method exists");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
-      {amber::runtime::make_list_value({amber::runtime::Value::integer(3),
-                                        amber::runtime::Value::integer(4),
-                                        amber::runtime::Value::integer(5)})});
+      {sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(3),
+                                        sputnik::runtime::Value::integer(4),
+                                        sputnik::runtime::Value::integer(5)})});
   expect(exec.ok(), "pattern assignment execution failed");
   expect(exec.value.is_list(), "pattern assignment tail should be a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> tail =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> tail =
       exec.value.as_list();
   expect(tail != nullptr && tail->items.size() == 2,
          "pattern assignment tail should have two items");
@@ -3904,25 +3904,25 @@ void test_execute_emitted_pattern_assign_list_rest() {
 }
 
 void test_execute_emitted_case_map_rest() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def capture(payload):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def capture(payload):\n"
                                                     "  case payload:\n"
                                                     "    when {a:, **rest}:\n"
                                                     "      rest\n"
                                                     "    else:\n"
                                                     "      null\n");
   ensure_symbol_id(&emit_result.module, "b");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "capture");
   expect(method != nullptr, "map-rest case method exists");
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
       {make_symbol_map(emit_result.module,
-                       {{"a", amber::runtime::Value::integer(1)},
-                        {"b", amber::runtime::Value::integer(7)}})});
+                       {{"a", sputnik::runtime::Value::integer(1)},
+                        {"b", sputnik::runtime::Value::integer(7)}})});
   expect(exec.ok(), "map-rest case execution failed");
   expect(exec.value.is_map(), "map-rest case should return rest map");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> rest =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> rest =
       exec.value.as_map();
   expect(rest != nullptr && rest->entries.size() == 1,
          "map-rest case should keep one extra key");
@@ -3934,37 +3934,37 @@ void test_execute_emitted_case_map_rest() {
 }
 
 void test_execute_emitted_case_map_strict_null() {
-  amber::bytecode::EmitResult emit_result = emit_ok("def strict(payload):\n"
+  sputnik::bytecode::EmitResult emit_result = emit_ok("def strict(payload):\n"
                                                     "  case payload:\n"
                                                     "    when {a:, **null}:\n"
                                                     "      1\n"
                                                     "    else:\n"
                                                     "      0\n");
   ensure_symbol_id(&emit_result.module, "b");
-  const amber::bytecode::BcMethod *method =
+  const sputnik::bytecode::BcMethod *method =
       method_by_name(emit_result.module, "strict");
   expect(method != nullptr, "strict map case method exists");
 
-  const amber::runtime::ExecutionResult exact = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exact = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
       {make_symbol_map(emit_result.module,
-                       {{"a", amber::runtime::Value::integer(1)}})});
+                       {{"a", sputnik::runtime::Value::integer(1)}})});
   expect(exact.ok(), "strict map exact execution failed");
   expect(exact.value.is_integer() && exact.value.as_integer() == 1,
          "strict map should accept exact key set");
 
-  const amber::runtime::ExecutionResult extra = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult extra = sputnik::runtime::execute_code(
       emit_result.module, method->entry_code_id,
       {make_symbol_map(emit_result.module,
-                       {{"a", amber::runtime::Value::integer(1)},
-                        {"b", amber::runtime::Value::integer(2)}})});
+                       {{"a", sputnik::runtime::Value::integer(1)},
+                        {"b", sputnik::runtime::Value::integer(2)}})});
   expect(extra.ok(), "strict map extra-key execution failed");
   expect(extra.value.is_integer() && extra.value.as_integer() == 0,
          "strict map should reject extra keys");
 }
 
 void test_execute_emitted_clause_method_dispatch() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  def mass(0): 1\n"
               "  def mass(n) if n > 0: n\n"
@@ -3977,30 +3977,30 @@ void test_execute_emitted_clause_method_dispatch() {
               "\n"
               "def negative():\n"
               "  Particle().mass(2 - 3)\n");
-  const amber::bytecode::BcMethod *zero =
+  const sputnik::bytecode::BcMethod *zero =
       method_by_name(emit_result.module, "zero");
-  const amber::bytecode::BcMethod *positive =
+  const sputnik::bytecode::BcMethod *positive =
       method_by_name(emit_result.module, "positive");
-  const amber::bytecode::BcMethod *negative =
+  const sputnik::bytecode::BcMethod *negative =
       method_by_name(emit_result.module, "negative");
   expect(zero != nullptr && positive != nullptr && negative != nullptr,
          "clause dispatch probes exist");
 
-  const amber::runtime::ExecutionResult zero_result =
-      amber::runtime::execute_code(emit_result.module, zero->entry_code_id);
+  const sputnik::runtime::ExecutionResult zero_result =
+      sputnik::runtime::execute_code(emit_result.module, zero->entry_code_id);
   expect(zero_result.ok(), "clause dispatch zero execution failed");
   expect(zero_result.value.is_integer() && zero_result.value.as_integer() == 1,
          "first clause should match zero");
 
-  const amber::runtime::ExecutionResult positive_result =
-      amber::runtime::execute_code(emit_result.module, positive->entry_code_id);
+  const sputnik::runtime::ExecutionResult positive_result =
+      sputnik::runtime::execute_code(emit_result.module, positive->entry_code_id);
   expect(positive_result.ok(), "clause dispatch positive execution failed");
   expect(positive_result.value.is_integer() &&
              positive_result.value.as_integer() == 4,
          "guarded clause should match positive argument");
 
-  const amber::runtime::ExecutionResult negative_result =
-      amber::runtime::execute_code(emit_result.module, negative->entry_code_id);
+  const sputnik::runtime::ExecutionResult negative_result =
+      sputnik::runtime::execute_code(emit_result.module, negative->entry_code_id);
   expect(!negative_result.ok(), "clause dispatch miss should fail");
   expect(negative_result.fault.has_value() &&
              negative_result.fault->error_name == "MatchError",
@@ -4008,7 +4008,7 @@ void test_execute_emitted_clause_method_dispatch() {
 }
 
 void test_manual_make_map() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"α", "β"};
@@ -4037,11 +4037,11 @@ void test_manual_make_map() {
   code.instructions.push_back({Opcode::Return, {{2, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(exec.ok(), "MAKE_MAP execution failed");
   expect(exec.value.is_map(), "MAKE_MAP should materialize map value");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> map =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> map =
       exec.value.as_map();
   expect(map != nullptr && map->entries.size() == 2,
          "MAKE_MAP should preserve two entries");
@@ -4053,11 +4053,11 @@ void test_manual_make_map() {
          "MAKE_MAP should preserve second entry");
 }
 
-void expect_integer_list(const amber::runtime::Value &value,
+void expect_integer_list(const sputnik::runtime::Value &value,
                          const std::vector<std::int64_t> &expected,
                          const std::string &message) {
   expect(value.is_list(), message + " should be a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       value.as_list();
   expect(list != nullptr && list->items.size() == expected.size(),
          message + " list size");
@@ -4069,7 +4069,7 @@ void expect_integer_list(const amber::runtime::Value &value,
 }
 
 void test_execute_emitted_control_condition_assignment() {
-  const amber::runtime::ExecutionResult if_assign = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult if_assign = execute_emitted_init(
       "def value():\n"
       "  4\n"
       "if x = value():\n"
@@ -4080,7 +4080,7 @@ void test_execute_emitted_control_condition_assignment() {
   expect(if_assign.value.is_integer() && if_assign.value.as_integer() == 5,
          "if assignment condition should return assigned value");
 
-  const amber::runtime::ExecutionResult while_assign = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult while_assign = execute_emitted_init(
       "class Accum:\n"
       "  def init(@values)\n"
       "  def pop():\n"
@@ -4094,7 +4094,7 @@ void test_execute_emitted_control_condition_assignment() {
   expect_integer_list(while_assign.value, {3, 2, 1, 0},
                       "while assignment condition");
 
-  const amber::runtime::ExecutionResult while_assign_and =
+  const sputnik::runtime::ExecutionResult while_assign_and =
       execute_emitted_init("class Accum:\n"
                            "  def init(@values)\n"
                            "  def pop():\n"
@@ -4110,36 +4110,36 @@ void test_execute_emitted_control_condition_assignment() {
                       "while assignment-and condition");
 }
 
-amber::runtime::ExecutionResult
+sputnik::runtime::ExecutionResult
 execute_emitted_init(const std::string &source) {
-  const amber::bytecode::EmitResult emit_result = emit_ok(source);
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::EmitResult emit_result = emit_ok(source);
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id, "emitted module init exists");
-  return amber::runtime::execute_code(decoded.module,
+  return sputnik::runtime::execute_code(decoded.module,
                                       decoded.module.init.entry_code_id);
 }
 
-amber::runtime::ExecutionResult execute_emitted_init_with_errors(
+sputnik::runtime::ExecutionResult execute_emitted_init_with_errors(
     const std::string &source,
-    const amber::runtime::RuntimeErrorRegistry &errors) {
-  const amber::bytecode::EmitResult emit_result = emit_ok(source);
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+    const sputnik::runtime::RuntimeErrorRegistry &errors) {
+  const sputnik::bytecode::EmitResult emit_result = emit_ok(source);
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id, "emitted module init exists");
-  amber::runtime::RuntimeVmExecutionContext context;
+  sputnik::runtime::RuntimeVmExecutionContext context;
   context.error_registry = &errors;
-  return amber::runtime::execute_runtime_vm(
+  return sputnik::runtime::execute_runtime_vm(
       decoded.module, std::move(context), decoded.module.init.entry_code_id, {},
-      amber::runtime::Value::null(), amber::runtime::Value::null());
+      sputnik::runtime::Value::null(), sputnik::runtime::Value::null());
 }
 
 void test_execute_emitted_v20_9_named_multiblock() {
-  const amber::runtime::ExecutionResult multiblock = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult multiblock = execute_emitted_init(
       "def request(value, &success:, &error: null):\n"
       "  success(value) + success(value)\n"
       "request(21) with:\n"
@@ -4150,7 +4150,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
              multiblock.value.as_integer() == 42,
          "named multiblock closure can be invoked multiple times");
 
-  const amber::runtime::ExecutionResult callable_values =
+  const sputnik::runtime::ExecutionResult callable_values =
       execute_emitted_init(
           "def add_one(value): value + 1\n"
           "def invoke(value, &done:): done(value)\n"
@@ -4160,7 +4160,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
              callable_values.value.as_integer() == 42,
          "prebuilt callable values satisfy named callable parameters");
 
-  const amber::runtime::ExecutionResult callable_object =
+  const sputnik::runtime::ExecutionResult callable_object =
       execute_emitted_init(
           "class AddOne:\n"
           "  def call(value): value + 1\n"
@@ -4170,7 +4170,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
              callable_object.value.as_integer() == 42,
          "objects implementing call satisfy named callable parameters");
 
-  const amber::runtime::ExecutionResult reflective = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult reflective = execute_emitted_init(
       "class Client:\n"
       "  def request(value, &success:): success(value)\n"
       "client = Client()\n"
@@ -4181,14 +4181,14 @@ void test_execute_emitted_v20_9_named_multiblock() {
              reflective.value.as_integer() == 42,
          "reflective send forwards multiblock entries as keywords");
 
-  const amber::runtime::ExecutionResult nullable = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult nullable = execute_emitted_init(
       "def skip(&done: null): 42\n"
       "skip(done: null)\n");
   expect(nullable.ok() && nullable.value.is_integer() &&
              nullable.value.as_integer() == 42,
          "exact null default permits omitted and explicit null callbacks");
 
-  const amber::runtime::ExecutionResult missing = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult missing = execute_emitted_init(
       "def invoke(&done:): null\n"
       "invoke()\n");
   expect(!missing.ok() && missing.fault.has_value() &&
@@ -4197,7 +4197,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
                                          "`done`") != std::string::npos,
          "missing required named callable reports its keyword name");
 
-  const amber::runtime::ExecutionResult non_callable = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult non_callable = execute_emitted_init(
       "def invoke(&done:): null\n"
       "invoke(done: 42)\n");
   expect(!non_callable.ok() && non_callable.fault.has_value() &&
@@ -4207,7 +4207,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
                  std::string::npos,
          "non-callable explicit value reports named callable TypeError");
 
-  const amber::runtime::ExecutionResult bad_default = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult bad_default = execute_emitted_init(
       "def invoke(&done: 42): null\n"
       "invoke()\n");
   expect(!bad_default.ok() && bad_default.fault.has_value() &&
@@ -4215,7 +4215,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
              bad_default.fault->message.find("`done`") != std::string::npos,
          "non-callable default is checked before method body execution");
 
-  const amber::runtime::ExecutionResult spread_duplicate =
+  const sputnik::runtime::ExecutionResult spread_duplicate =
       execute_emitted_init(
           "def keep(value): value\n"
           "def invoke(&done:): null\n"
@@ -4228,10 +4228,10 @@ void test_execute_emitted_v20_9_named_multiblock() {
          "keyword spread collision with multiblock is rejected at runtime");
 }
 
-const amber::runtime::ExecutionLocal *
-execution_local_by_name(const amber::runtime::ExecutionResult &result,
+const sputnik::runtime::ExecutionLocal *
+execution_local_by_name(const sputnik::runtime::ExecutionResult &result,
                         const std::string &name) {
-  for (const amber::runtime::ExecutionLocal &local : result.locals) {
+  for (const sputnik::runtime::ExecutionLocal &local : result.locals) {
     if (local.name == name) {
       return &local;
     }
@@ -4239,10 +4239,10 @@ execution_local_by_name(const amber::runtime::ExecutionResult &result,
   return nullptr;
 }
 
-const amber::runtime::RuntimeDependency *
-dependency_by_kind(const amber::runtime::RuntimeDependencySet &set,
-                   amber::runtime::RuntimeDependencyKind kind) {
-  for (const amber::runtime::RuntimeDependency &dependency : set.dependencies) {
+const sputnik::runtime::RuntimeDependency *
+dependency_by_kind(const sputnik::runtime::RuntimeDependencySet &set,
+                   sputnik::runtime::RuntimeDependencyKind kind) {
+  for (const sputnik::runtime::RuntimeDependency &dependency : set.dependencies) {
     if (dependency.kind == kind) {
       return &dependency;
     }
@@ -4251,17 +4251,17 @@ dependency_by_kind(const amber::runtime::RuntimeDependencySet &set,
 }
 
 void test_execute_emitted_block_map_suffixes() {
-  const amber::runtime::ExecutionResult implicit =
+  const sputnik::runtime::ExecutionResult implicit =
       execute_emitted_init("[1,2].map: _1 * 2\n");
   expect(implicit.ok(), "implicit placeholder map block should execute");
   expect_integer_list(implicit.value, {2, 4}, "implicit placeholder map block");
 
-  const amber::runtime::ExecutionResult it_alias =
+  const sputnik::runtime::ExecutionResult it_alias =
       execute_emitted_init("[1,2].map: $it * 2\n");
   expect(it_alias.ok(), "$it placeholder map block should execute");
   expect_integer_list(it_alias.value, {2, 4}, "$it placeholder map block");
 
-  const amber::runtime::ExecutionResult indexed_it_alias =
+  const sputnik::runtime::ExecutionResult indexed_it_alias =
       execute_emitted_init("def invoke(&blk):\n"
                            "  blk(1, 2, 3, 4, 5, 6, 7, 8, 9, 10)\n"
                            "invoke(): $it1 + $it2 + $it3 + $it4 + $it5 + "
@@ -4271,12 +4271,12 @@ void test_execute_emitted_block_map_suffixes() {
              indexed_it_alias.value.as_integer() == 145,
          "$it1 through $it10 preserve numeric positional argument order");
 
-  const amber::runtime::ExecutionResult explicit_param =
+  const sputnik::runtime::ExecutionResult explicit_param =
       execute_emitted_init("[1,2].map |x|: x * 2\n");
   expect(explicit_param.ok(), "explicit param map block should execute");
   expect_integer_list(explicit_param.value, {2, 4}, "explicit param map block");
 
-  const amber::runtime::ExecutionResult implicit_indented =
+  const sputnik::runtime::ExecutionResult implicit_indented =
       execute_emitted_init("[1,2].map:\n"
                            "  doubled = _1 * 2\n"
                            "  doubled + 1\n");
@@ -4285,7 +4285,7 @@ void test_execute_emitted_block_map_suffixes() {
   expect_integer_list(implicit_indented.value, {3, 5},
                       "implicit placeholder indented map block");
 
-  const amber::runtime::ExecutionResult explicit_indented =
+  const sputnik::runtime::ExecutionResult explicit_indented =
       execute_emitted_init("[1,2].map |x|:\n"
                            "  doubled = x * 2\n"
                            "  doubled + 1\n");
@@ -4296,7 +4296,7 @@ void test_execute_emitted_block_map_suffixes() {
 }
 
 void test_quick_sequence_block_sends() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "values = [1, 2, 3]\n"
       "seen = []\n"
       "each_result = values.each |value|:\n"
@@ -4309,11 +4309,11 @@ void test_quick_sequence_block_sends() {
       "none_negative = values.none? |value|: value < 0\n"
       "[seen.count, values.count, each_result.count, mapped[3], "
       "all_positive, any_large, none_negative, values.length, "
-      "\"Жa\".size, \"amber\".contains?(\"mb\"), "
-      "\"amber\" == \"amber\", Str === \"x\", Int === 1, "
+      "\"Жa\".size, \"sputnik\".contains?(\"ut\"), "
+      "\"sputnik\" == \"sputnik\", Str === \"x\", Int === 1, "
       "Array === values, Str === 1]\n");
   expect(exec.ok(), "quick sequence block sends should execute");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> parts =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> parts =
       exec.value.is_list() ? exec.value.as_list() : nullptr;
   expect(parts != nullptr && parts->items.size() == 15,
          "quick sequence block sends result shape");
@@ -4349,14 +4349,14 @@ void test_quick_sequence_block_sends() {
 }
 
 void test_quick_constant_string_contains_predicate() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
-      "sku = \"AMBER-42\"\n"
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
+      "sku = \"SPUTNIK-42\"\n"
       "valid_sku = sku.chars.all? |char|: \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_\".contains?(char)\n"
-      "invalid_sku = \"AMBER!\".chars.all? |char|: \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_\".contains?(char)\n"
+      "invalid_sku = \"SPUTNIK!\".chars.all? |char|: \"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_\".contains?(char)\n"
       "digit_only = \"2048\".chars.none? |char|: \"ABC\".contains?(char)\n"
       "[valid_sku, invalid_sku, digit_only]\n");
   expect(exec.ok(), "constant string contains? predicate should execute");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.is_list() ? exec.value.as_list() : nullptr;
   expect(values != nullptr && values->items.size() == 3,
          "constant string contains? predicate result shape");
@@ -4368,13 +4368,13 @@ void test_quick_constant_string_contains_predicate() {
 }
 
 void test_string_contains_only() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "[\"header-name\".contains_only?(\"abcdefghijklmnopqrstuvwxyz-\"), "
       "\"bad name\".contains_only?(\"abcdefghijklmnopqrstuvwxyz-\"), "
       "\"hé!\".contains_only?(\"!éh\"), "
       "\"\".contains_only?(\"\"), \"x\".contains_only?(\"\")]\n");
   expect(exec.ok(), "String#contains_only? should execute");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> parts =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> parts =
       exec.value.is_list() ? exec.value.as_list() : nullptr;
   expect(parts != nullptr && parts->items.size() == 5,
          "String#contains_only? result shape");
@@ -4388,7 +4388,7 @@ void test_string_contains_only() {
 }
 
 void test_synchronous_collection_block_control_flow() {
-  const amber::runtime::ExecutionResult nonlocal_return =
+  const sputnik::runtime::ExecutionResult nonlocal_return =
       execute_emitted_init(
           "def first_even(values):\n"
           "  values.each |value|:\n"
@@ -4401,7 +4401,7 @@ void test_synchronous_collection_block_control_flow() {
              nonlocal_return.value.as_integer() == 4,
          "return inside quick each exits the enclosing function");
 
-  const amber::runtime::ExecutionResult return_through_ensure =
+  const sputnik::runtime::ExecutionResult return_through_ensure =
       execute_emitted_init(
           "log = []\n"
           "\n"
@@ -4420,7 +4420,7 @@ void test_synchronous_collection_block_control_flow() {
              return_through_ensure.value.as_bool(),
          "non-local return through ensure preserves its dynamic target");
 
-  const amber::runtime::ExecutionResult rescued =
+  const sputnik::runtime::ExecutionResult rescued =
       execute_emitted_init(
           "try:\n"
           "  [1].map |value|:\n"
@@ -4431,7 +4431,7 @@ void test_synchronous_collection_block_control_flow() {
              rescued.value.as_integer() == 7,
          "raise inside quick map reaches the enclosing rescue");
 
-  const amber::runtime::ExecutionResult caught =
+  const sputnik::runtime::ExecutionResult caught =
       execute_emitted_init(
           "catch :done:\n"
           "  [1].all? |value|:\n"
@@ -4440,7 +4440,7 @@ void test_synchronous_collection_block_control_flow() {
              caught.value.as_integer() == 9,
          "throw inside quick all? reaches the enclosing catch");
 
-  const amber::runtime::ExecutionResult map_nonlocal_return =
+  const sputnik::runtime::ExecutionResult map_nonlocal_return =
       execute_emitted_init(
           "def find_map_value(values):\n"
           "  values.each |key, value|:\n"
@@ -4453,7 +4453,7 @@ void test_synchronous_collection_block_control_flow() {
              map_nonlocal_return.value.as_integer() == 8,
          "return inside quick Map#each exits the enclosing function");
 
-  const amber::runtime::ExecutionResult rescued_map =
+  const sputnik::runtime::ExecutionResult rescued_map =
       execute_emitted_init(
           "try:\n"
           "  {first: 1, second: 2}.map |key, value|:\n"
@@ -4467,7 +4467,7 @@ void test_synchronous_collection_block_control_flow() {
 }
 
 void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class Box:\n"
       "  attr value\n"
       "  def init(@value)\n"
@@ -4480,7 +4480,7 @@ void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {
       "  boxes\n"
       "\n"
       "first = decode_all([\"people\", \"posts\"])\n"
-      "second = [\"posts\", \"amber\"].map |value|:\n"
+      "second = [\"posts\", \"sputnik\"].map |value|:\n"
       "  Url.percent_decode(value)\n"
       "first_people = first[0].value\n"
       "first_posts = first[1].value\n"
@@ -4488,58 +4488,58 @@ void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {
   expect(exec.ok(),
          "pooled block VM runtime string synchronization should execute");
   const std::string text = string_value_text_or_die(
-      exec.value, amber::bytecode::BcModule{}, exec);
-  expect(text == "people|posts|posts|amber",
+      exec.value, sputnik::bytecode::BcModule{}, exec);
+  expect(text == "people|posts|posts|sputnik",
          "pooled block VM keeps runtime string ids content-stable");
 }
 
 void test_runtime_world_persists_runtime_strings_between_execute_calls() {
-  const amber::bytecode::EmitResult emitted = emit_ok(
+  const sputnik::bytecode::EmitResult emitted = emit_ok(
       "stored = []\n"
       "[\"people\", \"posts\"].each |value|:\n"
       "  stored.push!(Url.percent_decode(value))\n"
       "\n"
       "def main():\n"
-      "  current = [\"posts\", \"amber\"].map |value|:\n"
+      "  current = [\"posts\", \"sputnik\"].map |value|:\n"
       "    Url.percent_decode(value)\n"
       "  stored_people = stored[0]\n"
       "  stored_posts = stored[1]\n"
       "  current_posts = current[0]\n"
-      "  current_amber = current[1]\n"
-      "  [stored_people, stored_posts, current_posts, current_amber].join(\"|\")\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emitted.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+      "  current_sputnik = current[1]\n"
+      "  [stored_people, stored_posts, current_posts, current_sputnik].join(\"|\")\n");
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emitted.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id,
          "runtime world string persistence init exists");
-  const amber::bytecode::BcMethod *main_method =
+  const sputnik::bytecode::BcMethod *main_method =
       method_by_name(decoded.module, "main");
   expect(main_method != nullptr, "runtime world string persistence main exists");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
-  const amber::runtime::ExecutionResult initialized =
+  sputnik::runtime::RuntimeWorld world(decoded.module);
+  const sputnik::runtime::ExecutionResult initialized =
       world.execute(decoded.module.init.entry_code_id);
   expect(initialized.ok(), "runtime world string persistence init executes");
-  const amber::runtime::ExecutionResult executed =
+  const sputnik::runtime::ExecutionResult executed =
       world.execute(main_method->entry_code_id);
   expect(executed.ok(), "runtime world string persistence main executes");
   expect(string_value_text_or_die(executed.value, decoded.module, executed) ==
-             "people|posts|posts|amber",
+             "people|posts|posts|sputnik",
          "runtime world keeps dynamic string ids stable across execute calls");
 }
 
 void test_runtime_world_shared_module_keeps_runtime_names_private() {
-  amber::bytecode::BcModule source;
+  sputnik::bytecode::BcModule source;
   source.strings.push_back("compiled");
   source.symbols.push_back("compiled_symbol");
   const auto module =
-      std::make_shared<const amber::bytecode::BcModule>(std::move(source));
-  amber::runtime::RuntimeWorld world(
-      module, amber::runtime::RuntimeWorldOptions{});
+      std::make_shared<const sputnik::bytecode::BcModule>(std::move(source));
+  sputnik::runtime::RuntimeWorld world(
+      module, sputnik::runtime::RuntimeWorldOptions{});
 
-  const amber::runtime::Value text = world.string_value("runtime");
-  const amber::runtime::Value symbol = world.symbol_value("runtime_symbol");
+  const sputnik::runtime::Value text = world.string_value("runtime");
+  const sputnik::runtime::Value symbol = world.symbol_value("runtime_symbol");
   expect(text.is_string() && text.as_string().string_id == 1,
          "shared RuntimeWorld should append to its private string overlay");
   expect(symbol.is_symbol() && symbol.as_symbol().symbol_id == 1,
@@ -4550,9 +4550,9 @@ void test_runtime_world_shared_module_keeps_runtime_names_private() {
              module->symbols[0] == "compiled_symbol",
          "shared RuntimeWorld must not mutate compiled symbols");
 
-  const amber::runtime::ExecutionResult size =
+  const sputnik::runtime::ExecutionResult size =
       world.invoke_native_stdlib_send(text, "size", {}, {},
-                                      amber::runtime::Value::null(), false);
+                                      sputnik::runtime::Value::null(), false);
   expect(size.ok() && size.value.is_integer() &&
              size.value.as_integer() == 7,
          "shared RuntimeWorld should synchronize private names to its VM");
@@ -4563,14 +4563,14 @@ void test_runtime_world_shared_module_keeps_runtime_names_private() {
                  std::vector<std::string>{"runtime_symbol"},
          "incremental native bridge calls should publish appended names");
 
-  const amber::runtime::ExecutionResult unchanged =
+  const sputnik::runtime::ExecutionResult unchanged =
       world.invoke_native_stdlib_send(text, "size", {}, {},
-                                      amber::runtime::Value::null(), false);
+                                      sputnik::runtime::Value::null(), false);
   expect(unchanged.ok() && unchanged.runtime_strings.empty() &&
              unchanged.runtime_symbols.empty(),
          "incremental native bridge calls should omit unchanged name tables");
 
-  const amber::runtime::ExecutionResult compatible =
+  const sputnik::runtime::ExecutionResult compatible =
       world.invoke_native_stdlib_send(text, "size");
   expect(compatible.ok() && compatible.runtime_strings.size() == 2 &&
              compatible.runtime_symbols.size() == 2,
@@ -4578,28 +4578,28 @@ void test_runtime_world_shared_module_keeps_runtime_names_private() {
 }
 
 void test_runtime_world_reuses_native_bridge_session_after_stdlib_fault() {
-  amber::bytecode::BcModule module;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::bytecode::BcModule module;
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::Value first = world.string_value("amber");
-  const amber::runtime::ExecutionResult first_size =
+  const sputnik::runtime::Value first = world.string_value("sputnik");
+  const sputnik::runtime::ExecutionResult first_size =
       world.invoke_native_stdlib_send(first, "size", {}, {},
-                                      amber::runtime::Value::null());
+                                      sputnik::runtime::Value::null());
   expect(first_size.ok() && first_size.value.is_integer() &&
-             first_size.value.as_integer() == 5,
+             first_size.value.as_integer() == 7,
          "native stdlib session should execute its first send");
 
-  const amber::runtime::ExecutionResult missing =
+  const sputnik::runtime::ExecutionResult missing =
       world.invoke_native_stdlib_send(first, "missing_selector", {}, {},
-                                      amber::runtime::Value::null());
+                                      sputnik::runtime::Value::null());
   expect(!missing.ok() && missing.fault.has_value() &&
              missing.fault->error_name == "NoMethodError",
          "native stdlib session should report a missing selector");
 
-  const amber::runtime::Value second = world.string_value("persistent");
-  const amber::runtime::ExecutionResult second_size =
+  const sputnik::runtime::Value second = world.string_value("persistent");
+  const sputnik::runtime::ExecutionResult second_size =
       world.invoke_native_stdlib_send(second, "size", {}, {},
-                                      amber::runtime::Value::null());
+                                      sputnik::runtime::Value::null());
   expect(second_size.ok() && second_size.value.is_integer() &&
              second_size.value.as_integer() == 10,
          "native stdlib session should clear fault state and synchronize "
@@ -4610,7 +4610,7 @@ void test_runtime_world_reuses_native_bridge_session_after_stdlib_fault() {
 }
 
 void test_execute_emitted_copy_graphs() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class Box:\n"
       "  attr value\n"
       "  attr copied_from\n"
@@ -4665,7 +4665,7 @@ void test_execute_emitted_copy_graphs() {
 }
 
 void test_execute_emitted_user_index_methods() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "class Bag:\n"
       "  def init():\n"
       "    @values = {}\n"
@@ -4683,7 +4683,7 @@ void test_execute_emitted_user_index_methods() {
 }
 
 void test_execute_emitted_v20_5_array_generation_and_optional_access() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "generated = Array.of(4) |i|:\n"
       "  i + 1\n"
       "implicit = Array.of(3):\n"
@@ -4699,7 +4699,7 @@ void test_execute_emitted_v20_5_array_generation_and_optional_access() {
       "m[?:c], m.contains?(:b), m.contains?(:c)]\n");
   expect(exec.ok(), "v20.5 array/optional access probe should execute");
   expect(exec.value.is_list(), "v20.5 probe should return list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 16,
          "v20.5 probe result shape");
@@ -4725,12 +4725,12 @@ void test_execute_emitted_v20_5_array_generation_and_optional_access() {
   expect(values->items[15].is_bool() && !values->items[15].as_bool(),
          "Map#contains? rejects missing key");
 
-  const amber::runtime::ExecutionResult fresh =
+  const sputnik::runtime::ExecutionResult fresh =
       execute_emitted_init("Array.of(2):\n"
                            "  []\n");
   expect(fresh.ok() && fresh.value.is_list(),
          "Array.of should create nested arrays");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> fresh_items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> fresh_items =
       fresh.value.as_list();
   expect(fresh_items != nullptr && fresh_items->items.size() == 2 &&
              fresh_items->items[0].is_list() &&
@@ -4738,11 +4738,11 @@ void test_execute_emitted_v20_5_array_generation_and_optional_access() {
              fresh_items->items[0].as_list() != fresh_items->items[1].as_list(),
          "Array.of evaluates block once per slot");
 
-  const amber::runtime::ExecutionResult shared =
+  const sputnik::runtime::ExecutionResult shared =
       execute_emitted_init("Array.filled(2, [])\n");
   expect(shared.ok() && shared.value.is_list(),
          "Array.filled should create outer array");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> shared_items =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> shared_items =
       shared.value.as_list();
   expect(shared_items != nullptr && shared_items->items.size() == 2 &&
              shared_items->items[0].is_list() &&
@@ -4751,19 +4751,19 @@ void test_execute_emitted_v20_5_array_generation_and_optional_access() {
                  shared_items->items[1].as_list(),
          "Array.filled repeats the same value reference");
 
-  const amber::runtime::ExecutionResult missing_block =
+  const sputnik::runtime::ExecutionResult missing_block =
       execute_emitted_init("Array.of(1)\n");
   expect(!missing_block.ok() && missing_block.fault.has_value() &&
              missing_block.fault->error_name == "ArgumentError",
          "Array.of without block reports ArgumentError");
 
-  const amber::runtime::ExecutionResult negative =
+  const sputnik::runtime::ExecutionResult negative =
       execute_emitted_init("Array.filled(-1, 0)\n");
   expect(!negative.ok() && negative.fault.has_value() &&
              negative.fault->error_name == "ArgumentError",
          "Array.filled negative length reports ArgumentError");
 
-  const amber::runtime::ExecutionResult non_int =
+  const sputnik::runtime::ExecutionResult non_int =
       execute_emitted_init("Array.filled(\"2\", 0)\n");
   expect(!non_int.ok() && non_int.fault.has_value() &&
              non_int.fault->error_name == "TypeError",
@@ -4771,7 +4771,7 @@ void test_execute_emitted_v20_5_array_generation_and_optional_access() {
 }
 
 void test_runtime_map_get_or_set() {
-  const amber::runtime::ExecutionResult exec = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "calls = 0\n"
       "values = {present: false, nullable: null}\n"
       "missing = values.get_or_set!(:missing, 7)\n"
@@ -4790,7 +4790,7 @@ void test_runtime_map_get_or_set() {
       "values[:group][0], strict[:name], strict[\"name\"], strict.count]\n");
   expect(exec.ok(), "Map#get_or_set! probe should execute");
   expect(exec.value.is_list(), "Map#get_or_set! probe should return a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 10U,
          "Map#get_or_set! result shape");
@@ -4816,20 +4816,20 @@ void test_runtime_map_get_or_set() {
 }
 
 void test_runtime_watch_local_storage_replacement() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
                                                           "Kernel.watch(x)\n"
                                                           "x = 1\n"
                                                           "x = 2\n"
                                                           "x\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id, "watch local module init");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
+  sputnik::runtime::RuntimeWorld world(decoded.module);
   const std::uint64_t world_epoch_before = world.world_epoch();
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       world.execute(decoded.module.init.entry_code_id);
   expect(exec.ok(), "watch local module should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
@@ -4867,7 +4867,7 @@ void test_runtime_watch_local_storage_replacement() {
              exec.watch_events[2].new_value.as_integer() == 2,
          "watched local write records new value");
 
-  const amber::runtime::ExecutionLocal *x_local =
+  const sputnik::runtime::ExecutionLocal *x_local =
       execution_local_by_name(exec, "x");
   expect(x_local != nullptr, "watched local appears in execution locals");
   expect(x_local->initialized, "watched local remains initialized");
@@ -4880,31 +4880,31 @@ void test_runtime_watch_local_storage_replacement() {
 }
 
 void test_runtime_watch_stream_cursor_and_overflow() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
                                                           "Kernel.watch(x)\n"
                                                           "x = 1\n"
                                                           "x = 2\n"
                                                           "x\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  amber::runtime::RuntimeWorldOptions bounded_options;
+  sputnik::runtime::RuntimeWorldOptions bounded_options;
   bounded_options.watch_event_capacity = 2U;
-  amber::runtime::RuntimeWorld bounded(decoded.module, bounded_options);
-  const amber::runtime::RuntimeWatchCursor before = bounded.watch_cursor();
-  const amber::runtime::ExecutionResult bounded_exec =
+  sputnik::runtime::RuntimeWorld bounded(decoded.module, bounded_options);
+  const sputnik::runtime::RuntimeWatchCursor before = bounded.watch_cursor();
+  const sputnik::runtime::ExecutionResult bounded_exec =
       bounded.execute(decoded.module.init.entry_code_id);
   expect(bounded_exec.ok(), "bounded watch stream module should execute");
   expect(bounded_exec.watch_event_status ==
-             amber::runtime::RuntimeWatchPollStatus::Overflow &&
+             sputnik::runtime::RuntimeWatchPollStatus::Overflow &&
              bounded_exec.watch_events.empty(),
          "execution result must report a lost run-local watch suffix");
 
-  const amber::runtime::RuntimeWatchPollResult overflow =
+  const sputnik::runtime::RuntimeWatchPollResult overflow =
       bounded.poll_watch_events(before);
-  expect(overflow.status == amber::runtime::RuntimeWatchPollStatus::Overflow &&
+  expect(overflow.status == sputnik::runtime::RuntimeWatchPollStatus::Overflow &&
              overflow.events.empty(),
          "a lagging cursor must report overflow without a partial batch");
   expect(overflow.requested_cursor.source == before.source &&
@@ -4914,26 +4914,26 @@ void test_runtime_watch_stream_cursor_and_overflow() {
              overflow.latest_epoch == 3U &&
              overflow.next_cursor.next_epoch == 4U,
          "overflow exposes retained bounds and a recovery cursor");
-  const std::vector<amber::runtime::RuntimeWatchEvent> retained =
+  const std::vector<sputnik::runtime::RuntimeWatchEvent> retained =
       bounded.watch_events();
   expect(retained.size() == 2U && retained.front().watch_epoch == 2U &&
              retained.back().watch_epoch == 3U,
          "bounded stream retains only its configured suffix");
 
-  const amber::runtime::RuntimeWatchPollResult recovered =
+  const sputnik::runtime::RuntimeWatchPollResult recovered =
       bounded.poll_watch_events(overflow.next_cursor);
   expect(recovered.ok() && recovered.events.empty(),
          "publishing the overflow recovery cursor acknowledges the gap");
 
-  amber::runtime::RuntimeWorld replayable(decoded.module);
-  const amber::runtime::RuntimeWatchCursor replay_start =
+  sputnik::runtime::RuntimeWorld replayable(decoded.module);
+  const sputnik::runtime::RuntimeWatchCursor replay_start =
       replayable.watch_cursor();
-  const amber::runtime::ExecutionResult replay_exec =
+  const sputnik::runtime::ExecutionResult replay_exec =
       replayable.execute(decoded.module.init.entry_code_id);
   expect(replay_exec.ok(), "replayable watch stream module should execute");
-  const amber::runtime::RuntimeWatchPollResult first =
+  const sputnik::runtime::RuntimeWatchPollResult first =
       replayable.poll_watch_events(replay_start, 1U);
-  const amber::runtime::RuntimeWatchPollResult repeated =
+  const sputnik::runtime::RuntimeWatchPollResult repeated =
       replayable.poll_watch_events(replay_start, 1U);
   expect(first.ok() && repeated.ok() && first.events.size() == 1U &&
              repeated.events.size() == 1U &&
@@ -4944,7 +4944,7 @@ void test_runtime_watch_stream_cursor_and_overflow() {
   expect(first.requested_cursor.source == replay_start.source &&
              first.requested_cursor.next_epoch == replay_start.next_epoch,
          "a successful poll is self-contained with its requested cursor");
-  const amber::runtime::RuntimeWatchPollResult rest =
+  const sputnik::runtime::RuntimeWatchPollResult rest =
       replayable.poll_watch_events(first.next_cursor);
   expect(rest.ok() && rest.events.size() == 2U &&
              rest.requested_cursor.next_epoch ==
@@ -4955,48 +4955,48 @@ void test_runtime_watch_stream_cursor_and_overflow() {
              first.events.front().watch_generation == first.source.generation,
          "events carry their stream namespace");
 
-  amber::runtime::RuntimeWatchCursor future = replay_start;
+  sputnik::runtime::RuntimeWatchCursor future = replay_start;
   future.next_epoch = replay_exec.watch_epoch + 2U;
   expect(replayable.poll_watch_events(future).status ==
-             amber::runtime::RuntimeWatchPollStatus::InvalidCursor,
+             sputnik::runtime::RuntimeWatchPollStatus::InvalidCursor,
          "a cursor from the future is rejected explicitly");
   expect(replayable.poll_watch_events({}).status ==
-             amber::runtime::RuntimeWatchPollStatus::InvalidCursor,
+             sputnik::runtime::RuntimeWatchPollStatus::InvalidCursor,
          "a structurally invalid cursor is not mistaken for another source");
 
-  amber::runtime::RuntimeWorld independent(decoded.module);
-  const amber::runtime::RuntimeWatchPollResult changed =
+  sputnik::runtime::RuntimeWorld independent(decoded.module);
+  const sputnik::runtime::RuntimeWatchPollResult changed =
       independent.poll_watch_events(replay_start);
   expect(changed.status ==
-             amber::runtime::RuntimeWatchPollStatus::SourceChanged &&
+             sputnik::runtime::RuntimeWatchPollStatus::SourceChanged &&
              changed.source.world_id != replay_start.source.world_id,
          "a cursor cannot be reused with an independent runtime world");
 
-  const amber::bytecode::EmitResult handle_emit =
+  const sputnik::bytecode::EmitResult handle_emit =
       emit_ok("x = 1\nKernel.watch(x)\n");
   std::atomic<unsigned> activity_calls{0U};
-  amber::runtime::RuntimeWorldOptions activity_options;
+  sputnik::runtime::RuntimeWorldOptions activity_options;
   activity_options.watch_activity_notifier = [&activity_calls] {
     activity_calls.fetch_add(1U, std::memory_order_relaxed);
   };
-  amber::runtime::RuntimeWorld handle_world(handle_emit.module,
+  sputnik::runtime::RuntimeWorld handle_world(handle_emit.module,
                                             std::move(activity_options));
-  const amber::runtime::ExecutionResult handle_exec =
+  const sputnik::runtime::ExecutionResult handle_exec =
       handle_world.execute(handle_emit.module.init.entry_code_id);
   expect(handle_exec.ok() && handle_exec.value.is_watch_handle(),
          "Kernel.watch should expose a host-visible watch handle");
-  const amber::runtime::RuntimeWatchCursor host_write_start =
+  const sputnik::runtime::RuntimeWatchCursor host_write_start =
       handle_world.watch_cursor();
-  const std::shared_ptr<amber::runtime::RuntimeWatchHandle> handle =
+  const std::shared_ptr<sputnik::runtime::RuntimeWatchHandle> handle =
       handle_exec.value.as_watch_handle();
   expect(handle != nullptr && handle->cell() != nullptr,
          "watch handle should retain its backing cell");
   const unsigned calls_before_write = activity_calls.load();
   expect(calls_before_write != 0U,
          "watch registration must notify the world's activity hook");
-  const amber::runtime::RuntimeWatchWriteResult host_write =
-      handle->cell()->write(amber::runtime::Value::integer(9));
-  const amber::runtime::RuntimeWatchPollResult host_events =
+  const sputnik::runtime::RuntimeWatchWriteResult host_write =
+      handle->cell()->write(sputnik::runtime::Value::integer(9));
+  const sputnik::runtime::RuntimeWatchPollResult host_events =
       handle_world.poll_watch_events(host_write_start);
   expect(host_write.changed && host_events.ok() &&
              host_events.events.size() == 1U &&
@@ -5009,7 +5009,7 @@ void test_runtime_watch_stream_cursor_and_overflow() {
 }
 
 void test_runtime_watch_activity_hook_runs_after_publication_and_is_advisory() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   RuntimeWatchStream stream;
   const auto cursor = stream.tail_cursor();
   unsigned calls = 0U;
@@ -5029,7 +5029,7 @@ void test_runtime_watch_activity_hook_runs_after_publication_and_is_advisory() {
 }
 
 void test_runtime_watch_stream_wait_timeout_and_wakeup() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   auto stream = std::make_shared<RuntimeWatchStream>();
   const RuntimeWatchCursor cursor = stream->tail_cursor();
 
@@ -5114,7 +5114,7 @@ void test_runtime_watch_stream_wait_timeout_and_wakeup() {
 }
 
 void test_runtime_watch_wait_large_timeout_does_not_overflow() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   using namespace std::chrono_literals;
   for (const auto timeout : {std::chrono::milliseconds::max(),
                              std::chrono::milliseconds::max() / 2}) {
@@ -5145,13 +5145,13 @@ void test_runtime_watch_wait_large_timeout_does_not_overflow() {
 }
 
 void test_runtime_world_watch_wait_does_not_hold_execution_lock() {
-  using namespace amber::runtime;
-  const amber::bytecode::EmitResult emit_result =
+  using namespace sputnik::runtime;
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("x = 0\n"
               "def noop():\n"
               "  1\n"
               "Kernel.watch(x)\n");
-  const amber::bytecode::BcMethod *noop =
+  const sputnik::bytecode::BcMethod *noop =
       method_by_name(emit_result.module, "noop");
   expect(noop != nullptr, "watch wait lock test should emit noop");
 
@@ -5205,10 +5205,10 @@ void test_runtime_world_watch_wait_does_not_hold_execution_lock() {
 
 struct BlockingWatchEventProbe {
   explicit BlockingWatchEventProbe(
-      std::shared_ptr<amber::runtime::RuntimeWatchStream> stream)
+      std::shared_ptr<sputnik::runtime::RuntimeWatchStream> stream)
       : stream(std::move(stream)) {}
 
-  void deliver(amber::runtime::RuntimeWatchEvent event) {
+  void deliver(sputnik::runtime::RuntimeWatchEvent event) {
     const bool first = event.new_revision == 1U;
     if (first) {
       std::unique_lock<std::mutex> lock(mutex);
@@ -5250,7 +5250,7 @@ struct BlockingWatchEventProbe {
     condition.notify_all();
   }
 
-  std::shared_ptr<amber::runtime::RuntimeWatchStream> stream;
+  std::shared_ptr<sputnik::runtime::RuntimeWatchStream> stream;
   std::mutex mutex;
   std::condition_variable condition;
   bool first_callback_entered = false;
@@ -5259,7 +5259,7 @@ struct BlockingWatchEventProbe {
 };
 
 void test_runtime_watch_binding_events_follow_mutation_order() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   auto stream = std::make_shared<RuntimeWatchStream>();
   BlockingWatchEventProbe probe(stream);
   RuntimeWatchCell cell(
@@ -5304,7 +5304,7 @@ void test_runtime_watch_binding_events_follow_mutation_order() {
 }
 
 void test_runtime_watch_ivar_events_follow_object_mutation_order() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   auto stream = std::make_shared<RuntimeWatchStream>();
   BlockingWatchEventProbe probe(stream);
   RuntimeWatchObjectState object(
@@ -5353,7 +5353,7 @@ void test_runtime_watch_ivar_events_follow_object_mutation_order() {
 }
 
 void test_runtime_watch_binding_sink_may_reenter_same_cell() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   RuntimeWatchCell *cell_pointer = nullptr;
   std::vector<std::uint64_t> delivered;
   RuntimeWatchCell cell(
@@ -5377,7 +5377,7 @@ void test_runtime_watch_binding_sink_may_reenter_same_cell() {
 }
 
 void test_runtime_watch_ivar_sink_may_reenter_same_object() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   RuntimeWatchObjectState *object_pointer = nullptr;
   std::vector<std::uint64_t> delivered;
   RuntimeWatchObjectState object(
@@ -5406,7 +5406,7 @@ void test_runtime_watch_ivar_sink_may_reenter_same_object() {
 }
 
 void test_runtime_watch_throwing_sink_commits_and_releases_delivery() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   std::vector<std::uint64_t> delivered;
   RuntimeWatchCell cell(
       Value::integer(0), 99U, "value",
@@ -5434,7 +5434,7 @@ void test_runtime_watch_throwing_sink_commits_and_releases_delivery() {
 }
 
 void test_runtime_watch_parallel_task_bookkeeping() {
-  const amber::bytecode::EmitResult emit_result = emit_ok(
+  const sputnik::bytecode::EmitResult emit_result = emit_ok(
       "def watched(start):\n"
       "  value = start\n"
       "  Kernel.watch(value)\n"
@@ -5450,22 +5450,22 @@ void test_runtime_watch_parallel_task_bookkeeping() {
       "fourth = task.spawn:\n"
       "  watched(3000)\n"
       "first.wait() + second.wait() + third.wait() + fourth.wait()\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id,
          "parallel watch module init");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
-  const amber::runtime::ExecutionResult exec =
+  sputnik::runtime::RuntimeWorld world(decoded.module);
+  const sputnik::runtime::ExecutionResult exec =
       world.execute(decoded.module.init.entry_code_id);
   expect(exec.ok(), "parallel watched tasks should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 6800,
          "parallel watched tasks preserve task-local values");
 
   constexpr std::uint64_t kExpectedEvents = 4U * 201U;
-  const std::vector<amber::runtime::RuntimeWatchEvent> events =
+  const std::vector<sputnik::runtime::RuntimeWatchEvent> events =
       world.watch_events();
   expect(world.watch_epoch() == kExpectedEvents &&
              events.size() == kExpectedEvents,
@@ -5483,8 +5483,8 @@ void test_runtime_watch_parallel_task_bookkeeping() {
   }
 }
 
-void test_runtime_amber_tasks_execute_without_global_interpreter_lock() {
-  const amber::bytecode::EmitResult emit_result = emit_ok(
+void test_runtime_sputnik_tasks_execute_without_global_interpreter_lock() {
+  const sputnik::bytecode::EmitResult emit_result = emit_ok(
       "from sync import Atomic\n"
       "def rendezvous(counter):\n"
       "  counter.update: _1 + 1\n"
@@ -5501,23 +5501,23 @@ void test_runtime_amber_tasks_execute_without_global_interpreter_lock() {
       "second = task.spawn:\n"
       "  rendezvous(counter)\n"
       "first.wait() + second.wait()\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id,
          "no-GIL rendezvous module init");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
-  const amber::runtime::ExecutionResult exec =
+  sputnik::runtime::RuntimeWorld world(decoded.module);
+  const sputnik::runtime::ExecutionResult exec =
       world.execute(decoded.module.init.entry_code_id);
-  expect(exec.ok(), "parallel Amber rendezvous should execute");
+  expect(exec.ok(), "parallel Sputnik rendezvous should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
-         "different Amber strands must make CPU progress concurrently");
+         "different Sputnik strands must make CPU progress concurrently");
 }
 
 void test_runtime_integer_specialized_op_preserves_watch_local_write() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -5538,8 +5538,8 @@ void test_runtime_integer_specialized_op_preserves_watch_local_write() {
   code.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
-  const amber::runtime::ExecutionResult exec = world.execute(code.code_id);
+  sputnik::runtime::RuntimeWorld world(module);
+  const sputnik::runtime::ExecutionResult exec = world.execute(code.code_id);
   expect(exec.ok(), "watched integer add should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "watched integer add returns updated value");
@@ -5555,7 +5555,7 @@ void test_runtime_integer_specialized_op_preserves_watch_local_write() {
 }
 
 void test_runtime_compare_branch_preserves_debug_local() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -5580,13 +5580,13 @@ void test_runtime_compare_branch_preserves_debug_local() {
   code.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
-  const amber::runtime::ExecutionResult exec = world.execute(code.code_id);
+  sputnik::runtime::RuntimeWorld world(module);
+  const sputnik::runtime::ExecutionResult exec = world.execute(code.code_id);
   expect(exec.ok(), "compare branch with debug local should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "compare branch should take true path");
 
-  const amber::runtime::ExecutionLocal *cmp_local =
+  const sputnik::runtime::ExecutionLocal *cmp_local =
       execution_local_by_name(exec, "cmp");
   expect(cmp_local != nullptr, "compare local appears in execution locals");
   expect(cmp_local->initialized, "compare local remains initialized");
@@ -5595,7 +5595,7 @@ void test_runtime_compare_branch_preserves_debug_local() {
 }
 
 void test_runtime_watch_capture_uses_shared_storage_cell() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.strings = {"x"};
@@ -5639,8 +5639,8 @@ void test_runtime_watch_capture_uses_shared_storage_cell() {
 
   module.code_objects = {outer, inner};
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(exec.ok(), "watch capture module should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "watched captured local is updated through shared storage");
@@ -5658,9 +5658,9 @@ void test_runtime_watch_capture_uses_shared_storage_cell() {
 }
 
 void test_runtime_watch_ivar_records_object_revision_events() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  def observe():\n"
               "    Kernel.watch(@mass)\n"
@@ -5670,17 +5670,17 @@ void test_runtime_watch_ivar_records_object_revision_events() {
               "\n"
               "def probe():\n"
               "  Particle().observe()\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(decoded.module, "probe");
   expect(probe != nullptr, "watch ivar probe method exists");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
+  sputnik::runtime::RuntimeWorld world(decoded.module);
   const std::uint64_t world_epoch_before = world.world_epoch();
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       world.execute(probe->entry_code_id);
   expect(exec.ok(), "watch ivar module should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 1,
@@ -5690,7 +5690,7 @@ void test_runtime_watch_ivar_records_object_revision_events() {
   expect(exec.watch_epoch == 3, "watch ivar updates watch epoch");
   expect(exec.watch_events.size() == 3, "watch ivar records three events");
 
-  const amber::runtime::RuntimeWatchEvent &binding = exec.watch_events[0];
+  const sputnik::runtime::RuntimeWatchEvent &binding = exec.watch_events[0];
   expect(binding.kind == "watch.ivar", "watch ivar records binding event");
   expect(binding.target_name == "@mass" && binding.field_name == "mass",
          "watch ivar binding names field target");
@@ -5700,7 +5700,7 @@ void test_runtime_watch_ivar_records_object_revision_events() {
   expect(binding.old_object_revision == 0 && binding.new_object_revision == 0,
          "watch ivar binding starts object revision at zero");
 
-  const amber::runtime::RuntimeWatchEvent &first_write = exec.watch_events[1];
+  const sputnik::runtime::RuntimeWatchEvent &first_write = exec.watch_events[1];
   expect(first_write.kind == "watch.ivar.write",
          "watched ivar assignment records write event");
   expect(first_write.object_id == binding.object_id,
@@ -5716,7 +5716,7 @@ void test_runtime_watch_ivar_records_object_revision_events() {
              first_write.new_value.as_integer() == 1,
          "watched ivar first write records new value");
 
-  const amber::runtime::RuntimeWatchEvent &second_write = exec.watch_events[2];
+  const sputnik::runtime::RuntimeWatchEvent &second_write = exec.watch_events[2];
   expect(second_write.kind == "watch.ivar.write",
          "watched ivar same-value assignment records write event");
   expect(second_write.old_revision == 1 && second_write.new_revision == 2,
@@ -5754,11 +5754,11 @@ void test_runtime_watch_ivar_records_object_revision_events() {
   failed_module.code_objects.push_back(failed);
 
   auto failed_instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   failed_instance->class_index = 0;
-  amber::runtime::RuntimeWorld failed_world(failed_module);
-  const amber::runtime::ExecutionResult failed_exec = failed_world.execute(
-      1, {}, amber::runtime::Value::instance(failed_instance));
+  sputnik::runtime::RuntimeWorld failed_world(failed_module);
+  const sputnik::runtime::ExecutionResult failed_exec = failed_world.execute(
+      1, {}, sputnik::runtime::Value::instance(failed_instance));
   expect(!failed_exec.ok(), "failed watched ivar write should fault");
   expect(failed_exec.watch_events.size() == 1,
          "failed watched ivar write should not publish write event");
@@ -5767,40 +5767,40 @@ void test_runtime_watch_ivar_records_object_revision_events() {
 }
 
 void test_runtime_dependency_capture_records_binding_reads() {
-  const amber::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
+  const sputnik::bytecode::EmitResult emit_result = emit_ok("x = 1\n"
                                                           "Kernel.watch(x)\n"
                                                           "x\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   expect(decoded.module.init.has_entry_code_id,
          "dependency capture module init exists");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
-  const amber::runtime::RuntimeWatchStreamIdentity source =
+  sputnik::runtime::RuntimeWorld world(decoded.module);
+  const sputnik::runtime::RuntimeWatchStreamIdentity source =
       world.watch_cursor().source;
   const std::uint64_t watch_epoch_before = world.watch_epoch();
   world.begin_dependency_capture(42);
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       world.execute(decoded.module.init.entry_code_id);
   expect(exec.ok(), "dependency capture binding module should execute");
 
-  const amber::runtime::RuntimeDependencySet active =
+  const sputnik::runtime::RuntimeDependencySet active =
       world.dependency_capture_snapshot();
   expect(active.notebook_cell_id == 42 && active.source == source,
          "active dependency capture keeps notebook cell id");
   expect(active.dependencies.size() == 1,
          "active dependency capture deduplicates binding reads");
 
-  const amber::runtime::RuntimeDependencySet deps =
+  const sputnik::runtime::RuntimeDependencySet deps =
       world.end_dependency_capture();
   expect(deps.notebook_cell_id == 42 && deps.source == source,
          "ended dependency capture returns notebook cell id");
   expect(deps.dependencies.size() == 1,
          "ended dependency capture returns one binding dependency");
-  const amber::runtime::RuntimeDependency *binding =
-      dependency_by_kind(deps, amber::runtime::RuntimeDependencyKind::Binding);
+  const sputnik::runtime::RuntimeDependency *binding =
+      dependency_by_kind(deps, sputnik::runtime::RuntimeDependencyKind::Binding);
   expect(binding != nullptr, "dependency capture exposes binding dependency");
   expect(binding->cell_id == exec.watch_events[0].cell_id,
          "binding dependency uses watch cell id");
@@ -5815,7 +5815,7 @@ void test_runtime_dependency_capture_records_binding_reads() {
 }
 
 void test_runtime_dependency_capture_deduplicates_repeated_binding_reads() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.strings = {"x"};
@@ -5838,25 +5838,25 @@ void test_runtime_dependency_capture_deduplicates_repeated_binding_reads() {
   code.instructions.push_back({Opcode::Return, {{2, false}}});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   world.begin_dependency_capture(7);
-  const amber::runtime::ExecutionResult exec = world.execute(1);
+  const sputnik::runtime::ExecutionResult exec = world.execute(1);
   expect(exec.ok(), "repeated binding dependency module should execute");
-  const amber::runtime::RuntimeDependencySet deps =
+  const sputnik::runtime::RuntimeDependencySet deps =
       world.end_dependency_capture();
   expect(deps.notebook_cell_id == 7,
          "repeated binding capture keeps notebook cell id");
   expect(deps.dependencies.size() == 1,
          "repeated binding reads are captured once");
   expect(deps.dependencies[0].kind ==
-             amber::runtime::RuntimeDependencyKind::Binding,
+             sputnik::runtime::RuntimeDependencyKind::Binding,
          "repeated dependency is a binding dependency");
   expect(deps.dependencies[0].cell_id == exec.watch_events[0].cell_id,
          "deduplicated dependency keeps binding id");
 }
 
 void test_runtime_dependency_capture_records_nested_ivar_reads() {
-  const amber::bytecode::EmitResult emit_result =
+  const sputnik::bytecode::EmitResult emit_result =
       emit_ok("class Particle:\n"
               "  def observe():\n"
               "    Kernel.watch(@mass)\n"
@@ -5865,30 +5865,30 @@ void test_runtime_dependency_capture_records_nested_ivar_reads() {
               "\n"
               "def probe():\n"
               "  Particle().observe()\n");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(emit_result.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
-  const amber::bytecode::BcMethod *probe =
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(emit_result.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
+  const sputnik::bytecode::BcMethod *probe =
       method_by_name(decoded.module, "probe");
   expect(probe != nullptr, "dependency capture ivar probe method exists");
 
-  amber::runtime::RuntimeWorld world(decoded.module);
+  sputnik::runtime::RuntimeWorld world(decoded.module);
   world.begin_dependency_capture(99);
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       world.execute(probe->entry_code_id);
   expect(exec.ok(), "dependency capture ivar module should execute");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
          "dependency capture ivar returns watched field value");
-  const amber::runtime::RuntimeDependencySet deps =
+  const sputnik::runtime::RuntimeDependencySet deps =
       world.end_dependency_capture();
   expect(deps.notebook_cell_id == 99,
          "ivar dependency capture keeps notebook cell id");
   expect(deps.dependencies.size() == 1,
          "ivar dependency capture records one field dependency");
 
-  const amber::runtime::RuntimeDependency *ivar =
-      dependency_by_kind(deps, amber::runtime::RuntimeDependencyKind::Ivar);
+  const sputnik::runtime::RuntimeDependency *ivar =
+      dependency_by_kind(deps, sputnik::runtime::RuntimeDependencyKind::Ivar);
   expect(ivar != nullptr, "dependency capture exposes ivar dependency");
   expect(ivar->object_id == exec.watch_events[0].object_id,
          "ivar dependency uses watch object id");
@@ -5900,7 +5900,7 @@ void test_runtime_dependency_capture_records_nested_ivar_reads() {
 }
 
 void test_runtime_sequence_collections_contract() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"lazy",  "map",      "select", "reduce", "+",
@@ -6057,10 +6057,10 @@ void test_runtime_sequence_collections_contract() {
                          count_find, reduce_init,  shape_probe, inc,
                          gt_one,     add,          pairify,     low_high_key};
 
-  const amber::runtime::Value source = amber::runtime::make_list_value(
-      {amber::runtime::Value::integer(0), amber::runtime::Value::integer(1),
-       amber::runtime::Value::integer(2)});
-  const amber::runtime::ExecutionResult chained = amber::runtime::execute_code(
+  const sputnik::runtime::Value source = sputnik::runtime::make_list_value(
+      {sputnik::runtime::Value::integer(0), sputnik::runtime::Value::integer(1),
+       sputnik::runtime::Value::integer(2)});
+  const sputnik::runtime::ExecutionResult chained = sputnik::runtime::execute_code(
       module, 1,
       {source, make_closure_value(10), make_closure_value(11),
        make_closure_value(12)});
@@ -6068,37 +6068,37 @@ void test_runtime_sequence_collections_contract() {
   expect(chained.value.is_integer() && chained.value.as_integer() == 5,
          "lazy/map/select/reduce should produce deterministic eager result");
 
-  const amber::runtime::ExecutionResult empty = amber::runtime::execute_code(
-      module, 2, {amber::runtime::make_list_value({}), make_closure_value(12)});
+  const sputnik::runtime::ExecutionResult empty = sputnik::runtime::execute_code(
+      module, 2, {sputnik::runtime::make_list_value({}), make_closure_value(12)});
   expect(!empty.ok() && empty.fault.has_value() &&
              empty.fault->error_name == "EmptyCollectionError",
          "empty reduce without init should raise EmptyCollectionError");
 
-  const amber::runtime::ExecutionResult flattened =
-      amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult flattened =
+      sputnik::runtime::execute_code(
           module, 3,
-          {amber::runtime::make_list_value({amber::runtime::Value::integer(1),
-                                            amber::runtime::Value::integer(2)}),
+          {sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(1),
+                                            sputnik::runtime::Value::integer(2)}),
            make_closure_value(13)});
   expect(flattened.ok(), "flat_map should execute");
   expect_integer_list(flattened.value, {1, 2, 2, 3}, "flat_map");
 
-  const amber::runtime::ExecutionResult counted =
-      amber::runtime::execute_code(module, 5, {source, make_closure_value(11)});
+  const sputnik::runtime::ExecutionResult counted =
+      sputnik::runtime::execute_code(module, 5, {source, make_closure_value(11)});
   expect(counted.ok(), "count/find should execute");
   expect_integer_list(counted.value, {1, 2}, "count/find");
 
-  const amber::runtime::ExecutionResult reduced_with_init =
-      amber::runtime::execute_code(module, 6, {source, make_closure_value(12)});
+  const sputnik::runtime::ExecutionResult reduced_with_init =
+      sputnik::runtime::execute_code(module, 6, {source, make_closure_value(12)});
   expect(reduced_with_init.ok() && reduced_with_init.value.is_integer() &&
              reduced_with_init.value.as_integer() == 4,
          "reduce(init) should start from explicit accumulator");
 
-  const amber::runtime::ExecutionResult shaped =
-      amber::runtime::execute_code(module, 7, {source});
+  const sputnik::runtime::ExecutionResult shaped =
+      sputnik::runtime::execute_code(module, 7, {source});
   expect(shaped.ok() && shaped.value.is_list(),
          "first/to_a/predicate probe should execute");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> shape_parts =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> shape_parts =
       shaped.value.as_list();
   expect(shape_parts != nullptr && shape_parts->items.size() == 6,
          "first/to_a/predicate probe shape");
@@ -6114,11 +6114,11 @@ void test_runtime_sequence_collections_contract() {
   expect(shape_parts->items[5].is_bool() && !shape_parts->items[5].as_bool(),
          "none? should reject truthy items");
 
-  const amber::runtime::ExecutionResult grouped =
-      amber::runtime::execute_code(module, 4, {source, make_closure_value(14)});
+  const sputnik::runtime::ExecutionResult grouped =
+      sputnik::runtime::execute_code(module, 4, {source, make_closure_value(14)});
   expect(grouped.ok(), "group_by should execute");
   expect(grouped.value.is_map(), "group_by should return map");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> groups =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> groups =
       grouped.value.as_map();
   expect(groups != nullptr && groups->entries.size() == 2,
          "group_by should preserve first-key ordering");
@@ -6131,7 +6131,7 @@ void test_runtime_sequence_collections_contract() {
 }
 
 void test_runtime_map_collections_contract() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"keys",
@@ -6214,16 +6214,16 @@ void test_runtime_map_collections_contract() {
   module.code_objects = {probe, each_probe, map_value_gt_one, inc_value,
                          map_pair_value};
 
-  const amber::runtime::Value map =
-      make_symbol_map(module, {{"alpha", amber::runtime::Value::integer(1)},
-                               {"beta", amber::runtime::Value::integer(2)}});
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::Value map =
+      make_symbol_map(module, {{"alpha", sputnik::runtime::Value::integer(1)},
+                               {"beta", sputnik::runtime::Value::integer(2)}});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       module, 1,
       {map, make_closure_value(20), make_closure_value(21),
        make_closure_value(22)});
   expect(exec.ok(), "map collections probe should execute");
   expect(exec.value.is_list(), "map collections probe should return list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> parts =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> parts =
       exec.value.as_list();
   expect(parts != nullptr && parts->items.size() == 7,
          "map collections probe should return seven parts");
@@ -6254,15 +6254,15 @@ void test_runtime_map_collections_contract() {
          "Map#transform_values should preserve keys and transform values");
   expect_integer_list(parts->items[6], {2, 3}, "Map#map");
 
-  const amber::runtime::ExecutionResult each =
-      amber::runtime::execute_code(module, 2, {map, make_closure_value(22)});
+  const sputnik::runtime::ExecutionResult each =
+      sputnik::runtime::execute_code(module, 2, {map, make_closure_value(22)});
   expect(each.ok() && each.value.is_map() &&
              each.value.as_map() == map.as_map(),
          "Map#each should return the receiver after visiting entries");
 }
 
 void test_runtime_collection_freeze_surface() {
-  const amber::runtime::ExecutionResult map = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult map = execute_emitted_init(
       "value = {a: 1}\n"
       "value.freeze()\n"
       "value.store!(:b, 2)\n");
@@ -6270,7 +6270,7 @@ void test_runtime_collection_freeze_surface() {
              map.fault->error_name == "FrozenError",
          "Map#freeze should reject mutation");
 
-  const amber::runtime::ExecutionResult list = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult list = execute_emitted_init(
       "value = [1]\n"
       "value.freeze()\n"
       "value.push!(2)\n");
@@ -6278,7 +6278,7 @@ void test_runtime_collection_freeze_surface() {
              list.fault->error_name == "FrozenError",
          "List#freeze should reject mutation");
 
-  const amber::runtime::ExecutionResult set = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult set = execute_emitted_init(
       "value = {1}\n"
       "value.freeze()\n"
       "value.add!(2)\n");
@@ -6286,7 +6286,7 @@ void test_runtime_collection_freeze_surface() {
              set.fault->error_name == "FrozenError",
          "Set#freeze should reject mutation");
 
-  const amber::runtime::ExecutionResult tuple = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult tuple = execute_emitted_init(
       "value = (1, 2)\n"
       "value.freeze() == value\n");
   expect(tuple.ok() && tuple.value.is_bool() && tuple.value.as_bool(),
@@ -6294,7 +6294,7 @@ void test_runtime_collection_freeze_surface() {
 }
 
 void test_manual_instance_send_dispatch() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Particle", "mass"};
@@ -6341,19 +6341,19 @@ void test_manual_instance_send_dispatch() {
   module.code_objects = {caller, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  instance->ivars["mass"] = amber::runtime::Value::integer(11);
+  instance->ivars["mass"] = sputnik::runtime::Value::integer(11);
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(exec.ok(), "instance send dispatch failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 11,
          "instance send should dispatch to local method table");
 }
 
 void test_manual_store_and_load_ivar() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"mass"};
@@ -6371,12 +6371,12 @@ void test_manual_store_and_load_ivar() {
   module.code_objects.push_back(code);
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::integer(17)},
-      amber::runtime::Value::instance(instance));
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::integer(17)},
+      sputnik::runtime::Value::instance(instance));
   expect(exec.ok(), "ivar store/load execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 17,
          "ivar load should return stored value");
@@ -6388,7 +6388,7 @@ void test_manual_store_and_load_ivar() {
 }
 
 void test_manual_store_and_load_cvar() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"ρ"};
@@ -6406,16 +6406,16 @@ void test_manual_store_and_load_cvar() {
   code.instructions.push_back({Opcode::Return, {{2, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::integer(19)},
-      amber::runtime::Value::class_object(0));
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::integer(19)},
+      sputnik::runtime::Value::class_object(0));
   expect(exec.ok(), "cvar store/load execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 19,
          "cvar load should return stored value");
 }
 
 void test_manual_multi_segment_lookup_const() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"physics", "Particle"};
@@ -6437,8 +6437,8 @@ void test_manual_multi_segment_lookup_const() {
   code.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects.push_back(code);
 
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1);
   expect(exec.ok(), "multi-segment LOOKUP_CONST failed");
   expect(exec.value.is_class_object() &&
              exec.value.as_class_object().class_index == 0,
@@ -6447,20 +6447,20 @@ void test_manual_multi_segment_lookup_const() {
 
 std::function<void()> lookup_const_probe_mutation;
 
-amber::runtime::SendStatus
-lookup_const_probe_handler(amber::runtime::NativeStdlibCall &call) {
+sputnik::runtime::SendStatus
+lookup_const_probe_handler(sputnik::runtime::NativeStdlibCall &call) {
   expect(call.selector == "mutate", "lookup probe calls its mutation boundary");
   lookup_const_probe_mutation();
-  *call.out = amber::runtime::Value::null();
-  return amber::runtime::SendStatus::Matched;
+  *call.out = sputnik::runtime::Value::null();
+  return sputnik::runtime::SendStatus::Matched;
 }
 
-amber::runtime::ExecutionResult execute_lookup_const_probe(
+sputnik::runtime::ExecutionResult execute_lookup_const_probe(
     const std::vector<std::string> &path,
-    amber::runtime::RuntimeVmExecutionContext context,
+    sputnik::runtime::RuntimeVmExecutionContext context,
     std::function<void()> mutation, bool add_class = false) {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
   BcModule module;
   module.symbols = path;
   module.symbols.push_back("mutate");
@@ -6502,7 +6502,7 @@ amber::runtime::ExecutionResult execute_lookup_const_probe(
 }
 
 void test_lookup_const_keeps_live_binding_and_captures() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   auto state = std::make_shared<RuntimeState>();
   auto first = make_intrusive<ClosureValue>();
   first->code_id = 17;
@@ -6560,7 +6560,7 @@ void test_lookup_const_keeps_live_binding_and_captures() {
 }
 
 void test_lookup_const_registry_mutation_and_precedence() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   RuntimeErrorRegistry errors;
   RuntimeModuleRegistry modules;
   auto state = std::make_shared<RuntimeState>();
@@ -6629,7 +6629,7 @@ void test_lookup_const_registry_mutation_and_precedence() {
       {"LocalClass"}, class_context, [] {}, true);
   expect(klass.ok() && klass.value.as_tuple()->items[0].is_class_object() &&
              klass.value.as_tuple()->items[2].as_class_object().class_index == 0,
-         "Amber class keeps precedence over native errors and bindings");
+         "Sputnik class keeps precedence over native errors and bindings");
 
   modules.register_flow_module_path("FlowProbe");
   const auto flow = execute_lookup_const_probe({"FlowProbe"}, context, [] {});
@@ -6648,7 +6648,7 @@ void test_lookup_const_registry_mutation_and_precedence() {
 }
 
 void test_lookup_const_quick_path_preserves_faults() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
   const auto check = [](BcModule module, const std::string &message,
                         std::int64_t ref = 0) {
     BcCode code;
@@ -6659,7 +6659,7 @@ void test_lookup_const_quick_path_preserves_faults() {
         {Opcode::LookupConst, {{0, false}, {ref, ref < 0}}},
         {Opcode::Return, {{0, false}}}};
     module.code_objects = {code};
-    const auto result = amber::runtime::execute_code(module, 1);
+    const auto result = sputnik::runtime::execute_code(module, 1);
     expect(!result.ok() && result.fault && result.fault->message == message,
            "LOOKUP_CONST preserves fault: " + message);
   };
@@ -6691,7 +6691,7 @@ void test_lookup_const_quick_path_preserves_faults() {
 }
 
 void test_manual_multi_segment_superclass_dispatch() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"physics", "Base", "Child", "answer"};
@@ -6755,18 +6755,18 @@ void test_manual_multi_segment_superclass_dispatch() {
   module.code_objects = {caller, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 1;
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(exec.ok(), "multi-segment superclass dispatch failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 41,
          "multi-segment superclass ref should resolve through dispatch");
 }
 
 void test_manual_send_cache_receiver_class_guard() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"A", "B", "value", "+", "=="};
@@ -6871,21 +6871,21 @@ void test_manual_send_cache_receiver_class_guard() {
   body_b.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects = {caller, body_a, body_b};
 
-  auto a = amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+  auto a = sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   a->class_index = 0;
-  auto b = amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+  auto b = sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   b->class_index = 1;
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
       module, 1,
-      {amber::runtime::Value::instance(a), amber::runtime::Value::instance(b)});
+      {sputnik::runtime::Value::instance(a), sputnik::runtime::Value::instance(b)});
   expect(exec.ok(), "send cache receiver-class guard execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "send cache should miss when receiver class changes");
 }
 
 void test_runtime_polymorphic_call_cache_and_invalidation() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
   BcModule module;
   const std::uint32_t selector = ensure_symbol_id(&module, "value");
   append_path_const(&module, {});
@@ -6896,7 +6896,7 @@ void test_runtime_polymorphic_call_cache_and_invalidation() {
   caller.instructions.push_back(send_instr(1, 0, selector, {}, -1, 0));
   caller.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects.push_back(caller);
-  std::vector<amber::runtime::Value> instances;
+  std::vector<sputnik::runtime::Value> instances;
   // More than the cache bound also exercises eviction without stale dispatch.
   for (std::uint32_t i = 0; i < 10; ++i) {
     BcClass klass;
@@ -6918,12 +6918,12 @@ void test_runtime_polymorphic_call_cache_and_invalidation() {
     body.instructions.push_back({Opcode::LoadK, {{0, false}, {constant, false}}});
     body.instructions.push_back({Opcode::Return, {{0, false}}});
     module.code_objects.push_back(body);
-    auto instance = amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+    auto instance = sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
     instance->class_index = i;
     instance->header.class_index = i;
-    instances.push_back(amber::runtime::Value::instance(instance));
+    instances.push_back(sputnik::runtime::Value::instance(instance));
   }
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   const auto invoke = [&](std::uint32_t i, std::int64_t expected) {
     const auto result = world.execute(1, {instances[i]});
     expect(result.ok() && result.value.is_integer() &&
@@ -6965,7 +6965,7 @@ void test_runtime_polymorphic_call_cache_and_invalidation() {
 }
 
 void test_constructor_call_cache_and_invalidation() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
   BcModule module;
   const auto init_symbol = ensure_symbol_id(&module, "init");
   const auto tag_symbol = ensure_symbol_id(&module, "tag");
@@ -7004,9 +7004,9 @@ void test_constructor_call_cache_and_invalidation() {
     body.instructions.push_back({Opcode::Return, {{1, false}}});
     module.code_objects.push_back(body);
   }
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   const auto construct = [&](std::uint32_t index, std::int64_t tag) {
-    const auto result = world.execute(1, {amber::runtime::Value::class_object(index)});
+    const auto result = world.execute(1, {sputnik::runtime::Value::class_object(index)});
     expect(result.ok() && result.value.is_instance_object(),
            "cached constructor must return a fresh instance");
     const auto instance = result.value.as_instance_object();
@@ -7033,7 +7033,7 @@ void test_constructor_call_cache_and_invalidation() {
 }
 
 void test_manual_ivar_cache_shape_guard() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"mass"};
@@ -7053,19 +7053,19 @@ void test_manual_ivar_cache_shape_guard() {
   module.code_objects.push_back(code);
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::integer(23)},
-      amber::runtime::Value::instance(instance));
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::integer(23)},
+      sputnik::runtime::Value::instance(instance));
   expect(exec.ok(), "ivar cache shape guard execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 23,
          "ivar cache should miss after a shape-changing store");
 }
 
 void test_runtime_ivar_shape_slot_transition_stability() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"mass", "charge"};
@@ -7084,13 +7084,13 @@ void test_runtime_ivar_shape_slot_transition_stability() {
   code.instructions.push_back({Opcode::Return, {{3, false}}});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
-  auto first = amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+  sputnik::runtime::RuntimeWorld world(module);
+  auto first = sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   first->class_index = 0;
-  const amber::runtime::ExecutionResult first_exec = world.execute(
+  const sputnik::runtime::ExecutionResult first_exec = world.execute(
       1,
-      {amber::runtime::Value::integer(7), amber::runtime::Value::integer(11)},
-      amber::runtime::Value::instance(first));
+      {sputnik::runtime::Value::integer(7), sputnik::runtime::Value::integer(11)},
+      sputnik::runtime::Value::instance(first));
   expect(first_exec.ok(), "first shape transition execution failed");
   expect(first_exec.value.is_integer() && first_exec.value.as_integer() == 7,
          "shape transition test should read stored mass");
@@ -7114,11 +7114,11 @@ void test_runtime_ivar_shape_slot_transition_stability() {
   const std::uint64_t final_shape_id = first->header.shape->shape_id;
   const std::uint64_t final_shape_version = first->header.shape->shape_version;
 
-  auto second = amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+  auto second = sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   second->class_index = 0;
-  const amber::runtime::ExecutionResult second_exec = world.execute(
-      1, {amber::runtime::Value::integer(5), amber::runtime::Value::integer(6)},
-      amber::runtime::Value::instance(second));
+  const sputnik::runtime::ExecutionResult second_exec = world.execute(
+      1, {sputnik::runtime::Value::integer(5), sputnik::runtime::Value::integer(6)},
+      sputnik::runtime::Value::instance(second));
   expect(second_exec.ok(), "second shape transition execution failed");
   expect(second->header.shape != nullptr &&
              second->header.shape->shape_id == final_shape_id,
@@ -7126,10 +7126,10 @@ void test_runtime_ivar_shape_slot_transition_stability() {
   expect(second->header.shape->shape_version == final_shape_version,
          "reused shape should keep a stable shape version");
 
-  const amber::runtime::ExecutionResult update_exec = world.execute(
+  const sputnik::runtime::ExecutionResult update_exec = world.execute(
       1,
-      {amber::runtime::Value::integer(13), amber::runtime::Value::integer(17)},
-      amber::runtime::Value::instance(first));
+      {sputnik::runtime::Value::integer(13), sputnik::runtime::Value::integer(17)},
+      sputnik::runtime::Value::instance(first));
   expect(update_exec.ok(), "existing-slot store execution failed");
   expect(first->header.shape->shape_id == final_shape_id,
          "storing existing ivars should not transition shape");
@@ -7142,7 +7142,7 @@ void test_runtime_ivar_shape_slot_transition_stability() {
 }
 
 void test_runtime_dead_shape_rejects_ivar_access() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"mass"};
@@ -7157,16 +7157,16 @@ void test_runtime_dead_shape_rejects_ivar_access() {
   code.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects.push_back(code);
 
-  auto dead_shape = std::make_shared<amber::runtime::ShapeDescriptor>();
+  auto dead_shape = std::make_shared<sputnik::runtime::ShapeDescriptor>();
   dead_shape->dead = true;
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.shape = dead_shape;
-  instance->header.flags = amber::runtime::kObjectFlagDead;
+  instance->header.flags = sputnik::runtime::kObjectFlagDead;
 
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {}, amber::runtime::Value::instance(instance));
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {}, sputnik::runtime::Value::instance(instance));
   expect(!exec.ok(), "dead-shape ivar load should fail");
   expect(exec.fault.has_value() &&
              exec.fault->error_name == "UseAfterFreeError",
@@ -7174,23 +7174,23 @@ void test_runtime_dead_shape_rejects_ivar_access() {
 }
 
 void test_runtime_heap_worker_arena_headers() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value list = amber::runtime::Value::null();
-  amber::runtime::Value tuple = amber::runtime::Value::null();
-  amber::runtime::Value map = amber::runtime::Value::null();
-  amber::runtime::IntrusivePtr<amber::runtime::InstanceValue> instance;
-  amber::runtime::IntrusivePtr<amber::runtime::ClosureValue> closure;
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value list = sputnik::runtime::Value::null();
+  sputnik::runtime::Value tuple = sputnik::runtime::Value::null();
+  sputnik::runtime::Value map = sputnik::runtime::Value::null();
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::InstanceValue> instance;
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ClosureValue> closure;
   {
-    amber::runtime::RuntimeWorkerScope worker(7);
-    list = heap.make_list_value({amber::runtime::Value::integer(1)});
-    tuple = heap.make_tuple_value({amber::runtime::Value::integer(2)});
-    map = heap.make_symbol_map_value({{0, amber::runtime::Value::integer(3)}},
+    sputnik::runtime::RuntimeWorkerScope worker(7);
+    list = heap.make_list_value({sputnik::runtime::Value::integer(1)});
+    tuple = heap.make_tuple_value({sputnik::runtime::Value::integer(2)});
+    map = heap.make_symbol_map_value({{0, sputnik::runtime::Value::integer(3)}},
                                      true);
     instance = heap.make_instance_value(4);
     closure = heap.make_closure_value();
   }
 
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list_ptr =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list_ptr =
       list.as_list();
   expect(list_ptr->header.allocation_id != 0,
          "list should carry heap allocation id");
@@ -7199,16 +7199,16 @@ void test_runtime_heap_worker_arena_headers() {
   expect(tuple.as_tuple()->header.arena_worker_id == 7,
          "tuple should record owner arena worker");
   expect(map.as_map()->header.owner.kind ==
-             amber::runtime::OwnerTokenKind::Shareable,
+             sputnik::runtime::OwnerTokenKind::Shareable,
          "frozen map should remain shareable");
-  expect(instance->header.kind == amber::runtime::HeapObjectKind::Instance &&
+  expect(instance->header.kind == sputnik::runtime::HeapObjectKind::Instance &&
              instance->header.class_index == 4,
          "allocator should initialize instance header");
-  expect(closure->header.kind == amber::runtime::HeapObjectKind::Closure,
+  expect(closure->header.kind == sputnik::runtime::HeapObjectKind::Closure,
          "allocator should initialize closure header");
 
-  const amber::runtime::RuntimeHeapStats stats = heap.stats();
-  const amber::runtime::RuntimeArenaStats *arena = arena_stats_for(stats, 7);
+  const sputnik::runtime::RuntimeHeapStats stats = heap.stats();
+  const sputnik::runtime::RuntimeArenaStats *arena = arena_stats_for(stats, 7);
   expect(arena != nullptr, "worker arena stats should exist");
   expect(arena->allocations == 5 && arena->live_objects == 5,
          "worker arena should count live allocations");
@@ -7218,32 +7218,32 @@ void test_runtime_heap_worker_arena_headers() {
 }
 
 void test_runtime_heap_remote_free_queue_drains_on_owner() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value = amber::runtime::Value::null();
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value = sputnik::runtime::Value::null();
   {
-    amber::runtime::RuntimeWorkerScope owner(1);
-    value = heap.make_list_value({amber::runtime::Value::integer(9)});
+    sputnik::runtime::RuntimeWorkerScope owner(1);
+    value = heap.make_list_value({sputnik::runtime::Value::integer(9)});
   }
 
   {
-    amber::runtime::RuntimeWorkerScope other_worker(2);
-    value = amber::runtime::Value::null();
+    sputnik::runtime::RuntimeWorkerScope other_worker(2);
+    value = sputnik::runtime::Value::null();
   }
 
-  amber::runtime::RuntimeHeapStats queued = heap.stats();
+  sputnik::runtime::RuntimeHeapStats queued = heap.stats();
   expect(queued.live_objects == 1, "remote free should retain object memory");
   expect(queued.remote_frees_queued == 1,
          "remote free should be queued for owner arena");
   expect(queued.remote_queue_depth == 1,
          "remote queue depth should track queued free");
-  const amber::runtime::RuntimeArenaStats *owner_arena =
+  const sputnik::runtime::RuntimeArenaStats *owner_arena =
       arena_stats_for(queued, 1);
   expect(owner_arena != nullptr && owner_arena->remote_queue_depth == 1,
          "owner arena should own the remote-free queue");
 
   const std::uint64_t drained = heap.drain_remote_frees(1);
   expect(drained == 1, "owner drain should free one queued object");
-  const amber::runtime::RuntimeHeapStats drained_stats = heap.stats();
+  const sputnik::runtime::RuntimeHeapStats drained_stats = heap.stats();
   expect(drained_stats.live_objects == 0,
          "drained remote free should release memory");
   expect(drained_stats.remote_frees_drained == 1,
@@ -7253,23 +7253,23 @@ void test_runtime_heap_remote_free_queue_drains_on_owner() {
 }
 
 void test_runtime_heap_allocation_heavy_smoke() {
-  amber::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeHeap heap;
   {
-    amber::runtime::RuntimeWorkerScope worker(3);
-    std::vector<amber::runtime::Value> values;
+    sputnik::runtime::RuntimeWorkerScope worker(3);
+    std::vector<sputnik::runtime::Value> values;
     values.reserve(4096);
     for (std::int64_t i = 0; i < 4096; ++i) {
       values.push_back(
-          heap.make_list_value({amber::runtime::Value::integer(i),
-                                amber::runtime::Value::integer(i + 1)}));
+          heap.make_list_value({sputnik::runtime::Value::integer(i),
+                                sputnik::runtime::Value::integer(i + 1)}));
     }
-    const amber::runtime::RuntimeHeapStats live_stats = heap.stats();
+    const sputnik::runtime::RuntimeHeapStats live_stats = heap.stats();
     expect(live_stats.allocations == 4096 && live_stats.live_objects == 4096,
            "allocation-heavy smoke should retain all live lists");
     values.clear();
   }
 
-  const amber::runtime::RuntimeHeapStats stats = heap.stats();
+  const sputnik::runtime::RuntimeHeapStats stats = heap.stats();
   expect(stats.allocations == 4096 && stats.live_objects == 0,
          "allocation-heavy smoke should free all local lists");
   expect(stats.local_frees == 4096,
@@ -7279,7 +7279,7 @@ void test_runtime_heap_allocation_heavy_smoke() {
 void test_runtime_heap_parallel_allocation_registry() {
   constexpr std::uint64_t kWorkers = 8;
   constexpr std::uint64_t kAllocationsPerWorker = 2048;
-  amber::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeHeap heap;
   std::atomic<std::uint64_t> ready{0};
   std::atomic<bool> go{false};
   std::mutex ids_mutex;
@@ -7289,19 +7289,19 @@ void test_runtime_heap_parallel_allocation_registry() {
 
   for (std::uint64_t worker = 0; worker < kWorkers; ++worker) {
     threads.emplace_back([&, worker]() {
-      amber::runtime::RuntimeWorkerScope scope(100 + worker);
+      sputnik::runtime::RuntimeWorkerScope scope(100 + worker);
       ready.fetch_add(1, std::memory_order_release);
       while (!go.load(std::memory_order_acquire)) {
         std::this_thread::yield();
       }
 
-      std::vector<amber::runtime::Value> values;
+      std::vector<sputnik::runtime::Value> values;
       std::vector<std::uint64_t> local_ids;
       values.reserve(kAllocationsPerWorker);
       local_ids.reserve(kAllocationsPerWorker);
       for (std::uint64_t index = 0; index < kAllocationsPerWorker; ++index) {
         values.push_back(heap.make_list_value(
-            {amber::runtime::Value::integer(
+            {sputnik::runtime::Value::integer(
                 static_cast<std::int64_t>(index))}));
         local_ids.push_back(values.back().as_list()->header.allocation_id);
       }
@@ -7327,7 +7327,7 @@ void test_runtime_heap_parallel_allocation_registry() {
       std::adjacent_find(allocation_ids.begin(), allocation_ids.end());
   expect(duplicate == allocation_ids.end(),
          "parallel heap allocation ids should remain unique");
-  const amber::runtime::RuntimeHeapStats stats = heap.stats();
+  const sputnik::runtime::RuntimeHeapStats stats = heap.stats();
   expect(stats.allocations == kWorkers * kAllocationsPerWorker,
          "parallel heap registry should retain every allocation record");
   expect(stats.live_objects == 0 &&
@@ -7338,47 +7338,47 @@ void test_runtime_heap_parallel_allocation_registry() {
 }
 
 void test_runtime_gc_full_cycle_preserves_root_address() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value root =
-      heap.make_list_value({amber::runtime::Value::integer(1)});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> root_ptr =
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value root =
+      heap.make_list_value({sputnik::runtime::Value::integer(1)});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> root_ptr =
       root.as_list();
-  const amber::runtime::ListValue *address = root_ptr.get();
+  const sputnik::runtime::ListValue *address = root_ptr.get();
 
-  const amber::runtime::RuntimeGcResult result =
-      heap.collect_garbage({root}, amber::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::RuntimeGcResult result =
+      heap.collect_garbage({root}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(result.marked == 1, "full GC should mark the rooted list");
   expect(result.reclaimed == 0, "full GC should not reclaim rooted list");
   expect(root.as_list().get() == address,
          "non-moving GC should preserve object address");
   expect(root_ptr->header.generation ==
-             amber::runtime::ObjectGeneration::Mature,
+             sputnik::runtime::ObjectGeneration::Mature,
          "rooted young object should promote after surviving GC");
   expect(root_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "rooted object should remain live after GC");
 }
 
 void test_runtime_gc_reclaims_unrooted_reference_cycle() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value left = heap.make_list_value({});
-  amber::runtime::Value right = heap.make_list_value({});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> left_ptr =
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value left = heap.make_list_value({});
+  sputnik::runtime::Value right = heap.make_list_value({});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> left_ptr =
       left.as_list();
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> right_ptr =
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> right_ptr =
       right.as_list();
   left_ptr->items.push_back(right);
   right_ptr->items.push_back(left);
 
-  const amber::runtime::RuntimeGcResult result =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::RuntimeGcResult result =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(result.reclaimed == 2,
          "full GC should reclaim an unrooted heap reference cycle");
   expect(left_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "left cycle node should become a GC tombstone");
   expect(right_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "right cycle node should become a GC tombstone");
   expect(left_ptr->items.empty() && right_ptr->items.empty(),
          "GC tombstone rewrite should sever outgoing references");
@@ -7387,19 +7387,19 @@ void test_runtime_gc_reclaims_unrooted_reference_cycle() {
 }
 
 void test_runtime_gc_write_barrier_remembers_mature_to_young_edge() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value parent = heap.make_list_value({});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> parent_ptr =
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value parent = heap.make_list_value({});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> parent_ptr =
       parent.as_list();
 
-  heap.collect_garbage({parent}, amber::runtime::RuntimeGcCycle::Full);
+  heap.collect_garbage({parent}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(parent_ptr->header.generation ==
-             amber::runtime::ObjectGeneration::Mature,
+             sputnik::runtime::ObjectGeneration::Mature,
          "parent should be mature before remembered-set probe");
 
-  amber::runtime::Value child =
-      heap.make_list_value({amber::runtime::Value::integer(7)});
-  const amber::runtime::RuntimeWriteBarrierResult barrier =
+  sputnik::runtime::Value child =
+      heap.make_list_value({sputnik::runtime::Value::integer(7)});
+  const sputnik::runtime::RuntimeWriteBarrierResult barrier =
       heap.write_barrier(parent, child);
   expect(barrier.ok && barrier.remembered,
          "mature-to-young write should update remembered set");
@@ -7407,35 +7407,35 @@ void test_runtime_gc_write_barrier_remembers_mature_to_young_edge() {
   expect(heap.stats().remembered_set_entries == 1,
          "remembered set should expose one mature-to-young edge");
 
-  const amber::runtime::RuntimeGcResult young =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Young);
+  const sputnik::runtime::RuntimeGcResult young =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Young);
   expect(young.reclaimed == 0,
          "young GC should retain child reachable from remembered set");
   expect(child.as_list()->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "remembered child should remain live");
 }
 
 void test_runtime_gc_write_barrier_rejects_invalid_edges() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value shared_owner = heap.make_tuple_value({});
-  amber::runtime::Value confined_child = heap.make_list_value({});
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value shared_owner = heap.make_tuple_value({});
+  sputnik::runtime::Value confined_child = heap.make_list_value({});
 
-  const amber::runtime::RuntimeWriteBarrierResult isolation =
+  const sputnik::runtime::RuntimeWriteBarrierResult isolation =
       heap.write_barrier(shared_owner, confined_child);
   expect(!isolation.ok && isolation.error_name == "IsolationError",
          "shared-to-confined write should fail isolation barrier");
 
-  amber::runtime::Value owner = heap.make_list_value({});
+  sputnik::runtime::Value owner = heap.make_list_value({});
   confined_child.as_list()->header.lifetime_state =
-      amber::runtime::ObjectLifetimeState::Deallocated;
-  confined_child.as_list()->header.flags |= amber::runtime::kObjectFlagDead;
-  const amber::runtime::RuntimeWriteBarrierResult lifetime =
+      sputnik::runtime::ObjectLifetimeState::Deallocated;
+  confined_child.as_list()->header.flags |= sputnik::runtime::kObjectFlagDead;
+  const sputnik::runtime::RuntimeWriteBarrierResult lifetime =
       heap.write_barrier(owner, confined_child);
   expect(!lifetime.ok && lifetime.error_name == "UseAfterFreeError",
          "write barrier should reject deallocated heap references");
 
-  const amber::runtime::RuntimeHeapStats stats = heap.stats();
+  const sputnik::runtime::RuntimeHeapStats stats = heap.stats();
   expect(stats.write_barrier_rejected_isolation == 1,
          "barrier stats should count isolation rejects");
   expect(stats.write_barrier_rejected_lifetime == 1,
@@ -7443,7 +7443,7 @@ void test_runtime_gc_write_barrier_rejects_invalid_edges() {
 }
 
 void test_runtime_gc_safepoint_scans_vm_frame_roots() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant one;
@@ -7462,16 +7462,16 @@ void test_runtime_gc_safepoint_scans_vm_frame_roots() {
   code.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
-  world.request_garbage_collection(amber::runtime::RuntimeGcCycle::Full);
-  const amber::runtime::ExecutionResult exec = world.execute(1);
+  sputnik::runtime::RuntimeWorld world(module);
+  world.request_garbage_collection(sputnik::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::ExecutionResult exec = world.execute(1);
   expect(exec.ok(), "safepoint GC probe should execute");
   expect(exec.value.is_list(), "safepoint GC probe should return list");
   expect(exec.value.as_list()->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "safepoint GC should preserve live frame register root");
 
-  const amber::runtime::RuntimeHeapStats stats = world.heap_stats();
+  const sputnik::runtime::RuntimeHeapStats stats = world.heap_stats();
   expect(stats.gc_safepoint_collections == 1,
          "safepoint should run one requested GC cycle");
   expect(stats.gc_full_cycles == 1,
@@ -7479,43 +7479,43 @@ void test_runtime_gc_safepoint_scans_vm_frame_roots() {
 }
 
 void test_runtime_external_gc_root_provider_preserves_world_roots() {
-  amber::bytecode::BcModule module;
-  std::vector<amber::runtime::Value> external_roots;
+  sputnik::bytecode::BcModule module;
+  std::vector<sputnik::runtime::Value> external_roots;
   std::atomic<std::uint64_t> snapshots{0};
 
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.external_gc_root_provider = [&external_roots, &snapshots]() {
     snapshots.fetch_add(1, std::memory_order_relaxed);
     return external_roots;
   };
-  amber::runtime::RuntimeWorld world(module, std::move(options));
+  sputnik::runtime::RuntimeWorld world(module, std::move(options));
 
-  amber::runtime::Value external_root = world.list_value({});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> external_root_ptr =
+  sputnik::runtime::Value external_root = world.list_value({});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> external_root_ptr =
       external_root.as_list();
   external_root_ptr->items.push_back(external_root);
   external_roots.push_back(external_root);
   external_root.reset();
 
-  const amber::runtime::RuntimeGcResult rooted = world.collect_garbage();
+  const sputnik::runtime::RuntimeGcResult rooted = world.collect_garbage();
   expect(rooted.marked == 1 && rooted.reclaimed == 0,
          "external GC root provider should preserve a world-owned root");
   expect(external_root_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "provider-rooted object should remain live after explicit GC");
 
   external_roots.clear();
-  const amber::runtime::RuntimeGcResult unrooted = world.collect_garbage();
+  const sputnik::runtime::RuntimeGcResult unrooted = world.collect_garbage();
   expect(unrooted.reclaimed == 1 &&
              external_root_ptr->header.lifetime_state ==
-                 amber::runtime::ObjectLifetimeState::Deallocated,
+                 sputnik::runtime::ObjectLifetimeState::Deallocated,
          "clearing provider snapshot should release its external root");
   expect(snapshots.load(std::memory_order_relaxed) == 2,
          "explicit GC should take one external root snapshot per cycle");
 }
 
 void test_runtime_external_gc_root_provider_preserves_safepoint_roots() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant one;
@@ -7532,28 +7532,28 @@ void test_runtime_external_gc_root_provider_preserves_safepoint_roots() {
   code.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects.push_back(code);
 
-  std::vector<amber::runtime::Value> external_roots;
+  std::vector<sputnik::runtime::Value> external_roots;
   std::atomic<std::uint64_t> snapshots{0};
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.external_gc_root_provider = [&external_roots, &snapshots]() {
     snapshots.fetch_add(1, std::memory_order_relaxed);
     return external_roots;
   };
-  amber::runtime::RuntimeWorld world(module, std::move(options));
+  sputnik::runtime::RuntimeWorld world(module, std::move(options));
 
-  amber::runtime::Value external_root = world.list_value({});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> external_root_ptr =
+  sputnik::runtime::Value external_root = world.list_value({});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> external_root_ptr =
       external_root.as_list();
   external_root_ptr->items.push_back(external_root);
   external_roots.push_back(external_root);
   external_root.reset();
 
-  world.request_garbage_collection(amber::runtime::RuntimeGcCycle::Full);
-  const amber::runtime::ExecutionResult exec = world.execute(1);
+  world.request_garbage_collection(sputnik::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::ExecutionResult exec = world.execute(1);
   expect(exec.ok() && exec.value.is_integer() && exec.value.as_integer() == 1,
          "external safepoint root probe should execute");
   expect(external_root_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "VM safepoint should preserve a provider-owned root");
   expect(world.heap_stats().gc_safepoint_collections == 1,
          "provider root probe should run one requested safepoint GC");
@@ -7563,12 +7563,12 @@ void test_runtime_external_gc_root_provider_preserves_safepoint_roots() {
   external_roots.clear();
   world.collect_garbage();
   expect(external_root_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "provider root should be released after the safepoint owner clears");
 }
 
-amber::bytecode::BcModule make_notebook_cell_test_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule make_notebook_cell_test_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant forty;
@@ -7593,9 +7593,9 @@ amber::bytecode::BcModule make_notebook_cell_test_module() {
 }
 
 void test_runtime_notebook_cell_execution_boundary() {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
 
-  const amber::bytecode::BcModule module = make_notebook_cell_test_module();
+  const sputnik::bytecode::BcModule module = make_notebook_cell_test_module();
   std::vector<std::pair<std::uint32_t, Value>> staged;
   RuntimeNotebookCellContext context;
   std::vector<std::uint32_t> observed;
@@ -7665,8 +7665,8 @@ void test_runtime_notebook_cell_execution_boundary() {
 }
 
 void test_runtime_notebook_cell_store_before_later_fault_is_only_staged() {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
 
   BcModule module = make_notebook_cell_test_module();
   module.code_objects[0].instructions = {
@@ -7697,8 +7697,8 @@ void test_runtime_notebook_cell_store_before_later_fault_is_only_staged() {
 }
 
 void test_runtime_notebook_cell_staged_roots_survive_safepoint() {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
 
   BcModule module;
   Constant one;
@@ -7745,8 +7745,8 @@ void test_runtime_notebook_cell_staged_roots_survive_safepoint() {
 }
 
 void test_runtime_notebook_image_install_preserves_world_state() {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
 
   BcModule original = make_notebook_cell_test_module();
   original.format_version = {1, 0};
@@ -7895,8 +7895,8 @@ void test_runtime_notebook_image_install_preserves_world_state() {
 }
 
 void test_runtime_notebook_image_install_commits_trace_atomically() {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
 
   BcModule original = make_notebook_cell_test_module();
   original.format_version = {1, 0};
@@ -7944,8 +7944,8 @@ void test_runtime_notebook_image_install_commits_trace_atomically() {
 }
 
 void test_runtime_notebook_image_install_releases_old_code_index_images() {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
 
   auto original =
       std::make_shared<const BcModule>(make_notebook_cell_test_module());
@@ -7975,7 +7975,7 @@ void test_runtime_notebook_image_install_releases_old_code_index_images() {
 }
 
 void test_runtime_gc_safepoint_preserves_caller_roots_during_call() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant one;
@@ -8011,16 +8011,16 @@ void test_runtime_gc_safepoint_preserves_caller_roots_during_call() {
 
   module.code_objects = {caller, callee};
 
-  amber::runtime::RuntimeWorld world(module);
-  world.request_garbage_collection(amber::runtime::RuntimeGcCycle::Full);
-  const amber::runtime::ExecutionResult exec = world.execute(1);
+  sputnik::runtime::RuntimeWorld world(module);
+  world.request_garbage_collection(sputnik::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::ExecutionResult exec = world.execute(1);
   expect(exec.ok(), "call-boundary safepoint probe should execute");
   expect(exec.value.is_list(),
          "caller root should be returned after callee GC");
   expect(exec.value.as_list()->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "callee safepoint GC should preserve caller frame roots");
-  const amber::runtime::RuntimeHeapStats stats = world.heap_stats();
+  const sputnik::runtime::RuntimeHeapStats stats = world.heap_stats();
   expect(stats.gc_safepoint_collections == 1,
          "callee safepoint should run requested GC once");
   expect(stats.gc_reclaimed_objects == 0,
@@ -8028,7 +8028,7 @@ void test_runtime_gc_safepoint_preserves_caller_roots_during_call() {
 }
 
 void test_runtime_gc_backedge_safepoint_preserves_live_roots() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant one;
@@ -8052,15 +8052,15 @@ void test_runtime_gc_backedge_safepoint_preserves_live_roots() {
   code.safepoint_table.push_back({3, 0});
   module.code_objects.push_back(code);
 
-  amber::runtime::RuntimeWorld world(module);
-  world.request_garbage_collection(amber::runtime::RuntimeGcCycle::Full);
-  const amber::runtime::ExecutionResult exec = world.execute(1);
+  sputnik::runtime::RuntimeWorld world(module);
+  world.request_garbage_collection(sputnik::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::ExecutionResult exec = world.execute(1);
   expect(exec.ok(), "backedge safepoint probe should execute");
   expect(exec.value.is_list(), "loop root should be returned after backedge");
   expect(exec.value.as_list()->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "backedge safepoint GC should preserve live loop root");
-  const amber::runtime::RuntimeHeapStats stats = world.heap_stats();
+  const sputnik::runtime::RuntimeHeapStats stats = world.heap_stats();
   expect(stats.gc_safepoint_collections == 1,
          "loop safepoint should consume one GC request");
   expect(stats.gc_reclaimed_objects == 0,
@@ -8068,72 +8068,72 @@ void test_runtime_gc_backedge_safepoint_preserves_live_roots() {
 }
 
 void test_runtime_gc_preserves_rooted_local_and_shared_cycles() {
-  amber::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeHeap heap;
 
-  amber::runtime::Value local_left = heap.make_list_value({});
-  amber::runtime::Value local_right = heap.make_list_value({});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> local_left_ptr =
+  sputnik::runtime::Value local_left = heap.make_list_value({});
+  sputnik::runtime::Value local_right = heap.make_list_value({});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> local_left_ptr =
       local_left.as_list();
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> local_right_ptr =
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> local_right_ptr =
       local_right.as_list();
   local_left_ptr->items.push_back(local_right);
   local_right_ptr->items.push_back(local_left);
 
-  const amber::runtime::RuntimeGcResult rooted_local =
-      heap.collect_garbage({local_left}, amber::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::RuntimeGcResult rooted_local =
+      heap.collect_garbage({local_left}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(rooted_local.marked == 2 && rooted_local.reclaimed == 0,
          "full GC should preserve a rooted local reference cycle");
   expect(local_left_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "rooted local cycle left node should stay live");
   expect(local_right_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "rooted local cycle right node should stay live");
 
-  local_left = amber::runtime::Value::null();
-  local_right = amber::runtime::Value::null();
-  const amber::runtime::RuntimeGcResult unrooted_local =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+  local_left = sputnik::runtime::Value::null();
+  local_right = sputnik::runtime::Value::null();
+  const sputnik::runtime::RuntimeGcResult unrooted_local =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(unrooted_local.reclaimed == 2,
          "full GC should reclaim local cycle after roots clear");
 
-  amber::runtime::Value shared_left = heap.make_tuple_value({});
-  amber::runtime::Value shared_right = heap.make_tuple_value({});
-  amber::runtime::IntrusivePtr<amber::runtime::TupleValue> shared_left_ptr =
+  sputnik::runtime::Value shared_left = heap.make_tuple_value({});
+  sputnik::runtime::Value shared_right = heap.make_tuple_value({});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::TupleValue> shared_left_ptr =
       shared_left.as_tuple();
-  amber::runtime::IntrusivePtr<amber::runtime::TupleValue> shared_right_ptr =
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::TupleValue> shared_right_ptr =
       shared_right.as_tuple();
   shared_left_ptr->items.push_back(shared_right);
   shared_right_ptr->items.push_back(shared_left);
 
-  const amber::runtime::RuntimeGcResult rooted_shared = heap.collect_garbage(
-      {shared_left}, amber::runtime::RuntimeGcCycle::Shared);
+  const sputnik::runtime::RuntimeGcResult rooted_shared = heap.collect_garbage(
+      {shared_left}, sputnik::runtime::RuntimeGcCycle::Shared);
   expect(rooted_shared.marked == 2 && rooted_shared.reclaimed == 0,
          "shared GC should preserve a rooted shared reference cycle");
   expect(shared_left_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "rooted shared cycle left node should stay live");
   expect(shared_right_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "rooted shared cycle right node should stay live");
 
-  shared_left = amber::runtime::Value::null();
-  shared_right = amber::runtime::Value::null();
-  const amber::runtime::RuntimeGcResult unrooted_shared =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Shared);
+  shared_left = sputnik::runtime::Value::null();
+  shared_right = sputnik::runtime::Value::null();
+  const sputnik::runtime::RuntimeGcResult unrooted_shared =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Shared);
   expect(unrooted_shared.reclaimed == 2,
          "shared GC should reclaim shared cycle after roots clear");
   expect(shared_left_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "unrooted shared cycle left node should be tombstoned");
   expect(shared_right_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "unrooted shared cycle right node should be tombstoned");
 }
 
 void test_runtime_gc_parallel_smoke() {
-  amber::runtime::RuntimeHeap heap;
-  std::vector<amber::runtime::Value> shared_roots;
+  sputnik::runtime::RuntimeHeap heap;
+  std::vector<sputnik::runtime::Value> shared_roots;
   std::mutex roots_mutex;
   std::atomic<int> ready{0};
   std::atomic<bool> go{false};
@@ -8142,11 +8142,11 @@ void test_runtime_gc_parallel_smoke() {
   for (std::uint64_t worker = 0; worker < 4; ++worker) {
     threads.emplace_back(
         [&heap, &shared_roots, &roots_mutex, &ready, &go, worker]() {
-          amber::runtime::RuntimeWorkerScope scope(30 + worker);
-          std::vector<amber::runtime::Value> local_roots;
+          sputnik::runtime::RuntimeWorkerScope scope(30 + worker);
+          std::vector<sputnik::runtime::Value> local_roots;
           for (std::int64_t i = 0; i < 64; ++i) {
             local_roots.push_back(
-                heap.make_list_value({amber::runtime::Value::integer(i)}));
+                heap.make_list_value({sputnik::runtime::Value::integer(i)}));
           }
           {
             std::lock_guard<std::mutex> lock(roots_mutex);
@@ -8157,12 +8157,12 @@ void test_runtime_gc_parallel_smoke() {
           while (!go.load()) {
             std::this_thread::yield();
           }
-          std::vector<amber::runtime::Value> snapshot;
+          std::vector<sputnik::runtime::Value> snapshot;
           {
             std::lock_guard<std::mutex> lock(roots_mutex);
             snapshot = shared_roots;
           }
-          heap.collect_garbage(snapshot, amber::runtime::RuntimeGcCycle::Full);
+          heap.collect_garbage(snapshot, sputnik::runtime::RuntimeGcCycle::Full);
         });
   }
 
@@ -8174,72 +8174,72 @@ void test_runtime_gc_parallel_smoke() {
     thread.join();
   }
 
-  const amber::runtime::RuntimeHeapStats after_threads = heap.stats();
+  const sputnik::runtime::RuntimeHeapStats after_threads = heap.stats();
   expect(after_threads.gc_full_cycles >= 4,
          "parallel GC smoke should run full cycles from worker threads");
   expect(after_threads.live_objects == 256,
          "shared roots should keep all worker allocations live");
 
   shared_roots.clear();
-  heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+  heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(heap.stats().live_objects == 0,
          "final full GC should reclaim worker allocations after roots clear");
 }
 
 void test_runtime_pin_roots_gc_and_rejects_stale_unpin() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value =
-      heap.make_list_value({amber::runtime::Value::integer(1)});
-  amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value =
+      heap.make_list_value({sputnik::runtime::Value::integer(1)});
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       value.as_list();
 
-  amber::runtime::RuntimePinResult pin = heap.pin(value);
+  sputnik::runtime::RuntimePinResult pin = heap.pin(value);
   expect(pin.ok && pin.token.active, "pin should create active token");
   expect(heap.pin_count(value) == 1, "pin count should include active token");
-  expect((list->header.flags & amber::runtime::kObjectFlagPinned) != 0U,
+  expect((list->header.flags & sputnik::runtime::kObjectFlagPinned) != 0U,
          "pin should set object pinned flag");
 
-  value = amber::runtime::Value::null();
-  const amber::runtime::RuntimeGcResult pinned_gc =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+  value = sputnik::runtime::Value::null();
+  const sputnik::runtime::RuntimeGcResult pinned_gc =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(pinned_gc.reclaimed == 0, "active pin should root object for GC");
   expect(list->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "pinned object should remain live after GC");
 
-  amber::runtime::RuntimeUnpinResult first = heap.unpin(&pin.token);
+  sputnik::runtime::RuntimeUnpinResult first = heap.unpin(&pin.token);
   expect(first.ok && first.unpinned && !pin.token.active,
          "first unpin should deactivate token");
-  amber::runtime::RuntimeUnpinResult second = heap.unpin(&pin.token);
+  sputnik::runtime::RuntimeUnpinResult second = heap.unpin(&pin.token);
   expect(second.ok && !second.unpinned && second.stale,
          "stale/double unpin should be guarded and return false");
 
-  const amber::runtime::RuntimeGcResult after_unpin =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::RuntimeGcResult after_unpin =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(after_unpin.reclaimed == 1,
          "unpinned object should be collectable without roots");
   expect(list->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "GC should tombstone object after pin release");
 }
 
 void test_runtime_pin_scope_nesting_counts_and_releases() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value = heap.make_list_value({});
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value = heap.make_list_value({});
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       value.as_list();
 
   {
-    amber::runtime::RuntimePinScope outer(heap, value);
+    sputnik::runtime::RuntimePinScope outer(heap, value);
     expect(outer.active(), "outer pin scope should be active");
     expect(heap.pin_count(value) == 1, "outer scope should pin once");
     {
-      amber::runtime::RuntimePinScope inner(heap, value);
+      sputnik::runtime::RuntimePinScope inner(heap, value);
       expect(inner.active(), "inner pin scope should be active");
       expect(heap.pin_count(value) == 2,
              "nested scope should increment pin count");
-      const amber::runtime::RuntimeGcResult gc =
-          heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+      const sputnik::runtime::RuntimeGcResult gc =
+          heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
       expect(gc.reclaimed == 0, "nested active pins should prevent GC reclaim");
     }
     expect(heap.pin_count(value) == 1,
@@ -8247,19 +8247,19 @@ void test_runtime_pin_scope_nesting_counts_and_releases() {
   }
 
   expect(heap.pin_count(value) == 0, "outer scope should release final pin");
-  expect((list->header.flags & amber::runtime::kObjectFlagPinned) == 0U,
+  expect((list->header.flags & sputnik::runtime::kObjectFlagPinned) == 0U,
          "final unpin should clear object pinned flag");
 }
 
 void test_runtime_pin_scope_releases_during_exception_unwind() {
-  amber::runtime::RuntimeHeap heap;
-  const amber::runtime::Value value = heap.make_list_value({});
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  sputnik::runtime::RuntimeHeap heap;
+  const sputnik::runtime::Value value = heap.make_list_value({});
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       value.as_list();
 
   bool caught = false;
   try {
-    amber::runtime::RuntimePinScope scope(heap, value);
+    sputnik::runtime::RuntimePinScope scope(heap, value);
     expect(scope.active(), "exception unwind pin scope should be active");
     expect(heap.pin_count(value) == 1,
            "exception unwind pin scope should pin once");
@@ -8271,23 +8271,23 @@ void test_runtime_pin_scope_releases_during_exception_unwind() {
   expect(caught, "exception unwind probe should catch thrown exception");
   expect(heap.pin_count(value) == 0,
          "pin scope destructor should release during exception unwind");
-  expect((list->header.flags & amber::runtime::kObjectFlagPinned) == 0U,
+  expect((list->header.flags & sputnik::runtime::kObjectFlagPinned) == 0U,
          "exception unwind should clear object pinned flag");
-  const amber::runtime::RuntimeGcResult after_unwind =
-      heap.collect_garbage({}, amber::runtime::RuntimeGcCycle::Full);
+  const sputnik::runtime::RuntimeGcResult after_unwind =
+      heap.collect_garbage({}, sputnik::runtime::RuntimeGcCycle::Full);
   expect(after_unwind.reclaimed == 1,
          "object should be collectable after exception-unwind pin release");
 }
 
 void test_runtime_pin_opaque_handle_boundary() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::IntrusivePtr<amber::runtime::InstanceValue> instance =
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::IntrusivePtr<sputnik::runtime::InstanceValue> instance =
       heap.make_instance_value(2);
-  amber::runtime::Value value = amber::runtime::Value::instance(instance);
+  sputnik::runtime::Value value = sputnik::runtime::Value::instance(instance);
 
-  amber::runtime::RuntimePinResult pin = heap.pin(value);
+  sputnik::runtime::RuntimePinResult pin = heap.pin(value);
   expect(pin.ok, "opaque pin should succeed for ordinary object");
-  amber::runtime::RuntimeOpaqueHandleResult handle_result =
+  sputnik::runtime::RuntimeOpaqueHandleResult handle_result =
       heap.opaque_handle_for(pin.token);
   expect(handle_result.ok && handle_result.handle.active &&
              handle_result.handle.handle_id != 0,
@@ -8295,44 +8295,44 @@ void test_runtime_pin_opaque_handle_boundary() {
   expect(handle_result.handle.allocation_id == instance->header.allocation_id,
          "opaque handle should refer to allocation id, not raw layout");
 
-  amber::runtime::RuntimeOpaqueHandleResult resolved =
+  sputnik::runtime::RuntimeOpaqueHandleResult resolved =
       heap.resolve_opaque_handle(handle_result.handle);
   expect(resolved.ok && resolved.value.is_instance_object() &&
              resolved.value.as_instance_object() == instance,
          "opaque handle should resolve through runtime registry");
 
-  amber::runtime::RuntimeOpaqueHandle handle = handle_result.handle;
-  amber::runtime::RuntimeOpaqueHandleResult released =
+  sputnik::runtime::RuntimeOpaqueHandle handle = handle_result.handle;
+  sputnik::runtime::RuntimeOpaqueHandleResult released =
       heap.release_opaque_handle(&handle);
   expect(released.ok && released.released && !handle.active,
          "opaque handle release should deactivate handle");
-  amber::runtime::RuntimeOpaqueHandleResult stale =
+  sputnik::runtime::RuntimeOpaqueHandleResult stale =
       heap.resolve_opaque_handle(handle);
   expect(!stale.ok && stale.error_name == "LifetimeError",
          "released opaque handle should not resolve");
 
-  amber::runtime::RuntimeUnpinResult unpin = heap.unpin(&pin.token);
+  sputnik::runtime::RuntimeUnpinResult unpin = heap.unpin(&pin.token);
   expect(unpin.unpinned, "opaque pin should unpin cleanly");
 }
 
 void test_runtime_pin_buffer_view_mode() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value = heap.make_list_value(
-      {amber::runtime::Value::integer(3), amber::runtime::Value::integer(4)});
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value = heap.make_list_value(
+      {sputnik::runtime::Value::integer(3), sputnik::runtime::Value::integer(4)});
 
-  amber::runtime::RuntimePinResult opaque = heap.pin(value);
+  sputnik::runtime::RuntimePinResult opaque = heap.pin(value);
   expect(opaque.ok, "opaque pin should succeed");
-  amber::runtime::RuntimeValueBufferViewResult wrong_mode =
+  sputnik::runtime::RuntimeValueBufferViewResult wrong_mode =
       heap.value_buffer_view(opaque.token);
   expect(!wrong_mode.ok && wrong_mode.error_name == "TypeError",
          "buffer view should reject opaque pin token");
   heap.unpin(&opaque.token);
 
-  amber::runtime::RuntimePinResult buffer =
-      heap.pin(value, amber::runtime::RuntimePinViewKind::ValueBuffer,
-               amber::runtime::RuntimePinPermission::ReadOnly);
+  sputnik::runtime::RuntimePinResult buffer =
+      heap.pin(value, sputnik::runtime::RuntimePinViewKind::ValueBuffer,
+               sputnik::runtime::RuntimePinPermission::ReadOnly);
   expect(buffer.ok, "buffer pin should succeed for list storage");
-  amber::runtime::RuntimeValueBufferViewResult view =
+  sputnik::runtime::RuntimeValueBufferViewResult view =
       heap.value_buffer_view(buffer.token);
   expect(view.ok && view.view.active && view.view.size == 2 &&
              view.view.data != nullptr,
@@ -8341,14 +8341,14 @@ void test_runtime_pin_buffer_view_mode() {
          "buffer view should point at list item storage");
   heap.unpin(&buffer.token);
 
-  amber::runtime::RuntimeValueBufferViewResult after_unpin =
+  sputnik::runtime::RuntimeValueBufferViewResult after_unpin =
       heap.value_buffer_view(buffer.token);
   expect(!after_unpin.ok && after_unpin.error_name == "LifetimeError",
          "buffer view should reject stale token after unpin");
 }
 
 void test_runtime_pin_dealloc_after_pin_violation() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   Constant one;
@@ -8374,61 +8374,61 @@ void test_runtime_pin_dealloc_after_pin_violation() {
   dealloc.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects = {make_list, dealloc};
 
-  amber::runtime::RuntimeWorld world(module);
-  amber::runtime::ExecutionResult made = world.execute(1);
+  sputnik::runtime::RuntimeWorld world(module);
+  sputnik::runtime::ExecutionResult made = world.execute(1);
   expect(made.ok() && made.value.is_list(),
          "pin dealloc probe should make list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list =
       made.value.as_list();
 
-  amber::runtime::RuntimePinResult pin = world.pin(made.value);
+  sputnik::runtime::RuntimePinResult pin = world.pin(made.value);
   expect(pin.ok, "world pin should succeed");
-  amber::runtime::ExecutionResult blocked = world.execute(2, {made.value});
+  sputnik::runtime::ExecutionResult blocked = world.execute(2, {made.value});
   expect(!blocked.ok() && blocked.fault.has_value() &&
              blocked.fault->error_name == "PinnedObjectError",
          "OBJ_DEALLOC should reject active pin");
   expect(list->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Live,
+             sputnik::runtime::ObjectLifetimeState::Live,
          "failed dealloc should not change lifetime state");
 
-  amber::runtime::RuntimeUnpinResult unpin = world.unpin(&pin.token);
+  sputnik::runtime::RuntimeUnpinResult unpin = world.unpin(&pin.token);
   expect(unpin.unpinned, "world unpin should succeed");
-  amber::runtime::ExecutionResult released = world.execute(2, {made.value});
+  sputnik::runtime::ExecutionResult released = world.execute(2, {made.value});
   expect(released.ok() && released.value.is_bool() && released.value.as_bool(),
          "OBJ_DEALLOC should succeed after pin release");
   expect(list->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "dealloc after unpin should tombstone list");
-  amber::runtime::RuntimePinResult dead_pin = world.pin(made.value);
+  sputnik::runtime::RuntimePinResult dead_pin = world.pin(made.value);
   expect(!dead_pin.ok && dead_pin.error_name == "UseAfterFreeError",
          "pin should reject deallocated objects");
 }
 
 void test_runtime_pin_parallel_race_smoke() {
-  amber::runtime::RuntimeHeap heap;
-  std::vector<amber::runtime::Value> values;
+  sputnik::runtime::RuntimeHeap heap;
+  std::vector<sputnik::runtime::Value> values;
   for (std::int64_t i = 0; i < 32; ++i) {
-    values.push_back(heap.make_list_value({amber::runtime::Value::integer(i)}));
+    values.push_back(heap.make_list_value({sputnik::runtime::Value::integer(i)}));
   }
 
   std::atomic<int> failures{0};
   std::vector<std::thread> threads;
   for (std::uint64_t worker = 0; worker < 4; ++worker) {
     threads.emplace_back([&heap, &values, &failures, worker]() {
-      amber::runtime::RuntimeWorkerScope scope(80 + worker);
+      sputnik::runtime::RuntimeWorkerScope scope(80 + worker);
       for (std::size_t i = worker; i < values.size(); i += 4) {
         for (int round = 0; round < 8; ++round) {
-          amber::runtime::RuntimePinResult pin = heap.pin(values[i]);
+          sputnik::runtime::RuntimePinResult pin = heap.pin(values[i]);
           if (!pin.ok) {
             ++failures;
             continue;
           }
-          const amber::runtime::RuntimeGcResult gc = heap.collect_garbage(
-              values, amber::runtime::RuntimeGcCycle::Full);
+          const sputnik::runtime::RuntimeGcResult gc = heap.collect_garbage(
+              values, sputnik::runtime::RuntimeGcCycle::Full);
           if (gc.reclaimed != 0) {
             ++failures;
           }
-          amber::runtime::RuntimeUnpinResult unpin = heap.unpin(&pin.token);
+          sputnik::runtime::RuntimeUnpinResult unpin = heap.unpin(&pin.token);
           if (!unpin.unpinned) {
             ++failures;
           }
@@ -8441,7 +8441,7 @@ void test_runtime_pin_parallel_race_smoke() {
   }
 
   expect(failures.load() == 0, "parallel pin/unpin smoke should not fail");
-  const amber::runtime::RuntimeHeapStats stats = heap.stats();
+  const sputnik::runtime::RuntimeHeapStats stats = heap.stats();
   expect(stats.pin_tokens_created == 256,
          "parallel smoke should create one token per pin attempt");
   expect(stats.active_pins == 0 && stats.pinned_objects == 0,
@@ -8449,35 +8449,35 @@ void test_runtime_pin_parallel_race_smoke() {
 }
 
 void test_runtime_native_wait_cancel_poll_uses_active_pin() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value = heap.make_list_value({});
-  amber::runtime::RuntimePinResult pin = heap.pin(value);
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value = heap.make_list_value({});
+  sputnik::runtime::RuntimePinResult pin = heap.pin(value);
   expect(pin.ok, "native wait needs active pin");
 
-  amber::runtime::RuntimeNativeWaitResult wait =
+  sputnik::runtime::RuntimeNativeWaitResult wait =
       heap.register_native_wait(pin.token);
   expect(wait.ok && wait.handle.active,
          "native wait registration should return active handle");
-  amber::runtime::RuntimeNativeWaitHandle handle = wait.handle;
-  amber::runtime::RuntimeNativeWaitResult initial_poll =
+  sputnik::runtime::RuntimeNativeWaitHandle handle = wait.handle;
+  sputnik::runtime::RuntimeNativeWaitResult initial_poll =
       heap.poll_native_wait(handle);
   expect(initial_poll.ok && !initial_poll.cancelled,
          "native wait should start without cancellation");
 
-  amber::runtime::RuntimeNativeWaitResult cancel =
+  sputnik::runtime::RuntimeNativeWaitResult cancel =
       heap.cancel_native_wait(&handle);
   expect(cancel.ok && cancel.cancelled && handle.cancellation_requested,
          "native wait cancel hook should record pending cancellation");
-  amber::runtime::RuntimeNativeWaitResult cancelled_poll =
+  sputnik::runtime::RuntimeNativeWaitResult cancelled_poll =
       heap.poll_native_wait(handle);
   expect(cancelled_poll.ok && cancelled_poll.cancelled,
          "native wait poll should observe cancellation");
 
-  amber::runtime::RuntimeNativeWaitResult finish =
+  sputnik::runtime::RuntimeNativeWaitResult finish =
       heap.finish_native_wait(&handle);
   expect(finish.ok && finish.finished && !handle.active,
          "native wait finish should deactivate wait handle");
-  amber::runtime::RuntimeNativeWaitResult stale_poll =
+  sputnik::runtime::RuntimeNativeWaitResult stale_poll =
       heap.poll_native_wait(handle);
   expect(!stale_poll.ok && stale_poll.error_name == "LifetimeError",
          "finished native wait should reject further polls");
@@ -8485,72 +8485,72 @@ void test_runtime_native_wait_cancel_poll_uses_active_pin() {
 }
 
 void test_runtime_awaitable_select_ready_timeout_and_failure() {
-  amber::runtime::RuntimeAwaitable awaitable;
+  sputnik::runtime::RuntimeAwaitable awaitable;
 
-  const amber::runtime::RuntimeSelectResult idle =
-      amber::runtime::runtime_select(
-          {amber::runtime::RuntimeSelectArm::awaitable_arm(awaitable)},
+  const sputnik::runtime::RuntimeSelectResult idle =
+      sputnik::runtime::runtime_select(
+          {sputnik::runtime::RuntimeSelectArm::awaitable_arm(awaitable)},
           std::chrono::hours(1), true);
   expect(idle.ok && idle.else_selected,
          "select else should run for a pending awaitable");
 
-  const amber::runtime::RuntimeSelectResult timed_out =
-      amber::runtime::runtime_select(
-          {amber::runtime::RuntimeSelectArm::awaitable_arm(awaitable)},
+  const sputnik::runtime::RuntimeSelectResult timed_out =
+      sputnik::runtime::runtime_select(
+          {sputnik::runtime::RuntimeSelectArm::awaitable_arm(awaitable)},
           std::chrono::milliseconds(5), false);
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
          "select should time out for a pending awaitable");
 
-  expect(awaitable.complete(amber::runtime::Value::integer(44)),
+  expect(awaitable.complete(sputnik::runtime::Value::integer(44)),
          "awaitable completion should transition pending token to ready");
-  const amber::runtime::RuntimeSelectResult selected =
-      amber::runtime::runtime_select(
-          {amber::runtime::RuntimeSelectArm::awaitable_arm(awaitable)},
+  const sputnik::runtime::RuntimeSelectResult selected =
+      sputnik::runtime::runtime_select(
+          {sputnik::runtime::RuntimeSelectArm::awaitable_arm(awaitable)},
           std::chrono::milliseconds(20), false);
   expect(selected.ok && selected.selected &&
-             selected.kind == amber::runtime::RuntimeSelectArmKind::Await &&
+             selected.kind == sputnik::runtime::RuntimeSelectArmKind::Await &&
              selected.awaitable_result.ready &&
              selected.awaitable_result.value.as_integer() == 44,
          "select should choose a ready awaitable arm");
 
-  amber::runtime::RuntimeAwaitable failed;
+  sputnik::runtime::RuntimeAwaitable failed;
   expect(failed.fail("TypeError", "synthetic awaitable failure"),
          "awaitable fail should publish terminal failure");
-  const amber::runtime::RuntimeSelectResult failed_selected =
-      amber::runtime::runtime_select(
-          {amber::runtime::RuntimeSelectArm::awaitable_arm(failed)},
+  const sputnik::runtime::RuntimeSelectResult failed_selected =
+      sputnik::runtime::runtime_select(
+          {sputnik::runtime::RuntimeSelectArm::awaitable_arm(failed)},
           std::chrono::milliseconds(20), false);
   expect(!failed_selected.ok && failed_selected.selected &&
              failed_selected.awaitable_result.failed &&
              failed_selected.error_name == "TypeError",
          "select should surface failed awaitables as selected terminal arms");
 
-  const amber::runtime::RuntimeAwaitableStats stats = awaitable.stats();
+  const sputnik::runtime::RuntimeAwaitableStats stats = awaitable.stats();
   expect(stats.completions == 1 && stats.polls >= 3,
          "awaitable stats should count completion and select polls");
 }
 
 void test_runtime_awaitable_native_wait_pin_bridge_and_scheduler() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value =
-      heap.make_list_value({amber::runtime::Value::integer(1)});
-  amber::runtime::RuntimePinResult pin = heap.pin(value);
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value =
+      heap.make_list_value({sputnik::runtime::Value::integer(1)});
+  sputnik::runtime::RuntimePinResult pin = heap.pin(value);
   expect(pin.ok, "native-backed awaitable needs active pin");
 
-  amber::runtime::RuntimeAwaitable io =
-      amber::runtime::RuntimeAwaitable::from_native_wait(heap, pin.token);
-  expect(io.state() == amber::runtime::RuntimeAwaitableState::Pending &&
+  sputnik::runtime::RuntimeAwaitable io =
+      sputnik::runtime::RuntimeAwaitable::from_native_wait(heap, pin.token);
+  expect(io.state() == sputnik::runtime::RuntimeAwaitableState::Pending &&
              io.stats().native_backed,
          "native-backed awaitable should start pending with native bridge");
 
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   std::atomic<bool> waiter_started{false};
   std::atomic<std::int64_t> observed{0};
   const std::uint64_t waiter =
       scheduler.spawn_task([&io, &waiter_started, &observed]() {
         waiter_started = true;
-        const amber::runtime::RuntimeAwaitableResult result =
+        const sputnik::runtime::RuntimeAwaitableResult result =
             io.await(std::chrono::milliseconds(500));
         if (result.ok && result.ready && result.value.is_integer()) {
           observed = result.value.as_integer();
@@ -8562,13 +8562,13 @@ void test_runtime_awaitable_native_wait_pin_bridge_and_scheduler() {
       "awaitable waiter task should start");
   const std::uint64_t completer =
       scheduler.spawn_sleeping_task(std::chrono::milliseconds(10), [&io]() {
-        expect(io.complete(amber::runtime::Value::integer(99)),
+        expect(io.complete(sputnik::runtime::Value::integer(99)),
                "native-backed awaitable should complete once");
       });
 
-  const amber::runtime::RuntimeTaskJoinResult waiter_join =
+  const sputnik::runtime::RuntimeTaskJoinResult waiter_join =
       scheduler.join_task(waiter, std::chrono::milliseconds(1000));
-  const amber::runtime::RuntimeTaskJoinResult completer_join =
+  const sputnik::runtime::RuntimeTaskJoinResult completer_join =
       scheduler.join_task(completer, std::chrono::milliseconds(1000));
   expect(waiter_join.ok,
          "native-backed awaitable waiter task should complete successfully");
@@ -8577,20 +8577,20 @@ void test_runtime_awaitable_native_wait_pin_bridge_and_scheduler() {
   expect(observed.load() == 99,
          "native-backed awaitable should wake scheduler task with value");
 
-  const amber::runtime::RuntimeAwaitableStats io_stats = io.stats();
+  const sputnik::runtime::RuntimeAwaitableStats io_stats = io.stats();
   expect(io_stats.completions == 1 && io_stats.native_polls > 0 &&
              io_stats.native_finishes == 1,
          "native-backed completion should poll and finish native wait");
   expect(heap.unpin(&pin.token).unpinned,
          "completed native-backed awaitable should release its pin normally");
 
-  amber::runtime::RuntimePinResult stale_pin = heap.pin(value);
+  sputnik::runtime::RuntimePinResult stale_pin = heap.pin(value);
   expect(stale_pin.ok, "stale-pin awaitable needs active pin first");
-  amber::runtime::RuntimeAwaitable stale =
-      amber::runtime::RuntimeAwaitable::from_native_wait(heap, stale_pin.token);
+  sputnik::runtime::RuntimeAwaitable stale =
+      sputnik::runtime::RuntimeAwaitable::from_native_wait(heap, stale_pin.token);
   expect(heap.unpin(&stale_pin.token).unpinned,
          "test should make native wait pin stale before await");
-  const amber::runtime::RuntimeAwaitableResult stale_result =
+  const sputnik::runtime::RuntimeAwaitableResult stale_result =
       stale.await(std::chrono::milliseconds(0));
   expect(!stale_result.ok && stale_result.failed &&
              stale_result.error_name == "LifetimeError",
@@ -8598,26 +8598,26 @@ void test_runtime_awaitable_native_wait_pin_bridge_and_scheduler() {
 }
 
 void test_runtime_awaitable_cancellation_finishes_native_wait() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::Value value = heap.make_list_value({});
-  amber::runtime::RuntimePinResult pin = heap.pin(value);
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::Value value = heap.make_list_value({});
+  sputnik::runtime::RuntimePinResult pin = heap.pin(value);
   expect(pin.ok, "cancelled native-backed awaitable needs active pin");
 
-  amber::runtime::RuntimeAwaitable awaitable =
-      amber::runtime::RuntimeAwaitable::from_native_wait(heap, pin.token);
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeAwaitable awaitable =
+      sputnik::runtime::RuntimeAwaitable::from_native_wait(heap, pin.token);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   std::atomic<bool> entered{false};
   std::atomic<bool> saw_cancelled_result{false};
 
   const std::uint64_t task =
       scheduler.spawn_task([&awaitable, &entered, &saw_cancelled_result]() {
         entered = true;
-        const amber::runtime::RuntimeAwaitableResult result =
+        const sputnik::runtime::RuntimeAwaitableResult result =
             awaitable.await(std::chrono::hours(1));
         if (result.cancelled && result.error_name == "CancelledError") {
           saw_cancelled_result = true;
         }
-        amber::runtime::throw_if_runtime_task_cancelled();
+        sputnik::runtime::throw_if_runtime_task_cancelled();
       });
 
   expect(wait_for_condition([&entered]() { return entered.load(); },
@@ -8625,13 +8625,13 @@ void test_runtime_awaitable_cancellation_finishes_native_wait() {
          "cancellable awaitable task should enter await");
   expect(scheduler.cancel_task(task),
          "scheduler should request cancellation for awaitable task");
-  const amber::runtime::RuntimeTaskJoinResult joined =
+  const sputnik::runtime::RuntimeTaskJoinResult joined =
       scheduler.join_task(task, std::chrono::milliseconds(1000));
   expect(joined.cancelled && joined.error_name == "CancelledError" &&
              saw_cancelled_result.load(),
          "awaitable task cancellation should surface and rethrow");
 
-  const amber::runtime::RuntimeAwaitableStats stats = awaitable.stats();
+  const sputnik::runtime::RuntimeAwaitableStats stats = awaitable.stats();
   expect(stats.cancellations == 1 && stats.native_cancellations == 1 &&
              stats.native_finishes == 1,
          "awaitable cancellation should cancel and finish native wait");
@@ -8640,7 +8640,7 @@ void test_runtime_awaitable_cancellation_finishes_native_wait() {
 }
 
 void test_runtime_scheduler_runs_strands_in_parallel() {
-  amber::runtime::RuntimeScheduler scheduler(4);
+  sputnik::runtime::RuntimeScheduler scheduler(4);
   std::atomic<int> entered{0};
   std::atomic<int> active{0};
   std::atomic<int> max_active{0};
@@ -8648,9 +8648,9 @@ void test_runtime_scheduler_runs_strands_in_parallel() {
 
   for (int index = 0; index < 8; ++index) {
     scheduler.spawn_strand([&entered, &active, &max_active, &release]() {
-      expect(amber::runtime::current_runtime_worker_id() != 0,
+      expect(sputnik::runtime::current_runtime_worker_id() != 0,
              "scheduler strand should run inside a worker scope");
-      expect(amber::runtime::current_runtime_strand_id() != 0,
+      expect(sputnik::runtime::current_runtime_strand_id() != 0,
              "scheduler strand should expose current strand id");
 
       const int now = active.fetch_add(1) + 1;
@@ -8675,7 +8675,7 @@ void test_runtime_scheduler_runs_strands_in_parallel() {
   expect(scheduler.wait_until_idle(std::chrono::milliseconds(1000)),
          "scheduler should drain runnable strands");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.worker_count == 4, "scheduler should report worker count");
   expect(stats.strands_created == 8 && stats.strands_completed == 8,
          "scheduler stats should count completed strands");
@@ -8684,15 +8684,15 @@ void test_runtime_scheduler_runs_strands_in_parallel() {
 }
 
 void test_runtime_scheduler_timer_queue_wakes_sleeping_strand() {
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   std::atomic<int> ran{0};
   const std::uint64_t strand_id = scheduler.spawn_sleeping_strand(
       std::chrono::milliseconds(25), [&ran]() { ran.fetch_add(1); });
 
-  const std::optional<amber::runtime::RuntimeStrandSnapshot> sleeping =
+  const std::optional<sputnik::runtime::RuntimeStrandSnapshot> sleeping =
       scheduler.strand_snapshot(strand_id);
   expect(sleeping.has_value() &&
-             sleeping->state == amber::runtime::RuntimeStrandState::Sleeping,
+             sleeping->state == sputnik::runtime::RuntimeStrandState::Sleeping,
          "delayed strand should begin in sleeping state");
   expect(!scheduler.wait_until_idle(std::chrono::milliseconds(5)),
          "sleeping strand should keep scheduler non-idle before timer fires");
@@ -8702,21 +8702,21 @@ void test_runtime_scheduler_timer_queue_wakes_sleeping_strand() {
          "timer queue should wake delayed strand");
   expect(ran.load() == 1, "timer wake should run sleeping strand once");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.timer_wakes == 1, "scheduler should count timer wake");
   expect(stats.local_queue_enqueues == 1,
          "timer wake should enter a worker-local run queue");
 }
 
 void test_runtime_scheduler_explicit_wake_coalesces_sleeping_strand() {
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   std::atomic<int> ran{0};
   std::atomic<std::uint64_t> observed_strand{0};
   std::atomic<bool> release{false};
 
   const std::uint64_t strand_id = scheduler.spawn_sleeping_strand(
       std::chrono::hours(1), [&ran, &observed_strand, &release]() {
-        observed_strand = amber::runtime::current_runtime_strand_id();
+        observed_strand = sputnik::runtime::current_runtime_strand_id();
         ran.fetch_add(1);
         while (!release.load()) {
           std::this_thread::yield();
@@ -8734,15 +8734,15 @@ void test_runtime_scheduler_explicit_wake_coalesces_sleeping_strand() {
   expect(observed_strand.load() == strand_id,
          "woken strand should preserve current strand id");
 
-  const std::optional<amber::runtime::RuntimeStrandSnapshot> finished =
+  const std::optional<sputnik::runtime::RuntimeStrandSnapshot> finished =
       scheduler.strand_snapshot(strand_id);
   expect(finished.has_value() &&
-             finished->state == amber::runtime::RuntimeStrandState::Finished,
+             finished->state == sputnik::runtime::RuntimeStrandState::Finished,
          "woken strand should finish");
   expect(finished->explicit_wakes == 1,
          "strand snapshot should count one accepted explicit wake");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.explicit_wakes == 1 && stats.coalesced_wakes == 1,
          "scheduler should count accepted and coalesced wakes");
   expect(stats.strands_completed == 1,
@@ -8752,26 +8752,26 @@ void test_runtime_scheduler_explicit_wake_coalesces_sleeping_strand() {
 }
 
 void test_runtime_task_join_rethrows_failure() {
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   const std::uint64_t task_id = scheduler.spawn_task([]() {
-    throw amber::runtime::RuntimeTaskFailure("BoomError", "child failed");
+    throw sputnik::runtime::RuntimeTaskFailure("BoomError", "child failed");
   });
 
-  const amber::runtime::RuntimeTaskJoinResult join =
+  const sputnik::runtime::RuntimeTaskJoinResult join =
       scheduler.join_task(task_id, std::chrono::milliseconds(1000));
   expect(!join.ok && join.joined &&
-             join.state == amber::runtime::RuntimeStrandState::Failed,
+             join.state == sputnik::runtime::RuntimeStrandState::Failed,
          "join should observe failed task state");
   expect(join.error_name == "BoomError" && join.message == "child failed",
          "join should rethrow task failure metadata");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.tasks_created == 1 && stats.tasks_failed == 1,
          "task stats should count failed task");
 }
 
 void test_runtime_task_join_timeout_does_not_cancel_task() {
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   std::atomic<bool> entered{false};
   std::atomic<bool> release{false};
 
@@ -8785,41 +8785,41 @@ void test_runtime_task_join_timeout_does_not_cancel_task() {
   expect(wait_for_condition([&entered]() { return entered.load(); },
                             std::chrono::milliseconds(1000)),
          "timeout probe task should start");
-  const amber::runtime::RuntimeTaskJoinResult timed_out =
+  const sputnik::runtime::RuntimeTaskJoinResult timed_out =
       scheduler.join_task(task_id, std::chrono::milliseconds(10));
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
          "timed join should return TimeoutError");
 
-  const std::optional<amber::runtime::RuntimeTaskSnapshot> snapshot =
+  const std::optional<sputnik::runtime::RuntimeTaskSnapshot> snapshot =
       scheduler.task_snapshot(task_id);
   expect(snapshot.has_value() && !snapshot->cancellation_requested,
          "join timeout should not request task cancellation");
 
   release = true;
-  const amber::runtime::RuntimeTaskJoinResult joined =
+  const sputnik::runtime::RuntimeTaskJoinResult joined =
       scheduler.join_task(task_id, std::chrono::milliseconds(1000));
-  expect(joined.ok && joined.state == amber::runtime::RuntimeStrandState::Done,
+  expect(joined.ok && joined.state == sputnik::runtime::RuntimeStrandState::Done,
          "task should still finish after join timeout");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.task_join_timeouts == 1 && stats.tasks_completed == 1,
          "task stats should count timeout and later completion");
 }
 
 void test_runtime_task_cancel_is_cooperative_safepoint() {
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   std::atomic<bool> entered{false};
   std::atomic<bool> observed_cancel{false};
 
   const std::uint64_t task_id =
       scheduler.spawn_task([&entered, &observed_cancel]() {
         entered = true;
-        while (!amber::runtime::current_runtime_task_cancel_requested()) {
+        while (!sputnik::runtime::current_runtime_task_cancel_requested()) {
           std::this_thread::yield();
         }
         observed_cancel = true;
-        amber::runtime::throw_if_runtime_task_cancelled();
+        sputnik::runtime::throw_if_runtime_task_cancelled();
       });
 
   expect(wait_for_condition([&entered]() { return entered.load(); },
@@ -8828,19 +8828,19 @@ void test_runtime_task_cancel_is_cooperative_safepoint() {
   expect(scheduler.cancel_task(task_id),
          "cancel_task should request cancellation");
 
-  const amber::runtime::RuntimeTaskJoinResult join =
+  const sputnik::runtime::RuntimeTaskJoinResult join =
       scheduler.join_task(task_id, std::chrono::milliseconds(1000));
   expect(!join.ok && join.cancelled && join.error_name == "CancelledError",
          "cancelled task should join with CancelledError");
   expect(observed_cancel.load(), "task should observe cancellation flag");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.task_cancellation_requests == 1 && stats.tasks_cancelled == 1,
          "task stats should count cooperative cancellation");
 }
 
 void test_runtime_structured_task_scope_propagates_first_failure() {
-  amber::runtime::RuntimeScheduler scheduler(3);
+  sputnik::runtime::RuntimeScheduler scheduler(3);
   std::atomic<bool> sibling_started{false};
   std::atomic<bool> sibling_cancelled{false};
   std::atomic<bool> allow_failure{false};
@@ -8849,17 +8849,17 @@ void test_runtime_structured_task_scope_propagates_first_failure() {
       [&scheduler, &sibling_started, &sibling_cancelled, &allow_failure]() {
         scheduler.spawn_task([&sibling_started, &sibling_cancelled]() {
           sibling_started = true;
-          while (!amber::runtime::current_runtime_task_cancel_requested()) {
+          while (!sputnik::runtime::current_runtime_task_cancel_requested()) {
             std::this_thread::yield();
           }
           sibling_cancelled = true;
-          amber::runtime::throw_if_runtime_task_cancelled();
+          sputnik::runtime::throw_if_runtime_task_cancelled();
         });
         scheduler.spawn_task([&allow_failure]() {
           while (!allow_failure.load()) {
             std::this_thread::yield();
           }
-          throw amber::runtime::RuntimeTaskFailure("ChildBoom",
+          throw sputnik::runtime::RuntimeTaskFailure("ChildBoom",
                                                    "first child failed");
         });
       });
@@ -8867,11 +8867,11 @@ void test_runtime_structured_task_scope_propagates_first_failure() {
   expect(
       wait_for_condition(
           [&scheduler, parent_id, &sibling_started]() {
-            const std::optional<amber::runtime::RuntimeTaskSnapshot> snapshot =
+            const std::optional<sputnik::runtime::RuntimeTaskSnapshot> snapshot =
                 scheduler.task_snapshot(parent_id);
             return snapshot.has_value() &&
                    snapshot->state ==
-                       amber::runtime::RuntimeStrandState::Waiting &&
+                       sputnik::runtime::RuntimeStrandState::Waiting &&
                    snapshot->active_children == 2 && sibling_started.load();
           },
           std::chrono::milliseconds(1000)),
@@ -8879,24 +8879,24 @@ void test_runtime_structured_task_scope_propagates_first_failure() {
   expect(sibling_started.load(), "sibling should be running before failure");
 
   allow_failure = true;
-  const amber::runtime::RuntimeTaskJoinResult join =
+  const sputnik::runtime::RuntimeTaskJoinResult join =
       scheduler.join_task(parent_id, std::chrono::milliseconds(1000));
   expect(!join.ok && join.joined &&
-             join.state == amber::runtime::RuntimeStrandState::Failed,
+             join.state == sputnik::runtime::RuntimeStrandState::Failed,
          "parent join should fail after first child failure");
   expect(join.error_name == "ChildBoom" && join.message == "first child failed",
          "parent join should report first child failure");
   expect(sibling_cancelled.load(),
          "first child failure should cancel running sibling");
 
-  const std::optional<amber::runtime::RuntimeTaskSnapshot> snapshot =
+  const std::optional<sputnik::runtime::RuntimeTaskSnapshot> snapshot =
       scheduler.task_snapshot(parent_id);
   expect(snapshot.has_value() &&
-             snapshot->state == amber::runtime::RuntimeStrandState::Failed &&
+             snapshot->state == sputnik::runtime::RuntimeStrandState::Failed &&
              snapshot->total_children == 2 && snapshot->active_children == 0,
          "failed parent should retain structured child snapshot");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.structured_child_tasks == 2 &&
              stats.first_failure_cancellations == 1,
          "structured stats should count child links and first-failure cancel");
@@ -8905,16 +8905,16 @@ void test_runtime_structured_task_scope_propagates_first_failure() {
 }
 
 void test_runtime_channel_rendezvous_fifo_close() {
-  amber::runtime::RuntimeChannel channel(0);
-  amber::runtime::RuntimeScheduler scheduler(4);
+  sputnik::runtime::RuntimeChannel channel(0);
+  sputnik::runtime::RuntimeScheduler scheduler(4);
   std::atomic<int> senders_released{0};
   std::mutex received_mutex;
   std::vector<std::int64_t> received;
 
   for (int index = 1; index <= 3; ++index) {
     scheduler.spawn_task([&channel, &senders_released, index]() {
-      const amber::runtime::RuntimeChannelResult send =
-          channel.send(amber::runtime::Value::integer(index),
+      const sputnik::runtime::RuntimeChannelResult send =
+          channel.send(sputnik::runtime::Value::integer(index),
                        std::chrono::milliseconds(1000));
       expect(send.ok && send.sent, "rendezvous channel send should complete");
       senders_released.fetch_add(1);
@@ -8933,7 +8933,7 @@ void test_runtime_channel_rendezvous_fifo_close() {
 
   scheduler.spawn_task([&channel, &received, &received_mutex]() {
     for (int expected = 1; expected <= 3; ++expected) {
-      const amber::runtime::RuntimeChannelResult recv =
+      const sputnik::runtime::RuntimeChannelResult recv =
           channel.recv(std::chrono::milliseconds(1000));
       expect(recv.ok && recv.received && recv.value.is_integer(),
              "rendezvous channel recv should return sent value");
@@ -8943,7 +8943,7 @@ void test_runtime_channel_rendezvous_fifo_close() {
              "rendezvous channel should preserve FIFO send order");
     }
     expect(channel.close(), "channel close should succeed once");
-    const amber::runtime::RuntimeChannelResult closed =
+    const sputnik::runtime::RuntimeChannelResult closed =
         channel.recv(std::chrono::milliseconds(10));
     expect(!closed.ok && closed.closed &&
                closed.error_name == "ChannelClosedError",
@@ -8961,124 +8961,124 @@ void test_runtime_channel_rendezvous_fifo_close() {
            "rendezvous channel should receive all values in order");
   }
 
-  const amber::runtime::RuntimeChannelStats stats = channel.stats();
+  const sputnik::runtime::RuntimeChannelStats stats = channel.stats();
   expect(stats.sends == 3 && stats.receives == 3 && stats.closes == 1,
          "rendezvous channel stats should count sends, receives, and close");
 }
 
 void test_runtime_channel_buffered_close_and_shareability_gate() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::RuntimeChannel channel(2);
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeChannel channel(2);
 
-  const amber::runtime::RuntimeChannelResult first =
-      channel.send(amber::runtime::Value::integer(10));
-  const amber::runtime::RuntimeChannelResult second =
-      channel.send(amber::runtime::Value::integer(11));
+  const sputnik::runtime::RuntimeChannelResult first =
+      channel.send(sputnik::runtime::Value::integer(10));
+  const sputnik::runtime::RuntimeChannelResult second =
+      channel.send(sputnik::runtime::Value::integer(11));
   expect(first.ok && second.ok, "buffered channel should accept capacity");
 
-  const amber::runtime::Value confined = heap.make_list_value({});
-  expect(!amber::runtime::runtime_value_is_shareable(confined),
+  const sputnik::runtime::Value confined = heap.make_list_value({});
+  expect(!sputnik::runtime::runtime_value_is_shareable(confined),
          "mutable list should not be shareable");
-  const amber::runtime::RuntimeChannelResult rejected =
+  const sputnik::runtime::RuntimeChannelResult rejected =
       channel.send(confined, std::chrono::milliseconds(0));
   expect(!rejected.ok && rejected.error_name == "IsolationError",
          "channel send should reject confined payloads");
 
-  const amber::runtime::Value transitively_confined =
+  const sputnik::runtime::Value transitively_confined =
       heap.make_list_value({confined}, true);
-  expect(!amber::runtime::runtime_value_is_shareable(transitively_confined),
+  expect(!sputnik::runtime::runtime_value_is_shareable(transitively_confined),
          "frozen collection with confined payload should not be shareable");
-  const amber::runtime::RuntimeChannelResult nested_rejected =
+  const sputnik::runtime::RuntimeChannelResult nested_rejected =
       channel.send(transitively_confined, std::chrono::milliseconds(0));
   expect(!nested_rejected.ok && nested_rejected.error_name == "IsolationError",
          "channel send should reject transitively confined payloads");
 
-  const amber::runtime::RuntimeChannelResult recv_first = channel.recv();
-  const amber::runtime::RuntimeChannelResult recv_second = channel.recv();
+  const sputnik::runtime::RuntimeChannelResult recv_first = channel.recv();
+  const sputnik::runtime::RuntimeChannelResult recv_second = channel.recv();
   expect(recv_first.ok && recv_first.value.as_integer() == 10,
          "buffered channel should receive first queued value");
   expect(recv_second.ok && recv_second.value.as_integer() == 11,
          "buffered channel should receive second queued value");
 
-  const amber::runtime::RuntimeChannelResult timed_out =
+  const sputnik::runtime::RuntimeChannelResult timed_out =
       channel.recv(std::chrono::milliseconds(5));
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
          "empty open channel recv should support timeout");
 
-  const amber::runtime::RuntimeChannelResult queued_after_timeout =
-      channel.send(amber::runtime::Value::integer(12));
+  const sputnik::runtime::RuntimeChannelResult queued_after_timeout =
+      channel.send(sputnik::runtime::Value::integer(12));
   expect(queued_after_timeout.ok, "buffered channel should accept later send");
   expect(channel.close(), "buffered channel close should succeed");
-  const amber::runtime::RuntimeChannelResult send_after_close =
-      channel.send(amber::runtime::Value::integer(13));
+  const sputnik::runtime::RuntimeChannelResult send_after_close =
+      channel.send(sputnik::runtime::Value::integer(13));
   expect(!send_after_close.ok && send_after_close.closed &&
              send_after_close.error_name == "ChannelClosedError",
          "send into closed channel should fail");
-  const amber::runtime::RuntimeChannelResult recv_buffered_after_close =
+  const sputnik::runtime::RuntimeChannelResult recv_buffered_after_close =
       channel.recv();
   expect(recv_buffered_after_close.ok &&
              recv_buffered_after_close.value.as_integer() == 12,
          "closed buffered channel should drain queued values first");
-  const amber::runtime::RuntimeChannelResult closed_empty = channel.recv();
+  const sputnik::runtime::RuntimeChannelResult closed_empty = channel.recv();
   expect(!closed_empty.ok && closed_empty.closed &&
              closed_empty.error_name == "ChannelClosedError",
          "closed empty buffered channel should fail recv");
 
-  const amber::runtime::RuntimeChannelStats stats = channel.stats();
+  const sputnik::runtime::RuntimeChannelStats stats = channel.stats();
   expect(stats.sends == 3 && stats.receives == 3 &&
              stats.receive_timeouts == 1 && stats.isolation_rejections == 2,
          "buffered channel stats should count success, timeout, and isolation");
 }
 
 void test_runtime_move_slot_channel_transfer_and_moved_guard() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::RuntimeChannel plain_channel(1);
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeChannel plain_channel(1);
 
-  amber::runtime::Value list;
+  sputnik::runtime::Value list;
   {
-    amber::runtime::RuntimeStrandScope sender_scope(41);
-    list = heap.make_list_value({amber::runtime::Value::integer(7)}, false);
+    sputnik::runtime::RuntimeStrandScope sender_scope(41);
+    list = heap.make_list_value({sputnik::runtime::Value::integer(7)}, false);
   }
 
-  const amber::runtime::RuntimeChannelResult plain_send =
+  const sputnik::runtime::RuntimeChannelResult plain_send =
       plain_channel.send(list, std::chrono::milliseconds(0));
   expect(!plain_send.ok && plain_send.error_name == "IsolationError",
          "plain channel send should reject confined mutable payload");
 
-  amber::runtime::RuntimeMoveSlot slot(list);
-  amber::runtime::RuntimeChannel moved_channel(1);
+  sputnik::runtime::RuntimeMoveSlot slot(list);
+  sputnik::runtime::RuntimeChannel moved_channel(1);
   {
-    amber::runtime::RuntimeStrandScope sender_scope(41);
-    const amber::runtime::RuntimeChannelResult moved_send =
+    sputnik::runtime::RuntimeStrandScope sender_scope(41);
+    const sputnik::runtime::RuntimeChannelResult moved_send =
         moved_channel.send(slot, std::chrono::milliseconds(10));
     expect(moved_send.ok && moved_send.sent,
            "moved channel send should accept confined payload");
   }
   expect(slot.moved(), "successful moved send should mark slot moved");
 
-  const amber::runtime::RuntimeMoveResult moved_read = slot.read();
+  const sputnik::runtime::RuntimeMoveResult moved_read = slot.read();
   expect(!moved_read.ok && moved_read.error_name == "MovedValueError",
          "reading moved-from slot should fail");
   expect(list.as_list()->header.owner.kind ==
-             amber::runtime::OwnerTokenKind::Sync,
+             sputnik::runtime::OwnerTokenKind::Sync,
          "moved payload should be in transit before recv");
 
   {
-    amber::runtime::RuntimeStrandScope receiver_scope(42);
-    const amber::runtime::RuntimeChannelResult moved_recv =
+    sputnik::runtime::RuntimeStrandScope receiver_scope(42);
+    const sputnik::runtime::RuntimeChannelResult moved_recv =
         moved_channel.recv(std::chrono::milliseconds(10));
     expect(moved_recv.ok && moved_recv.received && moved_recv.value.is_list(),
            "moved channel recv should return payload");
     expect(moved_recv.value.as_list()->header.owner.kind ==
-                   amber::runtime::OwnerTokenKind::Confined &&
+                   sputnik::runtime::OwnerTokenKind::Confined &&
                moved_recv.value.as_list()->header.owner.strand_id == 42,
            "recv should adopt moved payload to receiver strand");
   }
 
-  const amber::runtime::Value frozen = heap.make_list_value({}, true);
-  amber::runtime::RuntimeMoveSlot frozen_slot(frozen);
-  const amber::runtime::RuntimeChannelResult rejected_move =
+  const sputnik::runtime::Value frozen = heap.make_list_value({}, true);
+  sputnik::runtime::RuntimeMoveSlot frozen_slot(frozen);
+  const sputnik::runtime::RuntimeChannelResult rejected_move =
       moved_channel.send(frozen_slot, std::chrono::milliseconds(0));
   expect(!rejected_move.ok && rejected_move.error_name == "MoveError",
          "move should reject already-shareable payloads");
@@ -9087,24 +9087,24 @@ void test_runtime_move_slot_channel_transfer_and_moved_guard() {
 }
 
 void test_runtime_select_rotates_ready_arms_and_handles_else_timeout() {
-  amber::runtime::RuntimeChannel first(1);
-  amber::runtime::RuntimeChannel second(1);
+  sputnik::runtime::RuntimeChannel first(1);
+  sputnik::runtime::RuntimeChannel second(1);
   int first_selected = 0;
   int second_selected = 0;
 
   for (int iteration = 0; iteration < 8; ++iteration) {
-    expect(first.send(amber::runtime::Value::integer(iteration)).ok,
+    expect(first.send(sputnik::runtime::Value::integer(iteration)).ok,
            "first select channel should accept buffered value");
-    expect(second.send(amber::runtime::Value::integer(100 + iteration)).ok,
+    expect(second.send(sputnik::runtime::Value::integer(100 + iteration)).ok,
            "second select channel should accept buffered value");
 
-    const amber::runtime::RuntimeSelectResult selected =
-        amber::runtime::runtime_select(
-            {amber::runtime::RuntimeSelectArm::recv(first),
-             amber::runtime::RuntimeSelectArm::recv(second)},
+    const sputnik::runtime::RuntimeSelectResult selected =
+        sputnik::runtime::runtime_select(
+            {sputnik::runtime::RuntimeSelectArm::recv(first),
+             sputnik::runtime::RuntimeSelectArm::recv(second)},
             std::chrono::milliseconds(20));
     expect(selected.ok && selected.selected &&
-               selected.kind == amber::runtime::RuntimeSelectArmKind::Recv,
+               selected.kind == sputnik::runtime::RuntimeSelectArmKind::Recv,
            "select should choose a ready recv arm");
     if (selected.arm_index == 0) {
       ++first_selected;
@@ -9117,17 +9117,17 @@ void test_runtime_select_rotates_ready_arms_and_handles_else_timeout() {
   expect(first_selected > 0 && second_selected > 0,
          "select should rotate among ready arms instead of fixed left bias");
 
-  amber::runtime::RuntimeChannel empty(0);
-  const amber::runtime::RuntimeSelectResult else_result =
-      amber::runtime::runtime_select(
-          {amber::runtime::RuntimeSelectArm::recv(empty)},
+  sputnik::runtime::RuntimeChannel empty(0);
+  const sputnik::runtime::RuntimeSelectResult else_result =
+      sputnik::runtime::runtime_select(
+          {sputnik::runtime::RuntimeSelectArm::recv(empty)},
           std::chrono::hours(1), true);
   expect(else_result.ok && else_result.else_selected,
          "select else should run immediately when no arm is ready");
 
-  const amber::runtime::RuntimeSelectResult timeout_result =
-      amber::runtime::runtime_select(
-          {amber::runtime::RuntimeSelectArm::recv(empty)},
+  const sputnik::runtime::RuntimeSelectResult timeout_result =
+      sputnik::runtime::runtime_select(
+          {sputnik::runtime::RuntimeSelectArm::recv(empty)},
           std::chrono::milliseconds(5), false);
   expect(!timeout_result.ok && timeout_result.timed_out &&
              timeout_result.error_name == "TimeoutError",
@@ -9135,21 +9135,21 @@ void test_runtime_select_rotates_ready_arms_and_handles_else_timeout() {
 }
 
 void test_runtime_select_send_move_arm_commits_only_when_ready() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::RuntimeChannel rendezvous(0);
-  amber::runtime::RuntimeChannel buffered(1);
-  amber::runtime::Value packet;
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeChannel rendezvous(0);
+  sputnik::runtime::RuntimeChannel buffered(1);
+  sputnik::runtime::Value packet;
   {
-    amber::runtime::RuntimeStrandScope sender_scope(71);
-    packet = heap.make_list_value({amber::runtime::Value::integer(71)}, false);
+    sputnik::runtime::RuntimeStrandScope sender_scope(71);
+    packet = heap.make_list_value({sputnik::runtime::Value::integer(71)}, false);
   }
 
-  amber::runtime::RuntimeMoveSlot slot(packet);
+  sputnik::runtime::RuntimeMoveSlot slot(packet);
   {
-    amber::runtime::RuntimeStrandScope sender_scope(71);
-    const amber::runtime::RuntimeSelectResult idle =
-        amber::runtime::runtime_select(
-            {amber::runtime::RuntimeSelectArm::send_moved(rendezvous, slot)},
+    sputnik::runtime::RuntimeStrandScope sender_scope(71);
+    const sputnik::runtime::RuntimeSelectResult idle =
+        sputnik::runtime::runtime_select(
+            {sputnik::runtime::RuntimeSelectArm::send_moved(rendezvous, slot)},
             std::chrono::hours(1), true);
     expect(
         idle.ok && idle.else_selected,
@@ -9157,9 +9157,9 @@ void test_runtime_select_send_move_arm_commits_only_when_ready() {
     expect(slot.read().ok,
            "unselected moved send arm should leave slot readable");
 
-    const amber::runtime::RuntimeSelectResult sent =
-        amber::runtime::runtime_select(
-            {amber::runtime::RuntimeSelectArm::send_moved(buffered, slot)},
+    const sputnik::runtime::RuntimeSelectResult sent =
+        sputnik::runtime::runtime_select(
+            {sputnik::runtime::RuntimeSelectArm::send_moved(buffered, slot)},
             std::chrono::milliseconds(20), false);
     expect(sent.ok && sent.selected && sent.channel_result.sent,
            "ready select send arm should commit moved payload");
@@ -9168,22 +9168,22 @@ void test_runtime_select_send_move_arm_commits_only_when_ready() {
          "selected moved send arm should mark slot moved-from");
 
   {
-    amber::runtime::RuntimeStrandScope receiver_scope(72);
-    const amber::runtime::RuntimeChannelResult recv = buffered.recv();
+    sputnik::runtime::RuntimeStrandScope receiver_scope(72);
+    const sputnik::runtime::RuntimeChannelResult recv = buffered.recv();
     expect(recv.ok && recv.value.as_list()->header.owner.strand_id == 72,
            "select moved send payload should be adopted by receiver");
   }
 }
 
 void test_runtime_supervisor_one_for_one_keeps_sibling_running() {
-  amber::runtime::RuntimeScheduler scheduler(3);
+  sputnik::runtime::RuntimeScheduler scheduler(3);
   std::atomic<bool> sibling_started{false};
   std::atomic<bool> sibling_cancelled{false};
   std::atomic<bool> release_sibling{false};
   std::atomic<bool> allow_failure{false};
 
-  amber::runtime::RuntimeTaskOptions options;
-  options.policy = amber::runtime::RuntimeSupervisorPolicy::OneForOne;
+  sputnik::runtime::RuntimeTaskOptions options;
+  options.policy = sputnik::runtime::RuntimeSupervisorPolicy::OneForOne;
   const std::uint64_t parent_id = scheduler.spawn_task(
       options, [&scheduler, &sibling_started, &sibling_cancelled,
                 &release_sibling, &allow_failure]() {
@@ -9191,19 +9191,19 @@ void test_runtime_supervisor_one_for_one_keeps_sibling_running() {
             [&sibling_started, &sibling_cancelled, &release_sibling]() {
               sibling_started = true;
               while (!release_sibling.load() &&
-                     !amber::runtime::current_runtime_task_cancel_requested()) {
+                     !sputnik::runtime::current_runtime_task_cancel_requested()) {
                 std::this_thread::yield();
               }
-              if (amber::runtime::current_runtime_task_cancel_requested()) {
+              if (sputnik::runtime::current_runtime_task_cancel_requested()) {
                 sibling_cancelled = true;
-                amber::runtime::throw_if_runtime_task_cancelled();
+                sputnik::runtime::throw_if_runtime_task_cancelled();
               }
             });
         scheduler.spawn_task([&allow_failure]() {
           while (!allow_failure.load()) {
             std::this_thread::yield();
           }
-          throw amber::runtime::RuntimeTaskFailure("ChildBoom",
+          throw sputnik::runtime::RuntimeTaskFailure("ChildBoom",
                                                    "one-for-one child failed");
         });
       });
@@ -9228,46 +9228,46 @@ void test_runtime_supervisor_one_for_one_keeps_sibling_running() {
   expect(!sibling_cancelled.load(),
          "one-for-one policy should not cancel unrelated sibling");
 
-  const amber::runtime::RuntimeTaskJoinResult timed =
+  const sputnik::runtime::RuntimeTaskJoinResult timed =
       scheduler.join_task(parent_id, std::chrono::milliseconds(10));
   expect(!timed.ok && timed.timed_out,
          "one-for-one parent should keep waiting for live sibling");
 
   release_sibling = true;
-  const amber::runtime::RuntimeTaskJoinResult joined =
+  const sputnik::runtime::RuntimeTaskJoinResult joined =
       scheduler.join_task(parent_id, std::chrono::milliseconds(1000));
   expect(!joined.ok && joined.joined && joined.error_name == "ChildBoom",
          "one-for-one parent should report failed child after siblings drain");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.supervisor_one_for_one_failures == 1 &&
              stats.first_failure_cancellations == 0,
          "one-for-one stats should record non-cancelling child failure");
 }
 
 void test_runtime_supervisor_one_for_all_cancels_all_siblings() {
-  amber::runtime::RuntimeScheduler scheduler(4);
+  sputnik::runtime::RuntimeScheduler scheduler(4);
   std::atomic<int> sibling_cancellations{0};
   std::atomic<bool> allow_failure{false};
 
-  amber::runtime::RuntimeTaskOptions options;
-  options.policy = amber::runtime::RuntimeSupervisorPolicy::OneForAll;
+  sputnik::runtime::RuntimeTaskOptions options;
+  options.policy = sputnik::runtime::RuntimeSupervisorPolicy::OneForAll;
   const std::uint64_t parent_id = scheduler.spawn_task(
       options, [&scheduler, &sibling_cancellations, &allow_failure]() {
         for (int index = 0; index < 2; ++index) {
           scheduler.spawn_task([&sibling_cancellations]() {
-            while (!amber::runtime::current_runtime_task_cancel_requested()) {
+            while (!sputnik::runtime::current_runtime_task_cancel_requested()) {
               std::this_thread::yield();
             }
             sibling_cancellations.fetch_add(1);
-            amber::runtime::throw_if_runtime_task_cancelled();
+            sputnik::runtime::throw_if_runtime_task_cancelled();
           });
         }
         scheduler.spawn_task([&allow_failure]() {
           while (!allow_failure.load()) {
             std::this_thread::yield();
           }
-          throw amber::runtime::RuntimeTaskFailure("AllBoom",
+          throw sputnik::runtime::RuntimeTaskFailure("AllBoom",
                                                    "one-for-all failed");
         });
       });
@@ -9281,20 +9281,20 @@ void test_runtime_supervisor_one_for_all_cancels_all_siblings() {
          "one-for-all parent should start all children");
   allow_failure = true;
 
-  const amber::runtime::RuntimeTaskJoinResult joined =
+  const sputnik::runtime::RuntimeTaskJoinResult joined =
       scheduler.join_task(parent_id, std::chrono::milliseconds(1000));
   expect(!joined.ok && joined.error_name == "AllBoom",
          "one-for-all parent should fail with child error");
   expect(sibling_cancellations.load() == 2,
          "one-for-all should cancel all running siblings");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.supervisor_one_for_all_cancellations == 1,
          "one-for-all stats should record policy cancellation");
 }
 
 void test_runtime_supervisor_rest_for_one_cancels_later_siblings_only() {
-  amber::runtime::RuntimeScheduler scheduler(4);
+  sputnik::runtime::RuntimeScheduler scheduler(4);
   std::atomic<bool> earlier_started{false};
   std::atomic<bool> later_started{false};
   std::atomic<bool> earlier_cancelled{false};
@@ -9302,8 +9302,8 @@ void test_runtime_supervisor_rest_for_one_cancels_later_siblings_only() {
   std::atomic<bool> release_earlier{false};
   std::atomic<bool> allow_failure{false};
 
-  amber::runtime::RuntimeTaskOptions options;
-  options.policy = amber::runtime::RuntimeSupervisorPolicy::RestForOne;
+  sputnik::runtime::RuntimeTaskOptions options;
+  options.policy = sputnik::runtime::RuntimeSupervisorPolicy::RestForOne;
   const std::uint64_t parent_id = scheduler.spawn_task(
       options,
       [&scheduler, &earlier_started, &earlier_cancelled, &later_started,
@@ -9312,28 +9312,28 @@ void test_runtime_supervisor_rest_for_one_cancels_later_siblings_only() {
             [&earlier_started, &earlier_cancelled, &release_earlier]() {
               earlier_started = true;
               while (!release_earlier.load() &&
-                     !amber::runtime::current_runtime_task_cancel_requested()) {
+                     !sputnik::runtime::current_runtime_task_cancel_requested()) {
                 std::this_thread::yield();
               }
-              if (amber::runtime::current_runtime_task_cancel_requested()) {
+              if (sputnik::runtime::current_runtime_task_cancel_requested()) {
                 earlier_cancelled = true;
-                amber::runtime::throw_if_runtime_task_cancelled();
+                sputnik::runtime::throw_if_runtime_task_cancelled();
               }
             });
         scheduler.spawn_task([&allow_failure]() {
           while (!allow_failure.load()) {
             std::this_thread::yield();
           }
-          throw amber::runtime::RuntimeTaskFailure("RestBoom",
+          throw sputnik::runtime::RuntimeTaskFailure("RestBoom",
                                                    "middle child failed");
         });
         scheduler.spawn_task([&later_started, &later_cancelled]() {
           later_started = true;
-          while (!amber::runtime::current_runtime_task_cancel_requested()) {
+          while (!sputnik::runtime::current_runtime_task_cancel_requested()) {
             std::this_thread::yield();
           }
           later_cancelled = true;
-          amber::runtime::throw_if_runtime_task_cancelled();
+          sputnik::runtime::throw_if_runtime_task_cancelled();
         });
       });
 
@@ -9357,32 +9357,32 @@ void test_runtime_supervisor_rest_for_one_cancels_later_siblings_only() {
          "rest-for-one should leave earlier sibling running");
 
   release_earlier = true;
-  const amber::runtime::RuntimeTaskJoinResult joined =
+  const sputnik::runtime::RuntimeTaskJoinResult joined =
       scheduler.join_task(parent_id, std::chrono::milliseconds(1000));
   expect(!joined.ok && joined.error_name == "RestBoom",
          "rest-for-one parent should fail with first child error");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.supervisor_rest_for_one_cancellations == 1,
          "rest-for-one stats should count later sibling cancellation");
 }
 
 void test_runtime_mutex_non_reentrant_and_contention() {
-  amber::runtime::RuntimeMutex reentrant_probe;
-  const amber::runtime::RuntimeMutexResult first_lock =
+  sputnik::runtime::RuntimeMutex reentrant_probe;
+  const sputnik::runtime::RuntimeMutexResult first_lock =
       reentrant_probe.lock(std::chrono::milliseconds(10));
   expect(first_lock.ok && first_lock.locked, "mutex first lock should succeed");
-  const amber::runtime::RuntimeMutexResult second_lock =
+  const sputnik::runtime::RuntimeMutexResult second_lock =
       reentrant_probe.lock(std::chrono::milliseconds(10));
   expect(!second_lock.ok && second_lock.error_name == "DeadlockError",
          "mutex should reject reentrant lock by same owner");
-  const amber::runtime::RuntimeMutexResult first_unlock =
+  const sputnik::runtime::RuntimeMutexResult first_unlock =
       reentrant_probe.unlock();
   expect(first_unlock.ok && first_unlock.unlocked,
          "mutex unlock should release owner");
 
-  amber::runtime::RuntimeScheduler scheduler(4);
-  amber::runtime::RuntimeMutex mutex;
+  sputnik::runtime::RuntimeScheduler scheduler(4);
+  sputnik::runtime::RuntimeMutex mutex;
   int counter = 0;
   constexpr int kTasks = 8;
   constexpr int kIterations = 200;
@@ -9390,7 +9390,7 @@ void test_runtime_mutex_non_reentrant_and_contention() {
   for (int task = 0; task < kTasks; ++task) {
     scheduler.spawn_task([&mutex, &counter]() {
       for (int iteration = 0; iteration < kIterations; ++iteration) {
-        const amber::runtime::RuntimeMutexResult lock =
+        const sputnik::runtime::RuntimeMutexResult lock =
             mutex.lock(std::chrono::milliseconds(1000));
         expect(lock.ok && lock.locked,
                "contended mutex lock should eventually succeed");
@@ -9399,7 +9399,7 @@ void test_runtime_mutex_non_reentrant_and_contention() {
           std::this_thread::yield();
         }
         counter = next;
-        const amber::runtime::RuntimeMutexResult unlock = mutex.unlock();
+        const sputnik::runtime::RuntimeMutexResult unlock = mutex.unlock();
         expect(unlock.ok && unlock.unlocked,
                "contended mutex unlock should succeed");
       }
@@ -9410,14 +9410,14 @@ void test_runtime_mutex_non_reentrant_and_contention() {
          "mutex contention tasks should drain");
   expect(counter == kTasks * kIterations,
          "mutex should protect contended counter updates");
-  const amber::runtime::RuntimeMutexStats stats = mutex.stats();
+  const sputnik::runtime::RuntimeMutexStats stats = mutex.stats();
   expect(stats.locks == kTasks * kIterations &&
              stats.unlocks == kTasks * kIterations && !stats.locked,
          "mutex stats should count balanced lock/unlock operations");
 }
 
 void test_runtime_atomic_seq_cst_compare_and_set_visibility() {
-  amber::runtime::RuntimeAtomic probe(0);
+  sputnik::runtime::RuntimeAtomic probe(0);
   expect(probe.get() == 0, "atomic get should read initial value");
   expect(probe.compare_and_set(0, 1),
          "atomic compare_and_set should update matching value");
@@ -9426,8 +9426,8 @@ void test_runtime_atomic_seq_cst_compare_and_set_visibility() {
   probe.set(3);
   expect(probe.get() == 3, "atomic set should publish new value");
 
-  amber::runtime::RuntimeScheduler scheduler(4);
-  amber::runtime::RuntimeAtomic counter(0);
+  sputnik::runtime::RuntimeScheduler scheduler(4);
+  sputnik::runtime::RuntimeAtomic counter(0);
   constexpr int kTasks = 8;
   constexpr int kIterations = 500;
   for (int task = 0; task < kTasks; ++task) {
@@ -9451,7 +9451,7 @@ void test_runtime_atomic_seq_cst_compare_and_set_visibility() {
 }
 
 void test_runtime_world_heap_tracks_vm_allocations() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"k"};
@@ -9490,18 +9490,18 @@ void test_runtime_world_heap_tracks_vm_allocations() {
   module.classes.push_back(BcClass{});
   module.code_objects = {code, closure_code};
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   {
-    amber::runtime::RuntimeWorkerScope worker(11);
-    const amber::runtime::ExecutionResult exec =
-        world.execute(1, {amber::runtime::Value::class_object(0)});
+    sputnik::runtime::RuntimeWorkerScope worker(11);
+    const sputnik::runtime::ExecutionResult exec =
+        world.execute(1, {sputnik::runtime::Value::class_object(0)});
     expect(exec.ok(), "VM allocation probe should execute");
     expect(exec.value.is_list(), "VM allocation probe should return list");
     expect(exec.value.as_list()->header.arena_worker_id == 11,
            "VM list should be allocated in current worker arena");
 
-    const amber::runtime::RuntimeHeapStats stats = world.heap_stats();
-    const amber::runtime::RuntimeArenaStats *arena = arena_stats_for(stats, 11);
+    const sputnik::runtime::RuntimeHeapStats stats = world.heap_stats();
+    const sputnik::runtime::RuntimeArenaStats *arena = arena_stats_for(stats, 11);
     expect(arena != nullptr && arena->allocations == 5,
            "VM should allocate list/tuple/map/closure/instance through heap");
     expect(stats.instance_allocations == 1 && stats.array_allocations == 2 &&
@@ -9514,7 +9514,7 @@ void test_runtime_world_heap_tracks_vm_allocations() {
 }
 
 void test_runtime_lifecycle_destroy_opcode_is_idempotent() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "value", "destroy!", "mass"};
@@ -9597,33 +9597,33 @@ void test_runtime_lifecycle_destroy_opcode_is_idempotent() {
   module.code_objects = {destroy, send_after_destroy, body, destroy_body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.class_index = 0;
 
-  const amber::runtime::ExecutionResult first = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult first = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(first.ok(), "OBJ_DESTROY first execution should succeed");
   expect(first.value.is_bool() && first.value.as_bool(),
          "OBJ_DESTROY should return true for the first destroy");
   expect(instance->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Destroyed,
+             sputnik::runtime::ObjectLifetimeState::Destroyed,
          "OBJ_DESTROY should transition object to destroyed state");
-  expect((instance->header.flags & amber::runtime::kObjectFlagDestroyed) != 0U,
+  expect((instance->header.flags & sputnik::runtime::kObjectFlagDestroyed) != 0U,
          "OBJ_DESTROY should set destroyed flag");
   expect(instance->ivars.find("mass") != instance->ivars.end() &&
              instance->ivars["mass"].is_integer() &&
              instance->ivars["mass"].as_integer() == 99,
          "OBJ_DESTROY should run class-local destroy! body before tombstoning");
 
-  const amber::runtime::ExecutionResult second = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult second = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(second.ok(), "OBJ_DESTROY second execution should succeed");
   expect(second.value.is_bool() && !second.value.as_bool(),
          "OBJ_DESTROY should return false after object is already destroyed");
 
-  const amber::runtime::ExecutionResult send = amber::runtime::execute_code(
-      module, 2, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult send = sputnik::runtime::execute_code(
+      module, 2, {sputnik::runtime::Value::instance(instance)});
   expect(!send.ok(), "ordinary send on destroyed object should fail");
   expect(
       send.fault.has_value() &&
@@ -9632,7 +9632,7 @@ void test_runtime_lifecycle_destroy_opcode_is_idempotent() {
 }
 
 void test_runtime_lifecycle_dealloc_opcode_tombstones_instance_payload() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"mass"};
@@ -9655,35 +9655,35 @@ void test_runtime_lifecycle_dealloc_opcode_tombstones_instance_payload() {
   module.code_objects = {dealloc, load_ivar};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   instance->header.class_index = 0;
-  instance->ivar_storage.push_back(amber::runtime::Value::integer(7));
-  instance->ivars["mass"] = amber::runtime::Value::integer(7);
+  instance->ivar_storage.push_back(sputnik::runtime::Value::integer(7));
+  instance->ivars["mass"] = sputnik::runtime::Value::integer(7);
 
-  const amber::runtime::ExecutionResult first = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult first = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(first.ok(), "OBJ_DEALLOC first execution should succeed");
   expect(first.value.is_bool() && first.value.as_bool(),
          "OBJ_DEALLOC should return true for first deallocation");
   expect(instance->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "OBJ_DEALLOC should transition object to deallocated state");
-  expect((instance->header.flags & amber::runtime::kObjectFlagDead) != 0U,
+  expect((instance->header.flags & sputnik::runtime::kObjectFlagDead) != 0U,
          "OBJ_DEALLOC should set dead flag");
   expect(instance->header.shape != nullptr && instance->header.shape->dead,
          "OBJ_DEALLOC should rewrite shape to DeadShape");
   expect(instance->ivar_storage.empty() && instance->ivars.empty(),
          "OBJ_DEALLOC should release instance ivar payload");
 
-  const amber::runtime::ExecutionResult second = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult second = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(second.ok(), "OBJ_DEALLOC second execution should succeed");
   expect(second.value.is_bool() && !second.value.as_bool(),
          "OBJ_DEALLOC should return false for already deallocated object");
 
-  const amber::runtime::ExecutionResult load = amber::runtime::execute_code(
-      module, 2, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult load = sputnik::runtime::execute_code(
+      module, 2, {sputnik::runtime::Value::instance(instance)});
   expect(!load.ok(), "ivar access on deallocated object should fail");
   expect(load.fault.has_value() &&
              load.fault->error_name == "UseAfterFreeError",
@@ -9691,7 +9691,7 @@ void test_runtime_lifecycle_dealloc_opcode_tombstones_instance_payload() {
 }
 
 void test_runtime_lifecycle_dealloc_clears_collection_payload() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"empty?"};
@@ -9719,23 +9719,23 @@ void test_runtime_lifecycle_dealloc_clears_collection_payload() {
   builtin_send.instructions.push_back({Opcode::Return, {{1, false}}});
   module.code_objects = {dealloc, builtin_send};
 
-  amber::runtime::Value list = amber::runtime::make_list_value(
-      {amber::runtime::Value::integer(1), amber::runtime::Value::integer(2)});
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list_ptr =
+  sputnik::runtime::Value list = sputnik::runtime::make_list_value(
+      {sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2)});
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list_ptr =
       list.as_list();
 
-  const amber::runtime::ExecutionResult dealloc_result =
-      amber::runtime::execute_code(module, 1, {list});
+  const sputnik::runtime::ExecutionResult dealloc_result =
+      sputnik::runtime::execute_code(module, 1, {list});
   expect(dealloc_result.ok(), "list OBJ_DEALLOC should succeed");
   expect(dealloc_result.value.is_bool() && dealloc_result.value.as_bool(),
          "list OBJ_DEALLOC should return true");
   expect(list_ptr->items.empty(), "list OBJ_DEALLOC should clear items");
   expect(list_ptr->header.lifetime_state ==
-             amber::runtime::ObjectLifetimeState::Deallocated,
+             sputnik::runtime::ObjectLifetimeState::Deallocated,
          "list OBJ_DEALLOC should mark list deallocated");
 
-  const amber::runtime::ExecutionResult send =
-      amber::runtime::execute_code(module, 2, {list});
+  const sputnik::runtime::ExecutionResult send =
+      sputnik::runtime::execute_code(module, 2, {list});
   expect(!send.ok(), "builtin send on deallocated list should fail");
   expect(send.fault.has_value() &&
              send.fault->error_name == "UseAfterFreeError",
@@ -9743,7 +9743,7 @@ void test_runtime_lifecycle_dealloc_clears_collection_payload() {
 }
 
 void test_runtime_world_define_method_invalidates_send_cache() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "value"};
@@ -9806,18 +9806,18 @@ void test_runtime_world_define_method_invalidates_send_cache() {
   module.code_objects = {caller, body_one, body_two};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   expect(world.method_table_size(
-             0, amber::runtime::MethodTableSide::Instance) == 1,
+             0, sputnik::runtime::MethodTableSide::Instance) == 1,
          "instance method table should include emitted method");
-  expect(world.method_table_size(0, amber::runtime::MethodTableSide::Class) ==
+  expect(world.method_table_size(0, sputnik::runtime::MethodTableSide::Class) ==
              0,
          "class method table should be empty for instance-only owner");
 
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(before.ok(), "define_method preflight send failed");
   expect(before.value.is_integer() && before.value.as_integer() == 1,
          "initial method should return original value");
@@ -9826,7 +9826,7 @@ void test_runtime_world_define_method_invalidates_send_cache() {
   const std::uint64_t version_before = world.method_version(0);
   BcMethod replacement = original;
   replacement.entry_code_id = 3;
-  const amber::runtime::ExecutionResult define_result =
+  const sputnik::runtime::ExecutionResult define_result =
       world.define_instance_method(0, replacement);
   expect(define_result.ok(), "runtime define_instance_method failed");
   expect(world.world_epoch() == epoch_before + 1,
@@ -9834,18 +9834,18 @@ void test_runtime_world_define_method_invalidates_send_cache() {
   expect(world.method_version(0) == version_before + 1,
          "define_method should bump owner method version");
   expect(world.method_table_size(
-             0, amber::runtime::MethodTableSide::Instance) == 1,
+             0, sputnik::runtime::MethodTableSide::Instance) == 1,
          "method replacement should keep a stable method-table slot");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok(), "define_method post-mutation send failed");
   expect(after.value.is_integer() && after.value.as_integer() == 2,
          "send cache should invalidate after method replacement");
 }
 
 void test_runtime_world_include_invalidates_send_cache() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "Older", "Newer", "label"};
@@ -9933,29 +9933,29 @@ void test_runtime_world_include_invalidates_send_cache() {
   module.code_objects = {caller, old_body, new_body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(before.ok(), "include preflight send failed");
   expect(before.value.is_integer() && before.value.as_integer() == 1,
          "static included mixin should answer before late include");
 
-  const amber::runtime::ExecutionResult include_result =
+  const sputnik::runtime::ExecutionResult include_result =
       world.include_mixin(0, 2);
   expect(include_result.ok(), "runtime include_mixin failed");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok(), "include post-mutation send failed");
   expect(after.value.is_integer() && after.value.as_integer() == 2,
          "late include should dominate and invalidate cached dispatch");
 }
 
 void test_runtime_world_transaction_replaces_mixin_method_for_cached_class() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "Trait", "value"};
@@ -10008,39 +10008,39 @@ void test_runtime_world_transaction_replaces_mixin_method_for_cached_class() {
   module.code_objects = {caller, body_one, body_two};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
 
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(before.ok(), "mixin reopen preflight send failed");
   expect(before.value.is_integer() && before.value.as_integer() == 1,
          "static mixin method should answer before reopen");
 
-  amber::runtime::RuntimeWorldTransaction tx;
-  tx.target_kind = amber::runtime::RuntimeOwnerKind::Mixin;
+  sputnik::runtime::RuntimeWorldTransaction tx;
+  tx.target_kind = sputnik::runtime::RuntimeOwnerKind::Mixin;
   tx.target_index = 1;
   BcMethod replacement = original;
   replacement.entry_code_id = 3;
   tx.instance_methods.push_back(replacement);
 
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::ExecutionResult committed =
+  const sputnik::runtime::ExecutionResult committed =
       world.commit_transaction(tx);
   expect(committed.ok(), "mixin reopen transaction should commit");
   expect(world.world_epoch() == epoch_before + 1,
          "mixin reopen should bump world epoch once");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok(), "mixin reopen post-commit send failed");
   expect(after.value.is_integer() && after.value.as_integer() == 2,
          "mixin reopen should invalidate class receiver cache");
 }
 
 void test_runtime_world_transaction_rolls_back_on_invalid_include() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "Trait", "Plain", "value"};
@@ -10079,15 +10079,15 @@ void test_runtime_world_transaction_rolls_back_on_invalid_include() {
   body.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects = {caller, body};
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   const std::uint64_t epoch_before = world.world_epoch();
-  amber::runtime::RuntimeWorldTransaction tx;
-  tx.target_kind = amber::runtime::RuntimeOwnerKind::Class;
+  sputnik::runtime::RuntimeWorldTransaction tx;
+  tx.target_kind = sputnik::runtime::RuntimeOwnerKind::Class;
   tx.target_index = 0;
   tx.instance_methods.push_back(method);
   tx.include_indices.push_back(2);
 
-  const amber::runtime::ExecutionResult failed = world.commit_transaction(tx);
+  const sputnik::runtime::ExecutionResult failed = world.commit_transaction(tx);
   expect(!failed.ok(), "invalid include transaction should fail");
   expect(failed.fault.has_value() && failed.fault->error_name == "TypeError",
          "invalid include should report TypeError");
@@ -10095,17 +10095,17 @@ void test_runtime_world_transaction_rolls_back_on_invalid_include() {
          "failed transaction should not bump world epoch");
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult send =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult send =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(!send.ok(), "rolled-back method should not be visible");
   expect(send.fault.has_value() && send.fault->error_name == "NoMethodError",
          "rolled-back method should leave dispatch unchanged");
 }
 
 void test_runtime_world_freeze_rejects_world_mutation_but_keeps_send() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "value"};
@@ -10151,38 +10151,38 @@ void test_runtime_world_freeze_rejects_world_mutation_but_keeps_send() {
   module.code_objects = {caller, body_one, body_two};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  amber::runtime::RuntimeWorld world(module);
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  sputnik::runtime::RuntimeWorld world(module);
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(before.ok() && before.value.is_integer() &&
              before.value.as_integer() == 1,
          "pre-freeze send should use original method");
 
-  const amber::runtime::ExecutionResult frozen = world.freeze_world();
+  const sputnik::runtime::ExecutionResult frozen = world.freeze_world();
   expect(frozen.ok(), "freeze_world should succeed");
-  expect(world.world_state() == amber::runtime::RuntimeWorldState::Frozen,
+  expect(world.world_state() == sputnik::runtime::RuntimeWorldState::Frozen,
          "world should report frozen state");
 
   BcMethod replacement = original;
   replacement.entry_code_id = 3;
-  const amber::runtime::ExecutionResult rejected =
+  const sputnik::runtime::ExecutionResult rejected =
       world.define_instance_method(0, replacement);
   expect(!rejected.ok(), "post-freeze define_method should fail");
   expect(rejected.fault.has_value() &&
              rejected.fault->error_name == "WorldFrozenError",
          "post-freeze mutation should report WorldFrozenError");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 1,
          "ordinary send should remain legal after freeze");
 }
 
 void test_runtime_world_transaction_rejects_superclass_mismatch() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Parent", "Other", "Child"};
@@ -10203,15 +10203,15 @@ void test_runtime_world_transaction_rejects_superclass_mismatch() {
   child.superclass_ref = parent_ref;
   module.classes.push_back(child);
 
-  amber::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorld world(module);
   const std::uint64_t epoch_before = world.world_epoch();
-  amber::runtime::RuntimeWorldTransaction tx;
-  tx.target_kind = amber::runtime::RuntimeOwnerKind::Class;
+  sputnik::runtime::RuntimeWorldTransaction tx;
+  tx.target_kind = sputnik::runtime::RuntimeOwnerKind::Class;
   tx.target_index = 2;
   tx.has_superclass_ref = true;
   tx.superclass_ref = other_ref;
 
-  const amber::runtime::ExecutionResult failed = world.commit_transaction(tx);
+  const sputnik::runtime::ExecutionResult failed = world.commit_transaction(tx);
   expect(!failed.ok(), "superclass mismatch transaction should fail");
   expect(failed.fault.has_value() &&
              failed.fault->error_name == "SuperclassMismatchError",
@@ -10221,7 +10221,7 @@ void test_runtime_world_transaction_rejects_superclass_mismatch() {
 }
 
 void test_runtime_world_transaction_rejects_include_cycle_before_commit() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"MixA", "MixB"};
@@ -10236,21 +10236,21 @@ void test_runtime_world_transaction_rejects_include_cycle_before_commit() {
   mix_b.flags = kClassFlagMixin;
   module.classes.push_back(mix_b);
 
-  amber::runtime::RuntimeWorld world(module);
-  amber::runtime::RuntimeWorldTransaction first;
-  first.target_kind = amber::runtime::RuntimeOwnerKind::Mixin;
+  sputnik::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorldTransaction first;
+  first.target_kind = sputnik::runtime::RuntimeOwnerKind::Mixin;
   first.target_index = 0;
   first.include_indices.push_back(1);
   expect(world.commit_transaction(first).ok(),
          "initial acyclic mixin include should commit");
 
   const std::uint64_t epoch_before = world.world_epoch();
-  amber::runtime::RuntimeWorldTransaction cycle;
-  cycle.target_kind = amber::runtime::RuntimeOwnerKind::Mixin;
+  sputnik::runtime::RuntimeWorldTransaction cycle;
+  cycle.target_kind = sputnik::runtime::RuntimeOwnerKind::Mixin;
   cycle.target_index = 1;
   cycle.include_indices.push_back(0);
 
-  const amber::runtime::ExecutionResult failed =
+  const sputnik::runtime::ExecutionResult failed =
       world.commit_transaction(cycle);
   expect(!failed.ok(), "cyclic include transaction should fail");
   expect(failed.fault.has_value() &&
@@ -10261,7 +10261,7 @@ void test_runtime_world_transaction_rejects_include_cycle_before_commit() {
 }
 
 void test_runtime_world_extend_invalidates_class_side_send_cache() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "Older", "Newer", "label"};
@@ -10325,35 +10325,35 @@ void test_runtime_world_extend_invalidates_class_side_send_cache() {
   new_body.instructions.push_back({Opcode::Return, {{0, false}}});
   module.code_objects = {caller, old_body, new_body};
 
-  amber::runtime::RuntimeWorld world(module);
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::class_object(0)});
+  sputnik::runtime::RuntimeWorld world(module);
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::class_object(0)});
   expect(before.ok(), "extend preflight class-side send failed");
   expect(before.value.is_integer() && before.value.as_integer() == 1,
          "static extend should answer before late extend");
 
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::ExecutionResult extended = world.extend_mixin(0, 2);
+  const sputnik::runtime::ExecutionResult extended = world.extend_mixin(0, 2);
   expect(extended.ok(), "runtime extend_mixin should commit");
   expect(world.world_epoch() == epoch_before + 1,
          "late extend should bump world epoch");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::class_object(0)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::class_object(0)});
   expect(after.ok(), "extend post-mutation class-side send failed");
   expect(after.value.is_integer() && after.value.as_integer() == 2,
          "late extend should dominate and invalidate class-side cache");
 }
 
 void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
   module.language_version = {1, 0};
   module.symbols = {"Box", "Trait", "Later", "zeta", "alpha", "beta"};
 
-  const std::uint32_t package_key = append_string(&module, "amber.package");
+  const std::uint32_t package_key = append_string(&module, "sputnik.package");
   const std::uint32_t package_value = append_string(&module, "reflect.demo");
   const std::uint32_t dependency_name = append_string(&module, "dep.core");
   const std::uint32_t export_kind = append_string(&module, "class");
@@ -10417,26 +10417,26 @@ void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
   zeta_code.code_id = 10;
   zeta_code.kind = CodeKind::Method;
   zeta_code.source_spans.push_back(
-      {0, 1, {"reflect.am", {20, 3, 100}, {20, 8, 105}}});
+      {0, 1, {"reflect.s", {20, 3, 100}, {20, 8, 105}}});
   BcCode alpha_code;
   alpha_code.code_id = 11;
   alpha_code.kind = CodeKind::Method;
   alpha_code.source_spans.push_back(
-      {0, 1, {"reflect.am", {12, 5, 50}, {12, 10, 55}}});
+      {0, 1, {"reflect.s", {12, 5, 50}, {12, 10, 55}}});
   BcCode beta_code;
   beta_code.code_id = 12;
   beta_code.kind = CodeKind::Method;
   beta_code.source_spans.push_back(
-      {0, 1, {"reflect.am", {30, 3, 150}, {30, 8, 155}}});
+      {0, 1, {"reflect.s", {30, 3, 150}, {30, 8, 155}}});
   BcCode later_code;
   later_code.code_id = 13;
   later_code.kind = CodeKind::Method;
   later_code.source_spans.push_back(
-      {0, 1, {"reflect.am", {40, 3, 200}, {40, 8, 205}}});
+      {0, 1, {"reflect.s", {40, 3, 200}, {40, 8, 205}}});
   module.code_objects = {zeta_code, alpha_code, beta_code, later_code};
 
-  amber::runtime::RuntimeWorld world(module);
-  amber::runtime::RuntimeWorldMirror snapshot = world.world_mirror();
+  sputnik::runtime::RuntimeWorld world(module);
+  sputnik::runtime::RuntimeWorldMirror snapshot = world.world_mirror();
   expect(snapshot.read_only, "world mirror should advertise read-only state");
   expect(snapshot.package.read_only, "package mirror should be read-only");
   expect(snapshot.package.name == "reflect.demo",
@@ -10449,7 +10449,7 @@ void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
          "package mirror should expose deterministic exports");
   expect(snapshot.owners.size() == 3, "world mirror should expose all owners");
 
-  std::optional<amber::runtime::RuntimeOwnerMirror> box_mirror =
+  std::optional<sputnik::runtime::RuntimeOwnerMirror> box_mirror =
       world.class_mirror(0);
   expect(box_mirror.has_value(), "class mirror should resolve class owner");
   expect(!world.mixin_mirror(0).has_value(),
@@ -10457,7 +10457,7 @@ void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
   expect(world.mixin_mirror(1).has_value(),
          "mixin mirror should resolve mixin owner");
   expect(box_mirror->read_only, "owner mirror should be read-only");
-  expect(box_mirror->kind == amber::runtime::RuntimeOwnerKind::Class,
+  expect(box_mirror->kind == sputnik::runtime::RuntimeOwnerKind::Class,
          "owner mirror should report class kind");
   expect(box_mirror->instance_methods.size() == 2,
          "class mirror should expose instance method table");
@@ -10468,7 +10468,7 @@ void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
          "method mirror should be read-only");
   expect(box_mirror->instance_methods[0].source_location.present &&
              box_mirror->instance_methods[0].source_location.file ==
-                 "reflect.am" &&
+                 "reflect.s" &&
              box_mirror->instance_methods[0].source_location.line == 12,
          "method mirror should expose source location");
   expect(box_mirror->direct_includes.size() == 1 &&
@@ -10481,9 +10481,9 @@ void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
          "mutating a mirror copy should not mutate runtime state");
 
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::ExecutionResult included = world.include_mixin(0, 2);
+  const sputnik::runtime::ExecutionResult included = world.include_mixin(0, 2);
   expect(included.ok(), "late include for mirror test should commit");
-  std::optional<amber::runtime::RuntimeOwnerMirror> after_include =
+  std::optional<sputnik::runtime::RuntimeOwnerMirror> after_include =
       world.class_mirror(0);
   expect(after_include.has_value(),
          "class mirror after include should resolve");
@@ -10498,25 +10498,25 @@ void test_runtime_reflection_mirrors_are_read_only_stable_and_ordered() {
 }
 
 void test_runtime_package_reload_swaps_compatible_package_atomically() {
-  const amber::pkg::PackageArtifact original =
+  const sputnik::pkg::PackageArtifact original =
       make_reload_artifact(make_reload_module(1));
-  const amber::pkg::PackageArtifact replacement =
+  const sputnik::pkg::PackageArtifact replacement =
       make_reload_artifact(make_reload_module(2));
-  amber::runtime::RuntimeWorld world(original);
-  const amber::runtime::RuntimeWatchCursor watch_cursor_before_reload =
+  sputnik::runtime::RuntimeWorld world(original);
+  const sputnik::runtime::RuntimeWatchCursor watch_cursor_before_reload =
       world.watch_cursor();
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult before =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult before =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(before.ok() && before.value.is_integer() &&
              before.value.as_integer() == 1,
          "package reload preflight should execute original method body");
 
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::RuntimePackageReloadResult reloaded =
+  const sputnik::runtime::RuntimePackageReloadResult reloaded =
       world.reload_package_artifact(replacement);
   expect(reloaded.ok && reloaded.swapped,
          "compatible package reload should swap active package");
@@ -10525,32 +10525,32 @@ void test_runtime_package_reload_swaps_compatible_package_atomically() {
   expect(world.watch_cursor().source == watch_cursor_before_reload.source,
          "package reload should keep one ordered watch stream per world");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 2,
          "package reload should execute replacement method body");
 }
 
 void test_runtime_package_reload_commits_trace_atomically() {
-  const amber::pkg::PackageArtifact original =
+  const sputnik::pkg::PackageArtifact original =
       make_reload_artifact(make_reload_module(1));
-  const amber::pkg::PackageArtifact replacement =
+  const sputnik::pkg::PackageArtifact replacement =
       make_reload_artifact(make_reload_module(2));
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.record_replay_trace = true;
   options.trace_id = "package-reload-trace";
   options.virtual_time_start = 40;
-  amber::runtime::RuntimeWorld world(original, std::move(options));
+  sputnik::runtime::RuntimeWorld world(original, std::move(options));
 
-  const amber::runtime::RuntimeReplayTrace before = world.replay_trace();
+  const sputnik::runtime::RuntimeReplayTrace before = world.replay_trace();
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::RuntimePackageReloadResult reloaded =
+  const sputnik::runtime::RuntimePackageReloadResult reloaded =
       world.reload_package_artifact(replacement);
   expect(reloaded.ok && reloaded.swapped,
          "trace-enabled package reload should swap the package");
 
-  const amber::runtime::RuntimeReplayTrace after = world.replay_trace();
+  const sputnik::runtime::RuntimeReplayTrace after = world.replay_trace();
   expect(after.events.size() == before.events.size() + 2U,
          "package reload should publish exactly two trace events");
   expect(after.events[after.events.size() - 2U].name ==
@@ -10564,11 +10564,11 @@ void test_runtime_package_reload_commits_trace_atomically() {
              after.events.back().world_epoch == epoch_before + 1U,
          "package reload events should carry the new module and epoch");
 
-  const amber::pkg::PackageArtifact incompatible =
+  const sputnik::pkg::PackageArtifact incompatible =
       make_reload_artifact(make_reload_module(3, false));
-  const amber::runtime::RuntimePackageReloadResult rejected =
+  const sputnik::runtime::RuntimePackageReloadResult rejected =
       world.reload_package_artifact(incompatible);
-  const amber::runtime::RuntimeReplayTrace after_rejection =
+  const sputnik::runtime::RuntimeReplayTrace after_rejection =
       world.replay_trace();
   expect(!rejected.ok && !rejected.swapped &&
              after_rejection.events.size() == after.events.size() &&
@@ -10577,19 +10577,19 @@ void test_runtime_package_reload_commits_trace_atomically() {
 }
 
 void test_runtime_package_reload_rejects_incompatible_surface_without_swap() {
-  const amber::pkg::PackageArtifact original =
+  const sputnik::pkg::PackageArtifact original =
       make_reload_artifact(make_reload_module(1));
-  const amber::pkg::PackageArtifact removed_export =
+  const sputnik::pkg::PackageArtifact removed_export =
       make_reload_artifact(make_reload_module(2, false));
-  const amber::pkg::PackageArtifact arity_change =
+  const sputnik::pkg::PackageArtifact arity_change =
       make_reload_artifact(make_reload_module(3, true, true));
-  amber::runtime::RuntimeWorld world(original);
+  sputnik::runtime::RuntimeWorld world(original);
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::RuntimePackageReloadResult rejected_export =
+  const sputnik::runtime::RuntimePackageReloadResult rejected_export =
       world.reload_package_artifact(removed_export);
   expect(!rejected_export.ok && !rejected_export.swapped,
          "export-surface reload should be rejected");
@@ -10600,7 +10600,7 @@ void test_runtime_package_reload_rejects_incompatible_surface_without_swap() {
   expect(world.world_epoch() == epoch_before,
          "rejected export-surface reload should not bump epoch");
 
-  const amber::runtime::RuntimePackageReloadResult rejected_arity =
+  const sputnik::runtime::RuntimePackageReloadResult rejected_arity =
       world.reload_package_artifact(arity_change);
   expect(!rejected_arity.ok && !rejected_arity.swapped,
          "selector/arity reload should be rejected");
@@ -10609,23 +10609,23 @@ void test_runtime_package_reload_rejects_incompatible_surface_without_swap() {
                  "ReloadIncompatibleError",
          "selector/arity reload should report ReloadIncompatibleError");
 
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 1,
          "incompatible reload should leave original method body active");
 }
 
 void test_runtime_package_reload_rejects_frozen_world_without_swap() {
-  const amber::pkg::PackageArtifact original =
+  const sputnik::pkg::PackageArtifact original =
       make_reload_artifact(make_reload_module(1));
-  const amber::pkg::PackageArtifact replacement =
+  const sputnik::pkg::PackageArtifact replacement =
       make_reload_artifact(make_reload_module(2));
-  amber::runtime::RuntimeWorld world(original);
+  sputnik::runtime::RuntimeWorld world(original);
 
   expect(world.freeze_world().ok(), "freeze before reload should succeed");
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::RuntimePackageReloadResult reloaded =
+  const sputnik::runtime::RuntimePackageReloadResult reloaded =
       world.reload_package_artifact(replacement);
   expect(!reloaded.ok && !reloaded.swapped,
          "frozen package reload should be rejected");
@@ -10636,25 +10636,25 @@ void test_runtime_package_reload_rejects_frozen_world_without_swap() {
          "frozen reload rejection should not bump epoch");
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 1,
          "frozen reload rejection should leave original method body active");
 }
 
 void test_runtime_package_reload_rolls_back_failed_decode() {
-  const amber::pkg::PackageArtifact original =
+  const sputnik::pkg::PackageArtifact original =
       make_reload_artifact(make_reload_module(1));
-  amber::pkg::PackageArtifact broken =
+  sputnik::pkg::PackageArtifact broken =
       make_reload_artifact(make_reload_module(2));
   broken.modules[0].bytes = {0x00};
-  amber::runtime::RuntimeWorld world(original);
+  sputnik::runtime::RuntimeWorld world(original);
 
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::RuntimePackageReloadResult reloaded =
+  const sputnik::runtime::RuntimePackageReloadResult reloaded =
       world.reload_package_artifact(broken);
   expect(!reloaded.ok && !reloaded.swapped,
          "broken package reload should fail before swap");
@@ -10665,28 +10665,28 @@ void test_runtime_package_reload_rolls_back_failed_decode() {
          "broken reload should not bump epoch");
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 1,
          "broken reload should leave original method body active");
 }
 
 void test_runtime_package_reload_rejects_unbounded_code_index() {
-  const amber::pkg::PackageArtifact original =
+  const sputnik::pkg::PackageArtifact original =
       make_reload_artifact(make_reload_module(1));
-  amber::bytecode::BcModule oversized = make_reload_module(2);
+  sputnik::bytecode::BcModule oversized = make_reload_module(2);
   constexpr std::uint32_t oversized_code_id = (1U << 20U) + 1U;
   oversized.methods[0].entry_code_id = oversized_code_id;
   oversized.code_objects[1].code_id = oversized_code_id;
-  const amber::pkg::PackageArtifact replacement =
+  const sputnik::pkg::PackageArtifact replacement =
       make_reload_artifact(oversized);
-  amber::runtime::RuntimeWorld world(original);
+  sputnik::runtime::RuntimeWorld world(original);
 
   const std::uint64_t epoch_before = world.world_epoch();
-  const amber::runtime::RuntimePackageReloadResult rejected =
+  const sputnik::runtime::RuntimePackageReloadResult rejected =
       world.reload_package_artifact(replacement);
   expect(!rejected.ok && !rejected.swapped,
          "reload should reject code ids outside the bounded cache range");
@@ -10698,17 +10698,17 @@ void test_runtime_package_reload_rejects_unbounded_code_index() {
          "oversized code id rejection should not bump the world epoch");
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult after =
-      world.execute(1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult after =
+      world.execute(1, {sputnik::runtime::Value::instance(instance)});
   expect(after.ok() && after.value.is_integer() &&
              after.value.as_integer() == 1,
          "oversized code id rejection should leave the old image active");
 }
 
 void test_manual_pattern_deconstruct_protocol_sequence() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Pair", "deconstruct"};
@@ -10776,17 +10776,17 @@ void test_manual_pattern_deconstruct_protocol_sequence() {
   module.code_objects = {probe, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(exec.ok(), "sequence deconstruct protocol execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 9,
          "P_PREP_SEQ should use object deconstruct protocol");
 }
 
 void test_manual_pattern_deconstruct_protocol_map() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Payload", "deconstruct_keys", "a", "keys"};
@@ -10851,17 +10851,17 @@ void test_manual_pattern_deconstruct_protocol_map() {
   module.code_objects = {probe, body};
 
   auto instance =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   instance->class_index = 0;
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(instance)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(instance)});
   expect(exec.ok(), "map deconstruct_keys protocol execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
          "P_PREP_MAP should use object deconstruct_keys protocol");
 }
 
 void test_manual_raise_handler_table_recovers() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Boom"};
@@ -10892,17 +10892,17 @@ void test_manual_raise_handler_table_recovers() {
   module.code_objects = {code, handler};
 
   auto exception =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   exception->class_index = 0;
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(exception)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(exception)});
   expect(exec.ok(), "RAISE handler execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
          "rescue handler should recover with its return value");
 }
 
 void test_manual_raise_unwinds_closure_to_outer_handler() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Boom"};
@@ -10950,17 +10950,17 @@ void test_manual_raise_unwinds_closure_to_outer_handler() {
   module.code_objects = {outer, inner, handler};
 
   auto exception =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   exception->class_index = 0;
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(exception)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(exception)});
   expect(exec.ok(), "closure RAISE unwind execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 99,
          "outer handler should catch exception from active closure call");
 }
 
 void test_manual_raise_unwinds_method_send_to_outer_handler() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Box", "explode"};
@@ -11021,17 +11021,17 @@ void test_manual_raise_unwinds_method_send_to_outer_handler() {
   module.code_objects = {caller, body, handler};
 
   auto receiver =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   receiver->class_index = 0;
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(receiver)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(receiver)});
   expect(exec.ok(), "method SEND RAISE unwind execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 17,
          "outer handler should catch exception from active method SEND");
 }
 
 void test_manual_raise_unhandled_fault_trace() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Boom"};
@@ -11045,14 +11045,14 @@ void test_manual_raise_unhandled_fault_trace() {
   code.kind = CodeKind::Method;
   code.reg_count = 1;
   code.instructions.push_back({Opcode::Raise, {{0, false}}});
-  code.source_spans.push_back({0, 1, {"raise.am", {3, 5, 10}, {3, 15, 20}}});
+  code.source_spans.push_back({0, 1, {"raise.s", {3, 5, 10}, {3, 15, 20}}});
   module.code_objects.push_back(code);
 
   auto exception =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   exception->class_index = 0;
-  const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
-      module, 1, {amber::runtime::Value::instance(exception)});
+  const sputnik::runtime::ExecutionResult exec = sputnik::runtime::execute_code(
+      module, 1, {sputnik::runtime::Value::instance(exception)});
   expect(!exec.ok(), "unhandled RAISE should fail");
   expect(exec.fault.has_value() && exec.fault->error_name == "Boom",
          "unhandled RAISE should use exception class name");
@@ -11075,25 +11075,25 @@ void test_source_try_rescue_ensure_execution() {
                                      "  raise \"boom\"\n"
                                      "rescue |e|:\n"
                                      "  e\n";
-  const amber::bytecode::EmitResult binding_emit = emit_ok(binding_source);
-  const amber::bytecode::DecodeResult binding_decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(binding_emit.module));
+  const sputnik::bytecode::EmitResult binding_emit = emit_ok(binding_source);
+  const sputnik::bytecode::DecodeResult binding_decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(binding_emit.module));
   expect(binding_decoded.ok(),
-         amber::bytecode::verify_errors_to_json(binding_decoded.errors));
-  const amber::runtime::ExecutionResult binding_exec =
-      amber::runtime::execute_code(binding_decoded.module,
+         sputnik::bytecode::verify_errors_to_json(binding_decoded.errors));
+  const sputnik::runtime::ExecutionResult binding_exec =
+      sputnik::runtime::execute_code(binding_decoded.module,
                                    binding_decoded.module.init.entry_code_id);
   expect(binding_exec.ok(), "try rescue binding execution failed");
   expect(string_value_text_or_die(binding_exec.value, binding_decoded.module,
                                   binding_exec) == "boom",
          "rescue binding should receive raised value");
-  const amber::runtime::ExecutionLocal *binding_local =
+  const sputnik::runtime::ExecutionLocal *binding_local =
       execution_local_by_name(binding_exec, "e");
   expect(binding_local != nullptr && binding_local->initialized,
          "rescue binding appears initialized in execution locals");
 
-  amber::runtime::ExecutionResult typed_rescue =
+  sputnik::runtime::ExecutionResult typed_rescue =
       execute_emitted_init("class Boom\n"
                            "try:\n"
                            "  raise Boom()\n"
@@ -11104,7 +11104,7 @@ void test_source_try_rescue_ensure_execution() {
              typed_rescue.value.as_integer() == 7,
          "typed rescue matcher should catch matching class instances");
 
-  amber::runtime::ExecutionResult normal_ensure =
+  sputnik::runtime::ExecutionResult normal_ensure =
       execute_emitted_init("x = 0\n"
                            "try:\n"
                            "  5\n"
@@ -11114,13 +11114,13 @@ void test_source_try_rescue_ensure_execution() {
   expect(normal_ensure.value.is_integer() &&
              normal_ensure.value.as_integer() == 5,
          "ensure must not replace normal try result");
-  const amber::runtime::ExecutionLocal *x_local =
+  const sputnik::runtime::ExecutionLocal *x_local =
       execution_local_by_name(normal_ensure, "x");
   expect(x_local != nullptr && x_local->value.is_integer() &&
              x_local->value.as_integer() == 9,
          "ensure normal path side effect is visible");
 
-  amber::runtime::ExecutionResult nested_ensure =
+  sputnik::runtime::ExecutionResult nested_ensure =
       execute_emitted_init("x = 0\n"
                            "try:\n"
                            "  try:\n"
@@ -11134,7 +11134,7 @@ void test_source_try_rescue_ensure_execution() {
              nested_ensure.value.as_integer() == 9,
          "ensure must run before exception continues to outer rescue");
 
-  amber::runtime::ExecutionResult break_ensure =
+  sputnik::runtime::ExecutionResult break_ensure =
       execute_emitted_init("x = 0\n"
                            "loop:\n"
                            "  try:\n"
@@ -11145,7 +11145,7 @@ void test_source_try_rescue_ensure_execution() {
   expect(break_ensure.value.is_integer() &&
              break_ensure.value.as_integer() == 5,
          "break value should survive ensure");
-  const amber::runtime::ExecutionLocal *break_x_local =
+  const sputnik::runtime::ExecutionLocal *break_x_local =
       execution_local_by_name(break_ensure, "x");
   expect(break_x_local != nullptr && break_x_local->value.is_integer() &&
              break_x_local->value.as_integer() == 9,
@@ -11167,7 +11167,7 @@ void test_native_error_inherited_rescue_execution() {
            "NotImplementedError constructors preserve message and inherit Exception");
   }
 
-  amber::runtime::ExecutionResult inherited =
+  sputnik::runtime::ExecutionResult inherited =
       execute_emitted_init("try:\n"
                            "  raise JsonParseError(\"bad json\")\n"
                            "rescue JsonError |e|:\n"
@@ -11179,7 +11179,7 @@ void test_native_error_inherited_rescue_execution() {
              inherited.value.as_integer() == 7,
          "native parent error class should catch registered subclass");
 
-  amber::runtime::ExecutionResult sibling =
+  sputnik::runtime::ExecutionResult sibling =
       execute_emitted_init("try:\n"
                            "  try:\n"
                            "    raise JsonParseError(\"bad json\")\n"
@@ -11191,7 +11191,7 @@ void test_native_error_inherited_rescue_execution() {
              sibling.value.as_integer() == 7,
          "native sibling error class should not catch");
 
-  amber::runtime::ExecutionResult url =
+  sputnik::runtime::ExecutionResult url =
       execute_emitted_init("try:\n"
                            "  raise UrlParseError(\"bad url\")\n"
                            "rescue UrlError |e|:\n"
@@ -11202,7 +11202,7 @@ void test_native_error_inherited_rescue_execution() {
   expect(url.ok() && url.value.is_integer() && url.value.as_integer() == 7,
          "URL parent error class should catch registered subclass");
 
-  amber::runtime::ExecutionResult root =
+  sputnik::runtime::ExecutionResult root =
       execute_emitted_init("try:\n"
                            "  raise TypeError(\"bad type\")\n"
                            "rescue Exception:\n"
@@ -11210,11 +11210,11 @@ void test_native_error_inherited_rescue_execution() {
   expect(root.ok() && root.value.is_integer() && root.value.as_integer() == 7,
          "Exception should catch existing native error classes");
 
-  amber::runtime::RuntimeErrorRegistry package_errors;
+  sputnik::runtime::RuntimeErrorRegistry package_errors;
   package_errors.register_error("Sqlite3.Error", "NativeError");
   package_errors.register_error("Sqlite3.StepError", "Sqlite3.Error");
   package_errors.register_error("Sqlite3.ConstraintError", "Sqlite3.StepError");
-  amber::runtime::ExecutionResult qualified = execute_emitted_init_with_errors(
+  sputnik::runtime::ExecutionResult qualified = execute_emitted_init_with_errors(
       "try:\n"
       "  raise Sqlite3.ConstraintError(\"constraint\")\n"
       "rescue Sqlite3.StepError |e|:\n"
@@ -11229,7 +11229,7 @@ void test_native_error_inherited_rescue_execution() {
 }
 
 void test_source_declared_error_ancestry_execution() {
-  const amber::runtime::ExecutionResult rich = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult rich = execute_emitted_init(
       "class OrmError < Exception\n"
       "class ValidationError < OrmError\n"
       "try:\n"
@@ -11243,9 +11243,9 @@ void test_source_declared_error_ancestry_execution() {
       "  else:\n"
       "    0\n");
   expect(rich.ok() && rich.value.is_integer() && rich.value.as_integer() == 7,
-         "Exception ancestry should classify rich Amber error classes");
+         "Exception ancestry should classify rich Sputnik error classes");
 
-  const amber::runtime::ExecutionResult unhandled = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult unhandled = execute_emitted_init(
       "class DetailedError < Exception:\n"
       "  attr message\n"
       "  def init(@message)\n"
@@ -11255,7 +11255,7 @@ void test_source_declared_error_ancestry_execution() {
              unhandled.fault->message == "query failed",
          "unhandled source-declared exceptions preserve their message");
 
-  amber::bytecode::EmitResult linked_emit = emit_ok(
+  sputnik::bytecode::EmitResult linked_emit = emit_ok(
       "class PackageError < Exception\n"
       "class ImportedChild < PackageError\n"
       "try:\n"
@@ -11265,13 +11265,13 @@ void test_source_declared_error_ancestry_execution() {
   expect(linked_emit.module.classes.size() >= 2U,
          "linked ancestry probe emits both classes");
   linked_emit.module.classes[1].flags = 0U;
-  const amber::runtime::ExecutionResult linked = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult linked = sputnik::runtime::execute_code(
       linked_emit.module, linked_emit.module.init.entry_code_id);
   expect(linked.ok() && linked.value.is_integer() &&
              linked.value.as_integer() == 9,
          "runtime derives error ancestry through a linked superclass");
 
-  const amber::runtime::ExecutionResult native = execute_emitted_init(
+  const sputnik::runtime::ExecutionResult native = execute_emitted_init(
       "package sqlite3\n"
       "class Error < NativeError\n"
       "class StepError < Error\n"
@@ -11289,7 +11289,7 @@ void test_source_declared_error_ancestry_execution() {
 }
 
 void test_source_throw_catch_execution() {
-  amber::runtime::ExecutionResult deep =
+  sputnik::runtime::ExecutionResult deep =
       execute_emitted_init("def deep_nested_code():\n"
                            "  throw :enough, 42\n"
                            "\n"
@@ -11299,21 +11299,21 @@ void test_source_throw_catch_execution() {
   expect(deep.value.is_integer() && deep.value.as_integer() == 42,
          "catch should return thrown payload from deep call");
 
-  amber::runtime::ExecutionResult bare =
+  sputnik::runtime::ExecutionResult bare =
       execute_emitted_init("catch :enough:\n"
                            "  throw :enough, 7\n");
   expect(bare.ok(), "bare catch execution failed");
   expect(bare.value.is_integer() && bare.value.as_integer() == 7,
          "bare catch should return thrown payload");
 
-  amber::runtime::ExecutionResult null_payload =
+  sputnik::runtime::ExecutionResult null_payload =
       execute_emitted_init("catch :enough:\n"
                            "  throw :enough\n");
   expect(null_payload.ok(), "throw without payload execution failed");
   expect(null_payload.value.is_null(),
          "throw without payload should deliver null");
 
-  amber::runtime::ExecutionResult evaluated_tag_once =
+  sputnik::runtime::ExecutionResult evaluated_tag_once =
       execute_emitted_init("tag = :enough\n"
                            "catch tag:\n"
                            "  tag = :other\n"
@@ -11323,7 +11323,7 @@ void test_source_throw_catch_execution() {
              evaluated_tag_once.value.as_integer() == 21,
          "catch should use tag value evaluated before body");
 
-  amber::runtime::ExecutionResult nested =
+  sputnik::runtime::ExecutionResult nested =
       execute_emitted_init("catch :outer:\n"
                            "  catch :inner:\n"
                            "    throw :outer, 33\n");
@@ -11331,7 +11331,7 @@ void test_source_throw_catch_execution() {
   expect(nested.value.is_integer() && nested.value.as_integer() == 33,
          "mismatched catch should continue to outer matching catch");
 
-  amber::runtime::ExecutionResult not_rescued =
+  sputnik::runtime::ExecutionResult not_rescued =
       execute_emitted_init("catch :enough:\n"
                            "  try:\n"
                            "    throw :enough, 17\n"
@@ -11341,7 +11341,7 @@ void test_source_throw_catch_execution() {
   expect(not_rescued.value.is_integer() && not_rescued.value.as_integer() == 17,
          "rescue must not catch throw/catch control flow");
 
-  amber::runtime::ExecutionResult ensure_result =
+  sputnik::runtime::ExecutionResult ensure_result =
       execute_emitted_init("x = 0\n"
                            "y = 0\n"
                            "res = catch :enough:\n"
@@ -11356,7 +11356,7 @@ void test_source_throw_catch_execution() {
              ensure_result.value.as_integer() == 19,
          "ensure should run before matching catch resumes");
 
-  amber::runtime::ExecutionResult unhandled =
+  sputnik::runtime::ExecutionResult unhandled =
       execute_emitted_init("throw :missing, 1\n");
   expect(!unhandled.ok(), "unhandled throw should fail");
   expect(unhandled.fault.has_value() &&
@@ -11365,7 +11365,7 @@ void test_source_throw_catch_execution() {
 }
 
 void test_manual_ensure_suppresses_pending_exception() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.symbols = {"Primary", "Cleanup"};
@@ -11397,15 +11397,15 @@ void test_manual_ensure_suppresses_pending_exception() {
   module.code_objects = {code, ensure};
 
   auto primary =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   primary->class_index = 0;
   auto cleanup =
-      amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+      sputnik::runtime::make_intrusive<sputnik::runtime::InstanceValue>();
   cleanup->class_index = 1;
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(module, 1,
-                                   {amber::runtime::Value::instance(primary),
-                                    amber::runtime::Value::instance(cleanup)});
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(module, 1,
+                                   {sputnik::runtime::Value::instance(primary),
+                                    sputnik::runtime::Value::instance(cleanup)});
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "Cleanup",
          "cleanup exception should replace pending exception");
@@ -11413,7 +11413,7 @@ void test_manual_ensure_suppresses_pending_exception() {
   const auto suppressed = cleanup->ivars.find("suppressed_exceptions");
   expect(suppressed != cleanup->ivars.end() && suppressed->second.is_list(),
          "cleanup exception should keep suppressed exceptions");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue>
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue>
       suppressed_list = suppressed->second.as_list();
   expect(suppressed_list != nullptr && suppressed_list->items.size() == 1,
          "one pending exception should be suppressed");
@@ -11423,7 +11423,7 @@ void test_manual_ensure_suppresses_pending_exception() {
 }
 
 void test_runtime_io_v2_source_surface() {
-  amber::runtime::ExecutionResult buffer = execute_emitted_init(
+  sputnik::runtime::ExecutionResult buffer = execute_emitted_init(
       "buf = io.ByteBuffer(4)\n"
       "buf.put!(65)\n"
       "buf.put!(66)\n"
@@ -11451,8 +11451,8 @@ void test_runtime_io_v2_source_surface() {
           buffer_items[1].as_integer() == 1 && buffer_hex_matches,
       "ByteBuffer v2 source contract mismatch");
 
-  amber::runtime::ExecutionResult path =
-      execute_emitted_init("p = fs.Path(\"/tmp\") / \"amber.txt\"\n"
+  sputnik::runtime::ExecutionResult path =
+      execute_emitted_init("p = fs.Path(\"/tmp\") / \"sputnik.txt\"\n"
                            "[p.basename(), p.extname(), p.absolute?()]\n");
   expect(path.ok(), "Path v2 source execution failed");
   expect(path.value.is_list(), "Path source result should be Array");
@@ -11462,7 +11462,7 @@ void test_runtime_io_v2_source_surface() {
              path_items[2].as_bool(),
          "Path v2 source contract mismatch");
 
-  amber::runtime::ExecutionResult endpoint =
+  sputnik::runtime::ExecutionResult endpoint =
       execute_emitted_init("a = net.Endpoint.new(\"localhost\", 80)\n"
                            "b = net.Endpoint.parse(\"127.0.0.1:8080\")\n"
                            "types = [net.tcp, net.udp, net.http]\n"
@@ -11487,29 +11487,29 @@ void test_runtime_io_v2_source_surface() {
              endpoint_items[4].as_integer() == 5,
          "Endpoint source contract mismatch");
 
-  amber::runtime::ExecutionResult udp_family =
+  sputnik::runtime::ExecutionResult udp_family =
       execute_emitted_init("net.udp.open(family: :unix)\n");
   expect(!udp_family.ok() && udp_family.fault.has_value() &&
              udp_family.fault->error_name == "ArgumentError",
          "UDP open source validation should reject unsupported family");
-  amber::runtime::ExecutionResult udp_endpoint =
+  sputnik::runtime::ExecutionResult udp_endpoint =
       execute_emitted_init("net.udp.bind(\"127.0.0.1\", 70000)\n");
   expect(!udp_endpoint.ok() && udp_endpoint.fault.has_value() &&
              udp_endpoint.fault->error_name == "ArgumentError",
          "UDP bind source validation should reject invalid endpoint");
-  amber::runtime::ExecutionResult tcp_timeout =
+  sputnik::runtime::ExecutionResult tcp_timeout =
       execute_emitted_init("endpoint = net.Endpoint.new(\"127.0.0.1\", 1)\n"
                            "net.tcp.connect(endpoint, timeout: -1)\n");
   expect(!tcp_timeout.ok() && tcp_timeout.fault.has_value() &&
              tcp_timeout.fault->error_name == "ArgumentError",
          "TCP connect source validation should reject invalid timeout");
-  amber::runtime::ExecutionResult tcp_backlog =
+  sputnik::runtime::ExecutionResult tcp_backlog =
       execute_emitted_init("net.tcp.listen(\"127.0.0.1\", 0, backlog: 0)\n");
   expect(!tcp_backlog.ok() && tcp_backlog.fault.has_value() &&
              tcp_backlog.fault->error_name == "ArgumentError",
          "TCP listen source validation should reject invalid backlog");
 
-  amber::runtime::ExecutionResult pipe =
+  sputnik::runtime::ExecutionResult pipe =
       execute_emitted_init("pair = io.Pipe.new(capacity: 2)\n"
                            "r = pair[0]\n"
                            "w = pair[1]\n"
@@ -11531,8 +11531,8 @@ void test_runtime_io_v2_source_surface() {
          "Pipe v2 source contract mismatch");
 
   const std::string file_path =
-      "/tmp/amber_vm_io_" + std::to_string(::getpid()) + ".txt";
-  amber::runtime::ExecutionResult file =
+      "/tmp/sputnik_vm_io_" + std::to_string(::getpid()) + ".txt";
+  sputnik::runtime::ExecutionResult file =
       execute_emitted_init("path = \"" + file_path +
                            "\"\n"
                            "fs.write_bytes(path, \"abc\")\n"
@@ -11574,7 +11574,7 @@ void test_runtime_io_v2_source_surface() {
   const std::string renamed_path = file_path + ".renamed";
   ::unlink(copy_path.c_str());
   ::unlink(renamed_path.c_str());
-  amber::runtime::ExecutionResult moves =
+  sputnik::runtime::ExecutionResult moves =
       execute_emitted_init("source = \"" + file_path +
                            "\"\n"
                            "copy = \"" +
@@ -11600,13 +11600,13 @@ void test_runtime_io_v2_source_surface() {
   ::unlink(file_path.c_str());
 
   const std::string dir_path =
-      "/tmp/amber_vm_io_dir_" + std::to_string(::getpid());
+      "/tmp/sputnik_vm_io_dir_" + std::to_string(::getpid());
   const std::string parent_path = dir_path + "/a";
   const std::string nested_path = parent_path + "/b";
   ::rmdir(nested_path.c_str());
   ::rmdir(parent_path.c_str());
   ::rmdir(dir_path.c_str());
-  amber::runtime::ExecutionResult dirs =
+  sputnik::runtime::ExecutionResult dirs =
       execute_emitted_init("root = \"" + dir_path +
                            "\"\n"
                            "parent = \"" +
@@ -11638,70 +11638,70 @@ void test_runtime_io_v2_source_surface() {
 
 void test_runtime_io_v2_policy_and_replay() {
   const std::string file_path =
-      "/tmp/amber_vm_io_policy_" + std::to_string(::getpid()) + ".txt";
+      "/tmp/sputnik_vm_io_policy_" + std::to_string(::getpid()) + ".txt";
   {
     std::ofstream output(file_path, std::ios::binary | std::ios::trunc);
     output << "policy";
   }
 
-  amber::bytecode::EmitResult emitted =
+  sputnik::bytecode::EmitResult emitted =
       emit_ok("fs.read_bytes(\"" + file_path + "\").count()\n");
   emitted.module.capabilities.push_back(
-      amber::capability::make_capability("fs.read", file_path));
+      sputnik::capability::make_capability("fs.read", file_path));
 
-  amber::runtime::RuntimeWorldOptions allowed_options;
+  sputnik::runtime::RuntimeWorldOptions allowed_options;
   allowed_options.enforce_effects = true;
   allowed_options.allowed_effects = {"fs"};
   allowed_options.capability_grants.push_back(
-      amber::capability::make_capability("fs.read", file_path));
+      sputnik::capability::make_capability("fs.read", file_path));
   allowed_options.record_replay_trace = true;
-  amber::runtime::RuntimeWorld allowed_world(emitted.module, allowed_options);
-  amber::runtime::ExecutionResult allowed =
+  sputnik::runtime::RuntimeWorld allowed_world(emitted.module, allowed_options);
+  sputnik::runtime::ExecutionResult allowed =
       allowed_world.execute(emitted.module.init.entry_code_id);
   expect(allowed.ok() && allowed.value.is_integer() &&
              allowed.value.as_integer() == 6,
          "RuntimeWorld should allow scoped file IO");
-  const amber::runtime::RuntimeReplayTrace trace = allowed_world.replay_trace();
+  const sputnik::runtime::RuntimeReplayTrace trace = allowed_world.replay_trace();
   bool saw_io_wait = false;
-  for (const amber::runtime::RuntimeTraceEvent &event : trace.events) {
+  for (const sputnik::runtime::RuntimeTraceEvent &event : trace.events) {
     saw_io_wait = saw_io_wait || event.name == "io.wait";
   }
   expect(saw_io_wait, "file IO should emit io.wait trace metadata");
 
-  amber::runtime::RuntimeWorldOptions effect_options = allowed_options;
+  sputnik::runtime::RuntimeWorldOptions effect_options = allowed_options;
   effect_options.record_replay_trace = false;
   effect_options.allowed_effects = {"net"};
-  amber::runtime::RuntimeWorld effect_world(emitted.module, effect_options);
-  amber::runtime::ExecutionResult effect_denied =
+  sputnik::runtime::RuntimeWorld effect_world(emitted.module, effect_options);
+  sputnik::runtime::ExecutionResult effect_denied =
       effect_world.execute(emitted.module.init.entry_code_id);
   expect(!effect_denied.ok() && effect_denied.fault.has_value() &&
              effect_denied.fault->error_name == "EffectViolationError",
          "IO effect denial should precede capability and host access");
 
-  amber::runtime::RuntimeWorldOptions capability_options = allowed_options;
+  sputnik::runtime::RuntimeWorldOptions capability_options = allowed_options;
   capability_options.record_replay_trace = false;
   capability_options.capability_grants.clear();
-  amber::runtime::RuntimeWorld capability_world(emitted.module,
+  sputnik::runtime::RuntimeWorld capability_world(emitted.module,
                                                 capability_options);
-  amber::runtime::ExecutionResult capability_denied =
+  sputnik::runtime::ExecutionResult capability_denied =
       capability_world.execute(emitted.module.init.entry_code_id);
   expect(!capability_denied.ok() && capability_denied.fault.has_value() &&
              capability_denied.fault->error_name == "CapabilityError",
          "missing file capability should fail before host access");
 
-  amber::bytecode::EmitResult invalid = emit_ok("fs.read_bytes(1)\n");
-  amber::runtime::RuntimeWorld invalid_world(invalid.module, effect_options);
-  amber::runtime::ExecutionResult invalid_result =
+  sputnik::bytecode::EmitResult invalid = emit_ok("fs.read_bytes(1)\n");
+  sputnik::runtime::RuntimeWorld invalid_world(invalid.module, effect_options);
+  sputnik::runtime::ExecutionResult invalid_result =
       invalid_world.execute(invalid.module.init.entry_code_id);
   expect(!invalid_result.ok() && invalid_result.fault.has_value() &&
              invalid_result.fault->error_name == "TypeError",
          "local IO argument errors should precede policy errors");
 
-  amber::runtime::RuntimeWorldOptions replay_options = allowed_options;
+  sputnik::runtime::RuntimeWorldOptions replay_options = allowed_options;
   replay_options.record_replay_trace = false;
   replay_options.enforce_replay = true;
-  amber::runtime::RuntimeWorld replay_world(emitted.module, replay_options);
-  amber::runtime::ExecutionResult replay_denied =
+  sputnik::runtime::RuntimeWorld replay_world(emitted.module, replay_options);
+  sputnik::runtime::ExecutionResult replay_denied =
       replay_world.execute(emitted.module.init.entry_code_id);
   expect(!replay_denied.ok() && replay_denied.fault.has_value() &&
              replay_denied.fault->error_name == "ReplayProviderError",
@@ -11711,29 +11711,29 @@ void test_runtime_io_v2_policy_and_replay() {
 }
 
 void test_runtime_io_v2_replay_provider_file_surface() {
-  amber::bytecode::EmitResult emitted = emit_ok(
+  sputnik::bytecode::EmitResult emitted = emit_ok(
       "fs.File.open(\"out.txt\", :write, create: true, truncate: true) |f|:\n"
       "  f.write_all!(\"abc\")\n"
       "fs.read_text(\"out.txt\")\n");
   emitted.module.capabilities.push_back(
-      amber::capability::make_capability("fs.write", "out.txt"));
+      sputnik::capability::make_capability("fs.write", "out.txt"));
   emitted.module.capabilities.push_back(
-      amber::capability::make_capability("fs.read", "out.txt"));
+      sputnik::capability::make_capability("fs.read", "out.txt"));
 
   auto provider = std::make_shared<TestIoProvider>();
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.enforce_effects = true;
   options.allowed_effects = {"fs"};
   options.enforce_replay = true;
   options.record_replay_trace = true;
   options.io_provider = provider;
   options.capability_grants.push_back(
-      amber::capability::make_capability("fs.write", "out.txt"));
+      sputnik::capability::make_capability("fs.write", "out.txt"));
   options.capability_grants.push_back(
-      amber::capability::make_capability("fs.read", "out.txt"));
+      sputnik::capability::make_capability("fs.read", "out.txt"));
 
-  amber::runtime::RuntimeWorld world(emitted.module, options);
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::RuntimeWorld world(emitted.module, options);
+  sputnik::runtime::ExecutionResult result =
       world.execute(emitted.module.init.entry_code_id);
   expect(result.ok(),
          "provider-backed fs.File.open should execute in replay mode: " +
@@ -11750,7 +11750,7 @@ void test_runtime_io_v2_replay_provider_file_surface() {
 }
 
 void test_runtime_io_v2_low_level_wait_trace() {
-  amber::bytecode::EmitResult emitted =
+  sputnik::bytecode::EmitResult emitted =
       emit_ok("pair = io.Pipe.new(capacity: 1)\n"
               "r = pair[0]\n"
               "w = pair[1]\n"
@@ -11758,16 +11758,16 @@ void test_runtime_io_v2_low_level_wait_trace() {
               "buf = io.ByteBuffer(1)\n"
               "r.read!(buf)\n");
 
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::runtime::RuntimeWorldOptions options;
   options.record_replay_trace = true;
-  amber::runtime::RuntimeWorld world(emitted.module, options);
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::RuntimeWorld world(emitted.module, options);
+  sputnik::runtime::ExecutionResult result =
       world.execute(emitted.module.init.entry_code_id);
   expect(result.ok(), "pipe read trace scenario should execute");
 
   bool saw_enter = false;
   bool saw_exit = false;
-  for (const amber::runtime::RuntimeTraceEvent &event :
+  for (const sputnik::runtime::RuntimeTraceEvent &event :
        world.replay_trace().events) {
     if (event.name != "io.wait") {
       continue;
@@ -11775,7 +11775,7 @@ void test_runtime_io_v2_low_level_wait_trace() {
     bool pipe_read = false;
     bool enter = false;
     bool exit = false;
-    for (const amber::replay::TraceAttribute &attribute : event.attributes) {
+    for (const sputnik::replay::TraceAttribute &attribute : event.attributes) {
       if (attribute.key == "operation" && attribute.value == "pipe read") {
         pipe_read = true;
       }
@@ -11794,7 +11794,7 @@ void test_runtime_io_v2_low_level_wait_trace() {
 }
 
 void test_foreign_handle_lifetime() {
-  using amber::runtime::RuntimeForeignHandle;
+  using sputnik::runtime::RuntimeForeignHandle;
   using Ownership = RuntimeForeignHandle::Ownership;
 
   // owned: deterministic destroy! runs teardown exactly once with the supplied
@@ -11865,30 +11865,30 @@ void test_foreign_handle_lifetime() {
       handle->teardown = [&freed](void *, void *) { ++freed; };
       expect(handle->destroy(), "borrowed destroy! flips the tombstone");
     }
-    expect(freed == 0, "borrowed handle is never freed by Amber");
+    expect(freed == 0, "borrowed handle is never freed by Sputnik");
   }
   // The handle round-trips as a Value tail kind (exercised on both reps).
   {
     auto handle = std::make_shared<RuntimeForeignHandle>();
     handle->tag = "pkg.Box";
     handle->ownership = Ownership::Borrowed;
-    amber::runtime::Value value = amber::runtime::Value::foreign_handle(handle);
+    sputnik::runtime::Value value = sputnik::runtime::Value::foreign_handle(handle);
     expect(value.is_foreign_handle(),
            "Value::foreign_handle round-trips as a handle kind");
     expect(!value.is_null() && !value.is_uuid(),
            "a foreign handle Value is distinct from other kinds");
     expect(value.as_foreign_handle() == handle,
            "as_foreign_handle recovers the same underlying object");
-    amber::runtime::Value copy = value;
+    sputnik::runtime::Value copy = value;
     expect(copy.is_foreign_handle() && copy.as_foreign_handle() == handle,
            "copying a foreign handle Value shares the underlying handle");
   }
 }
 
 void test_native_tag_registry() {
-  using amber::runtime::NativeTagRegistry;
-  using amber::runtime::NativeTypeDescriptor;
-  using Ownership = amber::runtime::RuntimeForeignHandle::Ownership;
+  using sputnik::runtime::NativeTagRegistry;
+  using sputnik::runtime::NativeTypeDescriptor;
+  using Ownership = sputnik::runtime::RuntimeForeignHandle::Ownership;
 
   NativeTagRegistry registry;
   expect(registry.lookup("absent") == nullptr,
@@ -11927,14 +11927,14 @@ void test_native_tag_registry() {
 // kind and return the verbatim source slice for the node's span.
 void test_ast_value_model() {
   const std::string source = "x > 5\n";
-  amber::lexer::Lexer lexer(source, "<ast-test>");
-  amber::lexer::LexResult lex = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<ast-test>");
+  sputnik::lexer::LexResult lex = lexer.lex();
   expect(lex.ok(), "ast value: lex ok");
-  amber::parser::Parser parser(lex.tokens);
-  amber::parser::ParseModuleResult mod = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex.tokens);
+  sputnik::parser::ParseModuleResult mod = parser.parse_module_unit();
   expect(mod.ok() && mod.items.size() == 1, "ast value: parse ok");
 
-  const amber::ast::Expr *expr = nullptr;
+  const sputnik::ast::Expr *expr = nullptr;
   for (const auto &nf : mod.items[0]->node_fields) {
     if (nf.name == "expr") {
       expr = nf.value.get();
@@ -11942,74 +11942,74 @@ void test_ast_value_model() {
   }
   expect(expr != nullptr, "ast value: found statement expr");
 
-  auto root = std::shared_ptr<const amber::ast::Expr>(std::move(mod.items[0]));
+  auto root = std::shared_ptr<const sputnik::ast::Expr>(std::move(mod.items[0]));
   auto src = std::make_shared<const std::string>(source);
-  auto node = std::make_shared<amber::runtime::RuntimeAstNode>();
+  auto node = std::make_shared<sputnik::runtime::RuntimeAstNode>();
   node->root = root;
   node->node = expr; // aliasing pointer into the root-owned tree
   node->source = src;
-  amber::runtime::Value value = amber::runtime::Value::ast_node(node);
+  sputnik::runtime::Value value = sputnik::runtime::Value::ast_node(node);
 
   expect(value.is_ast_node(), "value is an ast_node");
   expect(!value.is_integer() && !value.is_string() && !value.is_list(),
          "ast_node is distinct from scalar/collection kinds");
-  const std::shared_ptr<amber::runtime::RuntimeAstNode> got =
+  const std::shared_ptr<sputnik::runtime::RuntimeAstNode> got =
       value.as_ast_node();
   expect(got != nullptr && got->node == expr,
          "as_ast_node round-trips the aliasing node pointer");
-  expect(!amber::runtime::runtime_ast_node_kind(*got).empty() &&
-             amber::runtime::runtime_ast_node_kind(*got) == expr->kind,
-         "runtime_ast_node_kind reports the node's amber.ast.v1 kind");
-  expect(amber::runtime::runtime_ast_node_source(*got) == "x > 5",
+  expect(!sputnik::runtime::runtime_ast_node_kind(*got).empty() &&
+             sputnik::runtime::runtime_ast_node_kind(*got) == expr->kind,
+         "runtime_ast_node_kind reports the node's sputnik.ast.v1 kind");
+  expect(sputnik::runtime::runtime_ast_node_source(*got) == "x > 5",
          "runtime_ast_node_source returns the verbatim span slice");
 
   // Copy/move must preserve the payload (exercises both Value reps'
   // refcounting).
-  amber::runtime::Value copy = value;
+  sputnik::runtime::Value copy = value;
   expect(copy.is_ast_node() && copy.as_ast_node()->node == expr,
          "ast_node survives value copy");
 }
 
 // Run F1.5 expansion over a source module and return the result.
-amber::macros::ExpandResult expand_source(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<macro-sandbox-test>");
-  amber::lexer::LexResult lex = lexer.lex();
+sputnik::macros::ExpandResult expand_source(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<macro-sandbox-test>");
+  sputnik::lexer::LexResult lex = lexer.lex();
   expect(lex.ok(), "macro sandbox: lex ok");
-  amber::parser::Parser parser(lex.tokens);
-  amber::parser::ParseModuleResult mod = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex.tokens);
+  sputnik::parser::ParseModuleResult mod = parser.parse_module_unit();
   expect(mod.ok(), "macro sandbox: parse ok");
-  return amber::macros::expand_macros(mod.items, "sandbox.test", source);
+  return sputnik::macros::expand_macros(mod.items, "sandbox.test", source);
 }
 
-amber::runtime::ExecutionResult execute_expanded_probe(
+sputnik::runtime::ExecutionResult execute_expanded_probe(
     const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<macro-exec-test>");
-  amber::lexer::LexResult lex = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<macro-exec-test>");
+  sputnik::lexer::LexResult lex = lexer.lex();
   expect(lex.ok(), "macro exec: lex ok");
-  amber::parser::Parser parser(lex.tokens);
-  amber::parser::ParseModuleResult mod = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex.tokens);
+  sputnik::parser::ParseModuleResult mod = parser.parse_module_unit();
   expect(mod.ok(), "macro exec: parse ok");
-  amber::macros::ExpandResult expanded =
-      amber::macros::expand_macros(mod.items, "sandbox.exec", source);
+  sputnik::macros::ExpandResult expanded =
+      sputnik::macros::expand_macros(mod.items, "sandbox.exec", source);
   expect(expanded.ok, "macro exec: expansion ok, got: " + expanded.error);
-  amber::ast::expand_quotes(mod.items);
-  amber::binder::BindResult bind =
-      amber::binder::bind_module(mod.items, mod.module_name);
+  sputnik::ast::expand_quotes(mod.items);
+  sputnik::binder::BindResult bind =
+      sputnik::binder::bind_module(mod.items, mod.module_name);
   expect(bind.ok(), "macro exec: bind ok");
-  amber::hir::Program program =
-      amber::hir::lower_module(mod.items, mod.module_name, bind.graph);
-  amber::bytecode::EmitResult emit =
-      amber::bytecode::emit_program(program, mod.module_name);
+  sputnik::hir::Program program =
+      sputnik::hir::lower_module(mod.items, mod.module_name, bind.graph);
+  sputnik::bytecode::EmitResult emit =
+      sputnik::bytecode::emit_program(program, mod.module_name);
   expect(emit.ok(), "macro exec: emit ok");
-  const amber::bytecode::BcMethod *probe = method_by_name(emit.module, "probe");
+  const sputnik::bytecode::BcMethod *probe = method_by_name(emit.module, "probe");
   expect(probe != nullptr, "macro exec: probe method exists");
-  return amber::runtime::execute_code(emit.module, probe->entry_code_id);
+  return sputnik::runtime::execute_code(emit.module, probe->entry_code_id);
 }
 
 void test_macro_expander_sandbox() {
   // Positive control: an ordinary macro expands under the sandbox.
   {
-    const amber::macros::ExpandResult ok =
+    const sputnik::macros::ExpandResult ok =
         expand_source("macro def double(x):\n"
                       "  quote:\n"
                       "    unquote(x) + unquote(x)\n"
@@ -12022,7 +12022,7 @@ void test_macro_expander_sandbox() {
   // expander VM runs with the capability gate armed and nothing granted
   // (DESIGN-macro-system §10).
   {
-    const amber::macros::ExpandResult denied =
+    const sputnik::macros::ExpandResult denied =
         expand_source("macro def sneaky(x):\n"
                       "  data = fs.read_text(\"/etc/hosts\")\n"
                       "  return quote:\n"
@@ -12037,7 +12037,7 @@ void test_macro_expander_sandbox() {
   // A non-terminating macro exhausts the step budget instead of hanging the
   // build; the budget is shared with nested block VMs via RuntimeState.
   {
-    const amber::macros::ExpandResult spun =
+    const sputnik::macros::ExpandResult spun =
         expand_source("macro def spin(x):\n"
                       "  n = 0\n"
                       "  while true:\n"
@@ -12058,7 +12058,7 @@ void test_macro_call_channels() {
   // Keyword channel: passed keyword binds the Ast; an unknown keyword to a
   // macro without `**` is an expansion diagnostic (VM keyword binding fault).
   {
-    const amber::macros::ExpandResult unknown =
+    const sputnik::macros::ExpandResult unknown =
         expand_source("macro def scaled(x, factor: 2):\n"
                       "  #{x} * #{factor}\n"
                       "\n"
@@ -12070,7 +12070,7 @@ void test_macro_call_channels() {
 
   // A `*` spread of a non-literal operand cannot be expanded at compile time.
   {
-    const amber::macros::ExpandResult spread =
+    const sputnik::macros::ExpandResult spread =
         expand_source("macro def sum2(a, b):\n"
                       "  #{a} + #{b}\n"
                       "\n"
@@ -12085,7 +12085,7 @@ void test_macro_call_channels() {
 
   // A `**` spread of a non-literal operand cannot be expanded either.
   {
-    const amber::macros::ExpandResult kw_spread =
+    const sputnik::macros::ExpandResult kw_spread =
         expand_source("macro def scaled(x, factor: 2):\n"
                       "  #{x} * #{factor}\n"
                       "\n"
@@ -12101,7 +12101,7 @@ void test_macro_call_channels() {
   // The block channel is single-occupancy: a block suffix and a `&name`
   // block-pass on the same call is a diagnostic.
   {
-    const amber::macros::ExpandResult both =
+    const sputnik::macros::ExpandResult both =
         expand_source("macro def with_block(x, &blk):\n"
                       "  #{x}\n"
                       "\n"
@@ -12117,7 +12117,7 @@ void test_macro_call_channels() {
   // Block suffixes bind only through the ordinary `&blk` channel. Keeping a
   // positional parameter no longer makes the block disappear into `*args`.
   {
-    const amber::macros::ExpandResult positional =
+    const sputnik::macros::ExpandResult positional =
         expand_source("macro def old_shape(blk):\n"
                       "  return blk\n"
                       "\n"
@@ -12134,7 +12134,7 @@ void test_macro_call_channels() {
   // `.expressions` exposes the emitted expression nodes without statement
   // wrapper archaeology.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def emitted(x):\n"
         "  #{x} * 2\n"
         "\n"
@@ -12153,7 +12153,7 @@ void test_macro_call_channels() {
   }
 
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def substitute(expr):\n"
         "  replacement = quote:\n"
         "    21\n"
@@ -12170,7 +12170,7 @@ void test_macro_call_channels() {
   // parameter and the generated references in its body. ORM's `validate`
   // wrapper exercises this shape after `expect` expands the predicate.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def predicate(expr):\n"
         "  getter = quote:\n"
         "    record\n"
@@ -12197,7 +12197,7 @@ void test_macro_call_channels() {
   // Keyword-rest macros collect extra keywords (`**kwargs` binds a frozen
   // Map of Ast values; `.size` counts the entries).
   {
-    const amber::macros::ExpandResult kw_rest =
+    const sputnik::macros::ExpandResult kw_rest =
         expand_source("macro def count_opts(**opts):\n"
                       "  return Ast.lift(opts.size)\n"
                       "\n"
@@ -12208,7 +12208,7 @@ void test_macro_call_channels() {
 
   // Annotation macros use the full call channel, including keywords.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def named(d, label:):\n"
         "  q = quote:\n"
         "    def annotation_label():\n"
@@ -12232,7 +12232,7 @@ void test_macro_call_channels() {
   // `use` injection forwards keyword args and a block, with the enclosing
   // class as the first macro argument.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def with_model(cls, table: null, &blk):\n"
         "  expanded = blk()\n"
         "  q1 = quote:\n"
@@ -12267,7 +12267,7 @@ void test_macro_call_channels() {
   // A use macro may inject class-only members directly. They remain
   // declarations during statement splicing instead of being expression-wrapped.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "mixin Shared:\n"
         "  def value():\n"
         "    42\n"
@@ -12290,7 +12290,7 @@ void test_macro_call_channels() {
   // references with the same context. Otherwise `value` below lowers as an
   // unresolved constant lookup instead of a local load.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def install_echo(cls):\n"
         "  return quote:\n"
         "    class_method def echo(value = 0):\n"
@@ -12308,7 +12308,7 @@ void test_macro_call_channels() {
 
   // The same hygiene rule applies to block-suffix pattern parameters.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def install_block(cls):\n"
         "  return quote:\n"
         "    class_method def doubled():\n"
@@ -12328,7 +12328,7 @@ void test_macro_call_channels() {
   // A generated block body can include an Ast subtree built by an earlier quote.
   // ORM validations use this shape for `record.get(:field)` predicates.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def install_spliced_block(cls):\n"
         "  getter = quote:\n"
         "    record\n"
@@ -12349,7 +12349,7 @@ void test_macro_call_channels() {
 
   // Duplicate generated block spans must map to distinct binder scopes.
   {
-    const amber::runtime::ExecutionResult exec = execute_expanded_probe(
+    const sputnik::runtime::ExecutionResult exec = execute_expanded_probe(
         "macro def install_two_blocks(cls):\n"
         "  return quote:\n"
         "    class_method def total():\n"
@@ -12385,27 +12385,27 @@ void test_macro_exports_artifact_section() {
                                       "\n"
                                       "string_tag macro def sql(t):\n"
                                       "  return Ast.lift(t.parts.size)\n";
-  amber::lexer::Lexer provider_lexer(provider_source, "<artifact-provider>");
-  amber::lexer::LexResult provider_lex = provider_lexer.lex();
+  sputnik::lexer::Lexer provider_lexer(provider_source, "<artifact-provider>");
+  sputnik::lexer::LexResult provider_lex = provider_lexer.lex();
   expect(provider_lex.ok(), "artifact section: provider lex ok");
-  amber::parser::Parser provider_parser(provider_lex.tokens);
-  amber::parser::ParseModuleResult provider_mod =
+  sputnik::parser::Parser provider_parser(provider_lex.tokens);
+  sputnik::parser::ParseModuleResult provider_mod =
       provider_parser.parse_module_unit();
   expect(provider_mod.ok(), "artifact section: provider parse ok");
-  const std::vector<amber::macros::MacroExport> exports =
-      amber::macros::collect_macro_exports(provider_mod.items);
+  const std::vector<sputnik::macros::MacroExport> exports =
+      sputnik::macros::collect_macro_exports(provider_mod.items);
   expect(exports.size() == 2, "artifact section: both exports harvested");
 
   const std::string payload =
-      amber::macros::serialize_macro_exports(exports, provider_source);
-  expect(payload.rfind("amber.macro.exports.v2\n", 0) == 0,
+      sputnik::macros::serialize_macro_exports(exports, provider_source);
+  expect(payload.rfind("sputnik.macro.exports.v2\n", 0) == 0,
          "payload is schema-tagged");
   expect(payload.find("string_tag macro def sql") != std::string::npos,
          "payload persists the definition source slice");
 
   std::string error;
-  std::vector<amber::macros::MacroExport> reloaded =
-      amber::macros::parse_macro_exports(payload, "provider.am", &error);
+  std::vector<sputnik::macros::MacroExport> reloaded =
+      sputnik::macros::parse_macro_exports(payload, "provider.s", &error);
   expect(error.empty(), "payload parses back, got: " + error);
   expect(reloaded.size() == 2 && reloaded[0].public_name == "run_twice" &&
              reloaded[0].public_export &&
@@ -12415,7 +12415,7 @@ void test_macro_exports_artifact_section() {
          "reloaded definition reports its original source line");
 
   // Staging from the reloaded table behaves exactly like a source harvest.
-  amber::macros::MacroProviderMap providers;
+  sputnik::macros::MacroProviderMap providers;
   providers["provider.mod"] = std::move(reloaded);
   const std::string importer_source = "package app.artifact\n"
                                       "from provider.mod import run_twice\n"
@@ -12425,22 +12425,22 @@ void test_macro_exports_artifact_section() {
                                       "  run_twice:\n"
                                       "    y = y + 21\n"
                                       "  y\n";
-  amber::lexer::Lexer importer_lexer(importer_source, "<artifact-importer>");
-  amber::lexer::LexResult importer_lex = importer_lexer.lex();
-  amber::parser::Parser importer_parser(importer_lex.tokens);
-  amber::parser::ParseModuleResult importer_mod =
+  sputnik::lexer::Lexer importer_lexer(importer_source, "<artifact-importer>");
+  sputnik::lexer::LexResult importer_lex = importer_lexer.lex();
+  sputnik::parser::Parser importer_parser(importer_lex.tokens);
+  sputnik::parser::ParseModuleResult importer_mod =
       importer_parser.parse_module_unit();
   expect(importer_mod.ok(), "artifact section: importer parse ok");
-  const amber::macros::ExpandResult expanded = amber::macros::expand_macros(
+  const sputnik::macros::ExpandResult expanded = sputnik::macros::expand_macros(
       importer_mod.items, importer_mod.module_name, importer_source, providers);
   expect(expanded.ok,
          "expansion from a reloaded table succeeds, got: " + expanded.error);
 
   // A corrupted payload is a decode error, not a crash or a silent table.
   std::string corrupt_error;
-  const std::vector<amber::macros::MacroExport> corrupt =
-      amber::macros::parse_macro_exports("amber.macro.exports.v9\n0\n",
-                                         "provider.am", &corrupt_error);
+  const std::vector<sputnik::macros::MacroExport> corrupt =
+      sputnik::macros::parse_macro_exports("sputnik.macro.exports.v9\n0\n",
+                                         "provider.s", &corrupt_error);
   expect(corrupt.empty() && !corrupt_error.empty(),
          "unknown schema is a decode error");
 }
@@ -12451,7 +12451,7 @@ void test_macro_expansion_backtrace() {
   // `outer` emits a call to `failing`; `failing` raises at expansion time.
   // The diagnostic must name the failing macro AND the expansion it came
   // from, innermost first.
-  const amber::macros::ExpandResult chained =
+  const sputnik::macros::ExpandResult chained =
       expand_source("macro def failing(x):\n"
                     "  raise ValueError.new(\"boom\")\n"
                     "  return quote:\n"
@@ -12469,7 +12469,7 @@ void test_macro_expansion_backtrace() {
 
   // A self-recursive macro hits the depth limit; the backtrace summarizes
   // instead of printing all ~128 frames.
-  const amber::macros::ExpandResult runaway =
+  const sputnik::macros::ExpandResult runaway =
       expand_source("macro def spiral(x):\n"
                     "  spiral(#{x})\n"
                     "\n"
@@ -12496,20 +12496,20 @@ void test_cross_module_macro_staging() {
                                       "\n"
                                       "macro def private_macro(x):\n"
                                       "  return x\n";
-  amber::lexer::Lexer provider_lexer(provider_source, "<provider>");
-  amber::lexer::LexResult provider_lex = provider_lexer.lex();
+  sputnik::lexer::Lexer provider_lexer(provider_source, "<provider>");
+  sputnik::lexer::LexResult provider_lex = provider_lexer.lex();
   expect(provider_lex.ok(), "staging: provider lex ok");
-  amber::parser::Parser provider_parser(provider_lex.tokens);
-  amber::parser::ParseModuleResult provider_mod =
+  sputnik::parser::Parser provider_parser(provider_lex.tokens);
+  sputnik::parser::ParseModuleResult provider_mod =
       provider_parser.parse_module_unit();
   expect(provider_mod.ok(), "staging: provider parse ok");
-  std::vector<amber::macros::MacroExport> exports =
-      amber::macros::collect_macro_exports(provider_mod.items);
+  std::vector<sputnik::macros::MacroExport> exports =
+      sputnik::macros::collect_macro_exports(provider_mod.items);
   expect(exports.size() == 2 && exports[0].public_name == "run_twice" &&
              exports[0].public_export && !exports[1].public_export,
          "public macro and private helper are harvested with visibility");
 
-  amber::macros::MacroProviderMap providers;
+  sputnik::macros::MacroProviderMap providers;
   providers["provider.mod"] = std::move(exports);
 
   // Importer: binds the provider macro under a local alias and invokes it
@@ -12523,34 +12523,34 @@ void test_cross_module_macro_staging() {
       "  loop2:\n"
       "    y = y + 21\n"
       "  y\n";
-  amber::lexer::Lexer importer_lexer(importer_source, "<importer>");
-  amber::lexer::LexResult importer_lex = importer_lexer.lex();
+  sputnik::lexer::Lexer importer_lexer(importer_source, "<importer>");
+  sputnik::lexer::LexResult importer_lex = importer_lexer.lex();
   expect(importer_lex.ok(), "staging: importer lex ok");
-  amber::parser::Parser importer_parser(importer_lex.tokens);
-  amber::parser::ParseModuleResult importer_mod =
+  sputnik::parser::Parser importer_parser(importer_lex.tokens);
+  sputnik::parser::ParseModuleResult importer_mod =
       importer_parser.parse_module_unit();
   expect(importer_mod.ok(), "staging: importer parse ok");
 
-  const amber::macros::ExpandResult expanded = amber::macros::expand_macros(
+  const sputnik::macros::ExpandResult expanded = sputnik::macros::expand_macros(
       importer_mod.items, importer_mod.module_name, importer_source, providers);
   expect(expanded.ok,
          "cross-module expansion succeeds, got: " + expanded.error);
 
   // Compile and run the expanded importer: the imported macro spliced the
   // block twice, so probe() == 42.
-  amber::ast::expand_quotes(importer_mod.items);
-  amber::binder::BindResult bind =
-      amber::binder::bind_module(importer_mod.items, importer_mod.module_name);
+  sputnik::ast::expand_quotes(importer_mod.items);
+  sputnik::binder::BindResult bind =
+      sputnik::binder::bind_module(importer_mod.items, importer_mod.module_name);
   expect(bind.ok(), "staging: expanded importer binds");
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       importer_mod.items, importer_mod.module_name, bind.graph);
-  amber::bytecode::EmitResult emit =
-      amber::bytecode::emit_program(program, importer_mod.module_name);
+  sputnik::bytecode::EmitResult emit =
+      sputnik::bytecode::emit_program(program, importer_mod.module_name);
   expect(emit.ok(), "staging: expanded importer emits");
-  const amber::bytecode::BcMethod *probe = method_by_name(emit.module, "probe");
+  const sputnik::bytecode::BcMethod *probe = method_by_name(emit.module, "probe");
   expect(probe != nullptr, "staging: probe method exists");
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit.module, probe->entry_code_id);
   expect(exec.ok(), "staging: probe executes");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
          "imported macro expanded at the call site (probe == 42)");
@@ -12580,16 +12580,16 @@ void test_cross_module_macro_staging() {
                                           "\n"
                                           "string_tag macro def sql(t):\n"
                                           "  return Ast.lift(t.parts.size)\n";
-  amber::lexer::Lexer tag_provider_lexer(tag_provider_source, "<provider2>");
-  amber::lexer::LexResult tag_provider_lex = tag_provider_lexer.lex();
+  sputnik::lexer::Lexer tag_provider_lexer(tag_provider_source, "<provider2>");
+  sputnik::lexer::LexResult tag_provider_lex = tag_provider_lexer.lex();
   expect(tag_provider_lex.ok(), "alias staging: provider lex ok");
-  amber::parser::Parser tag_provider_parser(tag_provider_lex.tokens);
-  amber::parser::ParseModuleResult tag_provider_mod =
+  sputnik::parser::Parser tag_provider_parser(tag_provider_lex.tokens);
+  sputnik::parser::ParseModuleResult tag_provider_mod =
       tag_provider_parser.parse_module_unit();
   expect(tag_provider_mod.ok(), "alias staging: provider parse ok");
-  amber::macros::MacroProviderMap alias_providers;
+  sputnik::macros::MacroProviderMap alias_providers;
   alias_providers["provider.mod"] =
-      amber::macros::collect_macro_exports(tag_provider_mod.items);
+      sputnik::macros::collect_macro_exports(tag_provider_mod.items);
   expect(alias_providers["provider.mod"].size() == 5,
          "alias staging: all macro exports harvested");
 
@@ -12603,24 +12603,24 @@ void test_cross_module_macro_staging() {
       "def probe():\n"
       "  pg.each_value |value|:\n"
       "    value\n";
-  amber::lexer::Lexer runtime_alias_lexer(runtime_alias_source,
+  sputnik::lexer::Lexer runtime_alias_lexer(runtime_alias_source,
                                           "<runtime-alias-importer>");
-  amber::lexer::LexResult runtime_alias_lex = runtime_alias_lexer.lex();
+  sputnik::lexer::LexResult runtime_alias_lex = runtime_alias_lexer.lex();
   expect(runtime_alias_lex.ok(), "runtime alias importer lexes");
-  amber::parser::Parser runtime_alias_parser(runtime_alias_lex.tokens);
-  amber::parser::ParseModuleResult runtime_alias_mod =
+  sputnik::parser::Parser runtime_alias_parser(runtime_alias_lex.tokens);
+  sputnik::parser::ParseModuleResult runtime_alias_mod =
       runtime_alias_parser.parse_module_unit();
   expect(runtime_alias_mod.ok(), "runtime alias importer parses");
-  const amber::macros::ExpandResult runtime_alias_expanded =
-      amber::macros::expand_macros(runtime_alias_mod.items,
+  const sputnik::macros::ExpandResult runtime_alias_expanded =
+      sputnik::macros::expand_macros(runtime_alias_mod.items,
                                    runtime_alias_mod.module_name,
                                    runtime_alias_source, alias_providers);
   expect(runtime_alias_expanded.ok,
          "non-macro dotted block call survives staging, got: " +
              runtime_alias_expanded.error);
-  amber::ast::expand_quotes(runtime_alias_mod.items);
-  const amber::binder::BindResult runtime_alias_bind =
-      amber::binder::bind_module(runtime_alias_mod.items,
+  sputnik::ast::expand_quotes(runtime_alias_mod.items);
+  const sputnik::binder::BindResult runtime_alias_bind =
+      sputnik::binder::bind_module(runtime_alias_mod.items,
                                  runtime_alias_mod.module_name);
   expect(runtime_alias_bind.ok(),
          "non-macro dotted block call binds after macro staging");
@@ -12639,32 +12639,32 @@ void test_cross_module_macro_staging() {
                                             "    SELECT 1\n"
                                             "    \"\"\"\n"
                                             "  y + q + z\n";
-  amber::lexer::Lexer alias_lexer(alias_importer_source, "<alias-importer>");
-  amber::lexer::LexResult alias_lex = alias_lexer.lex();
+  sputnik::lexer::Lexer alias_lexer(alias_importer_source, "<alias-importer>");
+  sputnik::lexer::LexResult alias_lex = alias_lexer.lex();
   expect(alias_lex.ok(), "alias staging: importer lex ok");
-  amber::parser::Parser alias_parser(alias_lex.tokens);
-  amber::parser::ParseModuleResult alias_mod = alias_parser.parse_module_unit();
+  sputnik::parser::Parser alias_parser(alias_lex.tokens);
+  sputnik::parser::ParseModuleResult alias_mod = alias_parser.parse_module_unit();
   expect(alias_mod.ok(), "alias staging: importer parse ok");
-  const amber::macros::ExpandResult alias_expanded =
-      amber::macros::expand_macros(alias_mod.items, alias_mod.module_name,
+  const sputnik::macros::ExpandResult alias_expanded =
+      sputnik::macros::expand_macros(alias_mod.items, alias_mod.module_name,
                                    alias_importer_source, alias_providers);
   expect(alias_expanded.ok,
          "module-alias expansion succeeds, got: " + alias_expanded.error);
   {
-    amber::ast::expand_quotes(alias_mod.items);
-    amber::binder::BindResult bind =
-        amber::binder::bind_module(alias_mod.items, alias_mod.module_name);
+    sputnik::ast::expand_quotes(alias_mod.items);
+    sputnik::binder::BindResult bind =
+        sputnik::binder::bind_module(alias_mod.items, alias_mod.module_name);
     expect(bind.ok(), "alias staging: expanded importer binds");
-    amber::hir::Program program = amber::hir::lower_module(
+    sputnik::hir::Program program = sputnik::hir::lower_module(
         alias_mod.items, alias_mod.module_name, bind.graph);
-    amber::bytecode::EmitResult emit =
-        amber::bytecode::emit_program(program, alias_mod.module_name);
+    sputnik::bytecode::EmitResult emit =
+        sputnik::bytecode::emit_program(program, alias_mod.module_name);
     expect(emit.ok(), "alias staging: expanded importer emits");
-    const amber::bytecode::BcMethod *probe =
+    const sputnik::bytecode::BcMethod *probe =
         method_by_name(emit.module, "probe");
     expect(probe != nullptr, "alias staging: probe method exists");
-    const amber::runtime::ExecutionResult exec =
-        amber::runtime::execute_code(emit.module, probe->entry_code_id);
+    const sputnik::runtime::ExecutionResult exec =
+        sputnik::runtime::execute_code(emit.module, probe->entry_code_id);
     expect(exec.ok(), "alias staging: probe executes");
     // run_twice adds 20 twice; the tag has one part; provider-scoped `value`
     // emits 1 from inside the callable `scope` block.
@@ -12682,36 +12682,36 @@ void test_cross_module_macro_staging() {
                                            "\n"
                                            "def probe():\n"
                                            "  Box().answer()\n";
-  amber::lexer::Lexer default_alias_lexer(default_alias_source,
+  sputnik::lexer::Lexer default_alias_lexer(default_alias_source,
                                           "<default-alias-importer>");
-  amber::lexer::LexResult default_alias_lex = default_alias_lexer.lex();
+  sputnik::lexer::LexResult default_alias_lex = default_alias_lexer.lex();
   expect(default_alias_lex.ok(), "default alias staging: importer lex ok");
-  amber::parser::Parser default_alias_parser(default_alias_lex.tokens);
-  amber::parser::ParseModuleResult default_alias_mod =
+  sputnik::parser::Parser default_alias_parser(default_alias_lex.tokens);
+  sputnik::parser::ParseModuleResult default_alias_mod =
       default_alias_parser.parse_module_unit();
   expect(default_alias_mod.ok(), "default alias staging: importer parse ok");
-  const amber::macros::ExpandResult default_alias_expanded =
-      amber::macros::expand_macros(default_alias_mod.items,
+  const sputnik::macros::ExpandResult default_alias_expanded =
+      sputnik::macros::expand_macros(default_alias_mod.items,
                                    default_alias_mod.module_name,
                                    default_alias_source, alias_providers);
   expect(default_alias_expanded.ok,
          "default module-alias expansion succeeds, got: " +
              default_alias_expanded.error);
   {
-    amber::ast::expand_quotes(default_alias_mod.items);
-    amber::binder::BindResult bind = amber::binder::bind_module(
+    sputnik::ast::expand_quotes(default_alias_mod.items);
+    sputnik::binder::BindResult bind = sputnik::binder::bind_module(
         default_alias_mod.items, default_alias_mod.module_name);
     expect(bind.ok(), "default alias staging: expanded importer binds");
-    amber::hir::Program program = amber::hir::lower_module(
+    sputnik::hir::Program program = sputnik::hir::lower_module(
         default_alias_mod.items, default_alias_mod.module_name, bind.graph);
-    amber::bytecode::EmitResult emit =
-        amber::bytecode::emit_program(program, default_alias_mod.module_name);
+    sputnik::bytecode::EmitResult emit =
+        sputnik::bytecode::emit_program(program, default_alias_mod.module_name);
     expect(emit.ok(), "default alias staging: expanded importer emits");
-    const amber::bytecode::BcMethod *probe =
+    const sputnik::bytecode::BcMethod *probe =
         method_by_name(emit.module, "probe");
     expect(probe != nullptr, "default alias staging: probe method exists");
-    const amber::runtime::ExecutionResult exec =
-        amber::runtime::execute_code(emit.module, probe->entry_code_id);
+    const sputnik::runtime::ExecutionResult exec =
+        sputnik::runtime::execute_code(emit.module, probe->entry_code_id);
     expect(exec.ok(), "default alias staging: probe executes");
     expect(exec.value.is_integer() && exec.value.as_integer() == 42,
            "plain import dotted use macro expanded at the call site");
@@ -12726,14 +12726,14 @@ void test_cross_module_macro_staging() {
                                     "  pg.sql \"\"\"\n"
                                     "    SELECT 1\n"
                                     "    \"\"\"\n";
-  amber::lexer::Lexer spaced_lexer(spaced_source, "<spaced-importer>");
-  amber::lexer::LexResult spaced_lex = spaced_lexer.lex();
-  amber::parser::Parser spaced_parser(spaced_lex.tokens);
-  amber::parser::ParseModuleResult spaced_mod =
+  sputnik::lexer::Lexer spaced_lexer(spaced_source, "<spaced-importer>");
+  sputnik::lexer::LexResult spaced_lex = spaced_lexer.lex();
+  sputnik::parser::Parser spaced_parser(spaced_lex.tokens);
+  sputnik::parser::ParseModuleResult spaced_mod =
       spaced_parser.parse_module_unit();
   expect(spaced_mod.ok(), "alias staging: spaced module parses");
-  const amber::macros::ExpandResult spaced_expanded =
-      amber::macros::expand_macros(spaced_mod.items, spaced_mod.module_name,
+  const sputnik::macros::ExpandResult spaced_expanded =
+      sputnik::macros::expand_macros(spaced_mod.items, spaced_mod.module_name,
                                    spaced_source, alias_providers);
   expect(!spaced_expanded.ok &&
              spaced_expanded.error.find("string_tag") != std::string::npos,
@@ -12749,13 +12749,13 @@ void test_cross_module_macro_staging() {
                                        "\n"
                                        "def probe():\n"
                                        "  run_twice(1)\n";
-  amber::lexer::Lexer collision_lexer(collision_source, "<collision>");
-  amber::lexer::LexResult collision_lex = collision_lexer.lex();
-  amber::parser::Parser collision_parser(collision_lex.tokens);
-  amber::parser::ParseModuleResult collision_mod =
+  sputnik::lexer::Lexer collision_lexer(collision_source, "<collision>");
+  sputnik::lexer::LexResult collision_lex = collision_lexer.lex();
+  sputnik::parser::Parser collision_parser(collision_lex.tokens);
+  sputnik::parser::ParseModuleResult collision_mod =
       collision_parser.parse_module_unit();
   expect(collision_mod.ok(), "staging: collision module parses");
-  const amber::macros::ExpandResult collided = amber::macros::expand_macros(
+  const sputnik::macros::ExpandResult collided = sputnik::macros::expand_macros(
       collision_mod.items, collision_mod.module_name, collision_source,
       providers);
   expect(!collided.ok && collided.error.find("collides") != std::string::npos,
@@ -12785,16 +12785,16 @@ void test_string_tag_macro_staging() {
       "      Ast.node(\"AstListLiteral\", {elements: holes})\n"
       "    ]\n"
       "  })\n";
-  amber::lexer::Lexer provider_lexer(provider_source, "<tag-provider>");
-  amber::lexer::LexResult provider_lex = provider_lexer.lex();
+  sputnik::lexer::Lexer provider_lexer(provider_source, "<tag-provider>");
+  sputnik::lexer::LexResult provider_lex = provider_lexer.lex();
   expect(provider_lex.ok(), "tag staging: provider lex ok");
-  amber::parser::Parser provider_parser(provider_lex.tokens);
-  amber::parser::ParseModuleResult provider_mod =
+  sputnik::parser::Parser provider_parser(provider_lex.tokens);
+  sputnik::parser::ParseModuleResult provider_mod =
       provider_parser.parse_module_unit();
   expect(provider_mod.ok(), "tag staging: provider parse ok");
-  amber::macros::MacroProviderMap providers;
+  sputnik::macros::MacroProviderMap providers;
   providers["db.mock"] =
-      amber::macros::collect_macro_exports(provider_mod.items);
+      sputnik::macros::collect_macro_exports(provider_mod.items);
   expect(providers["db.mock"].size() == 1,
          "tag staging: string_tag export harvested");
 
@@ -12808,30 +12808,30 @@ void test_string_tag_macro_staging() {
                                       "def probe():\n"
                                       "  pair = " + tag_literal + "\n"
                                       "  pair[1][0]\n";
-  amber::lexer::Lexer importer_lexer(importer_source, "<tag-importer>");
-  amber::lexer::LexResult importer_lex = importer_lexer.lex();
+  sputnik::lexer::Lexer importer_lexer(importer_source, "<tag-importer>");
+  sputnik::lexer::LexResult importer_lex = importer_lexer.lex();
   expect(importer_lex.ok(), "tag staging: importer lex ok");
-  amber::parser::Parser importer_parser(importer_lex.tokens);
-  amber::parser::ParseModuleResult importer_mod =
+  sputnik::parser::Parser importer_parser(importer_lex.tokens);
+  sputnik::parser::ParseModuleResult importer_mod =
       importer_parser.parse_module_unit();
   expect(importer_mod.ok(), "tag staging: importer parse ok");
-  const amber::macros::ExpandResult expanded = amber::macros::expand_macros(
+  const sputnik::macros::ExpandResult expanded = sputnik::macros::expand_macros(
       importer_mod.items, importer_mod.module_name, importer_source, providers);
   expect(expanded.ok,
          "imported string_tag expansion succeeds, got: " + expanded.error);
-  amber::ast::expand_quotes(importer_mod.items);
-  amber::binder::BindResult bind =
-      amber::binder::bind_module(importer_mod.items, importer_mod.module_name);
+  sputnik::ast::expand_quotes(importer_mod.items);
+  sputnik::binder::BindResult bind =
+      sputnik::binder::bind_module(importer_mod.items, importer_mod.module_name);
   expect(bind.ok(), "tag staging: expanded importer binds");
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       importer_mod.items, importer_mod.module_name, bind.graph);
-  amber::bytecode::EmitResult emit =
-      amber::bytecode::emit_program(program, importer_mod.module_name);
+  sputnik::bytecode::EmitResult emit =
+      sputnik::bytecode::emit_program(program, importer_mod.module_name);
   expect(emit.ok(), "tag staging: expanded importer emits");
-  const amber::bytecode::BcMethod *probe = method_by_name(emit.module, "probe");
+  const sputnik::bytecode::BcMethod *probe = method_by_name(emit.module, "probe");
   expect(probe != nullptr, "tag staging: probe method exists");
-  const amber::runtime::ExecutionResult exec =
-      amber::runtime::execute_code(emit.module, probe->entry_code_id);
+  const sputnik::runtime::ExecutionResult exec =
+      sputnik::runtime::execute_code(emit.module, probe->entry_code_id);
   expect(exec.ok(), "tag staging: probe executes");
   expect(exec.value.is_integer() && exec.value.as_integer() == 42,
          "imported tag bound the interpolant as a parameter (probe == 42)");
@@ -12844,13 +12844,13 @@ void test_string_tag_macro_staging() {
                                     "\n"
                                     "def probe():\n"
                                     "  q(1)\n";
-  amber::lexer::Lexer misuse_lexer(misuse_source, "<tag-misuse>");
-  amber::lexer::LexResult misuse_lex = misuse_lexer.lex();
-  amber::parser::Parser misuse_parser(misuse_lex.tokens);
-  amber::parser::ParseModuleResult misuse_mod =
+  sputnik::lexer::Lexer misuse_lexer(misuse_source, "<tag-misuse>");
+  sputnik::lexer::LexResult misuse_lex = misuse_lexer.lex();
+  sputnik::parser::Parser misuse_parser(misuse_lex.tokens);
+  sputnik::parser::ParseModuleResult misuse_mod =
       misuse_parser.parse_module_unit();
   expect(misuse_mod.ok(), "tag staging: misuse module parses");
-  const amber::macros::ExpandResult misused = amber::macros::expand_macros(
+  const sputnik::macros::ExpandResult misused = sputnik::macros::expand_macros(
       misuse_mod.items, misuse_mod.module_name, misuse_source, providers);
   expect(!misused.ok && misused.error.find("string_tag") != std::string::npos,
          "ordinary call of a string_tag macro is a diagnostic, got: " +
@@ -12993,7 +12993,7 @@ int main() {
   test_runtime_watch_ivar_sink_may_reenter_same_object();
   test_runtime_watch_throwing_sink_commits_and_releases_delivery();
   test_runtime_watch_parallel_task_bookkeeping();
-  test_runtime_amber_tasks_execute_without_global_interpreter_lock();
+  test_runtime_sputnik_tasks_execute_without_global_interpreter_lock();
   test_runtime_integer_specialized_op_preserves_watch_local_write();
   test_runtime_compare_branch_preserves_debug_local();
   test_runtime_watch_capture_uses_shared_storage_cell();

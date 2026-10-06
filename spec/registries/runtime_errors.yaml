@@ -1,5 +1,5 @@
-schema: amber.runtime_errors.registry.v2
-spec_anchor: amber_unified_final_spec.md
+schema: sputnik.runtime_errors.registry.v2
+spec_anchor: sputnik_unified_final_spec.md
 errors:
   - name: NameError
     parent: Exception

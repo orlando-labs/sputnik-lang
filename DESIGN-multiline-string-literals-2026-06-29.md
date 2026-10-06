@@ -6,10 +6,10 @@ Scope: a surface form for long, formatted, multi-line string literals (SQL,
 HTML, shell scripts, JSON fixtures, help text) with indentation that follows the
 surrounding code but is stripped from the value. Reviews the Ruby squiggly-
 heredoc baseline and three alternatives, recommends one, and pins how it reuses
-Amber's existing string machinery.
-Follows: `amber_unified_final_spec.md` §7 (interpolated string literals, line
+Sputnik's existing string machinery.
+Follows: `sputnik_unified_final_spec.md` §7 (interpolated string literals, line
 ~6432), §8.1 (`AstStringLiteral` parts model, line ~6539), §6/§7.4
-(`Amber.stringify`, lines ~6398/~6516), invariant "Privacy/Taint profile labels
+(`Sputnik.stringify`, lines ~6398/~6516), invariant "Privacy/Taint profile labels
 propagate through string interpolation" (line 6022), and the lexer's
 INDENT/DEDENT layout model (lines ~21945, ~22107). Interacts with
 `DESIGN-macro-system-2026-06-29.md` (`string_tag macro def` surface) and the
@@ -19,17 +19,17 @@ INDENT/DEDENT layout model (lines ~21945, ~22107). Interacts with
 
 ## 1. The problem and the one constraint that decides it
 
-Today Amber has exactly one string surface: the double-quoted, single-logical-
+Today Sputnik has exactly one string surface: the double-quoted, single-logical-
 line interpolated literal (§7). A SQL query or HTML fragment must be written as
 
-```amber
+```sputnik
 sql = "SELECT id, name\nFROM #{table}\nWHERE active = #{flag}\n"
 ```
 
 — `\n`-laden, unreadable, and impossible to diff cleanly. Every language solves
-this; the question is *which* solution fits Amber.
+this; the question is *which* solution fits Sputnik.
 
-**The deciding constraint: Amber is indentation-significant.** The lexer emits
+**The deciding constraint: Sputnik is indentation-significant.** The lexer emits
 structural `INDENT`/`DEDENT`/`NEWLINE` tokens (§ lexer, ~21945) and blocks are
 `INDENT Statement+ DEDENT` (~22107). A multi-line string lives in tension with
 this: its body contains newlines and leading whitespace that are *data*, not
@@ -39,7 +39,7 @@ while keeping that indentation *out of the value*.
 
 This constraint is the whole reason Ruby's `<<~EOS` is the wrong thing to copy.
 
-## 2. Baseline: Ruby squiggly heredoc — and why it's a poor fit for Amber
+## 2. Baseline: Ruby squiggly heredoc — and why it's a poor fit for Sputnik
 
 ```ruby
 conn.execute(<<~SQL)
@@ -49,7 +49,7 @@ SQL
 ```
 
 What's nice: the body is indented under the statement and `<<~` strips the
-common leading whitespace. What makes it a bad fit for Amber specifically:
+common leading whitespace. What makes it a bad fit for Sputnik specifically:
 
 1. **The body floats away from its position in the expression.** `<<~SQL` is a
    placeholder token sitting mid-expression (inside `execute(...)`), but the
@@ -57,7 +57,7 @@ common leading whitespace. What makes it a bad fit for Amber specifically:
    the body. In a NEWLINE-terminated grammar this is hostile: the statement's
    logical line ends, then more lines belong to a token from the previous line.
    Two heredocs on one line (`foo(<<~A, <<~B)`) compounds it. Ruby tolerates
-   this because newlines are not significant; Amber's are.
+   this because newlines are not significant; Sputnik's are.
 2. **It introduces a second, ad-hoc indentation algorithm** (strip the common
    prefix of body lines) bolted *next to* the real INDENT/DEDENT one, with its
    own edge cases (blank lines, tabs-vs-spaces, the terminator's own indent).
@@ -75,9 +75,9 @@ interpolation) and reject the *mechanism*.
 ### A. Delimited text block `"""…"""` with structural dedent  ← recommended
 
 Borrowed from Java text blocks / Swift multiline strings / Scala 3, adapted to
-Amber's interpolation:
+Sputnik's interpolation:
 
-```amber
+```sputnik
 sql = """
   SELECT id, name
   FROM #{table}
@@ -103,7 +103,7 @@ Rules:
   unlike the heredoc's float-away terminator.
 - **`#{}` interpolation, escapes, and `\#` all work unchanged.** The body is the
   same `StringPart*` stream as §7 — `TextChunk | EscapeSequence | Interpolation`
-  — so HIR lowering to `Amber.stringify` (§7.4) is *identical*; only the AST's
+  — so HIR lowering to `Sputnik.stringify` (§7.4) is *identical*; only the AST's
   `quote_kind` changes (see §5).
 
 Trade-off: it's still a delimited expression (good — composes everywhere a
@@ -112,10 +112,10 @@ string does), but the body is not a layout block, so the lexer must carry one
 
 ### B. Layout-native block string (reuse INDENT/DEDENT)
 
-The most "Amber-native" idea: don't suspend layout — *use* it. A keyword opens a
+The most "Sputnik-native" idea: don't suspend layout — *use* it. A keyword opens a
 real block whose body is captured as text:
 
-```amber
+```sputnik
 sql = text:
   SELECT id, name
   FROM #{table}
@@ -142,7 +142,7 @@ Why it's the runner-up, not the pick:
 
 ### C. Implicit adjacent-literal concatenation (C / Python style)
 
-```amber
+```sputnik
 sql = "SELECT id, name\n"
       "FROM #{table}\n"
       "WHERE active = #{flag}\n"
@@ -154,7 +154,7 @@ Mentioned only to dismiss.
 
 ### D. Margin-marker + runtime strip (Scala `.stripMargin`)
 
-```amber
+```sputnik
 sql = "...\n  |SELECT *\n  |FROM x".stripMargin
 ```
 
@@ -202,17 +202,17 @@ AST/HIR impact is deliberately tiny:
   stays syntax-faithful — the raw body text and the strip column are recorded so
   the form round-trips (formatter / `Ast.to_source`).
 - **HIR (invariant #2):** the dedent is applied during lowering, producing the
-  same explicit `Amber.stringify`-and-concatenate sequence §7.4 already
+  same explicit `Sputnik.stringify`-and-concatenate sequence §7.4 already
   specifies. Downstream stages see an ordinary built string; **no new HIR or
   bytecode** is introduced.
 
-## 6. The taint/privacy angle — where Amber beats the baseline
+## 6. The taint/privacy angle — where Sputnik beats the baseline
 
 Spec invariant (line 6022): privacy/taint labels propagate through
 interpolation. A `"""…"""` SQL string with `#{user_input}` therefore *already*
 carries the taint of its interpolants into the built value — so a
 capability/sink that refuses tainted SQL can reject it. Ruby's heredoc offers
-nothing here. This is the first way Amber's version is safer, for free.
+nothing here. This is the first way Sputnik's version is safer, for free.
 
 ## 7. Tagged text blocks — the real win, via the macro system
 
@@ -222,7 +222,7 @@ macro invoked by a prefix on a text block; it receives the literal's `parts`
 (static `TextChunk`s plus the interpolant `Ast`s) **unevaluated**, exactly like
 JS tagged templates or Scala `sql"…"` interpolators, and runs at F1.5:
 
-```amber
+```sputnik
 rows = conn.execute(sql"""
   SELECT id, name
   FROM users
@@ -259,7 +259,7 @@ is a compile-time diagnostic, like every other macro-only shape.
 in v1 is an imported macro identifier, not an arbitrary expression; use import
 aliases for dialects or competing providers:
 
-```amber
+```sputnik
 package db.postgres
 export macro sql
 
@@ -267,7 +267,7 @@ string_tag macro def sql(t as Ast.StringTemplate) -> Ast:
   Sql.expand(t, dialect: Sql.Postgres)
 ```
 
-```amber
+```sputnik
 from db.postgres import sql as psql
 from db.sqlite import sql as sqlite_sql
 
@@ -326,10 +326,10 @@ by hoping a caller remembered the right helper:
 ### 7.1 The ERB question — output tag vs control-flow tag
 
 The natural follow-on: ERB gives templates *control flow* (`<% items.each %> …
-<% end %>`), not just value substitution. Can Amber's text blocks offer the same
+<% end %>`), not just value substitution. Can Sputnik's text blocks offer the same
 feature set with different delimiters? Yes — and the mapping is:
 
-| ERB         | Role                                   | Amber                          |
+| ERB         | Role                                   | Sputnik                          |
 |-------------|----------------------------------------|--------------------------------|
 | `<%= e %>`  | evaluate **and emit** one value        | `#{ e }` — already exact (§7)  |
 | `<% s %>`   | evaluate, **emit nothing** (loop/cond) | `%for … :` / `%if … :` (§7.2)  |
@@ -344,11 +344,11 @@ is a *value* — concatenate static chunks and stringified interpolants left to
 right (§7.4). `<% each %>…<% end %>` is categorically different: it repeats or
 omits *regions of template text*, i.e. it embeds a statement language inside a
 string. Putting that in the base literal turns every string into a mini-program
-and breaks the "syntax-faithful parse, HIR just lowers to `Amber.stringify`"
+and breaks the "syntax-faithful parse, HIR just lowers to `Sputnik.stringify`"
 model. The base layer's answer to "where's my loop?" is the JSX answer —
-`#{}` already takes any Amber expression:
+`#{}` already takes any Sputnik expression:
 
-```amber
+```sputnik
 """
 <ul>
 #{ items.map |i|: "<li>#{i.name}</li>".join("") }
@@ -363,7 +363,7 @@ conditional = `if`-expression. The base literal stays a pure value.
 
 ERB-class control flow belongs in **tagged** blocks, because `html"""…"""` is a
 macro (§7) that receives the parts unevaluated at F1.5 and can compile its own
-embedded control syntax down to ordinary Amber AST (a loop/branch over a string
+embedded control syntax down to ordinary Sputnik AST (a loop/branch over a string
 builder) — typed and zero runtime cost. Three candidate spellings:
 
 - **X — ERB-faithful dual delimiters.** `#{ e }` emits, `#%{ s }` (or literal
@@ -376,9 +376,9 @@ builder) — typed and zero runtime cost. Three candidate spellings:
 
 - **Y — structured, layout-native control (recommended).** The control tag
   opens a *real* `INDENT` block of template text, closed by `DEDENT` — the same
-  rule as every other Amber block (lexer ~22107):
+  rule as every other Sputnik block (lexer ~22107):
 
-  ```amber
+  ```sputnik
   html"""
     <ul>
     %for item in items:
@@ -398,16 +398,16 @@ builder) — typed and zero runtime cost. Three candidate spellings:
   regardless of nesting depth.
 
   **Sigil — `%`, not `#`.** Control directives must *not* reuse `#`: `#` is
-  Amber's comment character (§7.2 escapes, line ~6473), so `#for item in items:`
+  Sputnik's comment character (§7.2 escapes, line ~6473), so `#for item in items:`
   reads as a commented-out loop and `#(…)` reads as a comment. Emit keeps `#{…}`
   (the brace makes it unmistakably not a comment, and it stays consistent with
   base `"""`), while control takes `%` at the (dedent-relative) line start —
-  which (a) collides with nothing in Amber syntax there (`%` is only the mid-line
+  which (a) collides with nothing in Sputnik syntax there (`%` is only the mid-line
   modulo operator), (b) is *not* comment-like, (c) has direct precedent in
   eRuby/Rails view trim-mode, where a leading `%` means "this line is code, not
   markup" — exactly the `<% %>` role, and (d) keeps the ERB rhyme already in play
   (`#{}≡<%=%>`, so control inherits the `%` of `<% %>`). Alternatives weighed and
-  passed: `@for` (Razor) overloads Amber's instance-variable sigil; `{% for %}`
+  passed: `@for` (Razor) overloads Sputnik's instance-variable sigil; `{% for %}`
   (Jinja) is the unstructured open/close form Y replaces, and its `%}` is noise
   on a structural line. A literal leading `%` in body text is escaped `%%`.
 
@@ -440,11 +440,11 @@ opt into the `%for`/`%if` surface. Each tag macro declares which control tags it
 honors — an unrecognized control tag in a tag that doesn't support it is a
 compile-time diagnostic, not silent text.
 
-Implementation note: the base lexer still suspends ordinary Amber layout while
+Implementation note: the base lexer still suspends ordinary Sputnik layout while
 inside a text block (§3.A). A template-shaped tag may parse `%` control lines
 from the template body using the body text's relative indentation and then emit
-ordinary Amber AST. "Layout-native" here means the tag's template grammar reuses
-Amber's indentation discipline; it does not mean third-party packages extend the
+ordinary Sputnik AST. "Layout-native" here means the tag's template grammar reuses
+Sputnik's indentation discipline; it does not mean third-party packages extend the
 core lexer with new `INDENT`/`DEDENT` tokens after parsing.
 
 ## 8. Edge cases to pin (for the eventual spec patch)

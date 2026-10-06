@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct RuntimeTextWriteResult {
   bool ok = true;
@@ -129,4 +129,4 @@ private:
   std::shared_ptr<Impl> impl_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct Value;
 class RuntimeHttpServerRequest;
@@ -650,4 +650,4 @@ RuntimeIoStatus runtime_fs_rename(const RuntimePath &from,
 RuntimeIoStatus runtime_fs_copy(const RuntimePath &from, const RuntimePath &to,
                                 std::size_t *count);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

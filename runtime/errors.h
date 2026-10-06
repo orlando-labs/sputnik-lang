@@ -4,7 +4,7 @@
 #include <optional>
 #include <string>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 inline constexpr std::uint32_t kRuntimeErrorFieldOption = 1U << 0U;
 inline constexpr std::uint32_t kRuntimeErrorFieldValue = 1U << 1U;
@@ -23,4 +23,4 @@ runtime_error_default_exit_code(std::uint16_t error_id);
 const char *runtime_error_default_message(std::uint16_t error_id);
 std::uint32_t runtime_error_field_bit(const std::string &name);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

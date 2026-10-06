@@ -2,7 +2,7 @@
 
 Status: implemented runtime design
 Date: 2026-07-02
-Target: Amber standard library `Time` / `TimePeriod` extension
+Target: Sputnik standard library `Time` / `TimePeriod` extension
 Scope: time-zone-aware `Time` values, fixed-offset and IANA time-zone lookup,
 local calendar boundary helpers, expanded `Time.parse`, and formatted
 `Time#to_str`
@@ -18,7 +18,7 @@ The extension adds an attached display/resolution time zone so that field access
 formatting, and local calendar helpers can be expressed in user-facing civil
 time.
 
-The surface keeps Amber's stdlib conventions:
+The surface keeps Sputnik's stdlib conventions:
 
 - lower_snake_case selectors;
 - pure methods by default;
@@ -39,7 +39,7 @@ The instant determines equality, ordering, Unix epoch fields, and duration
 difference. The zone determines calendar fields, `to_str`, parsing of local
 texts, and helpers such as `start_of_day`.
 
-```amber
+```sputnik
 t = Time.parse("2026-07-02T12:00:00Z")
 
 t.in_tz("Europe/Moscow").to_str
@@ -62,7 +62,7 @@ Both operations are pure and return a new `Time`.
 
 The brainstormed mutating forms are deliberately not adopted:
 
-```amber
+```sputnik
 time.in_tz!(zone)       # not provided
 time.as_tz!(zone)       # not provided
 time.time_zone = zone   # not provided
@@ -71,19 +71,19 @@ time.time_zone = zone   # not provided
 `Time` should remain scalar-like. A call site that changes a time's zone should
 produce a new value:
 
-```amber
+```sputnik
 local = time.in_tz("Europe/Moscow")
 wall  = time.as_tz("Europe/Moscow")
 ```
 
-This preserves the Amber mutation law: no bang, no receiver mutation; no
+This preserves the Sputnik mutation law: no bang, no receiver mutation; no
 setter-like spelling for what is better modeled as value transformation.
 
 ## 4. `TimeZone`
 
 Introduce an immutable `TimeZone` value type.
 
-```amber
+```sputnik
 utc = TimeZone.utc
 moscow = TimeZone["Europe/Moscow"]
 fixed = TimeZone.offset("+03:00")
@@ -92,7 +92,7 @@ same = Time.time_zone("Europe/Moscow")
 
 Core API:
 
-```amber
+```sputnik
 TimeZone.utc
 TimeZone.offset("+03:00")
 TimeZone.offset(seconds: 10_800)
@@ -124,7 +124,7 @@ same kind of replay care as wall-clock time. `Time.parse` does not silently use
 
 ## 5. Zone conversion and reinterpretation
 
-```amber
+```sputnik
 time.time_zone              # -> TimeZone
 time.in_time_zone(zone)     # alias: in_tz
 time.as_time_zone(zone)     # alias: as_tz
@@ -137,7 +137,7 @@ name such as `"Europe/Moscow"`.
 
 `in_time_zone` keeps the instant unchanged:
 
-```amber
+```sputnik
 t = Time.parse("2026-07-02T12:00:00Z")
 m = t.in_tz("Europe/Moscow")
 
@@ -153,7 +153,7 @@ m.hour
 `as_time_zone` keeps local fields unchanged and resolves them in the requested
 zone:
 
-```amber
+```sputnik
 t = Time.parse("2026-07-02T12:00:00Z")
 m = t.as_tz("Europe/Moscow")
 
@@ -167,7 +167,7 @@ m.in_tz(:utc).to_str
 Because local civil times can be invalid or ambiguous during daylight-saving
 transitions, `as_time_zone` accepts explicit resolution policy:
 
-```amber
+```sputnik
 time.as_tz(
   "America/New_York",
   on_gap: "raise",      # "raise" | :forward | :backward
@@ -188,7 +188,7 @@ allowing strict code to request `on_fold: "raise"`.
 
 Existing field methods become zone-aware:
 
-```amber
+```sputnik
 time.year
 time.month
 time.day
@@ -210,7 +210,7 @@ rollover. Fixed-duration arithmetic remains instant arithmetic.
 
 Canonical names use `start_of_*`.
 
-```amber
+```sputnik
 time.start_of_minute
 time.end_of_minute
 time.start_of_hour
@@ -229,7 +229,7 @@ time.end_of_year
 
 Discouraged aliases exist for Rails familiarity:
 
-```amber
+```sputnik
 time.beginning_of_day
 time.beginning_of_week
 time.beginning_of_month
@@ -246,7 +246,7 @@ Boundary helpers are pure. They return new `Time` values in the receiver's zone.
 civil time. It must not be implemented as `start + 24.hours - 1.nanosecond`,
 because DST days can be shorter or longer than 24 hours.
 
-```amber
+```sputnik
 time.in_tz("America/New_York").start_of_day
 # local New York midnight
 ```
@@ -256,7 +256,7 @@ time.in_tz("America/New_York").start_of_day
 `Time.parse` accepts an optional `format:` keyword. The format may be a `Symbol`
 preset or a `Str` pattern.
 
-```amber
+```sputnik
 Time.parse(text)
 Time.parse(text, format: :auto)
 Time.parse(text, format: :iso8601)
@@ -266,7 +266,7 @@ Time.parse(text, format: "%d.%m.%Y %H:%M", zone: "+03:00")
 
 ### 8.1 Parse signature
 
-```amber
+```sputnik
 Time.parse(
   text,
   format: :auto,
@@ -340,7 +340,7 @@ format string and zone resolver explicitly support them.
 
 A string format is a strftime-compatible pattern used for parsing:
 
-```amber
+```sputnik
 Time.parse("02/07/2026 15:30", format: "%d/%m/%Y %H:%M", zone: "+03:00")
 ```
 
@@ -372,7 +372,7 @@ Unsupported directives raise `ArgumentError`. Invalid text raises
 `to_str` is the encouraged formatting API. It accepts zero or one positional
 argument. The argument may be a `Symbol` preset or a `Str` pattern.
 
-```amber
+```sputnik
 time.to_str
 time.to_str(:iso8601)
 time.to_str(:date)
@@ -414,7 +414,7 @@ arguments.
 `to_json` should keep emitting an ISO-8601 string. For UTC values this is
 unchanged. For non-UTC display zones, v1 should emit the offset form:
 
-```amber
+```sputnik
 time.in_tz("Europe/Moscow").to_json
 # "\"2026-07-02T15:00:00+03:00\""
 ```

@@ -1,7 +1,7 @@
 {
-  "format": "amber.corpus.meta.v1",
+  "format": "sputnik.corpus.meta.v1",
   "phase": "run",
-  "source": "source.am",
+  "source": "source.s",
   "expect": "expect.run.json",
   "entry": "probe"
 }

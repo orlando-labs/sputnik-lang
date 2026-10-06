@@ -1,9 +1,9 @@
 (() => {
   document.body.innerHTML = `
     <header class="site-header">
-      <a class="brand" href="../index.html" aria-label="Amber home">
-        <span class="brand-gem"><img src="../assets/amber-logo.jpg" alt="" /></span>
-        <span>Amber</span>
+      <a class="brand" href="../index.html" aria-label="Sputnik home">
+        <span class="brand-gem"><img src="../assets/sputnik-mark.png" alt="" /></span>
+        <span>Sputnik</span>
       </a>
       <nav class="main-nav" aria-label="Primary navigation">
         <a href="../index.html#features" data-i18n="nav.features">Возможности</a>
@@ -26,8 +26,8 @@
     <main id="module-page-root" class="module-page-root"></main>
     <footer>
       <a class="brand" href="../index.html">
-        <span class="brand-gem"><img src="../assets/amber-logo.jpg" alt="" /></span>
-        <span>Amber</span>
+        <span class="brand-gem"><img src="../assets/sputnik-mark.png" alt="" /></span>
+        <span>Sputnik</span>
       </a>
       <p data-i18n="footer.text">Expressive language. Verified machine.</p>
       <span>runtime/stdlib_registry.cpp</span>
@@ -55,7 +55,7 @@
     }
   };
 
-  const highlightAmber = (source) => {
+  const highlightSputnik = (source) => {
     const escaped = source
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
@@ -88,7 +88,7 @@
   const render = (lang = "ru") => {
     const root = document.querySelector("#module-page-root");
     const id = document.body.dataset.module;
-    const modules = window.AMBER_MODULES || [];
+    const modules = window.SPUTNIK_MODULES || [];
     const index = modules.findIndex((item) => item.id === id);
     const module = modules[index];
     if (!root || !module) {
@@ -98,7 +98,7 @@
 
     const previous = modules[(index - 1 + modules.length) % modules.length];
     const next = modules[(index + 1) % modules.length];
-    document.title = `Amber · ${module.title}`;
+    document.title = `Sputnik · ${module.title}`;
 
     root.innerHTML = `
       <aside class="module-page-sidebar">
@@ -116,7 +116,7 @@
         <header class="module-reference-head">
           <div class="module-icon module-icon-large">${module.icon}</div>
           <div>
-            <p>Amber VM · prelude</p>
+            <p>Sputnik VM · prelude</p>
             <h1>${module.title}</h1>
             <div class="module-reference-description">${module.description[lang]}</div>
           </div>
@@ -137,7 +137,7 @@
                   <button type="button" data-copy-method="${methodIndex}">
                     ${labels[lang].copy}
                   </button>
-                  <pre><code>${highlightAmber(item.example)}</code></pre>
+                  <pre><code>${highlightSputnik(item.example)}</code></pre>
                 </div>
               </section>
             `).join("")}
@@ -167,5 +167,5 @@
     });
   };
 
-  window.renderAmberModulePage = render;
+  window.renderSputnikModulePage = render;
 })();

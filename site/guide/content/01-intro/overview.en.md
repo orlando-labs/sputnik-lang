@@ -1,7 +1,7 @@
 ---
 id: overview
 title: Language overview
-summary: What Amber is, how to read this Guide, and how the knowledge graph works.
+summary: What Sputnik is, how to read this Guide, and how the knowledge graph works.
 category: intro
 order: 10
 prerequisites: []
@@ -14,13 +14,13 @@ spec_refs:
 
 # Language overview
 
-Amber is a compact language for a no-GIL VM. It takes Python readability, Ruby
+Sputnik is a compact language for a no-GIL VM. It takes Python readability, Ruby
 plasticity, pattern matching and modern data-flow syntax, then lowers them into
 bytecode with an explicit lowering model: nice to write, predictable to compile.
 
 This **Guide** is a teaching layer on top of the formal
 [specification](spec:1-дизайн-якоря-языка). It uncovers the language step by
-step, on real, verifiable examples. Every code block is a working Amber program,
+step, on real, verifiable examples. Every code block is a working Sputnik program,
 and a `# =>` comment shows its actual result.
 
 > [!note]
@@ -30,16 +30,16 @@ and a `# =>` comment shows its actual result.
 
 ## How to read the examples
 
-The unit of code in Amber is the expression. `if`, `case`, loops and blocks all
+The unit of code in Sputnik is the expression. `if`, `case`, loops and blocks all
 return values, so programs often end with a result expression.
 
-```amber
+```sputnik
 def probe():
-  greeting = "Amber"
+  greeting = "Sputnik"
   "#{greeting}:#{2 + 3}"
 
 probe()
-# => "Amber:5"
+# => "Sputnik:5"
 ```
 
 String interpolation `#{...}` evaluates an expression and splices in its string
@@ -53,7 +53,7 @@ The Guide is organized as a graph, not a linear book. Every page has:
 - **prerequisites** — topics worth reading first;
 - **related topics** — where to go next.
 
-Start with blocks and functions — the load-bearing shapes of Amber syntax — then
+Start with blocks and functions — the load-bearing shapes of Sputnik syntax — then
 move on to pattern matching.
 
 > [!tip]

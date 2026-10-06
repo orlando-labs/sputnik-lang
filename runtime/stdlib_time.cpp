@@ -31,7 +31,7 @@
 
 #include <unistd.h>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -467,7 +467,7 @@ void push_unique_root(std::vector<std::string> *roots, std::string root) {
 
 std::vector<std::string> zoneinfo_roots() {
   std::vector<std::string> roots;
-  if (const char *env = std::getenv("AMBER_TZDB_DIR")) {
+  if (const char *env = std::getenv("SPUTNIK_TZDB_DIR")) {
     push_unique_root(&roots, env);
   }
   if (const std::optional<std::string> exe_dir = executable_dirname()) {
@@ -3370,4 +3370,4 @@ void register_time_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::build {
+namespace sputnik::build {
 
 struct BuildDiagnostic {
   std::string error_name;
@@ -25,14 +25,14 @@ struct BuildProfileSet {
   std::vector<std::string> required_features;
   std::vector<std::string> optional_features;
   std::vector<std::string> forbidden_features;
-  // amber.numeric-profile.v1 manifest mirror (profiles.numeric). Empty means
+  // sputnik.numeric-profile.v1 manifest mirror (profiles.numeric). Empty means
   // unspecified: source preambles (or the Int64/checked defaults) apply.
   std::string numeric_int;
   std::string numeric_overflow;
 };
 
 struct BuildManifest {
-  std::string schema = "amber.build.v1";
+  std::string schema = "sputnik.build.v1";
   std::string name;
   std::string root_module;
   BuildProfileSet profiles;
@@ -41,7 +41,7 @@ struct BuildManifest {
   // Native extension units, lowered from the package manifest's [[native]]
   // sections. Reuses the package shape so there is one schema for the build to
   // compile/link against (native-packages design §5).
-  std::vector<amber::pkg::PackageNativeExtension> native_extensions;
+  std::vector<sputnik::pkg::PackageNativeExtension> native_extensions;
 };
 
 struct BuildManifestResult {
@@ -95,7 +95,7 @@ struct BuildSummary {
   bool native_graph_full_coverage = false;
   bool native_graph_runtime_bridge = false;
   bool native_graph_vm_independent = false;
-  std::vector<amber::pkg::PackageNativeExtensionMetadata> native_extensions;
+  std::vector<sputnik::pkg::PackageNativeExtensionMetadata> native_extensions;
   BuildProfileSet profiles;
   std::vector<BuildArtifactRecord> artifacts;
   std::vector<BuildDiagnostic> diagnostics;
@@ -117,4 +117,4 @@ std::string summary_to_json(const BuildSummary &summary);
 std::string
 diagnostics_to_string(const std::vector<BuildDiagnostic> &diagnostics);
 
-} // namespace amber::build
+} // namespace sputnik::build

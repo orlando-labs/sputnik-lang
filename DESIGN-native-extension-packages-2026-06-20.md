@@ -1,4 +1,4 @@
-# Native Packages: Best-Effort Native Amber + Mixed Amber/C/C++ Extensions
+# Native Packages: Best-Effort Native Sputnik + Mixed Sputnik/C/C++ Extensions
 
 Status: design, 2026-06-20.
 Supersedes: `DESIGN-native-extension-packages-2026-06-17.md` (which framed the work
@@ -7,20 +7,20 @@ author-facing contract).
 
 ## 1. Core idea
 
-**Native is a build strategy for an ordinary Amber definition, not a second API
+**Native is a build strategy for an ordinary Sputnik definition, not a second API
 surface.**
 
-A package is always defined by its Amber surface. Hand-written C/C++ is an
-*optional implementation* of selected Amber definitions, never a parallel world.
-The Amber fallback body is the dial that slides a definition across the whole
+A package is always defined by its Sputnik surface. Hand-written C/C++ is an
+*optional implementation* of selected Sputnik definitions, never a parallel world.
+The Sputnik fallback body is the dial that slides a definition across the whole
 spectrum:
 
-- a **pure-Amber package** is best-effort compiled to native, exactly the way the
+- a **pure-Sputnik package** is best-effort compiled to native, exactly the way the
   root module is today — there is nothing new to learn or declare;
-- a **mixed package** pairs a pure-Amber reference body with a native
+- a **mixed package** pairs a pure-Sputnik reference body with a native
   acceleration; bytecode builds run the body, native builds call the symbol, and
   the two are proven observably identical;
-- a **native-only leaf** (a wrapper over a foreign resource with no pure-Amber
+- a **native-only leaf** (a wrapper over a foreign resource with no pure-Sputnik
   representation) is explicitly marked; it requires a native build and fails
   closed in bytecode.
 
@@ -46,19 +46,19 @@ identity *is* a foreign resource.
    explicit lifetime model (`destroy!` / `memory.dealloc`), not by implicit GC
    finalizers — with one carefully-bounded opt-in (`collected`, §7.4).
 5. **Equivalence is the safety net.** Wherever a fast native path shadows a
-   readable Amber path, the toolchain proves they match.
+   readable Sputnik path, the toolchain proves they match.
 
 ## 3. The execution spectrum
 
 | Package definition is written as | Build target = bytecode | Build target = native |
 |---|---|---|
-| Pure Amber | runs the Amber | best-effort compiled (whole graph, §8) |
-| `native def` with an Amber body | runs the Amber body | calls the C symbol; **must match the body** |
+| Pure Sputnik | runs the Sputnik | best-effort compiled (whole graph, §8) |
+| `native def` with an Sputnik body | runs the Sputnik body | calls the C symbol; **must match the body** |
 | Native-only leaf (`native def`/`native class`, no body) | `NativeRequiredError` (build-time if statically reachable) | calls the C symbol |
 
 ## 4. Author-facing surface
 
-The binding lives **in the Amber source** as a contextual modifier keyword on an
+The binding lives **in the Sputnik source** as a contextual modifier keyword on an
 ordinary definition (consistent with the existing `class_method def` / `prop` /
 `attr` modifier idiom), plus a `from "<logical.name>"` clause. The manifest
 (§5) resolves logical names to physical symbols and carries build facts. The
@@ -66,12 +66,12 @@ source says *which* definitions are native and *what* they bind to; the manifest
 says *how to build* the native side. Nothing is declared in both places.
 
 This surface was chosen over a `@native(...)` decorator because `@` is the
-instance-variable sigil in Amber (`@x`, `@@classvar`) and the language has no
+instance-variable sigil in Sputnik (`@x`, `@@classvar`) and the language has no
 decorator syntax; a leading modifier keyword is idiomatic and collision-free.
 
 ### 4.1 Free-function acceleration
 
-```amber
+```sputnik
 # The body IS the bytecode fallback AND the spec the native symbol must match.
 native def hash(data: Bytes) -> Bytes from "blake3.hash":
   state = blake3_iv()
@@ -83,12 +83,12 @@ native def hash(data: Bytes) -> Bytes from "blake3.hash":
 ### 4.2 Foreign-handle types
 
 A `native class` is a type whose instances wrap a foreign pointer. It reuses
-Amber's real constructor (`init`) and deterministic destructor (`destroy!`) —
+Sputnik's real constructor (`init`) and deterministic destructor (`destroy!`) —
 there are no `constructor`/`destructor`/`struct` keywords (the prior doc's
-`native struct` is dropped: Amber has no `struct`).
+`native struct` is dropped: Sputnik has no `struct`).
 
-```amber
-# `owned` => Amber drives deterministic teardown via destroy! (see §7).
+```sputnik
+# `owned` => Sputnik drives deterministic teardown via destroy! (see §7).
 native class Hasher from "blake3.Hasher" owned:
   def init()                          from "blake3.hasher_new"
   def update!(data: Bytes) -> self    from "blake3.hasher_update"
@@ -96,9 +96,9 @@ native class Hasher from "blake3.Hasher" owned:
   def destroy!()                      from "blake3.hasher_free"   # required by `owned`
 ```
 
-Usage reads like ordinary Amber:
+Usage reads like ordinary Sputnik:
 
-```amber
+```sputnik
 h = Hasher.new()
 chunks.each |c|: h.update!(c)
 digest = h.finalize()
@@ -107,7 +107,7 @@ h.destroy!()                          # deterministic; or memory.dealloc(h)
 
 ### 4.3 The mandatory-fallback rule
 
-Every native binding **must** carry a pure-Amber reference body, **except**
+Every native binding **must** carry a pure-Sputnik reference body, **except**
 definitions explicitly marked native-only. Two consequences:
 
 - a `native def` with a body is portable: it works in bytecode and is
@@ -116,7 +116,7 @@ definitions explicitly marked native-only. Two consequences:
   "works in bytecode" guarantee is hollow. (`hash` above is self-contained; it
   does not use `Hasher`.)
 
-Foreign-handle types are inherently native-only: there is no pure-Amber value
+Foreign-handle types are inherently native-only: there is no pure-Sputnik value
 that *is* a `blake3_hasher*`. So `native class Hasher` is a leaf — touching it in
 a bytecode build raises `NativeRequiredError`, while `hash(data)` keeps working
 everywhere. Same package, two points on the dial.
@@ -148,41 +148,41 @@ single position each. This guarantees no existing identifier breaks.
 ## 5. Manifest surface
 
 Native build facts live in the package manifest, keyed by the logical names the
-source already declared. The manifest never repeats `amber_name`/`signature`.
+source already declared. The manifest never repeats `sputnik_name`/`signature`.
 
 ```toml
 [[native]]
 name         = "blake3"
 language     = "c"                 # or "c++"
-sources      = ["native/blake3.c", "native/amber_blake3.c"]
+sources      = ["native/blake3.c", "native/sputnik_blake3.c"]
 include_dirs = ["native/include"]
 # link_libraries = ["blake3"]      # alternative to vendoring sources
 cxxflags     = ["-O3"]             # allowlisted; folded into the package digest
 capabilities = ["ffi"]            # consumer must grant ffi to build native
 
 [native.symbols]                   # logical name (in source)  ->  physical C symbol
-"blake3.hash"            = "amber_blake3_hash"
-"blake3.hasher_new"      = "amber_blake3_hasher_new"
-"blake3.hasher_update"   = "amber_blake3_hasher_update"
-"blake3.hasher_finalize" = "amber_blake3_hasher_finalize"
-"blake3.hasher_free"     = "amber_blake3_hasher_free"
+"blake3.hash"            = "sputnik_blake3_hash"
+"blake3.hasher_new"      = "sputnik_blake3_hasher_new"
+"blake3.hasher_update"   = "sputnik_blake3_hasher_update"
+"blake3.hasher_finalize" = "sputnik_blake3_hasher_finalize"
+"blake3.hasher_free"     = "sputnik_blake3_hasher_free"
 
 [[native.types]]                   # dispatch identity (see §6)
-amber      = "crypto.blake3.Hasher"
+sputnik      = "crypto.blake3.Hasher"
 tag        = "blake3.Hasher"
 ownership  = "owned"
 destructor = "blake3.hasher_free"
 ```
 
 Two manifests exist today and must be reconciled: the package manifest
-(`amber.toml`, hand-rolled line parser in `package/package.cpp`) and the build
-manifest (`amber.build.json`, JSON parser in `buildsys/build.cpp`, which already
+(`sputnik.toml`, hand-rolled line parser in `package/package.cpp`) and the build
+manifest (`sputnik.build.json`, JSON parser in `buildsys/build.cpp`, which already
 drives the native build and already carries `native_eligible` /
 `native_fallback_reason`). Native sections are *authored* in the package manifest
 and *lowered* into the build manifest; the native build reads the lowered form.
 The line-based TOML parser handles flat string arrays today but not nested
 repeated tables well; express the binding manifest with the structured shape
-above (or in JSON, matching `amber.build.json`) rather than extending the line
+above (or in JSON, matching `sputnik.build.json`) rather than extending the line
 parser.
 
 ## 6. Runtime ABI contract
@@ -193,49 +193,49 @@ There is **one** value-marshalling contract, exposed two ways:
   type-erased frame, value readers/builders, fault reporting, block calls,
   fs/random/time hosts;
 - out-of-tree, it is a stable, documented, header-only **C** surface,
-  `runtime/amber_ext.h`, that an external author compiles against without
-  building the Amber tree.
+  `runtime/sputnik_ext.h`, that an external author compiles against without
+  building the Sputnik tree.
 
-`amber_ext.h` is the canonical contract; `StdlibHost` is its in-tree
+`sputnik_ext.h` is the canonical contract; `StdlibHost` is its in-tree
 implementation (one marshalling implementation, two consumers). The C surface is
 justified here by a *present* need — external authors program against a header —
 not by a future dlopen story.
 
 It exposes:
 
-- opaque `AmberCtx`, `AmberValue`, `AmberStatus`, an ABI-version constant and an
+- opaque `SputnikCtx`, `SputnikValue`, `SputnikStatus`, an ABI-version constant and an
   init handshake;
 - readers for `Null/Bool/Int/Float/Str/Bytes/array/map`, including a **zero-copy
-  borrowed `Bytes` view** (`amber_bytes_view`, backed by the existing
+  borrowed `Bytes` view** (`sputnik_bytes_view`, backed by the existing
   `RuntimePinViewKind::ValueBuffer`) so hashing/compression do not copy;
-- builders for the same safe value set (`amber_make_bytes`, `amber_make_str`,
-  `amber_make_list`, `amber_make_object`, …);
-- fault reporting that maps to Amber's rescuable exception classes (reuse the
-  `runtime_errors.def` X-macro), e.g. `amber_fault(cx, "TypeError", msg)`;
-- foreign-handle operations: `amber_make_handle(cx, tag, ptr)` and
-  `amber_handle_ptr(cx, self, tag, &out)` (the latter performs the tombstone
+- builders for the same safe value set (`sputnik_make_bytes`, `sputnik_make_str`,
+  `sputnik_make_list`, `sputnik_make_object`, …);
+- fault reporting that maps to Sputnik's rescuable exception classes (reuse the
+  `runtime_errors.def` X-macro), e.g. `sputnik_fault(cx, "TypeError", msg)`;
+- foreign-handle operations: `sputnik_make_handle(cx, tag, ptr)` and
+  `sputnik_handle_ptr(cx, self, tag, &out)` (the latter performs the tombstone
   check and faults on use-after-`destroy!`);
-- block invocation for callbacks (`amber_call_block`), with the safepoint/root-map
+- block invocation for callbacks (`sputnik_call_block`), with the safepoint/root-map
   interaction defined for the extension frame.
 
 Thunk signatures:
 
 ```c
 // free function: (Bytes) -> Bytes
-AmberStatus amber_blake3_hash(AmberCtx *cx, const AmberValue *args,
-                              size_t argc, AmberValue *out);
+SputnikStatus sputnik_blake3_hash(SputnikCtx *cx, const SputnikValue *args,
+                              size_t argc, SputnikValue *out);
 
 // init() -> Hasher : returns an owned handle tagged blake3.Hasher
-AmberStatus amber_blake3_hasher_new(AmberCtx *cx, const AmberValue *args,
-                                    size_t argc, AmberValue *out);
+SputnikStatus sputnik_blake3_hasher_new(SputnikCtx *cx, const SputnikValue *args,
+                                    size_t argc, SputnikValue *out);
 
 // update!(self, Bytes) -> self : effectful; native-only leaf
-AmberStatus amber_blake3_hasher_update(AmberCtx *cx, AmberValue self,
-                                       const AmberValue *args, size_t argc,
-                                       AmberValue *out);
+SputnikStatus sputnik_blake3_hasher_update(SputnikCtx *cx, SputnikValue self,
+                                       const SputnikValue *args, size_t argc,
+                                       SputnikValue *out);
 
 // destructor for `owned`: full runtime context permitted
-void amber_blake3_hasher_free(AmberCtx *cx, void *handle);
+void sputnik_blake3_hasher_free(SputnikCtx *cx, void *handle);
 ```
 
 C++ packages expose the same `extern "C"` thunk surface and may use real C++
@@ -245,9 +245,9 @@ internally; the exported symbols stay C-compatible and versioned.
 
 ### 7.1 The three markers
 
-- **`borrowed`** — Amber holds a non-owning handle and never frees it; the
+- **`borrowed`** — Sputnik holds a non-owning handle and never frees it; the
   provider owns the lifetime. A `destroy!` binding is forbidden.
-- **`owned`** — Amber owns the handle and releases it through the deterministic
+- **`owned`** — Sputnik owns the handle and releases it through the deterministic
   lifetime model only. Requires a `destroy!` binding. The GC **never** runs the
   destructor (§7.2). Forgetting to release leaks the foreign resource and trips a
   diagnostic backstop (§7.3).
@@ -259,7 +259,7 @@ internally; the exported symbols stay C-compatible and versioned.
 This is normative in the lifetime spec (Part VII): the GC must not call a user
 destructor automatically; deterministic cleanup happens only via explicit code or
 an explicit runtime intrinsic, never "implicit finalizer magic." The reasons it
-would be *unsound* in Amber's model, not merely undesirable:
+would be *unsound* in Sputnik's model, not merely undesirable:
 
 1. **Wrong strand.** Objects have an owner strand and `destroy!` runs only on it.
    The GC runs on the collector strand, possibly with the world stopped. A native
@@ -287,7 +287,7 @@ When the GC reclaims an `owned` handle-object whose handle slot is still live, t
 runtime **detects and reports** the orphan (dev-time warning, leak counter,
 debug-mode abort) — it does **not** run the C destructor, because the bound symbol
 is opaque (it might flush buffers, close fds, touch shared state, or call back
-into Amber, all on the wrong strand mid-cycle). The backstop makes the bug
+into Sputnik, all on the wrong strand mid-cycle). The backstop makes the bug
 visible; it never guesses it is safe to free.
 
 Ergonomics: deterministic cleanup is made hard to forget without involving the GC
@@ -302,18 +302,18 @@ free from the collector. `collected` is the explicit opt-in, kept sound by two
 mechanical guardrails plus two author assertions.
 
 **Guardrail 1 — restricted reclaim signature.** A `collected` type's destructor is
-**context-free**: it receives only the raw handle, no `AmberCtx`.
+**context-free**: it receives only the raw handle, no `SputnikCtx`.
 
 ```c
-void z_buf_free(void *handle);     // no AmberCtx, by construction
+void z_buf_free(void *handle);     // no SputnikCtx, by construction
 ```
 
 With no door back into the runtime, the reentrancy / resurrection /
 touch-a-sibling failures are *structurally impossible* regardless of strand. If
-teardown needs runtime context (release child Amber objects, run a rich `destroy!`
+teardown needs runtime context (release child Sputnik objects, run a rich `destroy!`
 body), it does not fit this signature — which is exactly the signal that the type
 is `owned`, not `collected`. (`E_NATIVE_COLLECTED_RECLAIM_SIGNATURE` if an
-`AmberCtx`-taking destructor is declared on a `collected` type.)
+`SputnikCtx`-taking destructor is declared on a `collected` type.)
 
 **Guardrail 2 — tombstone-gated once-only.** Explicit `destroy!` and GC
 reclamation are mutually exclusive: whichever fires first flips the tombstone and
@@ -333,7 +333,7 @@ If either is false, the type stays `owned`. Decision rule:
 |---|---|
 | `malloc`'d buffer / in-process refcounted object; thread-agnostic free; OK if freed late or never | `collected` |
 | fd, socket, mutex, GPU/device handle; thread-affine teardown; must release promptly | `owned` |
-| owned by the provider; Amber must never free it | `borrowed` |
+| owned by the provider; Sputnik must never free it | `borrowed` |
 
 Caveat: process-exit GC sweeps do not reliably run reclaimers. `collected` means
 "freed promptly-ish, or reclaimed by the OS at exit." If a resource *must* be
@@ -345,7 +345,7 @@ scope/`ensure`, never `collected`.
 ### 8.1 Best-effort native over the whole graph
 
 Today the native build covers only the root module: `run_build_command`
-(`tools/amberc/main.cpp`) builds a native executable from a single root artifact,
+(`tools/sputnik/main.cpp`) builds a native executable from a single root artifact,
 and the generated `run_vm_entry()` runs one `RuntimeWorld` over the root bytecode
 without the module loader. A multi-module program is therefore not even fully
 native today.
@@ -359,7 +359,7 @@ native objects + a native linker is a possible later optimization, not required.
 
 "Best-effort" then means, for a given target:
 
-- pure-Amber code objects → natively lowered where eligible, else the per-function
+- pure-Sputnik code objects → natively lowered where eligible, else the per-function
   VM bridge, else whole-program restart (existing machinery, now graph-wide);
 - `native def` with a body → native build uses the symbol, bytecode build uses the
   body;
@@ -377,7 +377,7 @@ would require either compiling C at load (defeating the no-build-step, reproduci
 bytecode tier) or shipping+`dlopen`-ing prebuilt platform binaries (a trust
 escalation and a runtime gamble), and would silently erase the `ffi` decision.
 
-Instead, the *common path is a native build*: `amber build` defaults to native
+Instead, the *common path is a native build*: `sputnik build` defaults to native
 when the dependency graph carries native sources and `ffi` is granted, backed by
 the object cache (§9) so it is fast. "It just works" is achieved by *being native,
 explicitly* — `NativeRequiredError` appears only when a portable bytecode artifact
@@ -385,12 +385,12 @@ is deliberately requested, where a foreign resource genuinely cannot follow.
 
 ## 9. Distribution and optimization layers
 
-Packages ship **source + digests**: Amber sources/bytecode, optional native
+Packages ship **source + digests**: Sputnik sources/bytecode, optional native
 sources/headers, declared link libraries and allowlisted flags, the binding map,
 capability requirements, and the equivalence contract. No build scripts, no
 prebuilt blobs required, no runtime `dlopen` of arbitrary code in the base model.
 
-The package digest covers Amber bytecode digests, native source/header digests,
+The package digest covers Sputnik bytecode digests, native source/header digests,
 the binding-manifest text, the resolved (allowlisted) compiler/link flags, the
 compiler identity+version, the target triple, and the ABI version. The compiled
 binary's own hash is **never** part of the package digest (it is host-specific and
@@ -402,27 +402,27 @@ contract, in order of likely arrival, none changing what an author writes:
 1. **object cache** keyed by `{source digest, flags, compiler id+version, target
    triple, ABI version}` — makes native builds incremental/fast;
 2. **prebuilt binary variants** a registry may publish for common triples;
-3. **runtime dynamic loading** behind the same `amber_ext.h` ABI.
+3. **runtime dynamic loading** behind the same `sputnik_ext.h` ABI.
 
 ## 10. Backend-equivalence and soundness
 
 ### 10.1 Equivalence as the package contract
 
-A definition with both an Amber body and a native binding is gated by the
+A definition with both an Sputnik body and a native binding is gated by the
 `make backend-equivalence` discipline, extended to packages: the package's own
-test corpus runs in both modes (Amber body vs. native symbol) and observable
+test corpus runs in both modes (Sputnik body vs. native symbol) and observable
 output is diffed. Native-only leaves are exempt but marked and effect-typed.
 
 ### 10.2 Effectful bindings under whole-program restart
 
 The native lane's soundness rests on "re-run the whole program on bailout stays
-byte-identical" (`tools/amberc/main.cpp`), which holds only for side-effect-free
+byte-identical" (`tools/sputnik/main.cpp`), which holds only for side-effect-free
 code. Therefore:
 
-- pure `native def` accelerations (and their Amber bodies) may be VM-bridged and
+- pure `native def` accelerations (and their Sputnik bodies) may be VM-bridged and
   restarted freely;
 - an **effectful** native binding is always a **native-only leaf** (e.g. a
-  foreign-handle `update!`) — it has no Amber body, hence no VM-bridge target, so
+  foreign-handle `update!`) — it has no Sputnik body, hence no VM-bridge target, so
   it is always a direct native call;
 - the runtime must not place a restart boundary *after* an effect: an effectful
   native-only call is the bailout boundary itself.
@@ -434,10 +434,10 @@ restart is allowed to carry an effect.
 
 Native dispatch keys on the fixed `RuntimeNativeTypeKind` enum (`runtime/vm.h`),
 which third-party types cannot extend. Foreign-handle types get a generic
-`Foreign` kind carrying a per-`(package, type)` **tag** (`AMBER_TAG("blake3.Hasher")`,
+`Foreign` kind carrying a per-`(package, type)` **tag** (`SPUTNIK_TAG("blake3.Hasher")`,
 declared in `[[native.types]]`), resolved through a per-build registry. The fixed
 enum never grows for third-party types. This is distinct from the existing
-opaque-handle/pin system (`RuntimeOpaqueHandle`), which exports Amber values *to*
+opaque-handle/pin system (`RuntimeOpaqueHandle`), which exports Sputnik values *to*
 native code; foreign handles are the inbound direction (a `Value` wrapping a host
 pointer + tag + tombstone state) and are new.
 
@@ -446,9 +446,9 @@ pointer + tag + tombstone state) and are new.
 - `NativeRequiredError` — a native-only leaf was reached in a bytecode build.
 - `E_NATIVE_CLASS_OWNERSHIP_REQUIRED` — `native class` header without a marker.
 - `E_NATIVE_COLLECTED_RECLAIM_SIGNATURE` — `collected` type declares an
-  `AmberCtx`-taking destructor.
+  `SputnikCtx`-taking destructor.
 - `LifetimeError` — handle used after `destroy!` (tombstone check in
-  `amber_handle_ptr`).
+  `sputnik_handle_ptr`).
 - native-build symbol-presence check: every declared physical symbol is verified
   present in the compiled objects before link, failing early with a binding
   diagnostic rather than a raw linker error.
@@ -464,13 +464,13 @@ pointer + tag + tombstone state) and are new.
 - `owned` leak backstop fires (detect, no free) on dropped-without-`destroy!`;
 - `collected` GC reclamation runs the context-free reclaim once; tombstone gating
   prevents double-free against an explicit `destroy!`;
-- `collected` with an `AmberCtx` destructor is rejected;
+- `collected` with an `SputnikCtx` destructor is rejected;
 - fallback-depends-on-leaf is rejected;
 - whole-graph native: a multi-module program builds native end to end with
   `vm_fallback_code_count = 0` where expected;
 - deterministic package digest with native source blobs;
 - missing symbol; ABI version mismatch; bytecode-only build of a required leaf;
-- equivalence between a pure-Amber implementation and a native-backed
+- equivalence between a pure-Sputnik implementation and a native-backed
   implementation of the same exported API.
 
 Run:
@@ -487,10 +487,10 @@ make backend-equivalence
   `from <StringLit>` binding clause; ownership marker slot; new AST/HIR nodes;
   binder routes logical names; checker enforces mandatory-body + fallback-independence
   + effect typing of leaves.
-- **runtime** — `amber_ext.h` C contract over the `StdlibHost` implementation;
+- **runtime** — `sputnik_ext.h` C contract over the `StdlibHost` implementation;
   foreign-handle `Value` kind + tombstone integration with the lifetime model;
   per-build `Foreign` type-tag registry; `collected` reclaim scheduling off the GC.
-- **buildsys / amberc** — whole-graph native via merged `BcModule`; lower
+- **buildsys / sputnik** — whole-graph native via merged `BcModule`; lower
   `[[native]]` from package manifest into the build manifest; compile/link native
   sources with the allowlisted flags; symbol-presence check; extended reporting +
   digests.
@@ -513,11 +513,11 @@ make backend-equivalence
 - dropped the v1/v2/vN layering for a single contract (§2);
 - binding lives in source as a contextual modifier, not in the manifest and not as
   a `@native` decorator (§4);
-- `native class`, not `native struct` (Amber has no `struct`); reuse `init` /
+- `native class`, not `native struct` (Sputnik has no `struct`); reuse `init` /
   `destroy!`, not new `constructor` / `destructor` keywords (§4.2);
 - `owned` binds to deterministic `destroy!`, never a GC finalizer (§7.2); added
   `collected` as the bounded opt-in (§7.4);
-- one ABI contract (`amber_ext.h` over `StdlibHost`), not a parallel marshalling
+- one ABI contract (`sputnik_ext.h` over `StdlibHost`), not a parallel marshalling
   layer (§6);
 - explicit `ffi` capability gating and dispatch-identity tagging (§11, §2.3);
 - effectful-binding/restart soundness rule made normative (§10.2).

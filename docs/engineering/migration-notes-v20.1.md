@@ -1,4 +1,4 @@
-# Amber v20.1 Migration Notes
+# Sputnik v20.1 Migration Notes
 
 Status: W15 migration notes for the current reference implementation baseline.
 
@@ -7,28 +7,28 @@ Status: W15 migration notes for the current reference implementation baseline.
 W12 was documentation/spec synchronization only. W13 closes compiler/runtime
 contracts for source rules, bytecode verifier initializedness, runtime UNINIT
 guards, `CALL`, and source traces. W14 adds build/bootstrap/conformance
-metadata through `amber.build.v1`, `amberc build`, and optional `.amberbc`
-`PROF` profile metadata. W15 hardens `amber.native.v1` metadata with explicit
+metadata through `sputnik.build.v1`, `sputnik build`, and optional `.sputnikbc`
+`PROF` profile metadata. W15 hardens `sputnik.native.v1` metadata with explicit
 slowpaths, invalidation fallback, and exception-edge root maps. The post-W15
-CLI surface adds public `amberc metadata <file.amberbc> --json` and
-`amberc verify <file.amberbc> --json` entrypoints over the same `.amberbc`
+CLI surface adds public `sputnik metadata <file.sputnikbc> --json` and
+`sputnik verify <file.sputnikbc> --json` entrypoints over the same `.sputnikbc`
 format.
 
 Existing artifacts produced by the W11.6 baseline remain in the same format
-families. Invalid hand-authored `.amberbc` fixtures may now fail earlier under
+families. Invalid hand-authored `.sputnikbc` fixtures may now fail earlier under
 the stricter W13 verifier if they read registers before definite
 initialization, jump outside code bounds, or reference operands outside declared
 table/register ranges.
 
 | Artifact family | Migration impact |
 | --- | --- |
-| `.amberbc` / `amber.bc.v1` | optional `PROF` section added; old artifacts without `PROF` still decode |
-| `.amberpkg` / `amber.package.v1` | none |
-| `.amberimg` / `amber.image.v1` | verifier now expects embedded native JSON to advertise W15 readiness guards |
-| `.ambertrace` / `amber.replay.v1` | none |
-| `.amberschema` / `.ambertable` | none |
-| `.amberwasm` / `.amberaccel` | none |
-| `.ambermodern` | none |
+| `.sputnikbc` / `sputnik.bc.v1` | optional `PROF` section added; old artifacts without `PROF` still decode |
+| `.sputnikpkg` / `sputnik.package.v1` | none |
+| `.sputnikimg` / `sputnik.image.v1` | verifier now expects embedded native JSON to advertise W15 readiness guards |
+| `.sputniktrace` / `sputnik.replay.v1` | none |
+| `.sputnikschema` / `.sputniktable` | none |
+| `.sputnikwasm` / `.sputnikaccel` | none |
+| `.sputnikmodern` | none |
 
 ## Repository Layout Changes
 
@@ -43,10 +43,10 @@ module and fixtures. W15 updates native/frozen metadata validation:
 | `docs/engineering/implementation-status-v1.md` | Status dashboard for W0-W15 and release gates. |
 | `spec/changelog/v20.1.md` | Changelog for the current v20.1 implementation baseline. |
 | `docs/engineering/migration-notes-v20.1.md` | This migration note. |
-| `buildsys/build.*` | `amber.build.v1` manifest parser, profile normalization, and summary JSON helpers. |
+| `buildsys/build.*` | `sputnik.build.v1` manifest parser, profile normalization, and summary JSON helpers. |
 | `docs/engineering/build-v1.md` | W14 build/bootstrap/conformance engineering note. |
 | `docs/engineering/native-v1.md` | W15 native-readiness metadata engineering note. |
-| `tests/fixtures/w14_build/` | CLI smoke fixture for `amberc build`. |
+| `tests/fixtures/w14_build/` | CLI smoke fixture for `sputnik build`. |
 
 ## Maintainer Checklist
 

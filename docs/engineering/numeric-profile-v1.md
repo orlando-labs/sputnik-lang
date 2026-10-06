@@ -1,7 +1,7 @@
-# amber.numeric-profile.v1
+# sputnik.numeric-profile.v1
 
 Status: implemented in the reference toolchain (parser `numeric:` preamble,
-emitter literal range checks + `.amberbc` attrs, VM checked/wrapping/saturating
+emitter literal range checks + `.sputnikbc` attrs, VM checked/wrapping/saturating
 arithmetic for Int8–Int64 and UInt8–UInt32, explicit `BigInt`, manifest
 `profiles.numeric` mirror with mismatch diagnostics, native lane checked-Int64
 with VM fallback for other profiles). Staged, not yet implemented: `int:
@@ -9,7 +9,7 @@ UInt64` and `int: BigInt` profiles (compile-time diagnostic), per-function
 native support for non-default profiles. Conformance:
 `corpus/run/numeric_*`.
 
-Amber numeric semantics use a fixed-width `Int` by default, selected through a
+Sputnik numeric semantics use a fixed-width `Int` by default, selected through a
 compile-time numeric profile. Arbitrary-precision arithmetic remains available
 through explicit `BigInt` values. The goal is to keep ordinary VM and native
 integer paths predictable while preserving an opt-in path for unbounded
@@ -19,7 +19,7 @@ integers.
 
 Canonical source spelling:
 
-```amber
+```sputnik
 numeric:
  int: Int64
  overflow: checked
@@ -55,7 +55,7 @@ overflow: checked
 
 ## Manifest Mirror
 
-Package builds mirror the same choice in `amber.build.json`:
+Package builds mirror the same choice in `sputnik.build.json`:
 
 ```json
 {
@@ -83,7 +83,7 @@ not a runtime-mutable property and it is not ordinary user-defined type aliasing
 
 Examples under the default profile:
 
-```amber
+```sputnik
 type Int = Int64 # conceptual resolution only, not surface syntax
 
 x = 3           # Int, resolved as Int64
@@ -104,7 +104,7 @@ fixed-width overflow policy and is never introduced by implicit promotion from
 Unsuffixed integer literals have type `Int`, meaning the selected concrete
 fixed-width type.
 
-```amber
+```sputnik
 n = 123 # Int -> Int64 by default
 ```
 
@@ -199,7 +199,7 @@ Rules:
 
 - Add parser support for the `numeric:` preamble form.
 - Extend build manifest parsing with `profiles.numeric`.
-- Store numeric profile metadata in `.amberbc` and package ABI summaries.
+- Store numeric profile metadata in `.sputnikbc` and package ABI summaries.
 - Update checker/binder type display to resolve `Int` consistently.
 - Replace `std::int64_t`-only runtime assumptions with concrete fixed-width
   helpers and explicit `BigInt` support.

@@ -11,11 +11,11 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
-constexpr const char *kSchema = "amber.benchmark.v1";
+constexpr const char *kSchema = "sputnik.benchmark.v1";
 constexpr const char *kBoldOn = "\x1b[1m";
 constexpr const char *kBoldOff = "\x1b[22m";
 
@@ -271,7 +271,7 @@ Value measurement_map(NativeStdlibCall &call, Value label, std::int64_t elapsed,
 }
 
 Value profiler_map(NativeStdlibCall &call, std::int64_t id) {
-  return obj(call, {{"schema", s(call, "amber.benchmark.profiler.v1")},
+  return obj(call, {{"schema", s(call, "sputnik.benchmark.profiler.v1")},
                     {"id", Value::integer(id)}});
 }
 
@@ -637,7 +637,7 @@ bool required_list_field(NativeStdlibCall &call, const Value &map,
 bool result_kind(NativeStdlibCall &call, const Value &result, std::string *kind) {
   std::string schema;
   if (!map_text_field(call, result, "schema", &schema) || schema != kSchema) {
-    call.fault("BenchmarkImportError", "expected amber.benchmark.v1 map");
+    call.fault("BenchmarkImportError", "expected sputnik.benchmark.v1 map");
     return false;
   }
   if (!map_text_field(call, result, "kind", kind) || kind->empty()) {
@@ -2339,4 +2339,4 @@ void register_benchmark_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -6,7 +6,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::mir {
+namespace sputnik::mir {
 
 namespace {
 
@@ -944,7 +944,7 @@ std::string module_to_json(const Module &module,
                            const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.mir.v1\",\n";
+  out << "  \"format\": \"sputnik.mir.v1\",\n";
   if (module.module_name.empty()) {
     out << "  \"module\": null,\n";
   } else {
@@ -1026,7 +1026,7 @@ std::string module_to_json(const Module &module,
 std::string module_to_dump(const Module &module,
                            const std::string &source_hash) {
   std::ostringstream out;
-  out << "amber.mir.v1 module=";
+  out << "sputnik.mir.v1 module=";
   out << (module.module_name.empty() ? "<anonymous>" : module.module_name);
   out << " source=sha256:" << source_hash << "\n";
   for (const PassRecord &record : module.pass_log) {
@@ -1088,7 +1088,7 @@ std::string
 validation_errors_to_json(const std::vector<ValidationError> &errors) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.mir.validate.v1\",\n";
+  out << "  \"format\": \"sputnik.mir.validate.v1\",\n";
   out << "  \"ok\": " << (errors.empty() ? "true" : "false") << ",\n";
   out << "  \"errors\": [";
   for (std::size_t i = 0; i < errors.size(); ++i) {
@@ -1105,4 +1105,4 @@ validation_errors_to_json(const std::vector<ValidationError> &errors) {
   return out.str();
 }
 
-} // namespace amber::mir
+} // namespace sputnik::mir

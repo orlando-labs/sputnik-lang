@@ -5,7 +5,7 @@ gen_module_docs.py takes over generation.
 
 Run once (already run to create the initial sidecars); kept for provenance and
 in case the sidecars need to be regenerated from a known-good baseline. It reads
-a JSON dump of `window.AMBER_MODULES` (produced with node, see the module docs)
+a JSON dump of `window.SPUTNIK_MODULES` (produced with node, see the module docs)
 and writes one `.sidecar` per module in the format documented in
 docs/engineering/doc-system.md.
 """

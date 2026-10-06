@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Dependency-free one-shot digest primitives shared by the VM stdlib handler,
 // direct-native executables, and benchmark/reference tools. Results are raw
@@ -16,4 +16,4 @@ std::string digest_hmac_sha256(std::string_view key, std::string_view bytes);
 std::string digest_streebog256(std::string_view bytes);
 std::string digest_streebog512(std::string_view bytes);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

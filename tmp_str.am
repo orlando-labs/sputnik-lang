@@ -1,4 +1,0 @@
-def main():
-  if "a" + "b" != "ab":
-    raise ValueError("bad str")
-  0

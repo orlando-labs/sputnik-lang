@@ -1,4 +1,4 @@
-# amber.ast.v1
+# sputnik.ast.v1
 
 Status: seed contract.
 
@@ -9,7 +9,7 @@ The parser must produce a syntax-faithful AST before any HIR lowering. Every nod
 - semantic fields in source order;
 - child nodes in source order.
 
-The dump format follows the spec-level `amber.ast.v1` JSON envelope. `CHAIN_DOT` is a lexer/parser boundary marker and does not have to survive as a standalone AST node if the postfix chain plus block suffix preserves the source boundary.
+The dump format follows the spec-level `sputnik.ast.v1` JSON envelope. `CHAIN_DOT` is a lexer/parser boundary marker and does not have to survive as a standalone AST node if the postfix chain plus block suffix preserves the source boundary.
 
 ## Postfix chains
 

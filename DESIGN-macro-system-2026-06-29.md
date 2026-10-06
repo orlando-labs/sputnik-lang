@@ -3,8 +3,8 @@
 Date: 2026-06-29
 Status: design / language-extension proposal — no code change in this doc.
 Also a proposed **amendment to spec Q3**, which currently lists "DSL/macros"
-as deliberately out of scope (`amber_unified_final_spec.md` §Q3, line ~3311).
-Scope: a hygienic, compile-time macro system for Amber. Defines where macro
+as deliberately out of scope (`sputnik_unified_final_spec.md` §Q3, line ~3311).
+Scope: a hygienic, compile-time macro system for Sputnik. Defines where macro
 expansion sits in the pipeline, the first-class `Ast` value model, `quote`/
 `unquote` (the kernel) and the `#{}` / `%`-control template surface, the single
 authoring form (`macro def`, template-default body), the trigger surfaces
@@ -13,11 +13,11 @@ authoring form (`macro def`, template-default body), the trigger surfaces
 hygiene, the compile-time evaluation sandbox, module staging order,
 diagnostics, and the interaction with the binder, the typed profile, the
 frozen-world model, and the existing runtime MOP.
-Follows: `amber_unified_final_spec.md` §1–§2 (pipeline + architectural
+Follows: `sputnik_unified_final_spec.md` §1–§2 (pipeline + architectural
 invariants), §5.1–5.3 (F0 lexer / F1 parser+AST / F2 binder), §8.13–§8.16
 (open classes, reflective `define_method`, `send`, `method_missing`), Q3
 (minimal MOP profile), Q4 (typed profile + reflective `Any`-boundary rule),
-and the existing `frontend/pattern/` + `amber.pattern.v1` decision-program
+and the existing `frontend/pattern/` + `sputnik.pattern.v1` decision-program
 infrastructure.
 
 This doc is the *contract / shape* step. It deliberately stops short of the
@@ -29,17 +29,17 @@ are the implementation, gated on the contract here being agreed.
 
 ## 1. Where macros sit
 
-Amber already ships three things a macro system normally has to
+Sputnik already ships three things a macro system normally has to
 invent from scratch:
 
-1. **A syntax-faithful, serialized, golden-tested AST** — `amber.ast.v1`
+1. **A syntax-faithful, serialized, golden-tested AST** — `sputnik.ast.v1`
    (§1 pipeline, line ~21392; artifact table, line ~21422; invariant #1,
    line ~21408). This is a ready-made homoiconic data model. Elixir had to
-   *design* `{form, meta, args}`; Amber already shipped an equivalent as a
+   *design* `{form, meta, args}`; Sputnik already shipped an equivalent as a
    public contract with a JSON serializer and a fixed node schema.
-2. **A bootstrapped bytecode VM** (`runtime/vm.cpp`, the `amber.bc.v1`
-   execution path). Macro bodies can be ordinary Amber `def`s compiled to
-   `.amberbc` and executed *on that same VM* at compile time — the Elixir
+2. **A bootstrapped bytecode VM** (`runtime/vm.cpp`, the `sputnik.bc.v1`
+   execution path). Macro bodies can be ordinary Sputnik `def`s compiled to
+   `.sputnikbc` and executed *on that same VM* at compile time — the Elixir
    hosting model (macros are host-language functions), with none of Rust's
    separate-proc-macro-crate ceremony.
 3. **An open-world → frozen-world lifecycle** (invariant #5, line ~21412) and
@@ -69,11 +69,11 @@ MOP.
 
 ## 2. Non-goals
 
-- **Not** token-stream macros (the Rust proc-macro `TokenStream` model). Amber
+- **Not** token-stream macros (the Rust proc-macro `TokenStream` model). Sputnik
   has a stable AST contract; macros operate on AST, not tokens. This keeps
   invariant #1 intact and means no macro ever re-parses.
-- **Not** a second toolchain / plugin-crate model. Macros are Amber, run on the
-  Amber VM. No native plugin loading, no FFI requirement.
+- **Not** a second toolchain / plugin-crate model. Macros are Sputnik, run on the
+  Sputnik VM. No native plugin loading, no FFI requirement.
 - **Not** `instance_eval`/`class_eval`-style runtime `self`-rebinding (Q3 keeps
   those out; macros make them unnecessary for DSL bodies).
 - **Not** unrestricted compile-time IO. The expander is sandboxed (§10).
@@ -86,26 +86,26 @@ MOP.
 The current pipeline (§1, line ~21389):
 
 ```text
-source.am -> tokens -> amber.ast.v1 -> amber.diag.v1 -> amber.hir.v1
-          -> pattern decision program -> amber.bc.v1 -> .amberbc -> VM
+source.s -> tokens -> sputnik.ast.v1 -> sputnik.diag.v1 -> sputnik.hir.v1
+          -> pattern decision program -> sputnik.bc.v1 -> .sputnikbc -> VM
 ```
 
 Macros add **one new pass, F1.5, between F1 (parser) and F2 (binder)**:
 
 ```text
-... -> amber.ast.v1 --[F1.5 macro expansion (fixpoint)]--> amber.ast.expanded.v1
+... -> sputnik.ast.v1 --[F1.5 macro expansion (fixpoint)]--> sputnik.ast.expanded.v1
     -> binder(F2) -> ...
 ```
 
 Hard requirements on F1.5:
 
 - **Parsed surface AST in, expanded ordinary AST out.** Expansion consumes the
-  syntax-faithful parser AST and produces ordinary expanded `amber.ast.v1` for
+  syntax-faithful parser AST and produces ordinary expanded `sputnik.ast.v1` for
   downstream compilation. Dedicated macro surfaces (`macro def`, attributes,
   `use`) parse explicitly; ordinary/dot call syntax remains ordinary call AST
   until F1.5 resolves the callee in the compile-time macro namespace.
 - **No macro opcodes downstream.** Binder, checker, HIR lowering, bytecode
-  emission, verifier, and runtime see ordinary expanded Amber. The main
+  emission, verifier, and runtime see ordinary expanded Sputnik. The main
   downstream change is name-identity plumbing for hygiene (§9), not a second
   semantic pipeline.
 - **Fixpoint.** A macro may expand into a call to another macro. F1.5 re-walks
@@ -118,42 +118,42 @@ Hard requirements on F1.5:
 
 Two artifacts mirror the existing dump convention:
 
-- `amber.ast.expanded.v1`: post-expansion ordinary AST (`amberc expand --json`);
-- `amber.macrotrace.v1`: deterministic expansion trace with macro name,
+- `sputnik.ast.expanded.v1`: post-expansion ordinary AST (`sputnik expand --json`);
+- `sputnik.macrotrace.v1`: deterministic expansion trace with macro name,
   provider module, call-site span, definition span, generated-node origin, and
   hygiene context ids.
 
 If hygiene contexts or dual spans are serialized inline rather than sidecar,
-that is an explicit `amber.ast.v1` schema extension / format bump, not an
+that is an explicit `sputnik.ast.v1` schema extension / format bump, not an
 implicit field added to every node.
 
 ## 4. The `Ast` value model
 
-Macros manipulate AST as **first-class Amber values**. We expose the expanded
-`amber.ast.v1` node schema, plus macro-profile surface nodes, as a stdlib module
+Macros manipulate AST as **first-class Sputnik values**. We expose the expanded
+`sputnik.ast.v1` node schema, plus macro-profile surface nodes, as a stdlib module
 `Ast` whose constructors and accessors mirror the serialized schema and
 macrotrace identity model. Because the serializer already exists, this is
 mostly a binding exercise; the new design work is deciding which macro metadata
-lives inline versus in `amber.macrotrace.v1`.
+lives inline versus in `sputnik.macrotrace.v1`.
 
 - Each node kind is a value: `Ast.Call`, `Ast.If`, `Ast.Def`, `Ast.Ident`,
-  `Ast.Lit`, `Ast.Block`, `Ast.ClassDecl`, etc. — one per `amber.ast.v1` node.
+  `Ast.Lit`, `Ast.Block`, `Ast.ClassDecl`, etc. — one per `sputnik.ast.v1` node.
 - Nodes are **immutable, shareable** values (like frozen `Str`), so they cross
   strands freely and never alias caller state.
 - Nodes carry source `span` metadata. Macro-expanded nodes use the call-site
   span for primary diagnostics and link to definition/origin metadata through
-  `amber.macrotrace.v1`.
+  `sputnik.macrotrace.v1`.
 - Hygienic identifiers carry name identity `(text, syntax_context)` (§9). The
   `syntax_context` is exposed through `Ast` for identifier nodes, but may be
   serialized as trace/sidecar metadata rather than as a field on every AST node.
 - Introspection: `Ast.kind(node)`, field accessors, and source rendering through
-  both `node.source` and `node.to_source` (matching Amber's coercion convention:
+  both `node.source` and `node.to_source` (matching Sputnik's coercion convention:
   `.int` / `.to_int`, etc.). These render back to surface text and are required
   by the `assert` example below.
 - `Ast.gensym(:base)` mints a deterministic fresh hygienic identifier.
 
 This module is the single integration point between "macro code" (ordinary
-Amber) and "the compiler's AST." It is available **only** inside the macro
+Sputnik) and "the compiler's AST." It is available **only** inside the macro
 profile / expander environment; ordinary runtime code does not get `Ast.*`.
 
 ## 5. `quote` / `unquote`
@@ -161,13 +161,13 @@ profile / expander environment; ordinary runtime code does not get `Ast.*`.
 Authoring AST by hand via `Ast.*` constructors is unbearable, so the primitive
 is a quasiquote, identical in spirit to Elixir's `quote`/`unquote`:
 
-```amber
+```sputnik
 quote:
   if not unquote(cond):
     raise AssertionError.new(unquote(msg))
 ```
 
-- `quote: <amber>` parses its body with the *normal parser* and yields the
+- `quote: <sputnik>` parses its body with the *normal parser* and yields the
   corresponding `Ast` value. It is itself lowered by F1.5: the parser produces a
   `quote` node, and expansion turns it into the `Ast.*` builder calls that
   reconstruct the body.
@@ -193,7 +193,7 @@ A macro is an ordinary `def` tagged `macro`. It runs at expansion time, receives
 its arguments as **unevaluated `Ast` values**, and its body is a **template by
 default** — it reads like the code it emits, with `#{}` punching the holes:
 
-```amber
+```sputnik
 macro def assert(check):
   if not #{check}:
     raise AssertionError.new("assertion failed: " + #{check.source})
@@ -201,7 +201,7 @@ macro def assert(check):
 
 A use of this macro with argument `x > 5` expands (in F1.5) to:
 
-```amber
+```sputnik
 if not (x > 5):
   raise AssertionError.new("assertion failed: " + "x > 5")
 ```
@@ -211,7 +211,7 @@ evaluated** before the macro runs, and `#{check.source}` recovers the
 argument's *source text* — a function only ever sees the runtime value `false`
 and can never reproduce `"x > 5"`.
 
-**Splice forms (the `#{}` surface).** `#{}` reuses Amber's own string-
+**Splice forms (the `#{}` surface).** `#{}` reuses Sputnik's own string-
 interpolation hole; a quote is just a template for code instead of text:
 
 - `#{expr}` — splice an `Ast` value here (sugar for `unquote`, §5).
@@ -228,7 +228,7 @@ lines — the same control/emit convention the multiline-string / html-tag desig
 already uses (`%`-line = control, `#{}` = emit). This recovers repetition and
 compute-time locals with no further sigil:
 
-```amber
+```sputnik
 macro def trace(*exprs):
   %for e in exprs:                         # runs at expansion, not emitted
     puts(#{e.source} + " = " + #{e})       # emitted once per element
@@ -249,12 +249,12 @@ as the escape hatch for macro bodies that want to bypass the template-default
 body and construct nodes directly.
 
 > **Rest parameters.** Variadic macro params (`*exprs`) use the same
-> definition-site rest parameter surface as ordinary Amber. The macro ABI still
+> definition-site rest parameter surface as ordinary Sputnik. The macro ABI still
 > must pin the compile-time value shape: `*exprs` should bind an immutable
 > `Tuple[Ast]`, and `**kwargs` should bind a deterministic, name-indifferent
 > `Map[Str, Ast]`.
 
-`macro def` is the full-power form: arbitrary Amber computation over `Ast`
+`macro def` is the full-power form: arbitrary Sputnik computation over `Ast`
 values on `%`-lines, helper functions, the lot — bounded only by the sandbox
 (§10). The §5 kernel is what `#{}` and `%`-lines lower to.
 
@@ -266,13 +266,13 @@ An earlier draft of this design proposed a second, declarative rule layer
 
 - **Rust needs `macro_rules!` because its procedural macros are heavyweight** —
   a separate `proc-macro` crate, `syn`/`quote`, slow builds. The declarative
-  form is the lightweight escape from that ceremony. In Amber a `macro def` is
+  form is the lightweight escape from that ceremony. In Sputnik a `macro def` is
   an ordinary `def` on the already-bootstrapped VM (§1); there is no ceremony to
   escape, so the terseness argument nearly vanishes once `#{}` templating (§6)
   exists.
-- **Elixir — the model Amber actually matches — has one form (`defmacro`)** and
+- **Elixir — the model Sputnik actually matches — has one form (`defmacro`)** and
   no declarative layer, for precisely this reason.
-- **Amber already owns what the declarative rule layer was for.** Shape-matching
+- **Sputnik already owns what the declarative rule layer was for.** Shape-matching
   over a macro's `Ast` args is done with `case`/`case!` (exhaustive under the
   typed profile, more capable than a bespoke `=>` grammar); multiple arities
   are done with multi-clause `def` (the existing many-def mechanism). No new
@@ -283,10 +283,10 @@ there are no `$name:frag` captures and no `$(...)*` repetition. **The only
 template sigil is `#{}`** (plus `%`-control lines). Net authoring surface: one
 construct, one template hole.
 
-Amber grammar, which is `:`-and-INDENT based with `;` as a mere separator. The
+Sputnik grammar, which is `:`-and-INDENT based with `;` as a mere separator. The
 single-form `swap` is written in the §6 style:
 
-```amber
+```sputnik
 macro def swap(a, b):
   tmp = #{a}        # `tmp` is hygienic (§9)
   #{a} = #{b}
@@ -297,33 +297,33 @@ macro def swap(a, b):
 ## 8. Trigger surfaces
 
 Where a macro invocation is recognized in source. Five families, all built from
-syntax Amber already has:
+syntax Sputnik already has:
 
 1. **Function-like calls** — ordinary calls resolve to macros when the callee is
    a compile-time macro binding:
 
-   ```amber
+   ```sputnik
    assert(x > 5)
    ```
 
    The parser keeps this as a syntax-faithful ordinary call. F1.5 consults the
    compile-time macro namespace before the binder runs: if `assert` resolves to
-   a macro, the call expands; otherwise the call remains ordinary runtime Amber.
+   a macro, the call expands; otherwise the call remains ordinary runtime Sputnik.
    This keeps macro calls familiar while avoiding a new sigil.
 
    Explicit dot-call remains available for cases where the callee is already a
    macro/callable value or where the author wants the call-channel to be
    visually explicit:
 
-   ```amber
+   ```sputnik
    assert.(x > 5)
    ```
 
    The earlier `name!(args...)` candidate is rejected for v1: `!` already
-   belongs to Amber's bang-method culture (`destroy!`, mutating collection
+   belongs to Sputnik's bang-method culture (`destroy!`, mutating collection
    methods) and effect-row syntax, so it is the wrong default marker for macros.
 2. **Block-suffix** — `name: <block>` / `name |args|: <block>`, reusing the
-   existing block-suffix surface. This is the most Amber-idiomatic DSL entry and
+   existing block-suffix surface. This is the most Sputnik-idiomatic DSL entry and
    what the web framework (§ web-DSL sketch) leans on. Resolution follows the
    same rule as an ordinary macro call: F1.5 expands the form when its callee is
    a macro; otherwise it remains an ordinary runtime call with a block. This
@@ -332,7 +332,7 @@ syntax Amber already has:
 3. **Annotation** — a declaration is annotated by one or more *bare* macro calls
    on their own lines immediately above it, with **no sigil**:
 
-   ```amber
+   ```sputnik
    test 'rejects empty input'
    desc 'validates and stores a record'
    route '/api/v1/users'
@@ -344,9 +344,9 @@ syntax Amber already has:
    on a `def`, `memoize` / `deprecated` on a method, per-field `skip` / `rename`
    inside a class body. This is the Phoenix/Rails-style decorator surface, and
    the sigil-less spelling is deliberate: Elixir's `@doc` / `@spec` attach to the
-   following `def` exactly this way, but Amber cannot spend `@` — it is already
+   following `def` exactly this way, but Sputnik cannot spend `@` — it is already
    the instance-variable sigil (`@field` / `@@field`). Every language that spells
-   decorators `@` (Python, Elixir, Kotlin) is one *without* an `@ivar`; Amber is
+   decorators `@` (Python, Elixir, Kotlin) is one *without* an `@ivar`; Sputnik is
    not, so the sigil is dropped rather than replaced.
 
    **Attachment rule.** The parser keeps each such line as an ordinary call node.
@@ -362,7 +362,7 @@ syntax Amber already has:
    calls, then receive the annotated declaration `Ast` as the final positional
    argument. Keyword-rich annotation calls are therefore first-class:
 
-   ```amber
+   ```sputnik
    model table: :users, schema_mode: :explicit
    class User:
      pass
@@ -390,11 +390,11 @@ syntax Amber already has:
    `#[serde(skip)]` and Jason's `only:`. Serialization is therefore a
    two-surface feature, not the one-liner "killer app" it is sometimes sold as.
 
-   `use` uses Amber's ordinary bare-call surface. The macro head may be a plain
+   `use` uses Sputnik's ordinary bare-call surface. The macro head may be a plain
    macro name or a dotted module-alias macro name, and it may carry ordinary
    call arguments and a block suffix:
 
-   ```amber
+   ```sputnik
    class User:
      use orm.model(table: :users):
        expect_schema:
@@ -424,7 +424,7 @@ syntax Amber already has:
    cooked escape parts remain available. Triple-quoted text blocks still
    require a newline after their opener.
 
-   ```amber
+   ```sputnik
    string_tag macro def sql(t as Ast.StringTemplate) -> Ast:
      Sql.expand(t, dialect: Sql.Postgres)
    ```
@@ -500,7 +500,7 @@ the invocation with `Ast` returned by the macro body.
 - Macro diagnostics should be emitted through `Macro.error(...)` /
   `Macro.warn(...)` with explicit spans. Throwing from a macro body is reserved
   for macro implementation failure and is reported as a compiler diagnostic,
-  not as an Amber runtime exception.
+  not as an Sputnik runtime exception.
 
 ## 9. Hygiene
 
@@ -533,7 +533,7 @@ Macro bodies execute on a dedicated **expander VM** instance — the same
 - **Pure / sandboxed by default.** No capability grants: no filesystem, no net,
   no clock, no RNG, no environment. This both satisfies the determinism
   invariant (#7) and closes the supply-chain hole that unrestricted Rust
-  proc-macros and Elixir compile-time side effects leave open. Amber's existing
+  proc-macros and Elixir compile-time side effects leave open. Sputnik's existing
   **capability model is exactly the right tool** — the expander VM simply runs
   with an empty grant set.
 - **Deterministic surface.** Even otherwise-pure operations that could leak
@@ -556,7 +556,7 @@ Macro bodies execute on a dedicated **expander VM** instance — the same
 
 Macros must exist before the code that uses them, so the build/compiler graph
 gains a compile-time edge class (the Elixir model). The runtime loader remains
-unchanged: it consumes verified post-expansion `.amberbc`.
+unchanged: it consumes verified post-expansion `.sputnikbc`.
 
 - All modules are parsed first so macro definitions and macro-use edges can be
   discovered from syntax-faithful AST.
@@ -580,7 +580,7 @@ unchanged: it consumes verified post-expansion `.amberbc`.
 **Exports and imports (resolves §17.4).** Macros ride the existing module
 surfaces — there is no `import macro` statement:
 
-```amber
+```sputnik
 package db.postgres
 export macro sql
 
@@ -588,7 +588,7 @@ string_tag macro def sql(t as Ast.StringTemplate) -> Ast:
   Sql.expand(t, dialect: Sql.Postgres)
 ```
 
-```amber
+```sputnik
 from db.postgres import sql as psql
 
 rows = conn.execute(psql"""
@@ -615,7 +615,7 @@ rows = conn.execute(psql"""
   runs; a leftover reference to a macro name in value position (e.g. passing
   `psql` as an argument) is a compile-time diagnostic, so the compile-time and
   runtime namespaces sharing one alias never leaks into runtime semantics.
-- **The artifact carries a macro section.** A provider's `.amberbc` gains a
+- **The artifact carries a macro section.** A provider's `.sputnikbc` gains a
   table of staged macro defs: public/private visibility, public name for exports
   (helper name for private defs), surface kind (call / string-tag / annotation),
   declared signature/arity, and the source/bytecode slice needed to rebuild the
@@ -634,9 +634,9 @@ rows = conn.execute(psql"""
 - Type errors and binder errors in expanded code report against the call site by
   default, with an **expansion backtrace** ("expanded from macro `assert` at
   …") so the user is not shown synthetic code with no source.
-- `amberc expand --json` dumps post-expansion `amber.ast.expanded.v1` for
-  golden tests; `amberc expand --trace-json` dumps `amber.macrotrace.v1`;
-  `amberc expand --source` renders the expanded AST back through the same
+- `sputnik expand --json` dumps post-expansion `sputnik.ast.expanded.v1` for
+  golden tests; `sputnik expand --trace-json` dumps `sputnik.macrotrace.v1`;
+  `sputnik expand --source` renders the expanded AST back through the same
   source-rendering surface exposed as `node.source` / `node.to_source` for
   human review.
 - All of this rides the existing deterministic-span machinery (invariant #7,
@@ -668,7 +668,7 @@ build profile**, parallel to how Q4 makes the typed profile opt-in:
 
 - A package opts in through the existing build-profile mechanism, e.g.
   `profiles.required = ["core.v1", "macro.v1"]`. The feature is recorded in
-  `.amberbc` `PROF` metadata like other profile features; the minimal/static
+  `.sputnikbc` `PROF` metadata like other profile features; the minimal/static
   core is unchanged for packages that do not require `macro.v1`.
 - `macro def`, `quote`/`unquote`, `Ast.*`, and the plain-call / explicit
   dot-call / block-suffix / annotation / `use` macro surfaces are available
@@ -679,11 +679,11 @@ build profile**, parallel to how Q4 makes the typed profile opt-in:
 
 ## 15. Definition of done
 
-1. `Ast.*` value model mirrors expanded `amber.ast.v1` plus macro-surface
+1. `Ast.*` value model mirrors expanded `sputnik.ast.v1` plus macro-surface
    nodes, round-trips through `node.source` / `node.to_source` and the existing
    serializer (golden corpus).
 2. `quote`/`unquote`/`unquote_splice` produce correct `Ast` values (golden).
-3. F1.5 fixpoint pass: `amberc expand --json` stable; expands `macro def`;
+3. F1.5 fixpoint pass: `sputnik expand --json` stable; expands `macro def`;
    depth/budget limits are diagnostics, not hangs.
 4. Hygiene corpus: macro-introduced names never capture/are-captured; the
    `swap`/`tmp` and `unhygienic` cases pass; binder scope-key change verified.
@@ -704,8 +704,8 @@ build profile**, parallel to how Q4 makes the typed profile opt-in:
 ## 16. Phased implementation plan
 
 - **M0 — surface/profile contract.** *(done)* Reserve `macro.v1`, add parsed
-  macro-surface AST nodes, define `amber.ast.expanded.v1` /
-  `amber.macrotrace.v1`, and define plain-call / explicit-dot-call macro
+  macro-surface AST nodes, define `sputnik.ast.expanded.v1` /
+  `sputnik.macrotrace.v1`, and define plain-call / explicit-dot-call macro
   resolution (explicitly not `!`).
 - **M1 — AST as data.** *(done, minus `Ast.gensym`)* `Ast.*` model +
   `node.source` / `node.to_source`.
@@ -778,7 +778,7 @@ build profile**, parallel to how Q4 makes the typed profile opt-in:
    each macro seeing the previous one's output; only the last annotation in a
    stack may expand to multiple declarations (§8 ABI).
 6. **`Ast` introspection surface.** *Accessors resolved & landed:* a nullary
-   selector on an `Ast` value reads the amber.ast.v1 field of that name —
+   selector on an `Ast` value reads the sputnik.ast.v1 field of that name —
    Str for string fields, Bool for bool fields, `Ast` for child nodes
    (aliasing the shared immutable root, `.source` preserved on subtrees),
    `List[Ast]` for node lists (`bin.op`, `bin.left`, `blk.params`,
@@ -786,7 +786,7 @@ build profile**, parallel to how Q4 makes the typed profile opt-in:
    schema names — no renamed conveniences. Still open: `case`/`case!`
    shape-matching over `Ast` values (§7) as the ergonomic layer on top.
 6. **`gensym` rendering.** Hygiene identity is deterministic (§9), but
-   `node.source` / `node.to_source` / `amberc expand --source` must choose how
+   `node.source` / `node.to_source` / `sputnik expand --source` must choose how
    much of that identity to reveal for generated names (`tmp`, `tmp#1`, or
    trace-only metadata).
 7. **Compile-time capability escalation** (§10) — defer to a later RFC, or

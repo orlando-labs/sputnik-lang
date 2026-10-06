@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct RuntimeFrozenImageLoadResult {
   bool ok = false;
@@ -22,4 +22,4 @@ load_frozen_image(const frozen::FrozenImageArtifact &artifact);
 RuntimeFrozenImageLoadResult
 load_frozen_image(const std::string &serialized_image);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

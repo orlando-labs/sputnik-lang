@@ -1,4 +1,4 @@
-// Included inside Vm: notebook display uses ordinary Amber dispatch to render
+// Included inside Vm: notebook display uses ordinary Sputnik dispatch to render
 // plots, then crosses the host boundary with immutable images and inert scenes.
   bool notebook_scene_bounded(const Value &value, unsigned depth,
                               std::size_t &nodes, std::size_t &bytes) {
@@ -218,11 +218,11 @@
       unsigned remaining = 256;
       const auto key = notebook_order(order.value_or(Value::integer(0)), 0, remaining);
       if (!args[0].is_instance_object() || !args[0].as_instance_object())
-        throw std::invalid_argument("notebook.show currently supports amber-plot Figure, Figure3D and PNG Rendered objects");
+        throw std::invalid_argument("notebook.show currently supports sputnik-plot Figure, Figure3D and PNG Rendered objects");
       const auto object = args[0].as_instance_object();
       const auto name = class_name_for_index(object->class_index).value_or("");
       if (name != "plot.Figure" && name != "plot.Figure3D" && name != "plot.Rendered")
-        throw std::invalid_argument("notebook.show object is not an amber-plot figure");
+        throw std::invalid_argument("notebook.show object is not an sputnik-plot figure");
       if (!ensure_lifecycle_access(frame, args[0])) return SendStatus::Faulted;
       const auto width = instance_ivar_value_or_null(object, "width");
       const auto height = instance_ivar_value_or_null(object, "height");
@@ -239,7 +239,7 @@
       } else {
         const auto *method = find_method_for_dispatch(frame, object->class_index, "bytes", kMethodFlagInstance);
         if (fault_) return SendStatus::Faulted;
-        if (!method) throw std::invalid_argument("amber-plot figure is missing bytes(format:)");
+        if (!method) throw std::invalid_argument("sputnik-plot figure is missing bytes(format:)");
         const std::vector<std::pair<std::uint32_t, Value>> keywords = {
             {intern_runtime_symbol("format"), Value::symbol(intern_runtime_symbol("png"))}};
         auto rendered = execute_method_to_value(frame, *method, {}, keywords, args[0], Value::null(), "notebook.show rendering");
@@ -257,7 +257,7 @@
       };
       if (data.size() < 33 || data.compare(0, 8, "\x89PNG\r\n\x1a\n", 8) != 0 ||
           data.compare(12, 4, "IHDR") != 0 || u32(16) != display.width || u32(20) != display.height)
-        throw std::invalid_argument("amber-plot returned an invalid or mismatched PNG");
+        throw std::invalid_argument("sputnik-plot returned an invalid or mismatched PNG");
       if (name == "plot.Figure") {
         const auto *scene_method = find_method_for_dispatch(frame, object->class_index, "notebook_scene", kMethodFlagInstance);
         if (fault_) return SendStatus::Faulted;

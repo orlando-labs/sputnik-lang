@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 namespace {
 
 std::string bc_string_or_empty(const BcModule &module, std::uint32_t id) {
@@ -206,9 +206,9 @@ public:
     // capability embedded into the generated executable. Without copying the
     // requests into the merged module, RuntimeWorld resolves an empty
     // effective set even though the executable carries the host grants.
-    add_module_attr(&out_, "amber.build.graph", "merged-native-v1");
-    add_module_attr(&out_, "amber.build.graph.root", root_module);
-    add_module_attr(&out_, "amber.build.graph.modules",
+    add_module_attr(&out_, "sputnik.build.graph", "merged-native-v1");
+    add_module_attr(&out_, "sputnik.build.graph.root", root_module);
+    add_module_attr(&out_, "sputnik.build.graph.modules",
                     std::to_string(order_.size()));
     normalize_string_vector(&out_.required_features);
     normalize_string_vector(&out_.optional_features);
@@ -653,7 +653,7 @@ private:
   }
 
   void index_import_alias_paths(GraphModuleState &state) {
-    const std::string prefix = "amber.import.alias:";
+    const std::string prefix = "sputnik.import.alias:";
     for (const AttrEntry &attr : state.input->module.attrs) {
       const std::string key =
           bc_string_or_empty(state.input->module, attr.key_str_id);
@@ -720,7 +720,7 @@ private:
   std::vector<Instruction>
   import_seed_instructions(GraphModuleState &state) {
     std::vector<Instruction> seeds;
-    const std::string prefix = "amber.import.alias:";
+    const std::string prefix = "sputnik.import.alias:";
     for (const AttrEntry &attr : state.input->module.attrs) {
       const std::string key =
           bc_string_or_empty(state.input->module, attr.key_str_id);
@@ -1228,12 +1228,12 @@ private:
       if ((ref.kind == "method" || ref.kind == "code") &&
           ref.code_id != 0U) {
         add_module_attr(
-            &out_, "amber.merged.export:" + state.input->name + "." +
+            &out_, "sputnik.merged.export:" + state.input->name + "." +
                        export_name,
             ref.kind + "\t" + std::to_string(ref.code_id));
       } else if (ref.kind == "class") {
         add_module_attr(
-            &out_, "amber.merged.export:" + state.input->name + "." +
+            &out_, "sputnik.merged.export:" + state.input->name + "." +
                        export_name,
             "class\t" + std::to_string(ref.class_index));
       }
@@ -1277,24 +1277,24 @@ private:
           bc_string_or_empty(state.input->module, source.key_str_id);
       const std::string raw_value =
           bc_string_or_empty(state.input->module, source.value_str_id);
-      if (raw_key.rfind("amber.import.alias:", 0) == 0) {
+      if (raw_key.rfind("sputnik.import.alias:", 0) == 0) {
         continue;
       }
       std::string key = raw_key;
-      if (raw_key.rfind("amber.native.bind:", 0) == 0) {
+      if (raw_key.rfind("sputnik.native.bind:", 0) == 0) {
         std::uint32_t old_code = 0;
         if (parse_u32_text(
-                raw_key.substr(std::string("amber.native.bind:").size()),
+                raw_key.substr(std::string("sputnik.native.bind:").size()),
                 &old_code)) {
           key =
-              "amber.native.bind:" + std::to_string(map_code(state, old_code));
+              "sputnik.native.bind:" + std::to_string(map_code(state, old_code));
         }
       }
       out_.attrs.push_back({intern_string(key), intern_string(raw_value)});
     }
     if (state.input->module.init.has_entry_code_id) {
       add_module_attr(&out_,
-                      "amber.merged.init:" +
+                      "sputnik.merged.init:" +
                           std::to_string(map_code(
                               state, state.input->module.init.entry_code_id)),
                       state.input->name);
@@ -1336,7 +1336,7 @@ private:
         {Opcode::Return, {{1, false}}});
     out_.code_objects.push_back(std::move(wrapper));
     out_.init = {true, wrapper_id, 0};
-    add_module_attr(&out_, "amber.merged.wrapper:" + std::to_string(wrapper_id),
+    add_module_attr(&out_, "sputnik.merged.wrapper:" + std::to_string(wrapper_id),
                     "true");
   }
 
@@ -1602,4 +1602,4 @@ GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
                     std::move(is_external_namespace));
 }
 
-} // namespace amber::bytecode
+} // namespace sputnik::bytecode

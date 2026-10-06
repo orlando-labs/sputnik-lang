@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 enum class RuntimeModuleState {
   Unloaded,
@@ -141,4 +141,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

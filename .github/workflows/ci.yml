@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang libncurses-dev python3
+            build-essential clang libssl-dev pkg-config python3
 
       - name: Print compiler version
         run: ${{ matrix.cxx }} --version

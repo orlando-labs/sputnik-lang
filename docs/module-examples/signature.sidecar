@@ -27,14 +27,14 @@ method: Signature.sign(algorithm, private_key, message)
 ru: Подписать бинарное сообщение.
 en: Sign a binary message.
 example:
-signature = Signature.sign(:ed25519, keys["private_key"], Bytes.new("amber"))
+signature = Signature.sign(:ed25519, keys["private_key"], Bytes.new("sputnik"))
 .end
 
 method: Signature.verify(algorithm, public_key, message, signature)
 ru: Проверить подпись; изменённое сообщение возвращает false.
 en: Verify a signature; a changed message returns false.
 example:
-valid = Signature.verify(:ed25519, keys["public_key"], Bytes.new("amber"), signature)
+valid = Signature.verify(:ed25519, keys["public_key"], Bytes.new("sputnik"), signature)
 .end
 
 method: Signature.available?(algorithm)

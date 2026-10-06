@@ -11,11 +11,11 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::frozen {
+namespace sputnik::frozen {
 
 namespace {
 
-constexpr const char *kImageSchema = "amber.image.v1";
+constexpr const char *kImageSchema = "sputnik.image.v1";
 
 FrozenImageDiagnostic diagnostic(std::string error_name, std::string message,
                                  std::string module_name = {}) {
@@ -157,7 +157,7 @@ bool hex_to_bytes(const std::string &hex, std::vector<std::uint8_t> *bytes) {
 }
 
 std::string sha256_prefixed(const std::string &value) {
-  return "sha256:" + amber::lexer::sha256_hex(value);
+  return "sha256:" + sputnik::lexer::sha256_hex(value);
 }
 
 std::string sha256_prefixed_bytes(const std::vector<std::uint8_t> &bytes) {
@@ -254,7 +254,7 @@ std::vector<pkg::PackageNativeExtensionMetadata> sorted_native_extensions(
 
 bool same_native_type(const pkg::PackageNativeType &left,
                       const pkg::PackageNativeType &right) {
-  return left.amber == right.amber && left.tag == right.tag &&
+  return left.sputnik == right.sputnik && left.tag == right.tag &&
          left.ownership == right.ownership &&
          left.destructor == right.destructor;
 }
@@ -318,7 +318,7 @@ void append_native_diagnostics(
 }
 
 bool metadata_declares_native_readiness(const std::string &metadata_json) {
-  return metadata_json.find("\"format\": \"amber.native.v1\"") !=
+  return metadata_json.find("\"format\": \"sputnik.native.v1\"") !=
              std::string::npos &&
          metadata_json.find("\"requires_frozen_world\": true") !=
              std::string::npos &&
@@ -513,8 +513,8 @@ serialize_frozen_image_artifact(const FrozenImageArtifact &artifact) {
     const std::string prefix =
         "native_extension." + std::to_string(i) + ".";
     out << prefix << "name=" << line_escape(extension.name) << "\n";
-    out << prefix << "amber_ext_abi_version="
-        << extension.amber_ext_abi_version << "\n";
+    out << prefix << "sputnik_ext_abi_version="
+        << extension.sputnik_ext_abi_version << "\n";
     out << prefix << "target_triple="
         << line_escape(extension.target_triple) << "\n";
     out << prefix << "native_source_sha256="
@@ -524,7 +524,7 @@ serialize_frozen_image_artifact(const FrozenImageArtifact &artifact) {
     out << prefix << "type.count=" << extension.types.size() << "\n";
     for (std::size_t j = 0; j < extension.types.size(); ++j) {
       out << prefix << "type." << j
-          << ".amber=" << line_escape(extension.types[j].amber) << "\n";
+          << ".sputnik=" << line_escape(extension.types[j].sputnik) << "\n";
       out << prefix << "type." << j
           << ".tag=" << line_escape(extension.types[j].tag) << "\n";
       out << prefix << "type." << j
@@ -697,8 +697,8 @@ parse_frozen_image_artifact(const std::string &serialized,
                              &extension.native_source_digest) ||
           !get_escaped_value(values, prefix + "exported_symbol_sha256",
                              &extension.exported_symbol_digest) ||
-          !parse_u32(values[prefix + "amber_ext_abi_version"],
-                     &extension.amber_ext_abi_version)) {
+          !parse_u32(values[prefix + "sputnik_ext_abi_version"],
+                     &extension.sputnik_ext_abi_version)) {
         result.diagnostics.push_back(diagnostic(
             "FrozenImageParseError",
             "frozen image native extension is incomplete"));
@@ -716,7 +716,7 @@ parse_frozen_image_artifact(const std::string &serialized,
         pkg::PackageNativeType type;
         const std::string entry =
             prefix + "type." + std::to_string(j) + ".";
-        if (!get_escaped_value(values, entry + "amber", &type.amber) ||
+        if (!get_escaped_value(values, entry + "sputnik", &type.sputnik) ||
             !get_escaped_value(values, entry + "tag", &type.tag) ||
             !get_escaped_value(values, entry + "ownership",
                                &type.ownership) ||
@@ -860,7 +860,7 @@ verify_frozen_image_artifact(const std::string &serialized,
           "FrozenImageVerifyError",
           "native module has no matching package module", module.module_name));
     }
-    if (module.format != "amber.native.v1") {
+    if (module.format != "sputnik.native.v1") {
       result.diagnostics.push_back(
           diagnostic("FrozenImageVerifyError",
                      "unsupported native metadata format", module.module_name));
@@ -879,7 +879,7 @@ verify_frozen_image_artifact(const std::string &serialized,
         !metadata_declares_native_readiness(module.metadata_json)) {
       result.diagnostics.push_back(diagnostic(
           "FrozenImageVerifyError",
-          "native metadata does not declare amber.native.v1 readiness guards",
+          "native metadata does not declare sputnik.native.v1 readiness guards",
           module.module_name));
     }
     const auto code_count = code_count_by_module.find(module.module_name);
@@ -925,9 +925,9 @@ verify_frozen_image_artifact(const std::string &serialized,
           extension.name));
       continue;
     }
-    if (extension.amber_ext_abi_version != 1U ||
-        extension.amber_ext_abi_version !=
-            package_extension->amber_ext_abi_version) {
+    if (extension.sputnik_ext_abi_version != 1U ||
+        extension.sputnik_ext_abi_version !=
+            package_extension->sputnik_ext_abi_version) {
       result.diagnostics.push_back(diagnostic(
           "FrozenImageVerifyError",
           "native extension ABI version does not match",
@@ -1006,7 +1006,7 @@ verify_frozen_image_artifact(const std::string &serialized,
 std::string artifact_to_json(const FrozenImageArtifact &artifact) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.image.inspect.v1\",\n";
+  out << "  \"schema\": \"sputnik.image.inspect.v1\",\n";
   out << "  \"format\": \"" << json_escape(artifact.format) << "\",\n";
   out << "  \"digest\": \"" << json_escape(artifact.image_digest) << "\",\n";
   out << "  \"package\": {\"name\":\""
@@ -1043,8 +1043,8 @@ std::string artifact_to_json(const FrozenImageArtifact &artifact) {
     }
     const pkg::PackageNativeExtensionMetadata &extension = extensions[i];
     out << "\n    {\"name\":\"" << json_escape(extension.name)
-        << "\",\"amber_ext_abi_version\":"
-        << extension.amber_ext_abi_version << ",\"target_triple\":\""
+        << "\",\"sputnik_ext_abi_version\":"
+        << extension.sputnik_ext_abi_version << ",\"target_triple\":\""
         << json_escape(extension.target_triple)
         << "\",\"native_source_sha256\":\""
         << json_escape(extension.native_source_digest)
@@ -1071,7 +1071,7 @@ std::string artifact_to_json(const FrozenImageArtifact &artifact) {
 std::string verify_result_to_json(const FrozenImageVerifyResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.image.verify.v1\",\n";
+  out << "  \"schema\": \"sputnik.image.verify.v1\",\n";
   out << "  \"status\": \"" << (result.ok ? "ok" : "error") << "\",\n";
   out << "  \"package\": \"" << json_escape(result.package_name) << "\",\n";
   out << "  \"version\": \"" << json_escape(result.version) << "\",\n";
@@ -1102,7 +1102,7 @@ std::string verify_result_to_json(const FrozenImageVerifyResult &result) {
 std::string
 diagnostics_to_json(const std::vector<FrozenImageDiagnostic> &diagnostics) {
   std::ostringstream out;
-  out << "{\n  \"format\": \"amber.image.diagnostics.v1\",\n";
+  out << "{\n  \"format\": \"sputnik.image.diagnostics.v1\",\n";
   out << "  \"errors\": [";
   for (std::size_t i = 0; i < diagnostics.size(); ++i) {
     if (i != 0U) {
@@ -1117,4 +1117,4 @@ diagnostics_to_json(const std::vector<FrozenImageDiagnostic> &diagnostics) {
   return out.str();
 }
 
-} // namespace amber::frozen
+} // namespace sputnik::frozen

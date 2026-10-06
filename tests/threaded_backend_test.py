@@ -10,14 +10,14 @@ import sys
 
 def main():
     root = Path(__file__).resolve().parents[1]
-    compiler = Path(sys.argv[1] if len(sys.argv) > 1 else "build/amberc").resolve()
+    compiler = Path(sys.argv[1] if len(sys.argv) > 1 else "build/sputnik").resolve()
     work = compiler.parent / "threaded-backend"
     work.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
-    env.setdefault("AMBER_NATIVE_RT_CACHE", str(compiler.parent / "native-rt-cache"))
+    env.setdefault("SPUTNIK_NATIVE_RT_CACHE", str(compiler.parent / "native-rt-cache"))
     # Keep the real compile command to exercise the same native launcher with
     # one scheduler worker, without adding a production-only testing switch.
-    cxx = shutil.which(env.get("AMBER_NATIVE_CXX", env.get("CXX", "clang++")))
+    cxx = shutil.which(env.get("SPUTNIK_NATIVE_CXX", env.get("CXX", "clang++")))
     assert cxx, "native C++ compiler is unavailable"
     wrapper = work / "record-cxx"
     command_log = work / "compile-command.json"
@@ -27,7 +27,7 @@ def main():
         f"    Path({str(command_log)!r}).write_text(json.dumps([{cxx!r}, *sys.argv[1:]]))\n"
         f"os.execv({cxx!r}, [{cxx!r}, *sys.argv[1:]])\n")
     wrapper.chmod(0o755)
-    env["AMBER_NATIVE_CXX"] = str(wrapper)
+    env["SPUTNIK_NATIVE_CXX"] = str(wrapper)
 
     def run(args, timeout=180, success=True):
         result = subprocess.run(args, cwd=root, env=env, text=True,
@@ -37,7 +37,7 @@ def main():
         return result
 
     def build(name, source):
-        path = work / f"{name}.am"
+        path = work / f"{name}.s"
         path.write_text(source)
         executable = work / name
         result = run([str(compiler), "build", str(path), "--target", "native",
@@ -50,7 +50,7 @@ def main():
         (work / f"{name}.build.json").write_text(result.stdout)
         return path, executable
 
-    fixture = (root / "corpus/run/threaded_native/source.am").read_text() + "\nprobe()\n"
+    fixture = (root / "corpus/run/threaded_native/source.s").read_text() + "\nprobe()\n"
     source, executable = build("collections", fixture)
     vm = run([str(compiler), "run", str(source)]).stdout
     native = run([str(executable)]).stdout
@@ -119,11 +119,11 @@ if score == 8: 42 else: score
     info = json.loads((work / "errors.build.json").read_text())
     original = Path(info["native_source"])
     generated = original.read_text()
-    needle = "static amber::runtime::RuntimeTaskModule runtime;"
+    needle = "static sputnik::runtime::RuntimeTaskModule runtime;"
     assert generated.count(needle) == 1
     single_source = work / "errors.one-worker.cpp"
     single_source.write_text(generated.replace(
-        needle, "static amber::runtime::RuntimeTaskModule runtime(1);"))
+        needle, "static sputnik::runtime::RuntimeTaskModule runtime(1);"))
     command[command.index(str(original))] = str(single_source)
     single_executable = work / "errors.one-worker"
     command[command.index("-o") + 1] = str(single_executable)

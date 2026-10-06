@@ -13,7 +13,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 class RuntimeWatchObjectState;
 
@@ -38,7 +38,7 @@ inline constexpr std::uint32_t kObjectFlagDestroying = 0x10U;
 inline constexpr std::uint32_t kObjectFlagPinned = 0x20U;
 inline constexpr std::uint32_t kNativeSyntheticClassIndex =
     std::numeric_limits<std::uint32_t>::max();
-inline constexpr const char *kNativeRangeMarker = "__amber_range";
+inline constexpr const char *kNativeRangeMarker = "__sputnik_range";
 
 struct ShapeDescriptor {
   std::uint64_t shape_id = 0;
@@ -196,4 +196,4 @@ std::optional<std::vector<MapEntry>>
 normalize_map_entries(std::vector<MapEntry> entries, bool strict,
                       CollectionKeyError *error);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

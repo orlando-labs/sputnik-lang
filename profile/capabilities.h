@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::capability {
+namespace sputnik::capability {
 
 inline constexpr std::uint32_t kCapabilityFlagWildcardTarget = 0x1U;
 
@@ -54,4 +54,4 @@ bool parse_cli_grant(const std::string &raw, CapabilityRequest *grant,
 std::string request_to_text(const CapabilityRequest &request);
 std::string resolution_to_json(const CapabilityResolutionResult &result);
 
-} // namespace amber::capability
+} // namespace sputnik::capability

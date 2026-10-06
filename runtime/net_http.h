@@ -6,7 +6,7 @@
 // the Phase 1 wire codec with an injected byte transport to perform one
 // HTTP/1.1 request/response exchange. The transport seam is design decision D2
 // — the VM wraps a RuntimeTcpStream connector behind it; tests inject a
-// deterministic in-memory fake. Sockets, the Amber value surface, pooling,
+// deterministic in-memory fake. Sockets, the Sputnik value surface, pooling,
 // timeouts, and redirects layer on top in later slices.
 
 #include "runtime/http_codec.h"
@@ -17,7 +17,7 @@
 #include <optional>
 #include <string>
 
-namespace amber::runtime::http {
+namespace sputnik::runtime::http {
 
 // Parsed origin + origin-form request target for an HTTP(S) URL (§19).
 // Userinfo is rejected and the fragment is stripped (never sent on the wire). `target` is path + optional "?query"
@@ -222,4 +222,4 @@ HttpExchangeResult http_perform(HttpTransport &transport,
                                 bool head_request = false,
                                 const HttpResponseParserLimits &limits = {});
 
-} // namespace amber::runtime::http
+} // namespace sputnik::runtime::http

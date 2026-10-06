@@ -1,11 +1,11 @@
 # Task-local context
 
-`task.local` creates a slot whose binding belongs to the current logical Amber
+`task.local` creates a slot whose binding belongs to the current logical Sputnik
 task. It is not operating-system thread-local storage. A task may suspend on
 `task.sleep`, I/O, or another await-like operation and later resume on a
 different native worker; its task-local bindings move with its continuation.
 
-```amber
+```sputnik
 import task
 
 CURRENT_REQUEST = task.local(inherit: true)
@@ -38,7 +38,7 @@ Inheritance is an explicit slot property:
 The copied binding is a shallow snapshot. Rebinding or clearing the slot in the
 child does not change the parent's binding, but a mutable object stored as the
 value is the same object in both tasks. It must therefore already be safe to
-share under Amber's ownership rules.
+share under Sputnik's ownership rules.
 
 Task-local state is owned by the logical scheduler task and is discarded as a
 unit on completion or cancellation. Libraries do not need a global task-ID map
@@ -49,7 +49,7 @@ take a process-global mutex; mutation copies the normally small binding map.
 
 A connection pool should make its transaction slot non-inheritable:
 
-```amber
+```sputnik
 class Pool:
   def init(...):
     @current_connection = task.local(inherit: false)

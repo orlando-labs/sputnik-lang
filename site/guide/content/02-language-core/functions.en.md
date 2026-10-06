@@ -19,7 +19,7 @@ spec_refs:
 A function is declared with `def`. Both multi-line and one-liner forms are
 supported; the body is an expression, and its value becomes the result:
 
-```amber
+```sputnik
 def add(a, b):
   a + b
 
@@ -37,7 +37,7 @@ probe()
 `class` declares a type. Writing `@attr` directly in the `init` signature
 declares an instance field on the spot — no manual argument shuffling:
 
-```amber
+```sputnik
 class Collection:
   def init(@count): pass
 
@@ -61,7 +61,7 @@ A method that takes no arguments can be called without parentheses — a
 **bare-nullary send**. The forms `items.size` and `items.size()` are
 equivalent. The same holds for class methods declared with `class_method`:
 
-```amber
+```sputnik
 class Collection:
   def init(@count): pass
   def size(): @count

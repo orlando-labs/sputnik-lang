@@ -2,12 +2,12 @@
 
 Date: 2026-06-29
 Status: design / API-shape proposal — no code change in this doc
-Scope: the Amber-facing surface of `encoding`, the second library on the Layer 0
+Scope: the Sputnik-facing surface of `encoding`, the second library on the Layer 0
 stdlib substrate (`DESIGN-stdlib-next-libs-order-2026-06-15.md`, Tier 1, after
 `Json`). Defines the charset `Encoding` codec, the `Bytes`↔`Str` bridge, the
 `Encoded` staging type for untrusted input (the Ruby `force_encoding`/`encode!`
 workflow), encoding detection, the error model, and the runtime shape.
-Follows: `amber_unified_final_spec.md` §4.4 + §3.2 (`io.TextWriter`,
+Follows: `sputnik_unified_final_spec.md` §4.4 + §3.2 (`io.TextWriter`,
 `encoding::utf8`), the existing `EncodingError` registry entry, the immutable
 UTF-8 `Str` invariant (spec §"String literals are immutable UTF-8 `Str`"), and
 the `Bytes`/`ByteBuffer`/`ByteSlice` family in `runtime/io.h`.
@@ -23,7 +23,7 @@ the implementation, gated on the contract here being agreed.
 `encoding` is a native runtime type, identical in shape to `Json`/`Math`: one
 `RuntimeNativeTypeKind::Encoding`, one path registration (`"encoding"`), one
 `register_encoding(registry)` adding an `encoding_dispatch(NativeStdlibCall&)`
-handler in `runtime/stdlib_encoding.cpp`. No `.am` source ships.
+handler in `runtime/stdlib_encoding.cpp`. No `.s` source ships.
 
 Unlike `Json`, `encoding` introduces a **new heap value type**, `Encoded` (§5),
 carried as a `Value` tail kind on both value representations (the same mechanism
@@ -40,7 +40,7 @@ already exists; this library is the charset engine underneath it.
 
 ## 2. The core decision: text/bytes split, not tagged strings
 
-Amber has already made the decision most encoding APIs agonize over:
+Sputnik has already made the decision most encoding APIs agonize over:
 
 - `Str` is **always valid UTF-8, immutable text**. Source is UTF-8; no normalization.
 - Raw bytes live in a **separate family**: `Bytes` / `ByteBuffer` / `ByteSlice`.
@@ -82,7 +82,7 @@ thing the other is bad at:
   boundary becomes awkward — you lose the "carry and decide later" workflow and end
   up manually juggling a `bytes` value next to a separate encoding variable.
 
-Amber already committed to the second school (`Str` is immutable UTF-8; `Bytes` is
+Sputnik already committed to the second school (`Str` is immutable UTF-8; `Bytes` is
 separate). The bridge in this design keeps that strength **and buys back the Ruby
 strength precisely where it pays off**, by separating the two concerns into two
 types instead of one overloaded one:
@@ -128,7 +128,7 @@ need to inspect first → stage in `Encoded`, then commit with `to_str`.**
 `Encoding` values are constants reached as `encoding::<name>` or via lookup. They
 are immutable, interned, and shareable.
 
-```amber
+```sputnik
 enc = encoding::cp1251
 
 enc.name                  # "windows-1251"   (canonical)
@@ -149,7 +149,7 @@ enc.representable?(str)    # can this text round-trip losslessly into this chars
 
 `decode`/`encode` accept the shared error policy (§7):
 
-```amber
+```sputnik
 enc.decode(bytes, on_error: :replace)
 enc.encode(str,   on_error: :transliterate)
 enc.encode(str,   on_error: :replace, replacement: "_")
@@ -157,7 +157,7 @@ enc.encode(str,   on_error: :replace, replacement: "_")
 
 ### 4.2 Module-level surface
 
-```amber
+```sputnik
 encoding::utf8                 # constant fast-path (and ::utf16le, ::cp1251, ... — §8)
 encoding::default              # the process default == encoding::utf8
 
@@ -172,7 +172,7 @@ Encoding.sniff(bytes)          # -> Detection   (rich result, §6)
 
 ### 4.3 `Str` sugar (text → bytes; text → text)
 
-```amber
+```sputnik
 str.to_bytes                          # == encoding::utf8.encode(str) == the existing Str#bytes
 str.to_bytes(encoding::cp1251)        # encode to a charset -> Bytes
 str.to_bytes(encoding::cp1251, on_error: :replace)
@@ -182,13 +182,13 @@ str.reinterpret(from: encoding::latin1, to: encoding::cp1251)
 #   ≡ encoding::cp1251.decode( encoding::latin1.encode(str) )
 ```
 
-`Str#valid_encoding?` is deliberately **absent**: an Amber `Str` is valid UTF-8 by
+`Str#valid_encoding?` is deliberately **absent**: an Sputnik `Str` is valid UTF-8 by
 construction, so the predicate would always be `true`. Validity questions live on
 `Bytes` / `Encoded`.
 
 ### 4.4 `Bytes` sugar (bytes → text; detection)
 
-```amber
+```sputnik
 bytes.decode                          # assume UTF-8 -> Str
 bytes.decode(encoding::cp1251)        # -> Str   (exact inverse of str.to_bytes)
 bytes.decode(encoding::utf8, on_error: :replace)
@@ -211,7 +211,7 @@ Binary-transport encodings (base64, base64url, base32, hex) are bytes→ASCII, a
 different domain from charsets. They become **`Bytes` methods**, retiring the
 `Encoding` name reservation in roadmap §4.2 (noted as an erratum there):
 
-```amber
+```sputnik
 bytes.base64          bytes.base64url        bytes.hex        bytes.base32
 Bytes.from_base64(str)   Bytes.from_hex(str)   ...            # constructors (raise on malformed)
 ```
@@ -220,7 +220,7 @@ Bytes.from_base64(str)   Bytes.from_hex(str)   ...            # constructors (ra
 
 ## 5. Layer 2 — `Encoded`: the untrusted-input staging type
 
-`Encoded` is Amber's equivalent of a Ruby `String` / a byte-string: **raw bytes
+`Encoded` is Sputnik's equivalent of a Ruby `String` / a byte-string: **raw bytes
 carrying a *claimed-but-unverified* charset tag.** It is **mutable**, it **may be
 invalid**, and it is where all untrusted-input handling happens. Plain `Str` stays
 provably-UTF-8 — the "might not be valid" property is corralled in exactly one
@@ -228,7 +228,7 @@ type, never ambient.
 
 ### 5.1 Construction
 
-```amber
+```sputnik
 e = bytes.tagged(encoding::cp1251)        # O(1), no transcode
 e = encoding::cp1251.tag(bytes)           # same, codec-first spelling
 e = bytes.tagged(:detect)                 # tag with the detected encoding (§6)
@@ -237,7 +237,7 @@ e = Encoded.new(bytes, encoding::cp1251)
 
 ### 5.2 The Ruby workflow — the familiar verbs
 
-```amber
+```sputnik
 e.encoding                     # the currently-believed Encoding
 e.confidence                   # Float? — set when created via :detect, else null
 e.bytesize                     # raw byte count
@@ -270,7 +270,7 @@ return a new `Encoded`; `to_str` is the only operation that crosses into `Str`.
 
 ### 5.3 The pipeline
 
-```amber
+```sputnik
 text =
   res.body_bytes                       # Bytes from an untrusted server
     .tagged(:detect)                   # stage with a best-effort guess
@@ -300,7 +300,7 @@ decoded `Str`.
 
 ### 6.1 The `Detection` result
 
-```amber
+```sputnik
 d = bytes.sniff_encoding              # -> Detection
 d.encoding                            # Encoding?   best candidate, or null if inconclusive
 d.confidence                          # Float 0.0..1.0
@@ -309,7 +309,7 @@ d.candidates                          # List[(Encoding, Float)]  ranked
 
 `Detection` is pattern-matchable (a cold tail value like `Result`):
 
-```amber
+```sputnik
 case bytes.sniff_encoding
 in {encoding: enc, confidence: c} if c >= 0.8 then enc.decode(bytes)
 else                                                encoding::utf8.decode(bytes, on_error: :replace)
@@ -328,7 +328,7 @@ The first argument of `decode` / `tagged` is polymorphic: an `Encoding` **or** a
 detection sentinel. This replaces the buggy `bytes.decode(bytes.detect_encoding)`
 (which passes `null` when detection is inconclusive).
 
-```amber
+```sputnik
 bytes.decode(:detect)                              # detect then decode -> Str
 bytes.decode(:detect, fallback: encoding::utf8)    # used when detection is inconclusive (default utf8)
 bytes.decode(:detect, fallback: :raise)            # raise EncodingError instead of guessing
@@ -421,7 +421,7 @@ and `transliterate` (both Unicode-data-table-heavy).
   `runtime/stdlib_encoding.cpp`. Charset constants `encoding::<name>` resolve to
   `Encoding` values.
 - **GOTCHA:** the native-backend archive source list lives in
-  `tools/amberc/main.cpp` (~L5968), separate from `RUNTIME_SRCS` — add
+  `tools/sputnik/main.cpp` (~L5968), separate from `RUNTIME_SRCS` — add
   `stdlib_encoding.cpp` to both.
 - **Facade growth is small.** Builds `Str` and `Bytes` (already supported since
   `Json`/io); invokes no user blocks; touches no filesystem. The only new facade

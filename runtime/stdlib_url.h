@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 enum class RuntimeUrlEncodeMode { Component, Query };
 
@@ -62,4 +62,4 @@ std::string runtime_url_build_query(
 
 void register_url(NativeRegistry &registry);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

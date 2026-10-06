@@ -4,15 +4,15 @@ Date: 2026-07-04
 
 Context: `bench/polyglot/README.md` was rerun locally with Ruby 4.0.5 from RVM,
 Go 1.26.4, Rust 1.96.0, and Python 3.9.6. The reproduced results match the
-latest documented run: most Amber rows are in the same performance band, while
+latest documented run: most Sputnik rows are in the same performance band, while
 `map-words` is the clear outlier and `string-ops` exposes runtime string-table
 retention.
 
 ## Reproduced findings
 
-- `map-words` dominates the performance gap. Amber interpreted was about 54x
+- `map-words` dominates the performance gap. Sputnik interpreted was about 54x
   slower than Ruby and about 191x slower than Rust in the local rerun;
-  Amber-built was about 82x slower than C++ and about 60x slower than Rust.
+  Sputnik-built was about 82x slower than C++ and about 60x slower than Rust.
 - The VM map path copies `MapValue::entries` through `extract_map_entries` for
   read selectors, then scans linearly for `include?` and `[]`.
 - The generated native map path mirrors the same vector-only representation:
@@ -20,8 +20,8 @@ retention.
 - `string-ops` is primarily a memory-retention signal. String/symbol intern
   lookup is already indexed; the remaining issue is that runtime-created
   strings are still permanent entries in the VM string table.
-- Amber-built short workloads carry a fixed startup floor from the native
-  executable/runtime footprint. Tiny Amber native binaries are megabytes while
+- Sputnik-built short workloads carry a fixed startup floor from the native
+  executable/runtime footprint. Tiny Sputnik native binaries are megabytes while
   equivalent C++ benchmark binaries are tens of kilobytes.
 
 ## Optimization order
@@ -35,13 +35,13 @@ retention.
    selectors. Status: implemented for safe no-block paths on 2026-07-04; block
    iteration still snapshots to preserve mutation semantics.
 3. Mirror the indexed map representation in the generated native backend so
-   Amber-built no longer inherits vector-scan map traffic. Status: implemented
+   Sputnik-built no longer inherits vector-scan map traffic. Status: implemented
    for generated `NativeMap` lookup, containment, and mutation on 2026-07-04.
 4. Split ephemeral runtime strings from permanent literal/symbol interning so
    string-heavy workloads do not retain every intermediate forever. Status:
    partially implemented on 2026-07-04 by removing the duplicate owned string
    copies from VM/native intern indices; full ephemeral string values remain.
-5. Reduce Amber-built startup cost by pruning or lazily initializing unused
+5. Reduce Sputnik-built startup cost by pruning or lazily initializing unused
    runtime/world components and tightening fallback linkage.
 
 ## First implementation target
@@ -63,17 +63,17 @@ Start with item 1 in the VM/runtime:
 
 After adding `MapValue::name_index` and routing ordinary map lookup/upsert
 through it, `bench/polyglot/run_benchmark.py --workload map-words --repeats 10
---no-build --build-dir /private/tmp/amber_polyglot_suite_codex_20260704_01`
+--no-build --build-dir /private/tmp/sputnik_polyglot_suite_codex_20260704_01`
 reported:
 
 ```text
-amber-interpreted best_s: 0.1618
+sputnik-interpreted best_s: 0.1618
 checksum: 235174
 ```
 
 The reproduced pre-change interpreted best was 0.9603 seconds in the same
 benchmark directory, so the VM/runtime portion improved by about 5.9x. The
-`amber-built` row still uses the old generated native executable until item 3 is
+`sputnik-built` row still uses the old generated native executable until item 3 is
 implemented.
 
 ## Follow-up implementation results
@@ -83,10 +83,10 @@ selectors. The block-taking selectors (`each`, `map`, `select`, `filter_map`,
 `transform*`, and block `count`) still snapshot the entry list so a block can
 mutate the receiver without invalidating iteration.
 
-The package macro staging work in `tools/amberc/main.cpp` had introduced a
+The package macro staging work in `tools/sputnik/main.cpp` had introduced a
 compile-order error where `run_package_command` called `harvest_macro_exports`
 before it was declared. A temporary forward declaration now unblocks
-`build/amberc`; the actual macro-driver cleanup is intentionally left for the
+`build/sputnik`; the actual macro-driver cleanup is intentionally left for the
 later macro fix.
 
 Item 3 added the same ordinary Symbol/Str canonical index to the generated
@@ -94,14 +94,14 @@ native `NativeMap` representation and keeps it current for `[]=` / `store`
 mutations. A fresh `map-words` build followed by a no-build timing pass reported:
 
 ```text
-build dir: /private/tmp/amber_polyglot_map_p3_20260704_02
-amber-interpreted best_s: 0.1584
-amber-built best_s:      0.0507
+build dir: /private/tmp/sputnik_polyglot_map_p3_20260704_02
+sputnik-interpreted best_s: 0.1584
+sputnik-built best_s:      0.0507
 checksum:                235174
 ```
 
 Compared with the post-item-2 built target best of 0.2940 seconds, generated
-native map indexing improves the Amber-built workload by about 5.8x. The next
+native map indexing improves the Sputnik-built workload by about 5.8x. The next
 remaining drawdowns are fixed native startup/codegen overhead and the
 string-table retention issue called out in items 4 and 5.
 
@@ -112,11 +112,11 @@ while avoiding a second owned `std::string` copy for every runtime-created
 string. A fresh `string-ops` build followed by a no-build timing pass reported:
 
 ```text
-build dir: /private/tmp/amber_polyglot_string_p4_20260704_01
-amber-interpreted best_s: 0.0429
-amber-interpreted peak_rss_mb: 16.9
-amber-built best_s:      0.0107
-amber-built peak_rss_mb: 11.6
+build dir: /private/tmp/sputnik_polyglot_string_p4_20260704_01
+sputnik-interpreted best_s: 0.0429
+sputnik-interpreted peak_rss_mb: 16.9
+sputnik-built best_s:      0.0107
+sputnik-built peak_rss_mb: 11.6
 checksum:                280113
 ```
 
@@ -157,22 +157,22 @@ Additional map-word passes on 2026-07-04:
 Fresh build plus stable no-build timing:
 
 ```text
-build dir: /private/tmp/amber_polyglot_map_p6_20260704_01
+build dir: /private/tmp/sputnik_polyglot_map_p6_20260704_01
 
 after native string-id map keying:
-amber-interpreted best_s: 0.1171
-amber-built best_s:      0.0492
+sputnik-interpreted best_s: 0.1171
+sputnik-built best_s:      0.0492
 checksum:                235174
 
 after VM quick map/String construction paths:
-amber-interpreted best_s: 0.1015
-amber-built best_s:      0.0492
+sputnik-interpreted best_s: 0.1015
+sputnik-built best_s:      0.0492
 checksum:                235174
 
 after generated-native definitive index misses:
-build dir: /private/tmp/amber_polyglot_map_p7_20260704_01
-amber-interpreted best_s: 0.1010
-amber-built best_s:      0.0075
+build dir: /private/tmp/sputnik_polyglot_map_p7_20260704_01
+sputnik-interpreted best_s: 0.1010
+sputnik-built best_s:      0.0075
 confirmation built best: 0.0076
 checksum:                235174
 ```

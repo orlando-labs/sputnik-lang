@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::effect {
+namespace sputnik::effect {
 
 inline constexpr std::uint32_t kEffectSummaryFlagDeclared = 0x1U;
 
@@ -54,4 +54,4 @@ validate_effect_summaries(const std::vector<EffectSummary> &summaries,
 
 std::string validation_to_json(const EffectValidationResult &result);
 
-} // namespace amber::effect
+} // namespace sputnik::effect

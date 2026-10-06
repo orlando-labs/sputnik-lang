@@ -24,7 +24,7 @@ matchers are language semantics, not a protocol built on top of `if`.
 
 A type name in `when` matches when the value is of that type:
 
-```amber
+```sputnik
 def label(v):
   case v:
     when Int:
@@ -48,7 +48,7 @@ probe()
 Clauses are tested in order, so a narrower matcher goes higher. Literals and
 ranges are also valid in `when`:
 
-```amber
+```sputnik
 def classify(n):
   case n:
     when 1..5:
@@ -72,7 +72,7 @@ probe()
 `when` can take a map apart by named keys and bind them to fresh names. This
 works together with name-indifferent access (`:key` and `"key"`):
 
-```amber
+```sputnik
 def probe():
   p = Json.parse("{\"user_id\": 42, \"name\": \"Ada\"}")
   case p:

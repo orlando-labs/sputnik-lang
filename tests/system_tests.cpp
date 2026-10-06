@@ -8,7 +8,7 @@
 #include <thread>
 #include <unistd.h>
 
-using namespace amber::runtime;
+using namespace sputnik::runtime;
 using K = SystemValue::Kind;
 
 SystemValue send(SystemValue receiver, std::string selector,
@@ -68,7 +68,7 @@ int main() {
              .integer == 17);
   raises("ProcessExitError", [&] { send(exit, "output"); });
   raises("ProcessSpawnError",
-         [&] { send(command({"/no/such/amber-process"}), "capture"); });
+         [&] { send(command({"/no/such/sputnik-process"}), "capture"); });
   auto start = std::chrono::steady_clock::now();
   raises("ProcessTimeoutError", [&] {
     send(command({"/bin/sh", "-c", "trap '' TERM; while :; do :; done"}),
@@ -108,9 +108,9 @@ int main() {
   send(process, "close");
   auto env = SystemValue{};
   env.kind = K::Map;
-  env.entries["AMBER_SYSTEM_TEST"] = SystemValue::str("special value");
+  env.entries["SPUTNIK_SYSTEM_TEST"] = SystemValue::str("special value");
   auto configured = send(
-      command({"/bin/sh", "-c", "printf '%s' \"$AMBER_SYSTEM_TEST\"; pwd"}),
+      command({"/bin/sh", "-c", "printf '%s' \"$SPUTNIK_SYSTEM_TEST\"; pwd"}),
       "with", {}, {{"env", env}, {"cwd", SystemValue::str("/tmp")}});
   const auto configured_output = send(configured, "output").text;
   assert(configured_output == "special value/tmp\n" ||
@@ -197,7 +197,7 @@ int main() {
   for (int i = 0; i < 12; ++i) {
     assert(send(echo, "output").text == "a b; $(false) ' \"");
     raises("ProcessSpawnError",
-           [&] { send(command({"/no/such/amber-process"}), "capture"); });
+           [&] { send(command({"/no/such/sputnik-process"}), "capture"); });
   }
   assert(open_fds() == before_fds);
   std::cout << "system tests passed\n";

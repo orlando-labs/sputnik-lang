@@ -11,13 +11,13 @@ import (
 )
 
 var payloads = [][]byte{
-	[]byte("Amber digest polyglot benchmark payload zero"),
-	[]byte("Amber digest polyglot benchmark payload one 1234567890"),
+	[]byte("Sputnik digest polyglot benchmark payload zero"),
+	[]byte("Sputnik digest polyglot benchmark payload one 1234567890"),
 	[]byte("The quick brown fox jumps over the lazy dog"),
 	[]byte("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
 }
 
-var key = []byte("amber-digest-benchmark-key")
+var key = []byte("sputnik-digest-benchmark-key")
 
 func foldDigest(checksum uint64, digest []byte) uint64 {
 	return checksum + uint64(len(digest)) + uint64(digest[0]) +

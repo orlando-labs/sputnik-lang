@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 extern thread_local std::uint64_t tls_runtime_worker_id;
 extern thread_local std::uint64_t tls_runtime_strand_id;
@@ -257,9 +257,9 @@ std::uint64_t current_runtime_resource_owner_id();
 std::uint32_t current_runtime_io_wait_depth();
 
 // Application arguments visible to ArgParser() when no explicit `cmdline:` is
-// supplied. Launchers set this once before Amber code starts; callers receive a
+// supplied. Launchers set this once before Sputnik code starts; callers receive a
 // copy so parsing cannot mutate process-global state.
 void set_runtime_process_arguments(std::vector<std::string> arguments);
 std::vector<std::string> current_runtime_process_arguments();
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

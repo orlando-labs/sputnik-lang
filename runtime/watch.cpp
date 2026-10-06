@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -688,4 +688,4 @@ RuntimeWatchCellSnapshot RuntimeWatchHandle::snapshot() const {
   return impl_->snapshot();
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

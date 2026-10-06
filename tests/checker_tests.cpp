@@ -10,9 +10,9 @@
 namespace {
 
 struct ParsedModule {
-  std::vector<std::unique_ptr<amber::ast::Expr>> items;
+  std::vector<std::unique_ptr<sputnik::ast::Expr>> items;
   std::string module_name;
-  amber::binder::BindGraph graph;
+  sputnik::binder::BindGraph graph;
 };
 
 void expect(bool condition, const std::string &message) {
@@ -23,24 +23,24 @@ void expect(bool condition, const std::string &message) {
 }
 
 ParsedModule parse_and_bind_ok(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
@@ -51,15 +51,15 @@ ParsedModule parse_and_bind_ok(const std::string &source) {
   return parsed;
 }
 
-amber::checker::CheckResult check_source(const std::string &source) {
+sputnik::checker::CheckResult check_source(const std::string &source) {
   ParsedModule parsed = parse_and_bind_ok(source);
-  return amber::checker::check_module(parsed.items, parsed.module_name,
+  return sputnik::checker::check_module(parsed.items, parsed.module_name,
                                       parsed.graph);
 }
 
-bool has_diagnostic(const amber::checker::CheckResult &result,
+bool has_diagnostic(const sputnik::checker::CheckResult &result,
                     const std::string &code) {
-  for (const amber::lexer::Diagnostic &diagnostic : result.diagnostics) {
+  for (const sputnik::lexer::Diagnostic &diagnostic : result.diagnostics) {
     if (diagnostic.code == code) {
       return true;
     }
@@ -68,30 +68,30 @@ bool has_diagnostic(const amber::checker::CheckResult &result,
 }
 
 void test_type_term_parser() {
-  amber::lexer::Span span;
+  sputnik::lexer::Span span;
   span.file = "<type>";
-  amber::checker::TypeParseResult parsed =
-      amber::checker::parse_type_term("Map[Str, Int?]", span);
+  sputnik::checker::TypeParseResult parsed =
+      sputnik::checker::parse_type_term("Map[Str, Int?]", span);
   expect(parsed.ok(), "generic optional TypeTerm parses");
-  expect(amber::checker::type_term_to_string(parsed.term) == "Map[Str, Int?]",
+  expect(sputnik::checker::type_term_to_string(parsed.term) == "Map[Str, Int?]",
          "generic optional TypeTerm canonical form");
 
-  parsed = amber::checker::parse_type_term("{id: Int, **Never}", span);
+  parsed = sputnik::checker::parse_type_term("{id: Int, **Never}", span);
   expect(parsed.ok(), "exact record TypeTerm parses");
-  expect(amber::checker::type_term_to_string(parsed.term) ==
+  expect(sputnik::checker::type_term_to_string(parsed.term) ==
              "{id: Int, **Never}",
          "exact record TypeTerm canonical form");
 }
 
 void test_exported_boundary_success() {
-  amber::checker::CheckResult result =
+  sputnik::checker::CheckResult result =
       check_source("package typed.demo\n"
                    "export truthy\n"
                    "def truthy(flag as Bool) -> Bool:\n"
                    "  flag and true\n");
   expect(result.ok(), "exported typed boundary succeeds");
   expect(result.boundaries.size() == 1, "one exported boundary recorded");
-  const amber::checker::CallableBoundary &boundary = result.boundaries[0];
+  const sputnik::checker::CallableBoundary &boundary = result.boundaries[0];
   expect(boundary.exported, "boundary is exported");
   expect(boundary.return_type == "Bool", "return type normalized");
   expect(boundary.observed_return_type == "False | True",
@@ -100,7 +100,7 @@ void test_exported_boundary_success() {
 }
 
 void test_missing_export_annotations() {
-  amber::checker::CheckResult result = check_source("export f\n"
+  sputnik::checker::CheckResult result = check_source("export f\n"
                                                     "def f(x):\n"
                                                     "  x\n");
   expect(!result.ok(), "missing exported annotations fail typed check");
@@ -109,7 +109,7 @@ void test_missing_export_annotations() {
 }
 
 void test_boundary_mismatches() {
-  amber::checker::CheckResult result =
+  sputnik::checker::CheckResult result =
       check_source("def f(x as Int = \"bad\") -> Int:\n"
                    "  x\n");
   expect(!result.ok(), "default mismatch fails typed check");
@@ -123,7 +123,7 @@ void test_boundary_mismatches() {
 }
 
 void test_case_bang_exhaustiveness() {
-  amber::checker::CheckResult result =
+  sputnik::checker::CheckResult result =
       check_source("def classify(flag as Bool) -> Bool:\n"
                    "  case! flag:\n"
                    "    when true: true\n"
@@ -138,7 +138,7 @@ void test_case_bang_exhaustiveness() {
 }
 
 void test_effect_rows_and_call_validation() {
-  amber::checker::CheckResult result =
+  sputnik::checker::CheckResult result =
       check_source("def clocky() -> Int !{time}:\n"
                    "  clock.now()\n"
                    "def caller() -> Int !{time}:\n"

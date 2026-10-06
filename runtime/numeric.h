@@ -8,9 +8,9 @@
 #include <optional>
 #include <string>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
-// Overflow policy for fixed-width Int arithmetic (amber.numeric-profile.v1).
+// Overflow policy for fixed-width Int arithmetic (sputnik.numeric-profile.v1).
 // `checked` raises OverflowError; `wrapping` wraps two's-complement;
 // `saturating` clamps to the type bounds.
 enum class NumericOverflowMode : std::uint8_t { Checked, Wrapping, Saturating };
@@ -77,4 +77,4 @@ std::shared_ptr<BigIntValue> big_pow(const BigIntValue &base,
                                      std::uint64_t exponent);
 std::optional<BigIntValue> big_from_decimal_text(const std::string &text);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

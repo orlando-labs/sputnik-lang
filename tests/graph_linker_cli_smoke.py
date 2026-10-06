@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the shared linker through amberc, including its generated cache."""
+"""Exercise the shared linker through sputnik, including its generated cache."""
 
 import json
 import os
@@ -10,18 +10,19 @@ import tempfile
 
 
 def main():
-    binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else "build/amberc").resolve())
-    with tempfile.TemporaryDirectory(prefix="amber-graph-cli-") as temporary:
+    binary = str(Path(sys.argv[1] if len(sys.argv) > 1 else "build/sputnik").resolve())
+    with tempfile.TemporaryDirectory(prefix="sputnik-graph-cli-") as temporary:
         project = Path(temporary)
+        # Flush each asynchronous logger before observing module-init order.
         sources = {
-            "b": ('io.Logger.new.info("order-b")\n'
+            "b": ('logger = io.Logger.new\nlogger.info("order-b")\nlogger.flush\n'
                   'def g(0): 0\ndef g(v) if v > 0: v\nexport g\n'),
-            "a": ('io.Logger.new.info("order-a")\n'
+            "a": ('logger = io.Logger.new\nlogger.info("order-a")\nlogger.flush\n'
                   'def f(0): 1\ndef f(v) if v > 0: v + 1\nexport f\n'),
             "unused": 'raise "unreachable module initialized"\n',
             "root": (
                 "from b import g\nfrom a import f\n"
-                'io.Logger.new.info("order-root")\n'
+                'logger = io.Logger.new\nlogger.info("order-root")\nlogger.flush\n'
                 "part = 0\ncase [0]:\n"
                 "  when [1, v]: part = 99\n"
                 "  else: part = 20\n"
@@ -32,15 +33,15 @@ def main():
             ),
         }
         for name, source in sources.items():
-            (project / f"{name}.am").write_text(f"package {name}\n{source}")
-        manifest = project / "amber.build.json"
+            (project / f"{name}.s").write_text(f"package {name}\n{source}")
+        manifest = project / "sputnik.build.json"
         manifest.write_text(json.dumps({
-            "schema": "amber.build.v1", "name": "graph-cli", "root": "root",
+            "schema": "sputnik.build.v1", "name": "graph-cli", "root": "root",
             "profiles": {"required": ["core.v1"], "optional": [], "forbidden": []},
-            "modules": [{"name": name, "path": f"{name}.am"} for name in sources],
+            "modules": [{"name": name, "path": f"{name}.s"} for name in sources],
         }))
         cache = project / "cache"
-        environment = dict(os.environ, AMBER_VM_CACHE=str(cache))
+        environment = dict(os.environ, SPUTNIK_VM_CACHE=str(cache))
 
         def run():
             result = subprocess.run([binary, "run", str(manifest)], env=environment,

@@ -50,7 +50,7 @@ spec_refs:                       # ISOLATED — see §3 (removable later)
 
 ### Body conventions
 
-- Regular Markdown: headings, lists, tables, fenced code (```` ```amber ````).
+- Regular Markdown: headings, lists, tables, fenced code (```` ```sputnik ````).
 - **Admonitions**: a blockquote whose first line is `[!note]`, `[!tip]`,
   `[!warn]` or `[!spec]` renders as a colored callout.
 - **In-graph links**: `[text](guide:<node-id>)` navigates within the Guide.
@@ -58,7 +58,7 @@ spec_refs:                       # ISOLATED — see §3 (removable later)
   `spec.html#<anchor>` (isolated coupling, see §3).
 - **Examples must be real.** Every runnable snippet should end in a `# => <value>`
   line whose value is the actual output. Verify with:
-  `printf '<program>' | ./build/amberc /dev/stdin` (or drop it into a temp file).
+  `printf '<program>' | ./build/sputnik /dev/stdin` (or drop it into a temp file).
 
 ### Add a node
 
@@ -129,7 +129,7 @@ en: ...
 
 ```
 python3 tools/gen_module_docs.py            # writes site/modules-data.js + site/modules-coverage.json
-python3 tools/gen_module_docs.py --verify    # additionally runs inline `# =>` examples through build/amberc
+python3 tools/gen_module_docs.py --verify    # additionally runs inline `# =>` examples through build/sputnik
 python3 tools/gen_module_docs.py --check      # drift guard only; non-zero when the runtime exposes an undocumented, non-ignored selector
 ```
 
@@ -153,7 +153,7 @@ the sidecars directly and regenerate.
 ## 3. Removing the spec references later
 
 The Guide is meant to become a **self-contained** language document. All coupling
-to the formal `amber_unified_final_spec.md` is deliberately confined to two
+to the formal `sputnik_unified_final_spec.md` is deliberately confined to two
 grep-removable conventions:
 
 1. The `spec_refs:` frontmatter key on Guide nodes.

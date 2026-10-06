@@ -1,5 +1,5 @@
 {
   "phase": "parse",
-  "source": "source.am",
+  "source": "source.s",
   "expect": "expect.ast.json"
 }

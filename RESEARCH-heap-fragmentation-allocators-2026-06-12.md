@@ -6,7 +6,7 @@ Scope: `runtime/vm.cpp` RuntimeHeap, allocator selection, page-reuse strategy
 
 ## 1. Problem statement
 
-Heavy Amber apps end with very high RSS and heavy fragmentation even though the
+Heavy Sputnik apps end with very high RSS and heavy fragmentation even though the
 GC and refcount deallocation are running. Freed memory is not being returned to
 the OS and pages are reused poorly. The question: adopt jemalloc, or is there a
 better solution?
@@ -24,7 +24,7 @@ generation/pin machinery pointed at a moving young space as the endgame.
 
 All six heap object kinds (Instance, List, Tuple, Set, Map, Closure) go
 through one choke point, `RuntimeHeap::Impl::allocate<T>`
-(`runtime/vm.cpp:5039`). Per Amber object, the VM performs **four separate
+(`runtime/vm.cpp:5039`). Per Sputnik object, the VM performs **four separate
 system-malloc allocations in three or more different size classes**:
 
 1. **The object shell** — `new T()` straight to `operator new`
@@ -272,17 +272,17 @@ Layered, in order of effort-to-impact:
 instrumented, and the §9 measurement has been run. Steps 2–3 are unchanged.
 
 What landed (default `system` build untouched):
-- `MALLOC=system|mimalloc|jemalloc` in the Makefile (`-DAMBER_ALLOCATOR`,
+- `MALLOC=system|mimalloc|jemalloc` in the Makefile (`-DSPUTNIK_ALLOCATOR`,
   Homebrew-prefix discovery, `-Wl,-force_load` of the static archive on macOS so
   the zone override interposes; `-l` alone does not on Darwin).
 - `RuntimeHeapStats.live_object_bytes` / `tracked_object_bytes`, summed over
   `objects_` in `stats()` (shell bytes; a proxy, not payload-exact).
-- `AMBER_HEAP_STATS=1` runner dump: allocator, current + peak RSS, live/tracked
+- `SPUTNIK_HEAP_STATS=1` runner dump: allocator, current + peak RSS, live/tracked
   bytes, RSS/live ratio (one stderr line, stdout untouched).
-- `bench/heap/churn.am` — the §9 bench scenario (large mixed-lifetime live set +
+- `bench/heap/churn.s` — the §9 bench scenario (large mixed-lifetime live set +
   distinct-string loop). See `bench/heap/README.md`.
 
-Sweep (churn.am, Darwin arm64, mimalloc 3.3.2 / jemalloc 5.3.0):
+Sweep (churn.s, Darwin arm64, mimalloc 3.3.2 / jemalloc 5.3.0):
 
 ```text
 allocator   config                     peak RSS   end RSS   returned to OS

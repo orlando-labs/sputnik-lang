@@ -1,0 +1,25 @@
+package nat.demo
+
+export main
+
+# A `native def` whose Sputnik body is the portable fallback. A bytecode run
+# executes this body (returns n * 10); a native build calls the C thunk
+# `sputnik_demo_doubled` (returns n * 2) instead, proving dispatch routing.
+native def doubled(n as Int) -> Int from "demo.doubled":
+  n * 10
+
+# The Sputnik body keeps bytecode fallback portable. A native build calls the C
+# thunk, which raises Demo.NativeLeafError through sputnik_fault.
+native def fail_leaf() -> Int from "demo.fail_leaf":
+  1
+
+def main():
+  exact = try:
+    fail_leaf()
+  rescue Demo.NativeLeafError |e|:
+    1
+  parent = try:
+    fail_leaf()
+  rescue Demo.NativeError |e|:
+    1
+  doubled(21) + exact - 1 + parent - 1

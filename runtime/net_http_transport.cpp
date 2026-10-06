@@ -4,7 +4,7 @@
 #include <string>
 #include <utility>
 
-namespace amber::runtime::http {
+namespace sputnik::runtime::http {
 
 namespace {
 
@@ -123,4 +123,4 @@ std::unique_ptr<HttpTransport> http_connect(const HttpRequest &request,
   return transport;
 }
 
-} // namespace amber::runtime::http
+} // namespace sputnik::runtime::http

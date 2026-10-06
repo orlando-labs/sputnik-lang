@@ -1,10 +1,10 @@
 // Guide renderer. Loads the knowledge-graph manifest, builds the category
 // sidebar and the prerequisite/related rail, and renders the active node's
-// Markdown (per current language) through the shared `AmberMarkdown` renderer.
+// Markdown (per current language) through the shared `SputnikMarkdown` renderer.
 //
 // Routing is hash-based: `learn.html#<node-id>` selects a node. Language is
-// shared with the rest of the site through the `amber-lang` localStorage key;
-// `app.js` calls `window.renderAmberGuidePage(lang)` when the RU/EN switch is
+// shared with the rest of the site through the `sputnik-lang` localStorage key;
+// `app.js` calls `window.renderSputnikGuidePage(lang)` when the RU/EN switch is
 // toggled.
 (() => {
   const MANIFEST_URL = "./guide/guide-manifest.json";
@@ -39,13 +39,13 @@
     }
   };
 
-  const escapeHtml = window.AmberMarkdown.escapeHtml;
+  const escapeHtml = window.SputnikMarkdown.escapeHtml;
 
   let manifest = null;
   const cache = new Map();
 
   const currentLang = () =>
-    localStorage.getItem("amber-lang") ||
+    localStorage.getItem("sputnik-lang") ||
     (navigator.language.startsWith("ru") ? "ru" : "en");
 
   const nodeById = (id) => manifest.nodes.find((node) => node.id === id);
@@ -201,13 +201,13 @@
       content.innerHTML = `<h1>${labels[lang].missing}</h1>`;
       return;
     }
-    document.title = `Amber · ${titleOf(node, lang)}`;
+    document.title = `Sputnik · ${titleOf(node, lang)}`;
     renderNav(lang, node.id);
     renderRail(node, lang);
     const path = pickLang(node.paths, lang);
     try {
       const markdown = stripFrontmatter(await fetchMarkdown(path));
-      const rendered = window.AmberMarkdown.render(markdown, { resolveHref });
+      const rendered = window.SputnikMarkdown.render(markdown, { resolveHref });
       content.innerHTML = rendered.html + renderPagination(node, lang);
       window.scrollTo(0, 0);
     } catch (error) {
@@ -216,7 +216,7 @@
     }
   };
 
-  window.renderAmberGuidePage = render;
+  window.renderSputnikGuidePage = render;
   window.addEventListener("hashchange", () => void render());
 
   const load = async () => {

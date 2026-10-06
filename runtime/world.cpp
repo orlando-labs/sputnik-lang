@@ -1,5 +1,5 @@
 #include "runtime/world.h"
-#include "runtime/amber_ext_runtime.h"
+#include "runtime/sputnik_ext_runtime.h"
 #include "runtime/context.h"
 #include "runtime/stdlib_registry.h"
 #include "runtime/vm_internal.h"
@@ -15,7 +15,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -256,14 +256,14 @@ RuntimeIoProviderStatus RuntimeIoProvider::fs_copy(const std::string &from,
 namespace {
 
 constexpr std::uint32_t kMethodFlagInstance =
-    amber::bytecode::kMethodFlagInstance;
-constexpr std::uint32_t kMethodFlagClass = amber::bytecode::kMethodFlagClass;
+    sputnik::bytecode::kMethodFlagInstance;
+constexpr std::uint32_t kMethodFlagClass = sputnik::bytecode::kMethodFlagClass;
 constexpr std::uint32_t kMethodFlagPropertyGetter =
-    amber::bytecode::kMethodFlagPropertyGetter;
+    sputnik::bytecode::kMethodFlagPropertyGetter;
 constexpr std::uint32_t kMethodFlagPropertySetter =
-    amber::bytecode::kMethodFlagPropertySetter;
+    sputnik::bytecode::kMethodFlagPropertySetter;
 constexpr std::uint32_t kMethodFlagClauseFallback =
-    amber::bytecode::kMethodFlagClauseFallback;
+    sputnik::bytecode::kMethodFlagClauseFallback;
 constexpr std::uint32_t kMethodFlagRuntimePreservedMask =
     kMethodFlagPropertyGetter | kMethodFlagPropertySetter |
     kMethodFlagClauseFallback;
@@ -607,9 +607,9 @@ struct RuntimeWorld::Impl {
         module->lineage_nodes);
     workflow_metadata = modern::validate_workflow_metadata(
         module->workflow_steps, module->workflow_history);
-    trace.schema = "amber.replay.v1";
+    trace.schema = "sputnik.replay.v1";
     trace.capability_grants = options.capability_grants;
-    trace.schema_versions.push_back("amber.replay.v1");
+    trace.schema_versions.push_back("sputnik.replay.v1");
     for (const data::SchemaDefinition &schema : schemas.schemas) {
       trace.schema_versions.push_back(data::schema_version_id(schema));
     }
@@ -1308,7 +1308,7 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
     };
     ExecutionResult result;
     if (current_runtime_is_blocking_ffi_thread()) {
-      // Nested blocking FFI (for example from an Amber callback invoked by a
+      // Nested blocking FFI (for example from an Sputnik callback invoked by a
       // C library) is already off the scheduler/bridge. Run inline to avoid a
       // fixed-pool submit-and-wait deadlock.
       result = invoke();
@@ -2004,7 +2004,7 @@ RuntimeOwnerMirror owner_mirror_for(const bytecode::BcModule &module,
 std::string package_name_for_mirror(const bytecode::BcModule &module) {
   for (const bytecode::AttrEntry &attr : module.attrs) {
     const std::string key = string_name_for_mirror(module, attr.key_str_id);
-    if (key != "amber.package" && key != "package" && key != "module" &&
+    if (key != "sputnik.package" && key != "package" && key != "module" &&
         key != "module.name") {
       continue;
     }
@@ -4082,4 +4082,4 @@ RuntimeWorld::finish_native_wait(RuntimeNativeWaitHandle *handle) {
   return impl_->state->heap.finish_native_wait(handle);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

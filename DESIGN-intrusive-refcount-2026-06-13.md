@@ -81,7 +81,7 @@ through it identically.
 2. Switch: variant's 6 alternatives + `make`/`as` signatures shared_ptr→
    IntrusivePtr; rewrite `allocate`; update the ~174 type sites; delete the
    deleter. Build to green, run full `make test`.
-3. Measure: jemalloc `nrequests`/object on `churn.am` should drop by ~1 per
+3. Measure: jemalloc `nrequests`/object on `churn.s` should drop by ~1 per
    heap object (control block gone). Journal + commit.
 4. Deferred: convert the ~18-type tail to shrink `Value` 24→16 (separate phase).
 

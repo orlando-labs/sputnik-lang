@@ -1,6 +1,6 @@
 {
-  "format": "amber.corpus.meta.v1",
+  "format": "sputnik.corpus.meta.v1",
   "phase": "bind",
-  "source": "source.am",
+  "source": "source.s",
   "expect": "expect.bind.json"
 }

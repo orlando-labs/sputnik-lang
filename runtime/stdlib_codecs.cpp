@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -399,4 +399,4 @@ void register_codecs_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

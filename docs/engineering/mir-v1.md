@@ -1,4 +1,4 @@
-# amber.mir.v1
+# sputnik.mir.v1
 
 Status: **demoted to validation/diagnostic artifact** (decision 2026-06-12,
 see below). Originally implemented for the `W10.3` MIR/SSA baseline.
@@ -9,7 +9,7 @@ Recorded 2026-06-12 during the native-backend phase (research plan §5.6,
 work item 15). The facts that drove it:
 
 - the production native lane (`cpp-bytecode-direct-v1` in
-  `tools/amberc/main.cpp`) transpiles **bytecode** directly and is the only
+  `tools/sputnik/main.cpp`) transpiles **bytecode** directly and is the only
   lane that ships executables; it never reads MIR;
 - `run_pass_pipeline` has no callers outside `tests/mir_tests.cpp` — no
   optimization pass has ever run in the execution flow;
@@ -22,20 +22,20 @@ work item 15). The facts that drove it:
 Consequences:
 
 - MIR remains as: HIR lowering sanity validator, deterministic dump format
-  for diagnostics (`amberc mir/mir-dump/mir-verify`), and the input for
-  `amber.native.v1` *metadata* (eligibility/trampoline descriptors).
+  for diagnostics (`sputnik mir/mir-dump/mir-verify`), and the input for
+  `sputnik.native.v1` *metadata* (eligibility/trampoline descriptors).
 - No new consumers of MIR may be added to execution or codegen paths. If a
   future optimizing backend needs an IR, it starts from bytecode (the
   verified, executed format) or introduces a numerically-encoded IR with its
-  own conformance gate — it must not grow out of `amber.mir.v1`.
+  own conformance gate — it must not grow out of `sputnik.mir.v1`.
 - The pass harness stays only as long as its tests do; it documents the
   schema's invalidation contract, nothing more.
 
 The MIR layer is a deterministic optimizer-facing IR between HIR and the
-`amber.native.v1` metadata layer. It does not participate in the execution
+`sputnik.native.v1` metadata layer. It does not participate in the execution
 path.
 
-W10.4 consumes this layer through `amber.native.v1`; see
+W10.4 consumes this layer through `sputnik.native.v1`; see
 [native-v1.md](../../docs/engineering/native-v1.md:1)
 for the native/JIT metadata and frozen runtime bridge.
 
@@ -44,14 +44,14 @@ Implemented surface:
 - typed MIR schema in [optimizer/mir.h](../../optimizer/mir.h:1)
 - HIR-to-MIR lowering, validator, deterministic JSON/text dumps, and pass
   harness in [optimizer/mir.cpp](../../optimizer/mir.cpp:1)
-- CLI inspection in [tools/amberc/main.cpp](../../tools/amberc/main.cpp:1):
-  - `amberc mir <file>`
-  - `amberc mir-dump <file>`
-  - `amberc mir-verify <file>`
+- CLI inspection in [tools/sputnik/main.cpp](../../tools/sputnik/main.cpp:1):
+  - `sputnik mir <file>`
+  - `sputnik mir-dump <file>`
+  - `sputnik mir-verify <file>`
 
 ## IR Shape
 
-Top-level JSON format is `amber.mir.v1`:
+Top-level JSON format is `sputnik.mir.v1`:
 
 - `module`: package name or `null`;
 - `functions[]`: one MIR function per HIR procedure;
@@ -67,7 +67,7 @@ Each function contains:
 
 Instruction results are SSA values named `%vN`. Local and capture slots remain
 explicit storage operands (`local(lN)`, `capture(uN)`) so the initial MIR can
-represent imperative Amber semantics without inventing incomplete memory-SSA
+represent imperative Sputnik semantics without inventing incomplete memory-SSA
 proofs. Expression values, branch conditions, send results, closure values, and
 phi results are SSA.
 

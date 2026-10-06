@@ -8,7 +8,7 @@
 // tests/io_tests.cpp) and reused by the Phase 2 VM dispatch layer.
 //
 // Conformance coverage targeted here: §25.2 (headers) and §25.6 (protocol
-// parser). Pooling, timeouts, redirects, and the Amber-facing value surface
+// parser). Pooling, timeouts, redirects, and the Sputnik-facing value surface
 // land in later phases on top of this codec.
 
 #include <cstddef>
@@ -18,7 +18,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime::http {
+namespace sputnik::runtime::http {
 
 // Error categories produced by header validation and response parsing. The VM
 // boundary (Phase 2) maps each to the §21 HTTP error class name returned by
@@ -269,4 +269,4 @@ private:
   std::string error_message_;
 };
 
-} // namespace amber::runtime::http
+} // namespace sputnik::runtime::http

@@ -27,7 +27,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 thread_local bool tls_runtime_blocking_ffi_thread = false;
@@ -203,7 +203,7 @@ std::shared_ptr<RuntimeTaskContext> require_runtime_task_context() {
   if (context == nullptr) {
     throw RuntimeTaskFailure(
         "TaskLocalError",
-        "task-local access requires an active logical Amber task");
+        "task-local access requires an active logical Sputnik task");
   }
   return context;
 }
@@ -4120,27 +4120,27 @@ bool RuntimeTaskHandle::failed() const {
 }
 namespace {
 
-// Layer B cooperative suspension. g_amber_task_parked is a same-thread
+// Layer B cooperative suspension. g_sputnik_task_parked is a same-thread
 // handshake set by a parked VM/task driver and observed by the task body so the
 // body returns without recording completion (the scheduler re-invokes it to
-// resume). g_amber_cooperative_parks is the monotonic observability counter
+// resume). g_sputnik_cooperative_parks is the monotonic observability counter
 // exposed by runtime_cooperative_task_park_count().
-thread_local bool g_amber_task_parked = false;
-std::atomic<std::uint64_t> g_amber_cooperative_parks{0};
+thread_local bool g_sputnik_task_parked = false;
+std::atomic<std::uint64_t> g_sputnik_cooperative_parks{0};
 
 } // namespace
 
-void runtime_clear_task_parked() { g_amber_task_parked = false; }
+void runtime_clear_task_parked() { g_sputnik_task_parked = false; }
 
-bool runtime_task_is_parked() { return g_amber_task_parked; }
+bool runtime_task_is_parked() { return g_sputnik_task_parked; }
 
 void runtime_mark_task_parked() {
-  g_amber_task_parked = true;
-  g_amber_cooperative_parks.fetch_add(1, std::memory_order_relaxed);
+  g_sputnik_task_parked = true;
+  g_sputnik_cooperative_parks.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::uint64_t runtime_cooperative_task_park_count() {
-  return g_amber_cooperative_parks.load();
+  return g_sputnik_cooperative_parks.load();
 }
 
 RuntimeTaskModule::RuntimeTaskModule(std::size_t worker_count)
@@ -5290,4 +5290,4 @@ RuntimeThreadedCollection::permutation(std::size_t count) {
 RuntimeThreadedCollectionStats RuntimeThreadedCollection::stats() const {
   return impl_->stats();
 }
-} // namespace amber::runtime
+} // namespace sputnik::runtime

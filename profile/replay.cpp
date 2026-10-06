@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::replay {
+namespace sputnik::replay {
 
 namespace {
 
@@ -424,7 +424,7 @@ ReplayMetadata normalize_metadata(ReplayMetadata metadata) {
 
 ReplayTrace normalize_trace(ReplayTrace trace) {
   if (trace.schema.empty()) {
-    trace.schema = "amber.replay.v1";
+    trace.schema = "sputnik.replay.v1";
   }
   trace.artifact_digests = sorted_unique(std::move(trace.artifact_digests));
   trace.schema_versions = sorted_unique(std::move(trace.schema_versions));
@@ -474,7 +474,7 @@ validate_metadata(const ReplayMetadata &metadata,
 ReplayValidationResult validate_trace(const ReplayTrace &trace) {
   ReplayValidationResult result;
   const ReplayTrace normalized = normalize_trace(trace);
-  if (normalized.schema != "amber.replay.v1") {
+  if (normalized.schema != "sputnik.replay.v1") {
     result.diagnostics.push_back(
         diagnostic("ReplayTraceError",
                    "unsupported replay trace schema: " + normalized.schema));
@@ -576,7 +576,7 @@ ReplayTraceParseResult parse_trace(const std::string &serialized) {
   ReplayTraceParseResult result;
   const std::map<std::string, std::string> values = parse_lines(serialized);
   result.trace.schema = value_or_empty(values, "schema");
-  if (result.trace.schema != "amber.replay.v1") {
+  if (result.trace.schema != "sputnik.replay.v1") {
     result.diagnostics.push_back(
         diagnostic("ReplayTraceParseError",
                    "unsupported replay trace schema: " + result.trace.schema));
@@ -682,7 +682,7 @@ std::string trace_to_json(const ReplayTrace &raw_trace) {
   const ReplayTrace trace = normalize_trace(raw_trace);
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.replay.v1\",\n";
+  out << "  \"schema\": \"sputnik.replay.v1\",\n";
   out << "  \"digest\": \"" << json_escape(trace_digest(trace)) << "\",\n";
   out << "  \"package_lock_digest\": \""
       << json_escape(trace.package_lock_digest) << "\",\n";
@@ -748,7 +748,7 @@ std::string trace_to_json(const ReplayTrace &raw_trace) {
 std::string validation_to_json(const ReplayValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.replay.v1\",\n";
+  out << "  \"schema\": \"sputnik.replay.v1\",\n";
   out << "  \"status\": \"" << (result.ok ? "ok" : "error") << "\",\n";
   out << "  \"consumed_events\": " << result.consumed_events << ",\n";
   out << "  \"diagnostics\": [";
@@ -768,4 +768,4 @@ std::string validation_to_json(const ReplayValidationResult &result) {
   return out.str();
 }
 
-} // namespace amber::replay
+} // namespace sputnik::replay

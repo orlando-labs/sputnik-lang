@@ -1,4 +1,4 @@
-# amber.conformance.v1
+# sputnik.conformance.v1
 
 Status: `W8.4` full conformance runner gate is satisfied, `W9.1`
 typed-profile fixtures are available behind the cumulative `M6` bundle,
@@ -15,7 +15,7 @@ capability manifest parsing, bytecode metadata, policy resolution, and runtime
 checks are covered by focused package/bytecode/VM tests. `W11.2` effect rows,
 checker summaries, `EFCT` metadata, and runtime allowance checks are covered by
 focused lexer/parser/checker/bytecode/VM tests. `W11.3` replay metadata,
-`.ambertrace` serialization, runtime event recording, and replay divergence
+`.sputniktrace` serialization, runtime event recording, and replay divergence
 checks are covered by focused bytecode/VM tests. `W11.4` schema/table metadata,
 `SCMA`/`TABL` round-trips, query-plan fingerprints, and runtime mirror hooks are
 covered by focused bytecode/VM tests. `W11.5` Wasm/accelerator metadata,
@@ -26,11 +26,11 @@ contracts/property, privacy/lineage, and workflow metadata, `AGNT`/`CNTR`/
 hooks are covered by focused profile/bytecode/VM tests. `W12` documentation/spec
 sync is covered by `make spec-sync-check`, which compares the generated anchor
 map and validates local Markdown links. `W14` build/bootstrap/conformance
-closure is covered by `amberc build` fixture smoke in `make test`, bytecode
+closure is covered by `sputnik build` fixture smoke in `make test`, bytecode
 profile/ABI metadata checks, runtime unsupported-profile rejection, and the
 cumulative `M11` compile/load/run bundle.
 
-`ambertest run <path>` is the canonical corpus entrypoint. It discovers
+`sputniktest run <path>` is the canonical corpus entrypoint. It discovers
 `meta.json` fixtures deterministically, dispatches by fixture phase, compares
 golden output byte-for-byte, and renders focused expected/actual mismatches.
 
@@ -50,7 +50,7 @@ Supported positive phases:
 
 The W14 `M11` bundle also performs a compile-all postpass over `bc`,
 `bc-disasm`, `run`, and `load` fixtures. Each candidate is compiled to
-`.amberbc`, verified, disassembled, and then run or loaded where the fixture
+`.sputnikbc`, verified, disassembled, and then run or loaded where the fixture
 phase requires it.
 
 Supported negative phases:
@@ -61,8 +61,8 @@ Supported negative phases:
 Milestone bundles are selected with:
 
 ```sh
-ambertest run corpus --bundle M5
-ambertest run corpus --bundle M11
+sputniktest run corpus --bundle M5
+sputniktest run corpus --bundle M11
 ```
 
 Bundle levels are cumulative:
@@ -71,7 +71,7 @@ Bundle levels are cumulative:
 - `M2`: `M1` plus bytecode compile/disasm corpus;
 - `M3` and `M4`: `M2` plus VM run corpus;
 - `M5`: full dynamic corpus, including loader load fixtures;
-- `M6`: `M5` plus optional Amber/Typed checker fixtures.
+- `M6`: `M5` plus optional Sputnik/Typed checker fixtures.
 - `M11`: `M6` plus W14 compile-all verification for compile/load/run fixtures.
 
 The Makefile exposes the CI/mainline command:
@@ -92,18 +92,18 @@ Current limits:
 
 - `run` fixtures execute a zero-argument method named by `meta.json.entry`, or
   `main` when omitted;
-- `load` fixtures compile one source module, serialize it to `.amberbc`, load it
+- `load` fixtures compile one source module, serialize it to `.sputnikbc`, load it
   through `RuntimeModuleLoader`, and initialize all mapped modules;
-- `typed` fixtures run the optional Amber/Typed profile without changing
+- `typed` fixtures run the optional Sputnik/Typed profile without changing
   dynamic conformance or the `make conformance` M5 gate;
-- `mir` / `mir-dump` / `mir-verify` are available through `amberc` and focused
+- `mir` / `mir-dump` / `mir-verify` are available through `sputnik` and focused
   unit tests; corpus phases are not wired yet;
-- `native` / `native-dump` / `native-verify` are available through `amberc`
+- `native` / `native-dump` / `native-verify` are available through `sputnik`
   and focused unit tests, including W15 slowpath, exception-edge root-map, and
   invalidation-fallback metadata checks; corpus phases are not wired yet;
 - `image-build` / `image-inspect` / `image-verify` are available through
-  `amberc` and focused unit tests; corpus phases are not wired yet;
-- public `.amberbc` artifact `metadata --json` and `verify --json` commands
+  `sputnik` and focused unit tests; corpus phases are not wired yet;
+- public `.sputnikbc` artifact `metadata --json` and `verify --json` commands
   are covered by `make test` smoke checks, including structured verifier JSON
   for a corrupted artifact;
 - keyword/callsite cache corpus coverage is focused in VM tests: duplicate
@@ -118,19 +118,19 @@ Current limits:
   safepoint GC across callee frames and loop back-edges, rooted local/shared
   cycles, exception-unwind pin release, allocation/call/back-edge native root
   maps, and native trampoline heap-argument rooting;
-- `capabilities-check` is available through `amberc` and focused unit tests;
+- `capabilities-check` is available through `sputnik` and focused unit tests;
   corpus profile fixtures are not wired yet;
-- `effects-check` is available through `amberc` and focused unit tests; corpus
+- `effects-check` is available through `sputnik` and focused unit tests; corpus
   profile fixtures are not wired yet;
-- `replay-check` / `trace-inspect` are available through `amberc` and focused
+- `replay-check` / `trace-inspect` are available through `sputnik` and focused
   unit tests; corpus profile fixtures are not wired yet;
-- `schema-check` / `table-explain` are available through `amberc` and focused
+- `schema-check` / `table-explain` are available through `sputnik` and focused
   unit tests; corpus profile fixtures are not wired yet;
-- `wasm-build` / `accel-check` are available through `amberc` and focused unit
+- `wasm-build` / `accel-check` are available through `sputnik` and focused unit
   tests; corpus profile fixtures are not wired yet;
 - `symbols` / `explain` / `patch-check` / `provenance-audit` /
   `contract-check` / `privacy-check` / `workflow-check` are available through
-  `amberc` and focused unit tests; corpus profile fixtures are not wired yet;
+  `sputnik` and focused unit tests; corpus profile fixtures are not wired yet;
 - W9.2 transaction/freeze, W9.3 reflection mirror, W9.4 package artifact,
   W9.5 package hot-reload, W10.1 advanced concurrency, W10.2 awaitable, and
   W10.3 MIR/SSA, W10.4/W15 native/JIT metadata, W10.5 frozen-image, W11.1
@@ -144,7 +144,7 @@ Current limits:
   W11.5 Wasm-accelerator / W11.6 modern-profile
   language-surface fixtures can be added once those forms are exposed above the
   runtime API and corpus runner phases.
-- `amberc build` has a focused fixture smoke under
-  [tests/fixtures/w14_build](../../tests/fixtures/w14_build/amber.build.json);
+- `sputnik build` has a focused fixture smoke under
+  [tests/fixtures/w14_build](../../tests/fixtures/w14_build/sputnik.build.json);
   broader package/build-graph corpus phases can still be added when the source
   language exposes more stdlib surface.

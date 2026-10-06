@@ -1,4 +1,4 @@
-# RFC: User-Defined Block Parameters for Amber
+# RFC: User-Defined Block Parameters for Sputnik
 
 **Status:** Draft / for discussion
 **Author:** (expert review)
@@ -22,9 +22,9 @@ Everything below is the consequences of that one decision plus the integration d
 
 ## 2. Why no `yield`
 
-Amber's reference point is Ruby, so the obvious move is Ruby's `def each; …; yield x; end`. This RFC deliberately rejects `yield` for blocks.
+Sputnik's reference point is Ruby, so the obvious move is Ruby's `def each; …; yield x; end`. This RFC deliberately rejects `yield` for blocks.
 
-`yield` is an invisible jump to an unnamed slot. It is exactly the class of hidden control flow Amber has spent its other RFCs removing:
+`yield` is an invisible jump to an unnamed slot. It is exactly the class of hidden control flow Sputnik has spent its other RFCs removing:
 
 - The bare-nullary RFC (§8.13–8.17, accepted 2026-06-12) made implicit sends *explicit* rather than letting `foo` silently call.
 - `$_` is an **explicit** frame slot, not magic.
@@ -88,7 +88,7 @@ This already follows from existing text — **no new rule is required.** §8723 
 
 A bound block is a callable object. It is invoked with the canonical callable-call forms already normative in §4.6:
 
-```amber
+```sputnik
 def each(xs, &blk):
   i = 0
   while i < xs.length:
@@ -105,7 +105,7 @@ def each(xs, &blk):
 
 A bare `&blk` binds to the passed block **or `null`** when the caller supplied none.
 
-```amber
+```sputnik
 def each(xs, &blk):
   when blk == null: xs                 # no block: nothing to do
   else:
@@ -122,7 +122,7 @@ The safe-call form skips an absent block inline — `blk.?.(x)` returns `null` w
 
 To pass an already-captured block (or any callable held in a local) down to another call, write `&name` as the **last argument**:
 
-```amber
+```sputnik
 def each_twice(xs, &blk):
   xs.each(&blk)        # forward the block into each's block channel
   xs.each(&blk)
@@ -146,7 +146,7 @@ Inside parens, `&LocalName` (a bare local) is **not currently a legal expression
 
 A block parameter is typed with the existing callable type (§4.x, `Fn[Args -> Ret !{effects}]`):
 
-```amber
+```sputnik
 def map(xs as Array, &blk as Fn[T -> U !{}]) -> Array:
   out = []
   xs.each |x|: out.push!(blk(x))
@@ -164,7 +164,7 @@ Two consequences fall out of the existing effect system (§4.3) at no extra cost
 
 `define_method(Target, :name) |params|: body` takes the installed method's signature *from the block's parameters* (§8.14, line 1177). For consistency, that block-parameter list accepts a trailing `&name` exactly as a `def` signature does:
 
-```amber
+```sputnik
 define_method(Stream, :each) |&blk|:
   @items.each(&blk)
 ```
@@ -221,7 +221,7 @@ The compiler changes are confined to: the parser (one grammar production + diagn
 
 ## 12. Worked example — your own collection methods
 
-```amber
+```sputnik
 def each(xs, &blk):
   when blk == null: xs
   else:
@@ -331,14 +331,14 @@ Negative:
 
 ## 16. Recommendation
 
-Adopt this RFC. It opens block consumption to user code with **one new grammar production** (`BlockParam`), **one new argument form** (trailing `&LocalName`), and a reserved AST enum value — the VM, ABI, and pattern engine are untouched because §12.7.4 already carries the block. It does so while *strengthening* Amber's existing commitments: no hidden control flow (no `yield`), greppable effects (the block's `!{…}` row flows through `Fn[…]`), and a single coherent meaning for `&` across declaration, forwarding, and reference.
+Adopt this RFC. It opens block consumption to user code with **one new grammar production** (`BlockParam`), **one new argument form** (trailing `&LocalName`), and a reserved AST enum value — the VM, ABI, and pattern engine are untouched because §12.7.4 already carries the block. It does so while *strengthening* Sputnik's existing commitments: no hidden control flow (no `yield`), greppable effects (the block's `!{…}` row flows through `Fn[…]`), and a single coherent meaning for `&` across declaration, forwarding, and reference.
 
 Decisions requested: **§10.1** (default block param — recommend *exclude*) and **§10.2** (`&@field` capture — recommend *include*).
 
 Compromise framing for the language guide:
 
 ```text
-Amber methods take a block by naming it: `def each(&blk):`. The block is a
+Sputnik methods take a block by naming it: `def each(&blk):`. The block is a
 plain callable — call it `blk(x)`, test it `blk == null`, forward it
 `other(&blk)`, store it `@h = blk`. There is no `yield` and no
 `block_given?`: a block you can name is a block you can see.

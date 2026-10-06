@@ -4,12 +4,12 @@ import zlib
 
 
 PAYLOADS = [
-    b"Amber digest polyglot benchmark payload zero",
-    b"Amber digest polyglot benchmark payload one 1234567890",
+    b"Sputnik digest polyglot benchmark payload zero",
+    b"Sputnik digest polyglot benchmark payload one 1234567890",
     b"The quick brown fox jumps over the lazy dog",
     b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 ]
-KEY = b"amber-digest-benchmark-key"
+KEY = b"sputnik-digest-benchmark-key"
 
 
 def fold_digest(checksum: int, digest: bytes) -> int:

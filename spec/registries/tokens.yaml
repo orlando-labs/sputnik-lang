@@ -1,5 +1,5 @@
-schema: amber.tokens.registry.v1
-spec_anchor: amber_unified_final_spec.md
+schema: sputnik.tokens.registry.v1
+spec_anchor: sputnik_unified_final_spec.md
 tokens:
   structural:
     - EOF

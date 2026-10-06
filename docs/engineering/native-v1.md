@@ -1,11 +1,11 @@
-# amber.native.v1
+# sputnik.native.v1
 
 Status: implemented for the `W10.4` native/JIT readiness baseline, consumed by
 the `W10.5` frozen image layer, and hardened for `W15` native-readiness
 metadata closure.
 
 The native layer follows the compile-closure convention in
-[amber_runtime_project_design.md](../../amber_runtime_project_design.md#8-canonical-mir-native-jit-frozen-image-profile):
+[sputnik_runtime_project_design.md](../../sputnik_runtime_project_design.md#8-canonical-mir-native-jit-frozen-image-profile):
 the bytecode VM remains the reference execution engine, native compilation is a
 frozen-world profile, and reflective sites are represented as runtime stubs
 rather than unsafe host-code shortcuts.
@@ -18,18 +18,18 @@ Implemented surface:
 - frozen-world runtime bridge in
   [runtime/native_bridge.h](../../runtime/native_bridge.h:1)
   and [runtime/native_bridge.cpp](../../runtime/native_bridge.cpp:1)
-- CLI inspection in [tools/amberc/main.cpp](../../tools/amberc/main.cpp:1):
-  - `amberc native <file>`
-  - `amberc native-dump <file>`
-  - `amberc native-verify <file>`
+- CLI inspection in [tools/sputnik/main.cpp](../../tools/sputnik/main.cpp:1):
+  - `sputnik native <file>`
+  - `sputnik native-dump <file>`
+  - `sputnik native-verify <file>`
 - frozen image embedding through
   [frozen/image.cpp](../../frozen/image.cpp:1),
-  which stores deterministic `amber.native.v1` metadata summaries inside
-  `.amberimg` artifacts.
+  which stores deterministic `sputnik.native.v1` metadata summaries inside
+  `.sputnikimg` artifacts.
 
 ## Code Objects
 
-Top-level JSON format is `amber.native.v1`. The backend emits one
+Top-level JSON format is `sputnik.native.v1`. The backend emits one
 `NativeCodeObject` per bytecode `BcCode`.
 
 Each object records:
@@ -49,8 +49,8 @@ Each object records:
 - focused conformance coverage for allocation, call, and back-edge safepoints
   that each carry matching root maps.
 
-The `amber.native.v1` metadata layer still uses deterministic trampoline
-payloads. Separately, `amberc build` now has a `cpp-bytecode-direct-v1`
+The `sputnik.native.v1` metadata layer still uses deterministic trampoline
+payloads. Separately, `sputnik build` now has a `cpp-bytecode-direct-v1`
 executable backend for build artifacts: eligible bytecode functions are emitted
 as direct C++ functions and compiled by the host C++ toolchain, while unsupported
 bytecode remains available through an embedded verified VM fallback. This keeps
@@ -113,12 +113,12 @@ W15 does not introduce executable host machine code. It closes the native
 readiness contract so a future native/JIT backend can start without changing
 bytecode or VM semantics:
 
-- `NativeCodeObject.slowpath_table` is part of `amber.native.v1` JSON/dump
+- `NativeCodeObject.slowpath_table` is part of `sputnik.native.v1` JSON/dump
   output;
 - reflective `send`, dynamic pattern protocol, `TypeTerm` hooks, and `RAISE`
   sites are represented as explicit slowpaths;
 - stale frozen-world assumptions declare bytecode re-entry as the no-deopt
   invalidation path;
 - exception edges are represented as safepoints with root maps;
-- `.amberimg` verification now requires the embedded native JSON to advertise
+- `.sputnikimg` verification now requires the embedded native JSON to advertise
   these readiness guards.

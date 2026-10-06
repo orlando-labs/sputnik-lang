@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::lexer {
+namespace sputnik::lexer {
 
 struct LexResult {
   std::vector<Token> tokens;
@@ -87,4 +87,4 @@ private:
   LexResult result_;
 };
 
-} // namespace amber::lexer
+} // namespace sputnik::lexer

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::binder {
+namespace sputnik::binder {
 
 struct Scope {
   std::string id;
@@ -155,4 +155,4 @@ std::string bind_graph_to_json(const BindGraph &graph,
                                const std::string &module_name,
                                const std::string &source_hash);
 
-} // namespace amber::binder
+} // namespace sputnik::binder

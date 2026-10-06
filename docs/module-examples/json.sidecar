@@ -10,8 +10,8 @@ note.en: File methods require fs.read or fs.write; all other operations are pure
 drift_ignore:
 
 method: Json.parse(text, map: Map)
-ru: Преобразует JSON-текст в Amber-значение.
-en: Converts JSON text into an Amber value.
+ru: Преобразует JSON-текст в Sputnik-значение.
+en: Converts JSON text into an Sputnik value.
 example:
 user = Json.parse("{\"id\":7,\"name\":\"Iris\"}")
 user[:name]

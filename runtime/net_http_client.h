@@ -13,7 +13,7 @@
 #include <mutex>
 #include <unordered_map>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct RuntimeHttpPoolAcquire {
   enum class Kind { Reused, OpenNew, Closed, Timeout };
@@ -32,7 +32,7 @@ struct RuntimeHttpRedirectRecordData {
   bool cross_origin = false;
 };
 
-// net.http Amber-facing value instances (DESIGN-stdlib-net-http-io §7/§12),
+// net.http Sputnik-facing value instances (DESIGN-stdlib-net-http-io §7/§12),
 // wrapped as io values via Value::io_value and dispatched in the is_io_value
 // SEND chain. Response bodies and request handles own active pool leases until
 // EOF/discard, early close, or failure.
@@ -376,4 +376,4 @@ public:
   std::string request_write_error;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

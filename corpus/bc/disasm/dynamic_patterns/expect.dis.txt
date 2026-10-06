@@ -1,4 +1,4 @@
-; amber.bc.v1 sha256=74dbf37d5e71e6b427d6f619ba99453c133cd9cdc428198dd828fa33b5ef414b
+; sputnik.bc.v1 sha256=e28633ff982b5f16235feb3a05542418914554f86077304070d386a5b43e2d96
 .header format=1.0 language=1.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
 .sections
   STRS offset=368 size=95 align=1 flags=0
@@ -11,9 +11,9 @@
   EXPT offset=1395 size=4 align=1 flags=0
   INIT offset=1399 size=9 align=1 flags=0
   PATS offset=1408 size=28 align=1 flags=0
-  SPAN offset=1436 size=2992 align=1 flags=0
-  LINE offset=4428 size=436 align=1 flags=0
-  LOCS offset=4864 size=84 align=1 flags=0
+  SPAN offset=1436 size=2956 align=1 flags=0
+  LINE offset=4392 size=436 align=1 flags=0
+  LOCS offset=4828 size=84 align=1 flags=0
 .strs
   s0 "classify"
   s1 "function"
@@ -53,11 +53,11 @@ code c1 kind=module regs=3 flags=0
   0002 LOADNULL 2
   0003 CLOSE_UPVALUES 0
   0004 RETURN 2
-  span 0..1 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
-  span 1..2 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
-  span 2..3 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
-  span 3..4 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
-  span 4..5 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
+  span 0..1 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
+  span 1..2 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
+  span 2..3 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
+  span 3..4 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
+  span 4..5 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
 code c2 kind=method regs=19 flags=0
   local l0 name=s3(shape) role=s4(param) binding=s2(local)
   local l1 name=s5(limit) role=s4(param) binding=s2(local)
@@ -101,37 +101,37 @@ code c2 kind=method regs=19 flags=0
   callsite pc=17 slot=5 sym=y5 flags=0
   callsite pc=18 slot=6 sym=y7 flags=0
   callsite pc=21 slot=7 sym=y2 flags=0
-  span 0..1 corpus/bc/disasm/dynamic_patterns/source.am:1:9-1:10
-  span 1..2 corpus/bc/disasm/dynamic_patterns/source.am:1:1-1:10
-  span 2..3 corpus/bc/disasm/dynamic_patterns/source.am:3:5-4:12
-  span 3..4 corpus/bc/disasm/dynamic_patterns/source.am:4:7-4:12
-  span 4..5 corpus/bc/disasm/dynamic_patterns/source.am:3:5-4:12
-  span 5..6 corpus/bc/disasm/dynamic_patterns/source.am:1:1-1:6
-  span 6..7 corpus/bc/disasm/dynamic_patterns/source.am:1:7-1:19
-  span 7..8 corpus/bc/disasm/dynamic_patterns/source.am:1:1-1:20
-  span 8..9 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 9..10 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 10..11 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 11..12 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 12..13 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 13..14 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 14..15 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 15..16 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 16..17 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 17..18 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 18..19 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 19..20 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 20..21 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 21..22 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 22..23 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 23..24 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 24..25 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 25..26 corpus/bc/disasm/dynamic_patterns/source.am:6:7-6:9
-  span 26..27 corpus/bc/disasm/dynamic_patterns/source.am:5:5-6:9
-  span 27..28 corpus/bc/disasm/dynamic_patterns/source.am:8:7-8:8
-  span 28..29 corpus/bc/disasm/dynamic_patterns/source.am:8:7-8:8
-  span 29..30 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
-  span 30..31 corpus/bc/disasm/dynamic_patterns/source.am:1:1-8:8
+  span 0..1 corpus/bc/disasm/dynamic_patterns/source.s:1:9-1:10
+  span 1..2 corpus/bc/disasm/dynamic_patterns/source.s:1:1-1:10
+  span 2..3 corpus/bc/disasm/dynamic_patterns/source.s:3:5-4:12
+  span 3..4 corpus/bc/disasm/dynamic_patterns/source.s:4:7-4:12
+  span 4..5 corpus/bc/disasm/dynamic_patterns/source.s:3:5-4:12
+  span 5..6 corpus/bc/disasm/dynamic_patterns/source.s:1:1-1:6
+  span 6..7 corpus/bc/disasm/dynamic_patterns/source.s:1:7-1:19
+  span 7..8 corpus/bc/disasm/dynamic_patterns/source.s:1:1-1:20
+  span 8..9 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 9..10 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 10..11 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 11..12 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 12..13 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 13..14 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 14..15 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 15..16 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 16..17 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 17..18 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 18..19 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 19..20 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 20..21 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 21..22 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 22..23 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 23..24 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 24..25 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 25..26 corpus/bc/disasm/dynamic_patterns/source.s:6:7-6:9
+  span 26..27 corpus/bc/disasm/dynamic_patterns/source.s:5:5-6:9
+  span 27..28 corpus/bc/disasm/dynamic_patterns/source.s:8:7-8:8
+  span 28..29 corpus/bc/disasm/dynamic_patterns/source.s:8:7-8:8
+  span 29..30 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
+  span 30..31 corpus/bc/disasm/dynamic_patterns/source.s:1:1-8:8
 .methods
   m0 selector=y9(classify) owner=0 signature=k6 entry=c2 flags=0
     param external=y10(shape) local=s3(shape) flags=0

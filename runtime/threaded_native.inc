@@ -44,7 +44,7 @@ static bool native_threaded_shareable(
   }
 }
 
-struct NativeThreadedPayload final : amber::runtime::RuntimeIoValue {
+struct NativeThreadedPayload final : sputnik::runtime::RuntimeIoValue {
   NativeValue value;
   bool transferable;
   explicit NativeThreadedPayload(NativeValue item) : value(std::move(item)) {
@@ -61,16 +61,16 @@ struct NativeThreadedPayload final : amber::runtime::RuntimeIoValue {
   bool shareable() const override { return transferable; }
 };
 
-static amber::runtime::Value native_threaded_pack(NativeValue value) {
+static sputnik::runtime::Value native_threaded_pack(NativeValue value) {
   // filter_map tests null/false in the shared runtime before unpacking.
-  if (value.tag == NativeValue::Tag::Null) return amber::runtime::Value::null();
+  if (value.tag == NativeValue::Tag::Null) return sputnik::runtime::Value::null();
   if (value.tag == NativeValue::Tag::Bool)
-    return amber::runtime::Value::boolean(value.scalar_value != 0);
-  return amber::runtime::Value::io_value(
+    return sputnik::runtime::Value::boolean(value.scalar_value != 0);
+  return sputnik::runtime::Value::io_value(
       std::make_shared<NativeThreadedPayload>(std::move(value)));
 }
 
-static NativeValue native_threaded_unpack(const amber::runtime::Value &value) {
+static NativeValue native_threaded_unpack(const sputnik::runtime::Value &value) {
   if (value.is_null()) return NativeValue::nullv();
   if (value.is_bool()) return NativeValue::boolean(value.as_bool());
   if (value.is_io_value()) {
@@ -92,7 +92,7 @@ static NativeValue native_threaded_unpack(const amber::runtime::Value &value) {
 static NativeValue native_threaded_create(
     const NativeValue &receiver, const NativeArgsView &args,
     const NativeKeywordArgsView &kwargs, NativeValue block) {
-  using Policy = amber::runtime::RuntimeFlowPartitionPolicy;
+  using Policy = sputnik::runtime::RuntimeFlowPartitionPolicy;
   if (receiver.tag != NativeValue::Tag::List &&
       receiver.tag != NativeValue::Tag::Tuple && receiver.tag != NativeValue::Tag::Set)
     throw NativeRaised{native_named_error("TypeError", "threaded requires Array, Tuple, or Set")};
@@ -115,15 +115,15 @@ static NativeValue native_threaded_create(
     else if (name == "items" || name == "item" || name == "per_item") policy = Policy::Items;
     else throw NativeRaised{native_named_error("TypeError", "invalid threaded scatter policy")};
   }
-  std::vector<amber::runtime::Value> items;
+  std::vector<sputnik::runtime::Value> items;
   for (const auto &item : native_sequence_items_copy(receiver))
     items.push_back(native_threaded_pack(item));
   const auto workers = args.empty() ? 0U : static_cast<std::size_t>(args[0].scalar_value);
   native_require_suspendable("threaded");
   native_commit_effect();
-  return NativeValue::runtime_handle(amber::runtime::Value::threaded_collection(
-      std::make_shared<amber::runtime::RuntimeThreadedCollection>(
-          std::move(items), workers, amber::runtime::RuntimeFlowOptions{}, policy)));
+  return NativeValue::runtime_handle(sputnik::runtime::Value::threaded_collection(
+      std::make_shared<sputnik::runtime::RuntimeThreadedCollection>(
+          std::move(items), workers, sputnik::runtime::RuntimeFlowOptions{}, policy)));
 }
 
 // A worker gets its own invocation frame and cannot return through the caller's
@@ -170,29 +170,29 @@ static NativeValue native_threaded_send(
   auto callback = generated ? std::shared_ptr<NativeThreadedPayload>{}
       : std::make_shared<NativeThreadedPayload>(native_threaded_detach(block));
   auto failures = std::make_shared<NativeThreadedFailures>();
-  const auto stdout_writer = amber::runtime::current_runtime_stdout();
-  const auto stderr_writer = amber::runtime::current_runtime_stderr();
+  const auto stdout_writer = sputnik::runtime::current_runtime_stdout();
+  const auto stderr_writer = sputnik::runtime::current_runtime_stderr();
   // Produce a runtime value while still in the native mutator scope. Worker
   // completion/queue destruction can then release that value safely.
   auto invoke = [callback, failures, stdout_writer, stderr_writer, operation](
-      const amber::runtime::Value &item, std::size_t index) {
+      const sputnik::runtime::Value &item, std::size_t index) {
     NativeCycleScope scope;
-    amber::runtime::RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
+    sputnik::runtime::RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
     try {
       auto closure = native_threaded_detach(callback->value);
-      auto result = amber_native_call_closure(closure, {
+      auto result = sputnik_native_call_closure(closure, {
           native_threaded_unpack(item), NativeValue::integer(static_cast<std::int64_t>(index))});
-      if (operation == "each") return amber::runtime::Value::null();
+      if (operation == "each") return sputnik::runtime::Value::null();
       if (operation == "select" || operation == "reject")
-        return amber::runtime::Value::boolean(native_truthy(result));
+        return sputnik::runtime::Value::boolean(native_truthy(result));
       if (operation == "flat_map") {
         if (result.tag != NativeValue::Tag::List && result.tag != NativeValue::Tag::Tuple &&
             result.tag != NativeValue::Tag::Set)
           throw NativeRaised{native_named_error("TypeError", "threaded flat_map block must return sequence")};
-        std::vector<amber::runtime::Value> values;
+        std::vector<sputnik::runtime::Value> values;
         for (const auto &value : native_sequence_items_copy(result))
           values.push_back(native_threaded_pack(value));
-        return amber::runtime::make_list_value(std::move(values), true);
+        return sputnik::runtime::make_list_value(std::move(values), true);
       }
       return native_threaded_pack(std::move(result));
     } catch (const NativeRaised &raised) {
@@ -200,14 +200,14 @@ static NativeValue native_threaded_send(
         std::lock_guard<std::mutex> lock(failures->mutex);
         failures->exceptions.emplace(index, raised);
       }
-      throw amber::runtime::RuntimeTaskFailure("RuntimeError", "native threaded block raised");
+      throw sputnik::runtime::RuntimeTaskFailure("RuntimeError", "native threaded block raised");
     } catch (const NativeBailout &error) {
-      throw amber::runtime::RuntimeTaskFailure("NativeCodeError", error.what());
+      throw sputnik::runtime::RuntimeTaskFailure("NativeCodeError", error.what());
     }
   };
   native_require_suspendable("threaded operation");
   native_commit_effect();
-  amber::runtime::RuntimeFlowGatherResult result;
+  sputnik::runtime::RuntimeFlowGatherResult result;
   {
     NativeCycleSuspension suspension;
     if (operation == "map" || operation == "filter_map")

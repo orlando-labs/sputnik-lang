@@ -1,4 +1,4 @@
-# amber.spec-anchor-map.v1
+# sputnik.spec-anchor-map.v1
 
 Status: generated W12 anchor map for the current repository docs/spec set.
 
@@ -10,7 +10,7 @@ Check with `make spec-sync-check`.
 | Source | Included headings |
 | --- | ---: |
 | `README.md` | 1 |
-| `amber_unified_final_spec.md` | 76 |
+| `sputnik_unified_final_spec.md` | 76 |
 | `docs/engineering/ast-v1.md` | 5 |
 | `docs/engineering/bc-v1.md` | 4 |
 | `docs/engineering/bind-v1.md` | 1 |
@@ -32,15 +32,6 @@ Check with `make spec-sync-check`.
 | `docs/engineering/modern-profiles-v1.md` | 1 |
 | `docs/engineering/native-backend-equivalence-v1.md` | 6 |
 | `docs/engineering/native-v1.md` | 5 |
-| `docs/engineering/notebook-boards-v1.md` | 6 |
-| `docs/engineering/notebook-core-v1.md` | 9 |
-| `docs/engineering/notebook-dependencies-v1.md` | 5 |
-| `docs/engineering/notebook-execution-live-progress.md` | 6 |
-| `docs/engineering/notebook-macos-v1.md` | 7 |
-| `docs/engineering/notebook-mnist-showcase.md` | 6 |
-| `docs/engineering/notebook-plot-views.md` | 4 |
-| `docs/engineering/notebook-project-v1.md` | 7 |
-| `docs/engineering/notebook-result-viewer.md` | 1 |
 | `docs/engineering/numeric-profile-v1.md` | 10 |
 | `docs/engineering/object-lifecycle-v1.md` | 1 |
 | `docs/engineering/package-v1.md` | 1 |
@@ -55,119 +46,119 @@ Check with `make spec-sync-check`.
 
 | Registry | Lines | SHA-256 |
 | --- | ---: | --- |
-| `spec/registries/bytecode_sections.yaml` | 91 | `ebadf7e28d0757943abaeb588d9a4301ec8374fcebd06e744dd668070991b65c` |
-| `spec/registries/diagnostics.yaml` | 111 | `51b5f38c6947c6a3d99d26eec4a0ead293c2d464ccd5197a405447652eb4e8de` |
-| `spec/registries/opcodes.yaml` | 194 | `0546d31b062a926190382cf1b9711ee80ad6ad8d312e9f6426a8a69769664e67` |
-| `spec/registries/prelude.yaml` | 474 | `82290db7c3a46f61c791c445c8ed2f988969416f25012ea865db86cbd79971cd` |
-| `spec/registries/runtime_errors.yaml` | 285 | `9a2ef07192b12fff66ce2ef0f1855462c3f708fe67d294470049ef2425df375f` |
-| `spec/registries/tokens.yaml` | 127 | `8f625d0ae80376759b848e935282dca05065e1d7b742c69b6371d611f1a42fab` |
+| `spec/registries/bytecode_sections.yaml` | 91 | `a9def0d3e466580ccdf6231eb00e0cfeea0bb1d9741158f522b55892af876219` |
+| `spec/registries/diagnostics.yaml` | 111 | `b55eca5086b56dc39c62eed66308bf8c0575e3fd41fe178678277ecec495cf9d` |
+| `spec/registries/opcodes.yaml` | 194 | `342b6268a0f6f338022e92f2e48379245690409d64a6996488b7a7b19a520ea0` |
+| `spec/registries/prelude.yaml` | 474 | `8a76c3304b162f67df58d866add4110a2ae0dee6b0968cb735ba4474696e5db6` |
+| `spec/registries/runtime_errors.yaml` | 285 | `c8bf5a8fd187db62e1d7b1027844f3d20f9089eaec087136ce96f072db04299e` |
+| `spec/registries/tokens.yaml` | 127 | `4f4b12a1f160ed728319c85b1aa9729d2b56aebb11d977054b2dce7396656c69` |
 
 ## Anchor Map
 
 | Source | Line | Level | Anchor | Heading |
 | --- | ---: | ---: | --- | --- |
-| [`README.md`](../../README.md) | 1 | 1 | [`amber-reference-implementation`](../../README.md#amber-reference-implementation) | Amber Reference Implementation |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 1 | 1 | [`amber-единая-финальная-спецификация-языка`](../../amber_unified_final_spec.md#amber-единая-финальная-спецификация-языка) | Amber — единая финальная спецификация языка |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 11 | 2 | [`оглавление`](../../amber_unified_final_spec.md#оглавление) | Оглавление |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 20 | 1 | [`часть-i-языковая-спецификация-amber`](../../amber_unified_final_spec.md#часть-i-языковая-спецификация-amber) | Часть I. Языковая спецификация Amber |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 22 | 2 | [`1-дизайн-якоря-языка`](../../amber_unified_final_spec.md#1-дизайн-якоря-языка) | 1. Дизайн-якоря языка |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 35 | 2 | [`2-лексика-идентификаторы-и-блоки`](../../amber_unified_final_spec.md#2-лексика-идентификаторы-и-блоки) | 2. Лексика, идентификаторы и блоки |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 105 | 2 | [`3-общая-модель-выражений-и-операторов`](../../amber_unified_final_spec.md#3-общая-модель-выражений-и-операторов) | 3. Общая модель выражений и операторов |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 366 | 2 | [`4-postfix-выражения-чейнинг-и-block-suffix`](../../amber_unified_final_spec.md#4-postfix-выражения-чейнинг-и-block-suffix) | 4. Postfix-выражения, чейнинг и block suffix |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 678 | 2 | [`5-блоки-лямбда-аргументы-и-placeholders`](../../amber_unified_final_spec.md#5-блоки-лямбда-аргументы-и-placeholders) | 5. Блоки, лямбда-аргументы и placeholders |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 732 | 2 | [`6-специальная-переменная`](../../amber_unified_final_spec.md#6-специальная-переменная) | 6. Специальная переменная `$_` |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 779 | 2 | [`7-управляющие-конструкции-как-выражения`](../../amber_unified_final_spec.md#7-управляющие-конструкции-как-выражения) | 7. Управляющие конструкции как выражения |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 905 | 2 | [`8-функции-методы-классы-и-объектная-модель`](../../amber_unified_final_spec.md#8-функции-методы-классы-и-объектная-модель) | 8. Функции, методы, классы и объектная модель |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 1490 | 2 | [`9-pattern-matching-v1`](../../amber_unified_final_spec.md#9-pattern-matching-v1) | 9. Pattern matching v1 |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 1827 | 2 | [`10-multi-clause-def`](../../amber_unified_final_spec.md#10-multi-clause-def) | 10. Multi-clause def |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 1914 | 2 | [`105-исключения-raise-rescue-ensure`](../../amber_unified_final_spec.md#105-исключения-raise-rescue-ensure) | 10.5. Исключения: `raise`, `rescue`, `ensure` |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 2428 | 2 | [`106-resultt-e-value-based-errors`](../../amber_unified_final_spec.md#106-resultt-e-value-based-errors) | 10.6. `Result[T, E]` — value-based errors |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 2500 | 2 | [`11-ошибки-и-диагностики`](../../amber_unified_final_spec.md#11-ошибки-и-диагностики) | 11. Ошибки и диагностики |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 2696 | 2 | [`12-типовая-система-minimal-type-envelope-для-implementation-gate`](../../amber_unified_final_spec.md#12-типовая-система-minimal-type-envelope-для-implementation-gate) | 12. Типовая система: minimal type envelope для implementation gate |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 2762 | 2 | [`13-модель-concurrency-threading-v1-без-gil`](../../amber_unified_final_spec.md#13-модель-concurrency-threading-v1-без-gil) | 13. Модель concurrency / threading v1: без GIL |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 3333 | 2 | [`14-что-входит-в-язык-по-намерению-но-ещё-не-нормализовано-до-ядра`](../../amber_unified_final_spec.md#14-что-входит-в-язык-по-намерению-но-ещё-не-нормализовано-до-ядра) | 14. Что входит в язык по намерению, но ещё не нормализовано до ядра |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 3591 | 1 | [`часть-ii-интегрированные-языковые-решения`](../../amber_unified_final_spec.md#часть-ii-интегрированные-языковые-решения) | Часть II. Интегрированные языковые решения |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 3593 | 2 | [`inline-conditional-expression-и-conditional-collection-elements`](../../amber_unified_final_spec.md#inline-conditional-expression-и-conditional-collection-elements) | Inline conditional expression и conditional collection elements |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 4544 | 2 | [`type-conversion-sugar-и-string-interpolation`](../../amber_unified_final_spec.md#type-conversion-sugar-и-string-interpolation) | Type conversion sugar и string interpolation |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 5426 | 2 | [`computed-property-descriptors`](../../amber_unified_final_spec.md#computed-property-descriptors) | Computed property descriptors |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 6647 | 2 | [`attribute-property-sugar`](../../amber_unified_final_spec.md#attribute-property-sugar) | Attribute property sugar |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 7354 | 2 | [`bare-nullary-member-access-and-dot-call-expr`](../../amber_unified_final_spec.md#bare-nullary-member-access-and-dot-call-expr) | Bare-nullary member access and dot-call `expr.()` |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 7470 | 2 | [`range-step-materialization-negative-indexing-и-inttimes`](../../amber_unified_final_spec.md#range-step-materialization-negative-indexing-и-inttimes) | Range step, materialization, negative indexing и Int#times |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 9069 | 2 | [`array-generation-apis-и-optional-bracket-access`](../../amber_unified_final_spec.md#array-generation-apis-и-optional-bracket-access) | Array generation APIs и optional bracket access |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 10139 | 2 | [`value-keyed-mapset-hashmaphashset-и-expression-map-keys`](../../amber_unified_final_spec.md#value-keyed-mapset-hashmaphashset-и-expression-map-keys) | Value-keyed Map/Set, HashMap/HashSet и expression map keys |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 12310 | 2 | [`spread-expansion-для-calls-и-collection-literals`](../../amber_unified_final_spec.md#spread-expansion-для-calls-и-collection-literals) | Spread expansion для calls и collection literals |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 13362 | 2 | [`name-indifferent-maps-strict-maps-и-kwargs-view`](../../amber_unified_final_spec.md#name-indifferent-maps-strict-maps-и-kwargs-view) | Name-indifferent maps, strict maps и kwargs view |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 14610 | 1 | [`часть-iii-standard-library-и-runtime-facing-api`](../../amber_unified_final_spec.md#часть-iii-standard-library-и-runtime-facing-api) | Часть III. Standard library и runtime-facing API |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 14612 | 2 | [`s1-core-collections-stdlib`](../../amber_unified_final_spec.md#s1-core-collections-stdlib) | S1. Core collections stdlib |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 14695 | 2 | [`s2-task-threading-async-modules`](../../amber_unified_final_spec.md#s2-task-threading-async-modules) | S2. Task / threading / async modules |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 14800 | 2 | [`s3-watch-profile`](../../amber_unified_final_spec.md#s3-watch-profile) | S3. Watch profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 14898 | 2 | [`s4-io-foundation`](../../amber_unified_final_spec.md#s4-io-foundation) | S4. IO foundation |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 14945 | 2 | [`s5-low-level-networking`](../../amber_unified_final_spec.md#s5-low-level-networking) | S5. Low-level networking |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15005 | 2 | [`s6-http-client`](../../amber_unified_final_spec.md#s6-http-client) | S6. HTTP client |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15057 | 2 | [`s7-advanced-concurrency`](../../amber_unified_final_spec.md#s7-advanced-concurrency) | S7. Advanced concurrency |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15080 | 2 | [`text-output-debug-print-и-pretty-print`](../../amber_unified_final_spec.md#text-output-debug-print-и-pretty-print) | Text output, debug print и pretty print |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15084 | 2 | [`0-обзор-решения-9`](../../amber_unified_final_spec.md#0-обзор-решения-9) | 0. Обзор решения |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15116 | 2 | [`1-design-principles-4`](../../amber_unified_final_spec.md#1-design-principles-4) | 1. Design principles |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15186 | 2 | [`2-module-and-namespace-placement`](../../amber_unified_final_spec.md#2-module-and-namespace-placement) | 2. Module and namespace placement |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15238 | 2 | [`3-text-writer-protocol`](../../amber_unified_final_spec.md#3-text-writer-protocol) | 3. Text writer protocol |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15301 | 2 | [`4-print`](../../amber_unified_final_spec.md#4-print) | 4. `print` |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15451 | 2 | [`5-p`](../../amber_unified_final_spec.md#5-p) | 5. `p` |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15574 | 2 | [`6-pp`](../../amber_unified_final_spec.md#6-pp) | 6. `pp` |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15712 | 2 | [`7-stringification-modes`](../../amber_unified_final_spec.md#7-stringification-modes) | 7. Stringification modes |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15804 | 2 | [`8-prettyprinter-protocol`](../../amber_unified_final_spec.md#8-prettyprinter-protocol) | 8. PrettyPrinter protocol |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 15955 | 2 | [`9-sinks-and-dynamic-output-contexts`](../../amber_unified_final_spec.md#9-sinks-and-dynamic-output-contexts) | 9. Sinks and dynamic output contexts |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16016 | 2 | [`10-iamber-output-capture-profile`](../../amber_unified_final_spec.md#10-iamber-output-capture-profile) | 10. iamber output capture profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16148 | 2 | [`11-privacy-taint-and-policy`](../../amber_unified_final_spec.md#11-privacy-taint-and-policy) | 11. Privacy, taint and policy |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16181 | 2 | [`12-error-behavior`](../../amber_unified_final_spec.md#12-error-behavior) | 12. Error behavior |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16238 | 2 | [`13-evaluation-order`](../../amber_unified_final_spec.md#13-evaluation-order) | 13. Evaluation order |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16280 | 2 | [`14-command-form`](../../amber_unified_final_spec.md#14-command-form) | 14. Command form |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16332 | 2 | [`15-examples-1`](../../amber_unified_final_spec.md#15-examples-1) | 15. Examples |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16447 | 2 | [`16-conformance-tests-2`](../../amber_unified_final_spec.md#16-conformance-tests-2) | 16. Conformance tests |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16597 | 2 | [`17-open-questions`](../../amber_unified_final_spec.md#17-open-questions) | 17. Open questions |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16664 | 2 | [`18-summary-1`](../../amber_unified_final_spec.md#18-summary-1) | 18. Summary |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 16691 | 2 | [`threading-async-flow-concurrency-api`](../../amber_unified_final_spec.md#threading-async-flow-concurrency-api) | Threading / async / flow concurrency API |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19059 | 1 | [`часть-iv-modern-pressure-profiles`](../../amber_unified_final_spec.md#часть-iv-modern-pressure-profiles) | Часть IV. Modern Pressure Profiles |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19061 | 2 | [`1-назначение`](../../amber_unified_final_spec.md#1-назначение) | 1. Назначение |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19099 | 2 | [`2-общие-правила-профилей`](../../amber_unified_final_spec.md#2-общие-правила-профилей) | 2. Общие правила профилей |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19154 | 2 | [`3-ambercapabilities-sandbox-profile`](../../amber_unified_final_spec.md#3-ambercapabilities-sandbox-profile) | 3. Amber/Capabilities & Sandbox Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19281 | 2 | [`4-ambereffects-profile`](../../amber_unified_final_spec.md#4-ambereffects-profile) | 4. Amber/Effects Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19400 | 2 | [`5-amberobservability-replay-profile`](../../amber_unified_final_spec.md#5-amberobservability-replay-profile) | 5. Amber/Observability & Replay Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19539 | 2 | [`6-amberdataframe-columnar-bi-profile`](../../amber_unified_final_spec.md#6-amberdataframe-columnar-bi-profile) | 6. Amber/DataFrame & Columnar BI Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19647 | 2 | [`7-amberschema-api-contracts-profile`](../../amber_unified_final_spec.md#7-amberschema-api-contracts-profile) | 7. Amber/Schema & API Contracts Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19738 | 2 | [`8-amberwasm-component-profile`](../../amber_unified_final_spec.md#8-amberwasm-component-profile) | 8. Amber/Wasm Component Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19799 | 2 | [`9-amberaccelerator-profile`](../../amber_unified_final_spec.md#9-amberaccelerator-profile) | 9. Amber/Accelerator Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19870 | 2 | [`10-amberai-agent-tooling-provenance-profile`](../../amber_unified_final_spec.md#10-amberai-agent-tooling-provenance-profile) | 10. Amber/AI-Agent Tooling & Provenance Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 19966 | 2 | [`11-ambercontracts-property-testing-profile`](../../amber_unified_final_spec.md#11-ambercontracts-property-testing-profile) | 11. Amber/Contracts & Property Testing Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 20014 | 2 | [`12-amberprivacy-taint-lineage-profile`](../../amber_unified_final_spec.md#12-amberprivacy-taint-lineage-profile) | 12. Amber/Privacy, Taint & Lineage Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 20094 | 2 | [`13-amberdurable-workflow-profile`](../../amber_unified_final_spec.md#13-amberdurable-workflow-profile) | 13. Amber/Durable Workflow Profile |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 20151 | 2 | [`14-cross-profile-interaction-rules`](../../amber_unified_final_spec.md#14-cross-profile-interaction-rules) | 14. Cross-profile interaction rules |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 20205 | 2 | [`15-ненормативные-внешние-ориентиры`](../../amber_unified_final_spec.md#15-ненормативные-внешние-ориентиры) | 15. Ненормативные внешние ориентиры |
-| [`amber_unified_final_spec.md`](../../amber_unified_final_spec.md) | 20223 | 1 | [`часть-v-реализация-и-runtime-проектирование`](../../amber_unified_final_spec.md#часть-v-реализация-и-runtime-проектирование) | Часть V. Реализация и runtime-проектирование |
-| [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 1 | 1 | [`amberastv1`](../../docs/engineering/ast-v1.md#amberastv1) | amber.ast.v1 |
+| [`README.md`](../../README.md) | 1 | 1 | [`sputnik-reference-implementation`](../../README.md#sputnik-reference-implementation) | Sputnik Reference Implementation |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 1 | 1 | [`sputnik-единая-финальная-спецификация-языка`](../../sputnik_unified_final_spec.md#sputnik-единая-финальная-спецификация-языка) | Sputnik — единая финальная спецификация языка |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 11 | 2 | [`оглавление`](../../sputnik_unified_final_spec.md#оглавление) | Оглавление |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 20 | 1 | [`часть-i-языковая-спецификация-sputnik`](../../sputnik_unified_final_spec.md#часть-i-языковая-спецификация-sputnik) | Часть I. Языковая спецификация Sputnik |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 22 | 2 | [`1-дизайн-якоря-языка`](../../sputnik_unified_final_spec.md#1-дизайн-якоря-языка) | 1. Дизайн-якоря языка |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 35 | 2 | [`2-лексика-идентификаторы-и-блоки`](../../sputnik_unified_final_spec.md#2-лексика-идентификаторы-и-блоки) | 2. Лексика, идентификаторы и блоки |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 105 | 2 | [`3-общая-модель-выражений-и-операторов`](../../sputnik_unified_final_spec.md#3-общая-модель-выражений-и-операторов) | 3. Общая модель выражений и операторов |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 366 | 2 | [`4-postfix-выражения-чейнинг-и-block-suffix`](../../sputnik_unified_final_spec.md#4-postfix-выражения-чейнинг-и-block-suffix) | 4. Postfix-выражения, чейнинг и block suffix |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 678 | 2 | [`5-блоки-лямбда-аргументы-и-placeholders`](../../sputnik_unified_final_spec.md#5-блоки-лямбда-аргументы-и-placeholders) | 5. Блоки, лямбда-аргументы и placeholders |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 732 | 2 | [`6-специальная-переменная`](../../sputnik_unified_final_spec.md#6-специальная-переменная) | 6. Специальная переменная `$_` |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 779 | 2 | [`7-управляющие-конструкции-как-выражения`](../../sputnik_unified_final_spec.md#7-управляющие-конструкции-как-выражения) | 7. Управляющие конструкции как выражения |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 905 | 2 | [`8-функции-методы-классы-и-объектная-модель`](../../sputnik_unified_final_spec.md#8-функции-методы-классы-и-объектная-модель) | 8. Функции, методы, классы и объектная модель |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 1490 | 2 | [`9-pattern-matching-v1`](../../sputnik_unified_final_spec.md#9-pattern-matching-v1) | 9. Pattern matching v1 |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 1827 | 2 | [`10-multi-clause-def`](../../sputnik_unified_final_spec.md#10-multi-clause-def) | 10. Multi-clause def |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 1914 | 2 | [`105-исключения-raise-rescue-ensure`](../../sputnik_unified_final_spec.md#105-исключения-raise-rescue-ensure) | 10.5. Исключения: `raise`, `rescue`, `ensure` |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 2428 | 2 | [`106-resultt-e-value-based-errors`](../../sputnik_unified_final_spec.md#106-resultt-e-value-based-errors) | 10.6. `Result[T, E]` — value-based errors |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 2500 | 2 | [`11-ошибки-и-диагностики`](../../sputnik_unified_final_spec.md#11-ошибки-и-диагностики) | 11. Ошибки и диагностики |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 2696 | 2 | [`12-типовая-система-minimal-type-envelope-для-implementation-gate`](../../sputnik_unified_final_spec.md#12-типовая-система-minimal-type-envelope-для-implementation-gate) | 12. Типовая система: minimal type envelope для implementation gate |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 2762 | 2 | [`13-модель-concurrency-threading-v1-без-gil`](../../sputnik_unified_final_spec.md#13-модель-concurrency-threading-v1-без-gil) | 13. Модель concurrency / threading v1: без GIL |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 3333 | 2 | [`14-что-входит-в-язык-по-намерению-но-ещё-не-нормализовано-до-ядра`](../../sputnik_unified_final_spec.md#14-что-входит-в-язык-по-намерению-но-ещё-не-нормализовано-до-ядра) | 14. Что входит в язык по намерению, но ещё не нормализовано до ядра |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 3591 | 1 | [`часть-ii-интегрированные-языковые-решения`](../../sputnik_unified_final_spec.md#часть-ii-интегрированные-языковые-решения) | Часть II. Интегрированные языковые решения |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 3593 | 2 | [`inline-conditional-expression-и-conditional-collection-elements`](../../sputnik_unified_final_spec.md#inline-conditional-expression-и-conditional-collection-elements) | Inline conditional expression и conditional collection elements |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 4544 | 2 | [`type-conversion-sugar-и-string-interpolation`](../../sputnik_unified_final_spec.md#type-conversion-sugar-и-string-interpolation) | Type conversion sugar и string interpolation |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 5426 | 2 | [`computed-property-descriptors`](../../sputnik_unified_final_spec.md#computed-property-descriptors) | Computed property descriptors |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 6647 | 2 | [`attribute-property-sugar`](../../sputnik_unified_final_spec.md#attribute-property-sugar) | Attribute property sugar |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 7354 | 2 | [`bare-nullary-member-access-and-dot-call-expr`](../../sputnik_unified_final_spec.md#bare-nullary-member-access-and-dot-call-expr) | Bare-nullary member access and dot-call `expr.()` |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 7470 | 2 | [`range-step-materialization-negative-indexing-и-inttimes`](../../sputnik_unified_final_spec.md#range-step-materialization-negative-indexing-и-inttimes) | Range step, materialization, negative indexing и Int#times |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 9069 | 2 | [`array-generation-apis-и-optional-bracket-access`](../../sputnik_unified_final_spec.md#array-generation-apis-и-optional-bracket-access) | Array generation APIs и optional bracket access |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 10139 | 2 | [`value-keyed-mapset-hashmaphashset-и-expression-map-keys`](../../sputnik_unified_final_spec.md#value-keyed-mapset-hashmaphashset-и-expression-map-keys) | Value-keyed Map/Set, HashMap/HashSet и expression map keys |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 12310 | 2 | [`spread-expansion-для-calls-и-collection-literals`](../../sputnik_unified_final_spec.md#spread-expansion-для-calls-и-collection-literals) | Spread expansion для calls и collection literals |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 13362 | 2 | [`name-indifferent-maps-strict-maps-и-kwargs-view`](../../sputnik_unified_final_spec.md#name-indifferent-maps-strict-maps-и-kwargs-view) | Name-indifferent maps, strict maps и kwargs view |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 14610 | 1 | [`часть-iii-standard-library-и-runtime-facing-api`](../../sputnik_unified_final_spec.md#часть-iii-standard-library-и-runtime-facing-api) | Часть III. Standard library и runtime-facing API |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 14612 | 2 | [`s1-core-collections-stdlib`](../../sputnik_unified_final_spec.md#s1-core-collections-stdlib) | S1. Core collections stdlib |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 14695 | 2 | [`s2-task-threading-async-modules`](../../sputnik_unified_final_spec.md#s2-task-threading-async-modules) | S2. Task / threading / async modules |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 14800 | 2 | [`s3-watch-profile`](../../sputnik_unified_final_spec.md#s3-watch-profile) | S3. Watch profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 14898 | 2 | [`s4-io-foundation`](../../sputnik_unified_final_spec.md#s4-io-foundation) | S4. IO foundation |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 14945 | 2 | [`s5-low-level-networking`](../../sputnik_unified_final_spec.md#s5-low-level-networking) | S5. Low-level networking |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15005 | 2 | [`s6-http-client`](../../sputnik_unified_final_spec.md#s6-http-client) | S6. HTTP client |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15057 | 2 | [`s7-advanced-concurrency`](../../sputnik_unified_final_spec.md#s7-advanced-concurrency) | S7. Advanced concurrency |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15080 | 2 | [`text-output-debug-print-и-pretty-print`](../../sputnik_unified_final_spec.md#text-output-debug-print-и-pretty-print) | Text output, debug print и pretty print |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15084 | 2 | [`0-обзор-решения-9`](../../sputnik_unified_final_spec.md#0-обзор-решения-9) | 0. Обзор решения |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15116 | 2 | [`1-design-principles-4`](../../sputnik_unified_final_spec.md#1-design-principles-4) | 1. Design principles |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15186 | 2 | [`2-module-and-namespace-placement`](../../sputnik_unified_final_spec.md#2-module-and-namespace-placement) | 2. Module and namespace placement |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15238 | 2 | [`3-text-writer-protocol`](../../sputnik_unified_final_spec.md#3-text-writer-protocol) | 3. Text writer protocol |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15301 | 2 | [`4-print`](../../sputnik_unified_final_spec.md#4-print) | 4. `print` |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15451 | 2 | [`5-p`](../../sputnik_unified_final_spec.md#5-p) | 5. `p` |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15574 | 2 | [`6-pp`](../../sputnik_unified_final_spec.md#6-pp) | 6. `pp` |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15712 | 2 | [`7-stringification-modes`](../../sputnik_unified_final_spec.md#7-stringification-modes) | 7. Stringification modes |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15804 | 2 | [`8-prettyprinter-protocol`](../../sputnik_unified_final_spec.md#8-prettyprinter-protocol) | 8. PrettyPrinter protocol |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 15955 | 2 | [`9-sinks-and-dynamic-output-contexts`](../../sputnik_unified_final_spec.md#9-sinks-and-dynamic-output-contexts) | 9. Sinks and dynamic output contexts |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16016 | 2 | [`10-isputnik-output-capture-profile`](../../sputnik_unified_final_spec.md#10-isputnik-output-capture-profile) | 10. isputnik output capture profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16148 | 2 | [`11-privacy-taint-and-policy`](../../sputnik_unified_final_spec.md#11-privacy-taint-and-policy) | 11. Privacy, taint and policy |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16181 | 2 | [`12-error-behavior`](../../sputnik_unified_final_spec.md#12-error-behavior) | 12. Error behavior |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16238 | 2 | [`13-evaluation-order`](../../sputnik_unified_final_spec.md#13-evaluation-order) | 13. Evaluation order |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16280 | 2 | [`14-command-form`](../../sputnik_unified_final_spec.md#14-command-form) | 14. Command form |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16332 | 2 | [`15-examples-1`](../../sputnik_unified_final_spec.md#15-examples-1) | 15. Examples |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16447 | 2 | [`16-conformance-tests-2`](../../sputnik_unified_final_spec.md#16-conformance-tests-2) | 16. Conformance tests |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16597 | 2 | [`17-open-questions`](../../sputnik_unified_final_spec.md#17-open-questions) | 17. Open questions |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16664 | 2 | [`18-summary-1`](../../sputnik_unified_final_spec.md#18-summary-1) | 18. Summary |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 16691 | 2 | [`threading-async-flow-concurrency-api`](../../sputnik_unified_final_spec.md#threading-async-flow-concurrency-api) | Threading / async / flow concurrency API |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19059 | 1 | [`часть-iv-modern-pressure-profiles`](../../sputnik_unified_final_spec.md#часть-iv-modern-pressure-profiles) | Часть IV. Modern Pressure Profiles |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19061 | 2 | [`1-назначение`](../../sputnik_unified_final_spec.md#1-назначение) | 1. Назначение |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19099 | 2 | [`2-общие-правила-профилей`](../../sputnik_unified_final_spec.md#2-общие-правила-профилей) | 2. Общие правила профилей |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19154 | 2 | [`3-sputnikcapabilities-sandbox-profile`](../../sputnik_unified_final_spec.md#3-sputnikcapabilities-sandbox-profile) | 3. Sputnik/Capabilities & Sandbox Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19281 | 2 | [`4-sputnikeffects-profile`](../../sputnik_unified_final_spec.md#4-sputnikeffects-profile) | 4. Sputnik/Effects Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19400 | 2 | [`5-sputnikobservability-replay-profile`](../../sputnik_unified_final_spec.md#5-sputnikobservability-replay-profile) | 5. Sputnik/Observability & Replay Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19539 | 2 | [`6-sputnikdataframe-columnar-bi-profile`](../../sputnik_unified_final_spec.md#6-sputnikdataframe-columnar-bi-profile) | 6. Sputnik/DataFrame & Columnar BI Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19647 | 2 | [`7-sputnikschema-api-contracts-profile`](../../sputnik_unified_final_spec.md#7-sputnikschema-api-contracts-profile) | 7. Sputnik/Schema & API Contracts Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19738 | 2 | [`8-sputnikwasm-component-profile`](../../sputnik_unified_final_spec.md#8-sputnikwasm-component-profile) | 8. Sputnik/Wasm Component Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19799 | 2 | [`9-sputnikaccelerator-profile`](../../sputnik_unified_final_spec.md#9-sputnikaccelerator-profile) | 9. Sputnik/Accelerator Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19870 | 2 | [`10-sputnikai-agent-tooling-provenance-profile`](../../sputnik_unified_final_spec.md#10-sputnikai-agent-tooling-provenance-profile) | 10. Sputnik/AI-Agent Tooling & Provenance Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 19966 | 2 | [`11-sputnikcontracts-property-testing-profile`](../../sputnik_unified_final_spec.md#11-sputnikcontracts-property-testing-profile) | 11. Sputnik/Contracts & Property Testing Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 20014 | 2 | [`12-sputnikprivacy-taint-lineage-profile`](../../sputnik_unified_final_spec.md#12-sputnikprivacy-taint-lineage-profile) | 12. Sputnik/Privacy, Taint & Lineage Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 20094 | 2 | [`13-sputnikdurable-workflow-profile`](../../sputnik_unified_final_spec.md#13-sputnikdurable-workflow-profile) | 13. Sputnik/Durable Workflow Profile |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 20151 | 2 | [`14-cross-profile-interaction-rules`](../../sputnik_unified_final_spec.md#14-cross-profile-interaction-rules) | 14. Cross-profile interaction rules |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 20205 | 2 | [`15-ненормативные-внешние-ориентиры`](../../sputnik_unified_final_spec.md#15-ненормативные-внешние-ориентиры) | 15. Ненормативные внешние ориентиры |
+| [`sputnik_unified_final_spec.md`](../../sputnik_unified_final_spec.md) | 20223 | 1 | [`часть-v-реализация-и-runtime-проектирование`](../../sputnik_unified_final_spec.md#часть-v-реализация-и-runtime-проектирование) | Часть V. Реализация и runtime-проектирование |
+| [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 1 | 1 | [`sputnikastv1`](../../docs/engineering/ast-v1.md#sputnikastv1) | sputnik.ast.v1 |
 | [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 14 | 2 | [`postfix-chains`](../../docs/engineering/ast-v1.md#postfix-chains) | Postfix chains |
 | [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 38 | 2 | [`collection-literals`](../../docs/engineering/ast-v1.md#collection-literals) | Collection Literals |
 | [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 64 | 2 | [`inline-conditionals`](../../docs/engineering/ast-v1.md#inline-conditionals) | Inline conditionals |
 | [`docs/engineering/ast-v1.md`](../../docs/engineering/ast-v1.md) | 71 | 2 | [`clause-defs`](../../docs/engineering/ast-v1.md#clause-defs) | Clause defs |
-| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 1 | 1 | [`amberbcv1`](../../docs/engineering/bc-v1.md#amberbcv1) | amber.bc.v1 |
+| [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 1 | 1 | [`sputnikbcv1`](../../docs/engineering/bc-v1.md#sputnikbcv1) | sputnik.bc.v1 |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 22 | 2 | [`container`](../../docs/engineering/bc-v1.md#container) | Container |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 59 | 2 | [`record-encoding`](../../docs/engineering/bc-v1.md#record-encoding) | Record Encoding |
 | [`docs/engineering/bc-v1.md`](../../docs/engineering/bc-v1.md) | 149 | 2 | [`verifier-skeleton`](../../docs/engineering/bc-v1.md#verifier-skeleton) | Verifier Skeleton |
-| [`docs/engineering/bind-v1.md`](../../docs/engineering/bind-v1.md) | 1 | 1 | [`amberbindv1`](../../docs/engineering/bind-v1.md#amberbindv1) | amber.bind.v1 |
-| [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 1 | 1 | [`amberbuildv1`](../../docs/engineering/build-v1.md#amberbuildv1) | amber.build.v1 |
+| [`docs/engineering/bind-v1.md`](../../docs/engineering/bind-v1.md) | 1 | 1 | [`sputnikbindv1`](../../docs/engineering/bind-v1.md#sputnikbindv1) | sputnik.bind.v1 |
+| [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 1 | 1 | [`sputnikbuildv1`](../../docs/engineering/build-v1.md#sputnikbuildv1) | sputnik.build.v1 |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 19 | 2 | [`manifest-shape`](../../docs/engineering/build-v1.md#manifest-shape) | Manifest Shape |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 47 | 2 | [`cli`](../../docs/engineering/build-v1.md#cli) | CLI |
 | [`docs/engineering/build-v1.md`](../../docs/engineering/build-v1.md) | 87 | 2 | [`conformance`](../../docs/engineering/build-v1.md#conformance) | Conformance |
-| [`docs/engineering/capabilities-v1.md`](../../docs/engineering/capabilities-v1.md) | 1 | 1 | [`ambercapabilitiesv1`](../../docs/engineering/capabilities-v1.md#ambercapabilitiesv1) | amber.capabilities.v1 |
-| [`docs/engineering/conformance-v1.md`](../../docs/engineering/conformance-v1.md) | 1 | 1 | [`amberconformancev1`](../../docs/engineering/conformance-v1.md#amberconformancev1) | amber.conformance.v1 |
-| [`docs/engineering/data-schema-v1.md`](../../docs/engineering/data-schema-v1.md) | 1 | 1 | [`amberdataschemav1`](../../docs/engineering/data-schema-v1.md#amberdataschemav1) | amber.data/schema.v1 |
-| [`docs/engineering/diag-v1.md`](../../docs/engineering/diag-v1.md) | 1 | 1 | [`amberdiagv1`](../../docs/engineering/diag-v1.md#amberdiagv1) | amber.diag.v1 |
+| [`docs/engineering/capabilities-v1.md`](../../docs/engineering/capabilities-v1.md) | 1 | 1 | [`sputnikcapabilitiesv1`](../../docs/engineering/capabilities-v1.md#sputnikcapabilitiesv1) | sputnik.capabilities.v1 |
+| [`docs/engineering/conformance-v1.md`](../../docs/engineering/conformance-v1.md) | 1 | 1 | [`sputnikconformancev1`](../../docs/engineering/conformance-v1.md#sputnikconformancev1) | sputnik.conformance.v1 |
+| [`docs/engineering/data-schema-v1.md`](../../docs/engineering/data-schema-v1.md) | 1 | 1 | [`sputnikdataschemav1`](../../docs/engineering/data-schema-v1.md#sputnikdataschemav1) | sputnik.data/schema.v1 |
+| [`docs/engineering/diag-v1.md`](../../docs/engineering/diag-v1.md) | 1 | 1 | [`sputnikdiagv1`](../../docs/engineering/diag-v1.md#sputnikdiagv1) | sputnik.diag.v1 |
 | [`docs/engineering/doc-system.md`](../../docs/engineering/doc-system.md) | 1 | 1 | [`documentation-system`](../../docs/engineering/doc-system.md#documentation-system) | Documentation system |
 | [`docs/engineering/doc-system.md`](../../docs/engineering/doc-system.md) | 16 | 2 | [`1-the-guide-knowledge-graph`](../../docs/engineering/doc-system.md#1-the-guide-knowledge-graph) | 1. The Guide (knowledge graph) |
 | [`docs/engineering/doc-system.md`](../../docs/engineering/doc-system.md) | 77 | 2 | [`2-the-module-reference-generator`](../../docs/engineering/doc-system.md#2-the-module-reference-generator) | 2. The module reference (generator) |
 | [`docs/engineering/doc-system.md`](../../docs/engineering/doc-system.md) | 153 | 2 | [`3-removing-the-spec-references-later`](../../docs/engineering/doc-system.md#3-removing-the-spec-references-later) | 3. Removing the spec references later |
 | [`docs/engineering/doc-system.md`](../../docs/engineering/doc-system.md) | 180 | 2 | [`file-map`](../../docs/engineering/doc-system.md#file-map) | File map |
-| [`docs/engineering/effects-v1.md`](../../docs/engineering/effects-v1.md) | 1 | 1 | [`ambereffectsv1`](../../docs/engineering/effects-v1.md#ambereffectsv1) | amber.effects.v1 |
-| [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 1 | 1 | [`amberfull-nativeimplementation-planv1`](../../docs/engineering/full-native-implementation-plan-v1.md#amberfull-nativeimplementation-planv1) | amber.full-native.implementation-plan.v1 |
+| [`docs/engineering/effects-v1.md`](../../docs/engineering/effects-v1.md) | 1 | 1 | [`sputnikeffectsv1`](../../docs/engineering/effects-v1.md#sputnikeffectsv1) | sputnik.effects.v1 |
+| [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 1 | 1 | [`sputnikfull-nativeimplementation-planv1`](../../docs/engineering/full-native-implementation-plan-v1.md#sputnikfull-nativeimplementation-planv1) | sputnik.full-native.implementation-plan.v1 |
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 75 | 2 | [`target-definition`](../../docs/engineering/full-native-implementation-plan-v1.md#target-definition) | Target Definition |
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 96 | 2 | [`non-goals-for-the-first-native-milestone`](../../docs/engineering/full-native-implementation-plan-v1.md#non-goals-for-the-first-native-milestone) | Non-Goals For The First Native Milestone |
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 106 | 2 | [`guiding-invariants`](../../docs/engineering/full-native-implementation-plan-v1.md#guiding-invariants) | Guiding Invariants |
@@ -195,92 +186,41 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 894 | 2 | [`documentation-updates-per-phase`](../../docs/engineering/full-native-implementation-plan-v1.md#documentation-updates-per-phase) | Documentation Updates Per Phase |
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 904 | 2 | [`open-decisions`](../../docs/engineering/full-native-implementation-plan-v1.md#open-decisions) | Open Decisions |
 | [`docs/engineering/full-native-implementation-plan-v1.md`](../../docs/engineering/full-native-implementation-plan-v1.md) | 917 | 2 | [`completion-checklist`](../../docs/engineering/full-native-implementation-plan-v1.md#completion-checklist) | Completion Checklist |
-| [`docs/engineering/hir-v1.md`](../../docs/engineering/hir-v1.md) | 1 | 1 | [`amberhirv1`](../../docs/engineering/hir-v1.md#amberhirv1) | amber.hir.v1 |
+| [`docs/engineering/hir-v1.md`](../../docs/engineering/hir-v1.md) | 1 | 1 | [`sputnikhirv1`](../../docs/engineering/hir-v1.md#sputnikhirv1) | sputnik.hir.v1 |
 | [`docs/engineering/http-tls.md`](../../docs/engineering/http-tls.md) | 1 | 1 | [`http-tls`](../../docs/engineering/http-tls.md#http-tls) | HTTP TLS |
 | [`docs/engineering/http-tls.md`](../../docs/engineering/http-tls.md) | 62 | 2 | [`native-builds`](../../docs/engineering/http-tls.md#native-builds) | Native builds |
 | [`docs/engineering/http-tls.md`](../../docs/engineering/http-tls.md) | 76 | 2 | [`build-and-tests`](../../docs/engineering/http-tls.md#build-and-tests) | Build and tests |
-| [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 1 | 1 | [`amberimagev1`](../../docs/engineering/image-v1.md#amberimagev1) | amber.image.v1 |
+| [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 1 | 1 | [`sputnikimagev1`](../../docs/engineering/image-v1.md#sputnikimagev1) | sputnik.image.v1 |
 | [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 24 | 2 | [`artifact-layout`](../../docs/engineering/image-v1.md#artifact-layout) | Artifact Layout |
 | [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 43 | 2 | [`verification`](../../docs/engineering/image-v1.md#verification) | Verification |
 | [`docs/engineering/image-v1.md`](../../docs/engineering/image-v1.md) | 60 | 2 | [`runtime-load`](../../docs/engineering/image-v1.md#runtime-load) | Runtime Load |
-| [`docs/engineering/implementation-status-v1.md`](../../docs/engineering/implementation-status-v1.md) | 1 | 1 | [`amberimplementation-statusv1`](../../docs/engineering/implementation-status-v1.md#amberimplementation-statusv1) | amber.implementation-status.v1 |
+| [`docs/engineering/implementation-status-v1.md`](../../docs/engineering/implementation-status-v1.md) | 1 | 1 | [`sputnikimplementation-statusv1`](../../docs/engineering/implementation-status-v1.md#sputnikimplementation-statusv1) | sputnik.implementation-status.v1 |
 | [`docs/engineering/implementation-status-v1.md`](../../docs/engineering/implementation-status-v1.md) | 12 | 2 | [`release-dashboard`](../../docs/engineering/implementation-status-v1.md#release-dashboard) | Release Dashboard |
 | [`docs/engineering/implementation-status-v1.md`](../../docs/engineering/implementation-status-v1.md) | 42 | 2 | [`release-gates`](../../docs/engineering/implementation-status-v1.md#release-gates) | Release Gates |
 | [`docs/engineering/implementation-status-v1.md`](../../docs/engineering/implementation-status-v1.md) | 54 | 2 | [`sync-policy`](../../docs/engineering/implementation-status-v1.md#sync-policy) | Sync Policy |
-| [`docs/engineering/loader-v1.md`](../../docs/engineering/loader-v1.md) | 1 | 1 | [`amberloaderv1`](../../docs/engineering/loader-v1.md#amberloaderv1) | amber.loader.v1 |
-| [`docs/engineering/migration-notes-v20.1.md`](../../docs/engineering/migration-notes-v20.1.md) | 1 | 1 | [`amber-v201-migration-notes`](../../docs/engineering/migration-notes-v20.1.md#amber-v201-migration-notes) | Amber v20.1 Migration Notes |
+| [`docs/engineering/loader-v1.md`](../../docs/engineering/loader-v1.md) | 1 | 1 | [`sputnikloaderv1`](../../docs/engineering/loader-v1.md#sputnikloaderv1) | sputnik.loader.v1 |
+| [`docs/engineering/migration-notes-v20.1.md`](../../docs/engineering/migration-notes-v20.1.md) | 1 | 1 | [`sputnik-v201-migration-notes`](../../docs/engineering/migration-notes-v20.1.md#sputnik-v201-migration-notes) | Sputnik v20.1 Migration Notes |
 | [`docs/engineering/migration-notes-v20.1.md`](../../docs/engineering/migration-notes-v20.1.md) | 5 | 2 | [`runtime-and-artifact-compatibility`](../../docs/engineering/migration-notes-v20.1.md#runtime-and-artifact-compatibility) | Runtime And Artifact Compatibility |
 | [`docs/engineering/migration-notes-v20.1.md`](../../docs/engineering/migration-notes-v20.1.md) | 33 | 2 | [`repository-layout-changes`](../../docs/engineering/migration-notes-v20.1.md#repository-layout-changes) | Repository Layout Changes |
 | [`docs/engineering/migration-notes-v20.1.md`](../../docs/engineering/migration-notes-v20.1.md) | 51 | 2 | [`maintainer-checklist`](../../docs/engineering/migration-notes-v20.1.md#maintainer-checklist) | Maintainer Checklist |
-| [`docs/engineering/mir-v1.md`](../../docs/engineering/mir-v1.md) | 1 | 1 | [`ambermirv1`](../../docs/engineering/mir-v1.md#ambermirv1) | amber.mir.v1 |
+| [`docs/engineering/mir-v1.md`](../../docs/engineering/mir-v1.md) | 1 | 1 | [`sputnikmirv1`](../../docs/engineering/mir-v1.md#sputnikmirv1) | sputnik.mir.v1 |
 | [`docs/engineering/mir-v1.md`](../../docs/engineering/mir-v1.md) | 6 | 2 | [`decision-mir-is-a-validation-artifact-not-a-codegen-input`](../../docs/engineering/mir-v1.md#decision-mir-is-a-validation-artifact-not-a-codegen-input) | Decision: MIR is a validation artifact, not a codegen input |
 | [`docs/engineering/mir-v1.md`](../../docs/engineering/mir-v1.md) | 52 | 2 | [`ir-shape`](../../docs/engineering/mir-v1.md#ir-shape) | IR Shape |
 | [`docs/engineering/mir-v1.md`](../../docs/engineering/mir-v1.md) | 85 | 2 | [`ssa-validator`](../../docs/engineering/mir-v1.md#ssa-validator) | SSA Validator |
 | [`docs/engineering/mir-v1.md`](../../docs/engineering/mir-v1.md) | 107 | 2 | [`pass-harness`](../../docs/engineering/mir-v1.md#pass-harness) | Pass Harness |
-| [`docs/engineering/modern-profiles-v1.md`](../../docs/engineering/modern-profiles-v1.md) | 1 | 1 | [`ambermodern-profilesv1`](../../docs/engineering/modern-profiles-v1.md#ambermodern-profilesv1) | amber.modern-profiles.v1 |
-| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 1 | 1 | [`ambernative-backend-equivalencev1`](../../docs/engineering/native-backend-equivalence-v1.md#ambernative-backend-equivalencev1) | amber.native-backend-equivalence.v1 |
+| [`docs/engineering/modern-profiles-v1.md`](../../docs/engineering/modern-profiles-v1.md) | 1 | 1 | [`sputnikmodern-profilesv1`](../../docs/engineering/modern-profiles-v1.md#sputnikmodern-profilesv1) | sputnik.modern-profiles.v1 |
+| [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 1 | 1 | [`sputniknative-backend-equivalencev1`](../../docs/engineering/native-backend-equivalence-v1.md#sputniknative-backend-equivalencev1) | sputnik.native-backend-equivalence.v1 |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 6 | 2 | [`what-it-checks`](../../docs/engineering/native-backend-equivalence-v1.md#what-it-checks) | What it checks |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 25 | 2 | [`the-bailoutrestart-soundness-invariant`](../../docs/engineering/native-backend-equivalence-v1.md#the-bailoutrestart-soundness-invariant) | The bailout/restart soundness invariant |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 71 | 2 | [`direct-native-extension-leaves`](../../docs/engineering/native-backend-equivalence-v1.md#direct-native-extension-leaves) | Direct native-extension leaves |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 92 | 2 | [`direct-native-stdlib-sends`](../../docs/engineering/native-backend-equivalence-v1.md#direct-native-stdlib-sends) | Direct native stdlib sends |
 | [`docs/engineering/native-backend-equivalence-v1.md`](../../docs/engineering/native-backend-equivalence-v1.md) | 157 | 2 | [`per-function-vm-fallback-step-2-scalar-bridge`](../../docs/engineering/native-backend-equivalence-v1.md#per-function-vm-fallback-step-2-scalar-bridge) | Per-function VM fallback (step 2, scalar bridge) |
-| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 1 | 1 | [`ambernativev1`](../../docs/engineering/native-v1.md#ambernativev1) | amber.native.v1 |
+| [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 1 | 1 | [`sputniknativev1`](../../docs/engineering/native-v1.md#sputniknativev1) | sputnik.native.v1 |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 30 | 2 | [`code-objects`](../../docs/engineering/native-v1.md#code-objects) | Code Objects |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 74 | 2 | [`runtime-bridge`](../../docs/engineering/native-v1.md#runtime-bridge) | Runtime Bridge |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 90 | 2 | [`validation`](../../docs/engineering/native-v1.md#validation) | Validation |
 | [`docs/engineering/native-v1.md`](../../docs/engineering/native-v1.md) | 110 | 2 | [`w15-closure`](../../docs/engineering/native-v1.md#w15-closure) | W15 Closure |
-| [`docs/engineering/notebook-boards-v1.md`](../../docs/engineering/notebook-boards-v1.md) | 1 | 1 | [`notebook-boards-first-vertical-slice`](../../docs/engineering/notebook-boards-v1.md#notebook-boards-first-vertical-slice) | Notebook boards: first vertical slice |
-| [`docs/engineering/notebook-boards-v1.md`](../../docs/engineering/notebook-boards-v1.md) | 8 | 2 | [`try-it`](../../docs/engineering/notebook-boards-v1.md#try-it) | Try it |
-| [`docs/engineering/notebook-boards-v1.md`](../../docs/engineering/notebook-boards-v1.md) | 37 | 2 | [`execution-contract`](../../docs/engineering/notebook-boards-v1.md#execution-contract) | Execution contract |
-| [`docs/engineering/notebook-boards-v1.md`](../../docs/engineering/notebook-boards-v1.md) | 79 | 2 | [`project-format`](../../docs/engineering/notebook-boards-v1.md#project-format) | Project format |
-| [`docs/engineering/notebook-boards-v1.md`](../../docs/engineering/notebook-boards-v1.md) | 105 | 2 | [`next-increments`](../../docs/engineering/notebook-boards-v1.md#next-increments) | Next increments |
-| [`docs/engineering/notebook-boards-v1.md`](../../docs/engineering/notebook-boards-v1.md) | 115 | 2 | [`verification`](../../docs/engineering/notebook-boards-v1.md#verification) | Verification |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 1 | 1 | [`amber-notebook-core-v1`](../../docs/engineering/notebook-core-v1.md#amber-notebook-core-v1) | Amber notebook core v1 |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 3 | 2 | [`scope`](../../docs/engineering/notebook-core-v1.md#scope) | Scope |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 18 | 2 | [`dependency-model`](../../docs/engineering/notebook-core-v1.md#dependency-model) | Dependency model |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 41 | 2 | [`persistent-slots-and-kernel`](../../docs/engineering/notebook-core-v1.md#persistent-slots-and-kernel) | Persistent slots and kernel |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 68 | 2 | [`compiler-and-bytecode-boundary`](../../docs/engineering/notebook-core-v1.md#compiler-and-bytecode-boundary) | Compiler and bytecode boundary |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 107 | 2 | [`runtime-transaction`](../../docs/engineering/notebook-core-v1.md#runtime-transaction) | Runtime transaction |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 246 | 2 | [`current-iamber-adapter`](../../docs/engineering/notebook-core-v1.md#current-iamber-adapter) | Current `iamber` adapter |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 306 | 2 | [`verified-invariants`](../../docs/engineering/notebook-core-v1.md#verified-invariants) | Verified invariants |
-| [`docs/engineering/notebook-core-v1.md`](../../docs/engineering/notebook-core-v1.md) | 377 | 2 | [`next-runtime-increment`](../../docs/engineering/notebook-core-v1.md#next-runtime-increment) | Next runtime increment |
-| [`docs/engineering/notebook-dependencies-v1.md`](../../docs/engineering/notebook-dependencies-v1.md) | 1 | 1 | [`notebook-directory-dependencies`](../../docs/engineering/notebook-dependencies-v1.md#notebook-directory-dependencies) | Notebook directory dependencies |
-| [`docs/engineering/notebook-dependencies-v1.md`](../../docs/engineering/notebook-dependencies-v1.md) | 7 | 2 | [`link-and-import`](../../docs/engineering/notebook-dependencies-v1.md#link-and-import) | Link and import |
-| [`docs/engineering/notebook-dependencies-v1.md`](../../docs/engineering/notebook-dependencies-v1.md) | 54 | 2 | [`document-format`](../../docs/engineering/notebook-dependencies-v1.md#document-format) | Document format |
-| [`docs/engineering/notebook-dependencies-v1.md`](../../docs/engineering/notebook-dependencies-v1.md) | 86 | 2 | [`current-scope`](../../docs/engineering/notebook-dependencies-v1.md#current-scope) | Current scope |
-| [`docs/engineering/notebook-dependencies-v1.md`](../../docs/engineering/notebook-dependencies-v1.md) | 107 | 2 | [`plot-examples`](../../docs/engineering/notebook-dependencies-v1.md#plot-examples) | Plot examples |
-| [`docs/engineering/notebook-execution-live-progress.md`](../../docs/engineering/notebook-execution-live-progress.md) | 1 | 1 | [`notebook-execution-cancellation-live-output-and-progress`](../../docs/engineering/notebook-execution-live-progress.md#notebook-execution-cancellation-live-output-and-progress) | Notebook execution, cancellation, live output and progress |
-| [`docs/engineering/notebook-execution-live-progress.md`](../../docs/engineering/notebook-execution-live-progress.md) | 6 | 2 | [`implemented-slices-2026-09-272026-10-02`](../../docs/engineering/notebook-execution-live-progress.md#implemented-slices-2026-09-272026-10-02) | Implemented slices (2026-09-27–2026-10-02) |
-| [`docs/engineering/notebook-execution-live-progress.md`](../../docs/engineering/notebook-execution-live-progress.md) | 183 | 2 | [`execution-and-isolation`](../../docs/engineering/notebook-execution-live-progress.md#execution-and-isolation) | Execution and isolation |
-| [`docs/engineering/notebook-execution-live-progress.md`](../../docs/engineering/notebook-execution-live-progress.md) | 231 | 2 | [`shared-live-output-transport`](../../docs/engineering/notebook-execution-live-progress.md#shared-live-output-transport) | Shared live-output transport |
-| [`docs/engineering/notebook-execution-live-progress.md`](../../docs/engineering/notebook-execution-live-progress.md) | 267 | 2 | [`independent-progressbar-package`](../../docs/engineering/notebook-execution-live-progress.md#independent-progressbar-package) | Independent `progressbar` package |
-| [`docs/engineering/notebook-execution-live-progress.md`](../../docs/engineering/notebook-execution-live-progress.md) | 323 | 2 | [`implementation-sequence-and-acceptance-checks`](../../docs/engineering/notebook-execution-live-progress.md#implementation-sequence-and-acceptance-checks) | Implementation sequence and acceptance checks |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 1 | 1 | [`amber-notebook-for-macos-first-native-host`](../../docs/engineering/notebook-macos-v1.md#amber-notebook-for-macos-first-native-host) | Amber Notebook for macOS — first native host |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 11 | 2 | [`build-and-launch`](../../docs/engineering/notebook-macos-v1.md#build-and-launch) | Build and launch |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 92 | 2 | [`working-in-the-app`](../../docs/engineering/notebook-macos-v1.md#working-in-the-app) | Working in the app |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 161 | 2 | [`ownership-and-scheduling`](../../docs/engineering/notebook-macos-v1.md#ownership-and-scheduling) | Ownership and scheduling |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 196 | 2 | [`figures-with-amber-plot`](../../docs/engineering/notebook-macos-v1.md#figures-with-amber-plot) | Figures with amber-plot |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 242 | 2 | [`deliberate-first-version-limits`](../../docs/engineering/notebook-macos-v1.md#deliberate-first-version-limits) | Deliberate first-version limits |
-| [`docs/engineering/notebook-macos-v1.md`](../../docs/engineering/notebook-macos-v1.md) | 254 | 2 | [`verification`](../../docs/engineering/notebook-macos-v1.md#verification) | Verification |
-| [`docs/engineering/notebook-mnist-showcase.md`](../../docs/engineering/notebook-mnist-showcase.md) | 1 | 1 | [`mnist-in-the-native-macos-notebook`](../../docs/engineering/notebook-mnist-showcase.md#mnist-in-the-native-macos-notebook) | MNIST in the native macOS notebook |
-| [`docs/engineering/notebook-mnist-showcase.md`](../../docs/engineering/notebook-mnist-showcase.md) | 8 | 2 | [`open-the-prepared-project`](../../docs/engineering/notebook-mnist-showcase.md#open-the-prepared-project) | Open the prepared project |
-| [`docs/engineering/notebook-mnist-showcase.md`](../../docs/engineering/notebook-mnist-showcase.md) | 28 | 2 | [`rebuild-from-sibling-repositories`](../../docs/engineering/notebook-mnist-showcase.md#rebuild-from-sibling-repositories) | Rebuild from sibling repositories |
-| [`docs/engineering/notebook-mnist-showcase.md`](../../docs/engineering/notebook-mnist-showcase.md) | 58 | 2 | [`live-output-contract`](../../docs/engineering/notebook-mnist-showcase.md#live-output-contract) | Live output contract |
-| [`docs/engineering/notebook-mnist-showcase.md`](../../docs/engineering/notebook-mnist-showcase.md) | 85 | 2 | [`verification`](../../docs/engineering/notebook-mnist-showcase.md#verification) | Verification |
-| [`docs/engineering/notebook-mnist-showcase.md`](../../docs/engineering/notebook-mnist-showcase.md) | 119 | 2 | [`boundaries`](../../docs/engineering/notebook-mnist-showcase.md#boundaries) | Boundaries |
-| [`docs/engineering/notebook-plot-views.md`](../../docs/engineering/notebook-plot-views.md) | 1 | 1 | [`2d-plot-views-in-amber-notebook`](../../docs/engineering/notebook-plot-views.md#2d-plot-views-in-amber-notebook) | 2D plot views in Amber Notebook |
-| [`docs/engineering/notebook-plot-views.md`](../../docs/engineering/notebook-plot-views.md) | 5 | 2 | [`user-contract`](../../docs/engineering/notebook-plot-views.md#user-contract) | User contract |
-| [`docs/engineering/notebook-plot-views.md`](../../docs/engineering/notebook-plot-views.md) | 47 | 2 | [`boundary-and-resource-limits`](../../docs/engineering/notebook-plot-views.md#boundary-and-resource-limits) | Boundary and resource limits |
-| [`docs/engineering/notebook-plot-views.md`](../../docs/engineering/notebook-plot-views.md) | 78 | 2 | [`verification`](../../docs/engineering/notebook-plot-views.md#verification) | Verification |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 1 | 1 | [`notebook-project-v1-shared-document-not-a-runtime-snapshot`](../../docs/engineering/notebook-project-v1.md#notebook-project-v1-shared-document-not-a-runtime-snapshot) | Notebook project v1 — shared document, not a runtime snapshot |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 18 | 2 | [`opening-and-saving`](../../docs/engineering/notebook-project-v1.md#opening-and-saving) | Opening and saving |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 96 | 2 | [`package-layout`](../../docs/engineering/notebook-project-v1.md#package-layout) | Package layout |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 211 | 2 | [`bundled-environment-save-apply-run`](../../docs/engineering/notebook-project-v1.md#bundled-environment-save-apply-run) | Bundled environment: Save, Apply, Run |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 318 | 2 | [`filesystem-and-concurrency-contract`](../../docs/engineering/notebook-project-v1.md#filesystem-and-concurrency-contract) | Filesystem and concurrency contract |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 360 | 2 | [`macos-document-package`](../../docs/engineering/notebook-project-v1.md#macos-document-package) | macOS document package |
-| [`docs/engineering/notebook-project-v1.md`](../../docs/engineering/notebook-project-v1.md) | 376 | 2 | [`version-2-extension`](../../docs/engineering/notebook-project-v1.md#version-2-extension) | Version 2 extension |
-| [`docs/engineering/notebook-result-viewer.md`](../../docs/engineering/notebook-result-viewer.md) | 1 | 1 | [`notebook-result-viewer`](../../docs/engineering/notebook-result-viewer.md#notebook-result-viewer) | Notebook result viewer |
-| [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 1 | 1 | [`ambernumeric-profilev1`](../../docs/engineering/numeric-profile-v1.md#ambernumeric-profilev1) | amber.numeric-profile.v1 |
+| [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 1 | 1 | [`sputniknumeric-profilev1`](../../docs/engineering/numeric-profile-v1.md#sputniknumeric-profilev1) | sputnik.numeric-profile.v1 |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 18 | 2 | [`source-preamble`](../../docs/engineering/numeric-profile-v1.md#source-preamble) | Source Preamble |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 56 | 2 | [`manifest-mirror`](../../docs/engineering/numeric-profile-v1.md#manifest-mirror) | Manifest Mirror |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 79 | 2 | [`type-semantics`](../../docs/engineering/numeric-profile-v1.md#type-semantics) | Type Semantics |
@@ -291,9 +231,9 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 183 | 2 | [`cross-package-rules`](../../docs/engineering/numeric-profile-v1.md#cross-package-rules) | Cross-Package Rules |
 | [`docs/engineering/numeric-profile-v1.md`](../../docs/engineering/numeric-profile-v1.md) | 198 | 2 | [`open-implementation-work`](../../docs/engineering/numeric-profile-v1.md#open-implementation-work) | Open Implementation Work |
 | [`docs/engineering/object-lifecycle-v1.md`](../../docs/engineering/object-lifecycle-v1.md) | 1 | 1 | [`object-construction-and-instance-field-snapshots`](../../docs/engineering/object-lifecycle-v1.md#object-construction-and-instance-field-snapshots) | Object construction and instance field snapshots |
-| [`docs/engineering/package-v1.md`](../../docs/engineering/package-v1.md) | 1 | 1 | [`amberpackagev1`](../../docs/engineering/package-v1.md#amberpackagev1) | amber.package.v1 |
-| [`docs/engineering/replay-v1.md`](../../docs/engineering/replay-v1.md) | 1 | 1 | [`amberreplayv1`](../../docs/engineering/replay-v1.md#amberreplayv1) | amber.replay.v1 |
-| [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 1 | 1 | [`amber-rfc-bare-call-для-nullary-методов-и-chained-callable-call-expr`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#amber-rfc-bare-call-для-nullary-методов-и-chained-callable-call-expr) | Amber RFC: Bare-call для nullary-методов и chained callable-call `expr.()` |
+| [`docs/engineering/package-v1.md`](../../docs/engineering/package-v1.md) | 1 | 1 | [`sputnikpackagev1`](../../docs/engineering/package-v1.md#sputnikpackagev1) | sputnik.package.v1 |
+| [`docs/engineering/replay-v1.md`](../../docs/engineering/replay-v1.md) | 1 | 1 | [`sputnikreplayv1`](../../docs/engineering/replay-v1.md#sputnikreplayv1) | sputnik.replay.v1 |
+| [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 1 | 1 | [`sputnik-rfc-bare-call-для-nullary-методов-и-chained-callable-call-expr`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#sputnik-rfc-bare-call-для-nullary-методов-и-chained-callable-call-expr) | Sputnik RFC: Bare-call для nullary-методов и chained callable-call `expr.()` |
 | [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 9 | 2 | [`0-краткое-резюме`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#0-краткое-резюме) | 0. Краткое резюме |
 | [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 42 | 2 | [`1-проблематика`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#1-проблематика) | 1. Проблематика |
 | [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 88 | 2 | [`2-мотивация`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#2-мотивация) | 2. Мотивация |
@@ -313,14 +253,14 @@ Check with `make spec-sync-check`.
 | [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 1156 | 2 | [`16-conformance-tests`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#16-conformance-tests) | 16. Conformance tests |
 | [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 1262 | 2 | [`17-open-questions-resolved-decisions`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#17-open-questions-resolved-decisions) | 17. Open questions / resolved decisions |
 | [`docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md) | 1282 | 2 | [`18-final-accepted-rule`](../../docs/engineering/rfc-bare-nullary-and-dotcall-v1.md#18-final-accepted-rule) | 18. Final accepted rule |
-| [`docs/engineering/runtime-v1.md`](../../docs/engineering/runtime-v1.md) | 1 | 1 | [`amberruntimev1`](../../docs/engineering/runtime-v1.md#amberruntimev1) | amber.runtime.v1 |
-| [`docs/engineering/typed-v1.md`](../../docs/engineering/typed-v1.md) | 1 | 1 | [`ambertypedv1`](../../docs/engineering/typed-v1.md#ambertypedv1) | amber.typed.v1 |
-| [`docs/engineering/wasm-accelerator-v1.md`](../../docs/engineering/wasm-accelerator-v1.md) | 1 | 1 | [`amberwasmacceleratorv1`](../../docs/engineering/wasm-accelerator-v1.md#amberwasmacceleratorv1) | amber.wasm/accelerator.v1 |
-| [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 1 | 1 | [`amber-v201-changelog`](../../spec/changelog/v20.1.md#amber-v201-changelog) | Amber v20.1 Changelog |
+| [`docs/engineering/runtime-v1.md`](../../docs/engineering/runtime-v1.md) | 1 | 1 | [`sputnikruntimev1`](../../docs/engineering/runtime-v1.md#sputnikruntimev1) | sputnik.runtime.v1 |
+| [`docs/engineering/typed-v1.md`](../../docs/engineering/typed-v1.md) | 1 | 1 | [`sputniktypedv1`](../../docs/engineering/typed-v1.md#sputniktypedv1) | sputnik.typed.v1 |
+| [`docs/engineering/wasm-accelerator-v1.md`](../../docs/engineering/wasm-accelerator-v1.md) | 1 | 1 | [`sputnikwasmacceleratorv1`](../../docs/engineering/wasm-accelerator-v1.md#sputnikwasmacceleratorv1) | sputnik.wasm/accelerator.v1 |
+| [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 1 | 1 | [`sputnik-v201-changelog`](../../spec/changelog/v20.1.md#sputnik-v201-changelog) | Sputnik v20.1 Changelog |
 | [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 5 | 2 | [`implicit-block-placeholder-aliases`](../../spec/changelog/v20.1.md#implicit-block-placeholder-aliases) | Implicit Block Placeholder Aliases |
 | [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 14 | 2 | [`ancestry-errors-empty-declarations-and-map-initialization`](../../spec/changelog/v20.1.md#ancestry-errors-empty-declarations-and-map-initialization) | Ancestry Errors, Empty Declarations, and Map Initialization |
-| [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 26 | 2 | [`amber-v207v208-language-update`](../../spec/changelog/v20.1.md#amber-v207v208-language-update) | Amber v20.7/v20.8 Language Update |
-| [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 38 | 2 | [`amberext-001-inline-conditionals-and-conditional-collections`](../../spec/changelog/v20.1.md#amberext-001-inline-conditionals-and-conditional-collections) | AMBEREXT-001 Inline Conditionals and Conditional Collections |
+| [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 26 | 2 | [`sputnik-v207v208-language-update`](../../spec/changelog/v20.1.md#sputnik-v207v208-language-update) | Sputnik v20.7/v20.8 Language Update |
+| [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 38 | 2 | [`sputnikext-001-inline-conditionals-and-conditional-collections`](../../spec/changelog/v20.1.md#sputnikext-001-inline-conditionals-and-conditional-collections) | SPUTNIKEXT-001 Inline Conditionals and Conditional Collections |
 | [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 50 | 2 | [`w12-documentationspec-sync`](../../spec/changelog/v20.1.md#w12-documentationspec-sync) | W12 Documentation/Spec Sync |
 | [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 62 | 2 | [`w11-modern-profile-baseline`](../../spec/changelog/v20.1.md#w11-modern-profile-baseline) | W11 Modern Profile Baseline |
 | [`spec/changelog/v20.1.md`](../../spec/changelog/v20.1.md) | 72 | 2 | [`w13-compiler-contract-closure-slice`](../../spec/changelog/v20.1.md#w13-compiler-contract-closure-slice) | W13 Compiler-Contract Closure Slice |

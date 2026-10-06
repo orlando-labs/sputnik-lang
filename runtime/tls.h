@@ -4,7 +4,7 @@
 
 #include <functional>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // PEM files. Empty CA paths use OpenSSL's default trust store (including
 // SSL_CERT_FILE/SSL_CERT_DIR). Peer verification is always enabled for clients.
@@ -52,4 +52,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

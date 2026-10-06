@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <limits>
 
-namespace amber::runtime::http {
+namespace sputnik::runtime::http {
 
 namespace {
 
@@ -1075,4 +1075,4 @@ bool HttpResponseParser::finish() {
                    "connection closed before HTTP message was complete");
 }
 
-} // namespace amber::runtime::http
+} // namespace sputnik::runtime::http

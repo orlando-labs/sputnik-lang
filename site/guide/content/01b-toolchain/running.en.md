@@ -1,6 +1,6 @@
 ---
 id: running
-title: Running and building with amberc
+title: Running and building with sputnik
 summary: How to run a program, build a native binary, and inspect the compilation stages.
 category: toolchain
 order: 15
@@ -9,9 +9,9 @@ related: [overview, functions]
 status: draft
 ---
 
-# Running and building with amberc
+# Running and building with sputnik
 
-`amberc` is the Amber compiler and runner. One command executes a program;
+`sputnik` is the Sputnik compiler and runner. One command executes a program;
 another builds a standalone native executable. Here is the working loop, on
 verified examples.
 
@@ -21,27 +21,27 @@ The compiler and runtime build with a single `make`. You need `clang++` (the
 default), on Linux or macOS; the compiler build has no external dependencies.
 
 ```sh
-make build/amberc     # build only amberc
-make build            # build the whole toolchain (amberc, ambertest, tests)
+make build/sputnik     # build only sputnik
+make build            # build the whole toolchain (sputnik, sputniktest, tests)
 ```
 
-The binary lands at `build/amberc`.
+The binary lands at `build/sputnik`.
 
 ## Run a program
 
-`amberc <file.am>` executes the module and prints the value of the last
+`sputnik <file.s>` executes the module and prints the value of the last
 top-level expression in its canonical form (repr).
 
-```amber
+```sputnik
 def greet(name):
   "Hello, #{name}!"
 
-greet("Amber")
+greet("Sputnik")
 ```
 
 ```sh
-build/amberc hello.am
-# => "Hello, Amber!"
+build/sputnik hello.s
+# => "Hello, Sputnik!"
 ```
 
 > [!note]
@@ -50,14 +50,14 @@ build/amberc hello.am
 
 ## Build a native executable
 
-`amberc build <file.am> -o <path>` compiles the program into a standalone native
+`sputnik build <file.s> -o <path>` compiles the program into a standalone native
 binary. A JSON build report is printed to stdout, the generated C++ is saved
 alongside (`<path>.native.cpp`), and the executable is written to the given path.
 
 ```sh
-build/amberc build hello.am -o hello
+build/sputnik build hello.s -o hello
 ./hello
-# => "Hello, Amber!"
+# => "Hello, Sputnik!"
 ```
 
 ## Build targets and options
@@ -71,16 +71,16 @@ build/amberc build hello.am -o hello
 
 ```sh
 # a bytecode wrapper instead of native code
-build/amberc build hello.am --target bytecode-wrapper -o hello.bc
+build/sputnik build hello.s --target bytecode-wrapper -o hello.bc
 ```
 
 ## Multi-file project builds
 
-A project uses an `amber.build.json` manifest describing sources, targets and a
-cache. `amberc build` accepts the manifest instead of a single file.
+A project uses an `sputnik.build.json` manifest describing sources, targets and a
+cache. `sputnik build` accepts the manifest instead of a single file.
 
 ```sh
-build/amberc build amber.build.json \
+build/sputnik build sputnik.build.json \
   --out-dir build/out \
   --cache-dir build/cache
 ```
@@ -91,29 +91,29 @@ Useful for seeing what the syntax lowers into. Each stage is a subcommand that
 prints that form of the program; they do not run it.
 
 ```sh
-build/amberc lex   source.am   # tokens
-build/amberc parse source.am   # parse tree
-build/amberc hir   source.am   # high-level IR (the explicit lowering shows here)
-build/amberc mir   source.am   # mid-level IR
-build/amberc bc    source.am   # bytecode
-build/amberc native-dump source.am   # the generated native code
+build/sputnik lex   source.s   # tokens
+build/sputnik parse source.s   # parse tree
+build/sputnik hir   source.s   # high-level IR (the explicit lowering shows here)
+build/sputnik mir   source.s   # mid-level IR
+build/sputnik bc    source.s   # bytecode
+build/sputnik native-dump source.s   # the generated native code
 ```
 
-`.amberbc` artifacts are data, not trusted code: a verifier checks their
+`.sputnikbc` artifacts are data, not trusted code: a verifier checks their
 structure before execution.
 
 ```sh
-build/amberc verify   module.amberbc --json   # verify bytecode
-build/amberc metadata module.amberbc --json   # read module metadata
+build/sputnik verify   module.sputnikbc --json   # verify bytecode
+build/sputnik metadata module.sputnikbc --json   # read module metadata
 ```
 
 ## Run the conformance suite
 
-The corpus of verified programs runs through `ambertest`:
+The corpus of verified programs runs through `sputniktest`:
 
 ```sh
-build/ambertest run corpus              # the whole corpus
-build/ambertest run corpus --bundle M11 # a single bundle
+build/sputniktest run corpus              # the whole corpus
+build/sputniktest run corpus --bundle M11 # a single bundle
 ```
 
 Next: how the programs themselves are shaped — start with the

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 
 // A decoded, verifier-approved module presented to the graph linker. The
 // linker never reads or writes the filesystem; path is carried only so a
@@ -81,4 +81,4 @@ GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
                            ExternalNamespacePredicate is_external_namespace =
                                {});
 
-} // namespace amber::bytecode
+} // namespace sputnik::bytecode

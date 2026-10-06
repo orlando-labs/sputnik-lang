@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::data {
+namespace sputnik::data {
 
 inline constexpr std::uint32_t kSchemaFieldFlagPrimaryKey = 0x1U;
 inline constexpr std::uint32_t kSchemaMigrationFlagCompatible = 0x1U;
@@ -130,4 +130,4 @@ std::string
 table_plan_validation_to_json(const TablePlanValidationResult &result);
 std::string table_plans_to_json(const std::vector<TablePlan> &plans);
 
-} // namespace amber::data
+} // namespace sputnik::data

@@ -1,4 +1,4 @@
-# Bool parsing in Amber
+# Bool parsing in Sputnik
 
 `Bool.parse(value) -> Bool` strictly parses a `Str`. It is available in the
 prelude without an import and works in the VM and native executables.
@@ -12,7 +12,7 @@ Parsing ignores ASCII letter case and removes ASCII whitespace from both
 ends (space, tab, newline, carriage return, form feed, vertical tab).
 Internal whitespace is significant.
 
-```amber
+```sputnik
 Bool.parse(" YES ") # true
 Bool.parse("f")     # false
 Bool.parse("NULL")  # false
@@ -34,7 +34,7 @@ There is no implicit truthiness conversion or fallback value.
 ArgParser uses the same text parser for `type: Bool`, explicit flag values,
 positionals, rest arguments and environment fallbacks.
 
-```amber
+```sputnik
 parser = ArgParser(cmdline: ["--enabled=t", "--color=null"])
 parser.arg("--enabled", type: Bool)
 parser.flag("--color")

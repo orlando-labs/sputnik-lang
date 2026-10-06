@@ -1,5 +1,5 @@
-// net.http Amber-surface VM tests (DESIGN-stdlib-net-http-io-2026-06-20 Phase
-// 2b-2). Runs real Amber source through the full compile+execute pipeline
+// net.http Sputnik-surface VM tests (DESIGN-stdlib-net-http-io-2026-06-20 Phase
+// 2b-2). Runs real Sputnik source through the full compile+execute pipeline
 // against an in-process loopback HTTP server, exercising
 // net.http.Client().get(...) -> Response end to end (construct, capability,
 // connect, exchange, Response accessors, scoped-block form, error mapping).
@@ -27,8 +27,8 @@
 namespace {
 
 using namespace std::chrono_literals;
-using amber::runtime::RuntimeByteBuffer;
-using amber::runtime::RuntimeTcpListener;
+using sputnik::runtime::RuntimeByteBuffer;
+using sputnik::runtime::RuntimeTcpListener;
 
 int g_checks = 0;
 
@@ -40,55 +40,55 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<vm-net-http-test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::BcModule compile_source_or_die(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<vm-net-http-test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   expect(lex_result.ok(), "lex should succeed");
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   expect(parse_result.ok(), "parse should succeed");
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   expect(bind_result.ok(), "bind should succeed");
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   expect(emit_result.ok(), "emit should succeed");
 
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emit_result.module));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emit_result.module));
   expect(decoded.ok(), "decode should succeed: " +
-                           amber::bytecode::verify_errors_to_json(
+                           sputnik::bytecode::verify_errors_to_json(
                                decoded.errors));
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult execute_source(const std::string &source) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+sputnik::runtime::ExecutionResult execute_source(const std::string &source) {
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "module should have init code");
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
 void test_http_server_runtime_state_is_vm_independent() {
-  amber::runtime::RuntimeHttpServerOptions invalid;
+  sputnik::runtime::RuntimeHttpServerOptions invalid;
   invalid.workers = 0;
-  const amber::runtime::RuntimeHttpServerOpenResult rejected =
-      amber::runtime::runtime_http_server_open(std::move(invalid));
+  const sputnik::runtime::RuntimeHttpServerOpenResult rejected =
+      sputnik::runtime::runtime_http_server_open(std::move(invalid));
   expect(!rejected.ok && rejected.error_name == "ArgumentError" &&
              rejected.server == nullptr,
          "standalone server core validates limits before transport setup");
 
-  auto server = std::make_shared<amber::runtime::RuntimeHttpServer>();
+  auto server = std::make_shared<sputnik::runtime::RuntimeHttpServer>();
   server->workers = 3;
   server->max_concurrent_per_worker = 7;
   expect(server->capacity() == 21,
          "standalone server state computes connection capacity");
   server->begin_request(true);
-  amber::runtime::RuntimeHttpServerStats active = server->stats();
+  sputnik::runtime::RuntimeHttpServerStats active = server->stats();
   expect(active.requests == 1 && active.active_requests == 1 &&
              active.keepalive_requests == 1 && active.capacity == 21,
          "standalone server state records request counters");
@@ -97,42 +97,42 @@ void test_http_server_runtime_state_is_vm_independent() {
          "standalone server state closes request accounting");
 
   auto fixed =
-      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+      std::make_shared<sputnik::runtime::RuntimeHttpServerRequestBody>();
   fixed->framing =
-      amber::runtime::RuntimeHttpServerRequestFraming::ContentLength;
+      sputnik::runtime::RuntimeHttpServerRequestFraming::ContentLength;
   fixed->content_remaining = 5;
   fixed->max_body_bytes = 32;
-  fixed->buffered = "amber";
-  const amber::runtime::RuntimeHttpServerBodyReadResult fixed_read =
-      amber::runtime::runtime_http_server_read_body_all(fixed);
-  expect(fixed_read.ok && fixed_read.body == "amber" && fixed->closed,
+  fixed->buffered = "sputnik";
+  const sputnik::runtime::RuntimeHttpServerBodyReadResult fixed_read =
+      sputnik::runtime::runtime_http_server_read_body_all(fixed);
+  expect(fixed_read.ok && fixed_read.body == "sputnik" && fixed->closed,
          "standalone server core reads a buffered fixed-length body");
 
   auto chunked =
-      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+      std::make_shared<sputnik::runtime::RuntimeHttpServerRequestBody>();
   chunked->framing =
-      amber::runtime::RuntimeHttpServerRequestFraming::Chunked;
+      sputnik::runtime::RuntimeHttpServerRequestFraming::Chunked;
   chunked->max_body_bytes = 32;
   chunked->max_header_bytes = 128;
-  chunked->buffered = "5\r\namber\r\n0\r\nx-check: yes\r\n\r\n";
-  const amber::runtime::RuntimeHttpServerBodyReadResult chunked_read =
-      amber::runtime::runtime_http_server_read_body_all(chunked);
-  expect(chunked_read.ok && chunked_read.body == "amber" &&
+  chunked->buffered = "5\r\nsputnik\r\n0\r\nx-check: yes\r\n\r\n";
+  const sputnik::runtime::RuntimeHttpServerBodyReadResult chunked_read =
+      sputnik::runtime::runtime_http_server_read_body_all(chunked);
+  expect(chunked_read.ok && chunked_read.body == "sputnik" &&
              chunked->closed &&
              chunked->trailers.first("x-check").value_or("") == "yes",
          "standalone server core decodes chunked bodies and trailers");
 
   auto fixed_chunks =
-      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+      std::make_shared<sputnik::runtime::RuntimeHttpServerRequestBody>();
   fixed_chunks->framing =
-      amber::runtime::RuntimeHttpServerRequestFraming::ContentLength;
+      sputnik::runtime::RuntimeHttpServerRequestFraming::ContentLength;
   fixed_chunks->content_remaining = 5;
   fixed_chunks->max_body_bytes = 32;
-  fixed_chunks->buffered = "amber";
-  const amber::runtime::RuntimeHttpServerBodyChunkReadResult fixed_first =
-      amber::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 2);
-  const amber::runtime::RuntimeHttpServerBodyChunkReadResult fixed_second =
-      amber::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 8);
+  fixed_chunks->buffered = "sputnik";
+  const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult fixed_first =
+      sputnik::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 2);
+  const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult fixed_second =
+      sputnik::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 8);
   expect(fixed_first.ok && fixed_first.chunk != nullptr &&
              fixed_first.chunk->data == "am" && fixed_second.ok &&
              fixed_second.chunk != nullptr &&
@@ -140,19 +140,19 @@ void test_http_server_runtime_state_is_vm_independent() {
          "standalone server core preserves fixed-body chunk boundaries");
 
   auto wire_chunks =
-      std::make_shared<amber::runtime::RuntimeHttpServerRequestBody>();
+      std::make_shared<sputnik::runtime::RuntimeHttpServerRequestBody>();
   wire_chunks->framing =
-      amber::runtime::RuntimeHttpServerRequestFraming::Chunked;
+      sputnik::runtime::RuntimeHttpServerRequestFraming::Chunked;
   wire_chunks->max_body_bytes = 32;
   wire_chunks->max_header_bytes = 128;
   wire_chunks->buffered =
-      "5;kind=test\r\namber\r\n0\r\nx-check: yes\r\n\r\n";
-  const amber::runtime::RuntimeHttpServerBodyChunkReadResult wire_first =
-      amber::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
-  const amber::runtime::RuntimeHttpServerBodyChunkReadResult wire_eof =
-      amber::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
+      "5;kind=test\r\nsputnik\r\n0\r\nx-check: yes\r\n\r\n";
+  const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult wire_first =
+      sputnik::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
+  const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult wire_eof =
+      sputnik::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
   expect(wire_first.ok && wire_first.chunk != nullptr &&
-             wire_first.chunk->data == "amber" &&
+             wire_first.chunk->data == "sputnik" &&
              wire_first.chunk->extensions.size() == 1 &&
              wire_first.chunk->extensions.front().name == "kind" &&
              wire_first.chunk->extensions.front().value.value_or("") ==
@@ -232,7 +232,7 @@ bool request_complete(const std::string &request) {
 
 // Run `source` (with %PORT% substituted) while a one-shot loopback server
 // replies with `response`. Returns the execution result.
-amber::runtime::ExecutionResult
+sputnik::runtime::ExecutionResult
 run_with_server_capture(const std::string &source, const std::string &response,
                         std::string *server_error, std::string *got_request) {
   auto listening = RuntimeTcpListener::listen({"127.0.0.1", 0});
@@ -269,20 +269,20 @@ run_with_server_capture(const std::string &source, const std::string &response,
     accepted.stream->close();
   });
 
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::ExecutionResult result =
       execute_source(with_port(source, port));
   server.join();
   listening.listener->close();
   return result;
 }
 
-amber::runtime::ExecutionResult run_with_server(const std::string &source,
+sputnik::runtime::ExecutionResult run_with_server(const std::string &source,
                                                 const std::string &response,
                                                 std::string *server_error) {
   return run_with_server_capture(source, response, server_error, nullptr);
 }
 
-amber::runtime::ExecutionResult
+sputnik::runtime::ExecutionResult
 run_with_early_response_server(const std::string &source,
                                const std::string &response,
                                std::string *server_error) {
@@ -315,14 +315,14 @@ run_with_early_response_server(const std::string &source,
     accepted.stream->close();
   });
 
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::ExecutionResult result =
       execute_source(with_port(source, port));
   server.join();
   listening.listener->close();
   return result;
 }
 
-amber::runtime::ExecutionResult run_with_server_until_request_contains(
+sputnik::runtime::ExecutionResult run_with_server_until_request_contains(
     const std::string &source, const std::string &response,
     const std::string &needle, std::string *server_error,
     std::string *got_request) {
@@ -364,14 +364,14 @@ amber::runtime::ExecutionResult run_with_server_until_request_contains(
     accepted.stream->close();
   });
 
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::ExecutionResult result =
       execute_source(with_port(source, port));
   server.join();
   listening.listener->close();
   return result;
 }
 
-amber::runtime::ExecutionResult run_with_persistent_server(
+sputnik::runtime::ExecutionResult run_with_persistent_server(
     const std::string &source, const std::vector<std::string> &responses,
     std::string *server_error, std::vector<std::string> *got_requests,
     int *accept_count) {
@@ -417,14 +417,14 @@ amber::runtime::ExecutionResult run_with_persistent_server(
     accepted.stream->close();
   });
 
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::ExecutionResult result =
       execute_source(with_port(source, port));
   server.join();
   listening.listener->close();
   return result;
 }
 
-amber::runtime::ExecutionResult run_with_two_connection_server(
+sputnik::runtime::ExecutionResult run_with_two_connection_server(
     const std::string &source, const std::string &first_response,
     const std::string &second_response, std::string *server_error,
     std::vector<std::string> *got_requests, int *accept_count) {
@@ -480,14 +480,14 @@ amber::runtime::ExecutionResult run_with_two_connection_server(
     }
   });
 
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::ExecutionResult result =
       execute_source(with_port(source, port));
   server.join();
   listening.listener->close();
   return result;
 }
 
-amber::runtime::ExecutionResult run_with_two_origin_server(
+sputnik::runtime::ExecutionResult run_with_two_origin_server(
     const std::string &source, const std::string &first_response_template,
     const std::string &second_response, std::string *server_error,
     std::string *first_request, std::string *second_request) {
@@ -560,7 +560,7 @@ amber::runtime::ExecutionResult run_with_two_origin_server(
     accepted.stream->close();
   });
 
-  amber::runtime::ExecutionResult result =
+  sputnik::runtime::ExecutionResult result =
       execute_source(with_two_ports(source, port1, port2));
   first_server.join();
   second_server.join();
@@ -575,7 +575,7 @@ const char *kResponse = "HTTP/1.1 200 OK\r\n"
                         "\r\n"
                         "Hello, world!";
 
-void expect_ok_int(const amber::runtime::ExecutionResult &result,
+void expect_ok_int(const sputnik::runtime::ExecutionResult &result,
                    std::int64_t expected, const std::string &what) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << what << ": " << result.fault->error_name << " / "
@@ -586,7 +586,7 @@ void expect_ok_int(const amber::runtime::ExecutionResult &result,
   expect(result.value.as_integer() == expected, what + " value mismatch");
 }
 
-void expect_ok_true(const amber::runtime::ExecutionResult &result,
+void expect_ok_true(const sputnik::runtime::ExecutionResult &result,
                     const std::string &what) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << what << ": " << result.fault->error_name << " / "
@@ -597,7 +597,7 @@ void expect_ok_true(const amber::runtime::ExecutionResult &result,
          what + " should return true");
 }
 
-void expect_ok_string(const amber::runtime::ExecutionResult &result,
+void expect_ok_string(const sputnik::runtime::ExecutionResult &result,
                       const std::string &expected, const std::string &what) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << what << ": " << result.fault->error_name << " / "
@@ -606,7 +606,7 @@ void expect_ok_string(const amber::runtime::ExecutionResult &result,
   expect(result.ok(), what + " should succeed");
   expect(result.value.is_string(), what + " should return Str");
   if (result.value.is_heap_string()) {
-    const std::shared_ptr<amber::runtime::RuntimeHeapStringValue> value =
+    const std::shared_ptr<sputnik::runtime::RuntimeHeapStringValue> value =
         result.value.as_heap_string();
     expect(value != nullptr, what + " string value present");
     expect(value != nullptr && value->text == expected, what + " value mismatch");
@@ -621,7 +621,7 @@ void expect_ok_string(const amber::runtime::ExecutionResult &result,
 
 void test_get_status() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "res.status()\n",
@@ -632,7 +632,7 @@ void test_get_status() {
 
 void test_get_body_text() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "res.body_text() == \"Hello, world!\"\n",
@@ -643,7 +643,7 @@ void test_get_body_text() {
 
 void test_get_ok_predicate() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "res.ok?()\n",
@@ -654,7 +654,7 @@ void test_get_ok_predicate() {
 
 void test_get_headers_value() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "res.headers().first(\"X-Test\") == \"yes\"\n",
@@ -665,7 +665,7 @@ void test_get_headers_value() {
 
 void test_response_headers_read_only() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "res.headers().add!(\"x\", \"y\")\n",
@@ -678,7 +678,7 @@ void test_response_headers_read_only() {
 
 void test_headers_value_api() {
   // Duplicate preservation + case-insensitive all().
-  const amber::runtime::ExecutionResult dup =
+  const sputnik::runtime::ExecutionResult dup =
       execute_source("import net\n"
                      "h = net.http.Headers()\n"
                      "h.add!(\"X-Tag\", \"one\")\n"
@@ -687,7 +687,7 @@ void test_headers_value_api() {
   expect_ok_int(dup, 2, "Headers add! duplicate + case-insensitive all()");
 
   // first() returns the earliest line, case-insensitively.
-  const amber::runtime::ExecutionResult first =
+  const sputnik::runtime::ExecutionResult first =
       execute_source("import net\n"
                      "h = net.http.Headers()\n"
                      "h.add!(\"X-Tag\", \"one\")\n"
@@ -696,7 +696,7 @@ void test_headers_value_api() {
   expect_ok_true(first, "Headers first() earliest line");
 
   // set! replaces all lines for a name.
-  const amber::runtime::ExecutionResult set =
+  const sputnik::runtime::ExecutionResult set =
       execute_source("import net\n"
                      "h = net.http.Headers()\n"
                      "h.add!(\"x-tag\", \"one\")\n"
@@ -707,7 +707,7 @@ void test_headers_value_api() {
 }
 
 void test_headers_include_and_combined() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import net\n"
       "h = net.http.Headers()\n"
       "h.add!(\"Accept\", \"text/html\")\n"
@@ -718,7 +718,7 @@ void test_headers_include_and_combined() {
 
 void test_request_accepts_headers_value() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server("import net\n"
                       "h = net.http.Headers()\n"
                       "h.add!(\"accept\", \"application/json\")\n"
@@ -731,7 +731,7 @@ void test_request_accepts_headers_value() {
 }
 
 void test_from_import_headers() {
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("from net.http import Headers\n"
                      "h = Headers()\n"
                      "h.add!(\"a\", \"b\")\n"
@@ -742,12 +742,12 @@ void test_from_import_headers() {
 void test_capability_denied() {
   // A world with no capability grants must deny net.connect *before* any
   // socket opens (§20.1 / §25.9). Port 9 is never contacted.
-  amber::bytecode::BcModule module =
+  sputnik::bytecode::BcModule module =
       compile_source_or_die("import net\n"
                             "net.http.Client().get(\"http://127.0.0.1:9/\")\n");
-  amber::runtime::RuntimeWorldOptions options; // no net.connect grant
-  amber::runtime::RuntimeWorld world(module, options);
-  const amber::runtime::ExecutionResult result =
+  sputnik::runtime::RuntimeWorldOptions options; // no net.connect grant
+  sputnik::runtime::RuntimeWorld world(module, options);
+  const sputnik::runtime::ExecutionResult result =
       world.execute(module.init.entry_code_id);
   expect(!result.ok() && result.fault.has_value(),
          "denied net.connect should fault");
@@ -758,7 +758,7 @@ void test_capability_denied() {
 
 void test_scoped_block_form() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "net.http.Client().get(\"http://127.0.0.1:%PORT%/\") |res|:\n"
       "  res.status()\n",
@@ -771,7 +771,7 @@ void test_pool_reuses_after_body_read() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_persistent_server(
+  const sputnik::runtime::ExecutionResult result = run_with_persistent_server(
       "import net\n"
       "client = net.http.Client(max_idle_connections: 4, "
       "max_idle_per_origin: 2)\n"
@@ -791,7 +791,7 @@ void test_close_idle_closes_pooled_connection() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_two_connection_server(
+  const sputnik::runtime::ExecutionResult result = run_with_two_connection_server(
       "import net\n"
       "client = net.http.Client(max_idle_connections: 4, "
       "max_idle_per_origin: 2)\n"
@@ -812,7 +812,7 @@ void test_pool_does_not_reuse_after_early_close() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_two_connection_server(
+  const sputnik::runtime::ExecutionResult result = run_with_two_connection_server(
       "import net\n"
       "client = net.http.Client(max_idle_connections: 4, "
       "max_idle_per_origin: 2)\n"
@@ -834,7 +834,7 @@ void test_pool_does_not_reuse_after_early_close() {
 void test_pool_timeout_when_active_slot_unavailable() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server_until_request_contains(
           "import net\n"
           "client = net.http.Client(max_active_per_origin: 1)\n"
@@ -858,7 +858,7 @@ void test_pool_timeout_when_active_slot_unavailable() {
 
 void test_redirect_off_returns_3xx() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "net.http.Client().get(\"http://127.0.0.1:%PORT%/start\").status()\n",
       "HTTP/1.1 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n",
@@ -869,7 +869,7 @@ void test_redirect_off_returns_3xx() {
 
 void test_redirect_manual_exposes_location() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server("import net\n"
                       "res = net.http.Client(redirects: :manual).get("
                       "\"http://127.0.0.1:%PORT%/start\")\n"
@@ -886,7 +886,7 @@ void test_redirect_safe_follows_relative_and_records() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_persistent_server(
+  const sputnik::runtime::ExecutionResult result = run_with_persistent_server(
       "import net\n"
       "client = net.http.Client(redirects: :safe)\n"
       "res = client.get(\"http://127.0.0.1:%PORT%/start\")\n"
@@ -913,7 +913,7 @@ void test_redirect_303_rewrites_post_to_get() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_persistent_server(
+  const sputnik::runtime::ExecutionResult result = run_with_persistent_server(
       "import net\n"
       "client = net.http.Client(redirects: :safe)\n"
       "res = client.post(\"http://127.0.0.1:%PORT%/submit\", "
@@ -943,7 +943,7 @@ void test_redirect_cross_origin_strips_credentials_and_host() {
   std::string server_error;
   std::string first_request;
   std::string second_request;
-  const amber::runtime::ExecutionResult result = run_with_two_origin_server(
+  const sputnik::runtime::ExecutionResult result = run_with_two_origin_server(
       "import net\n"
       "headers = net.http.Headers()\n"
       "headers.add!(\"authorization\", \"Bearer secret\")\n"
@@ -981,7 +981,7 @@ void test_redirect_cross_origin_strips_credentials_and_host() {
 
 void test_redirect_unsupported_scheme_raises() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server("import net\n"
                       "client = net.http.Client(redirects: :safe)\n"
                       "client.get(\"http://127.0.0.1:%PORT%/start\")\n",
@@ -998,7 +998,7 @@ void test_redirect_max_redirects_raises() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_persistent_server(
+  const sputnik::runtime::ExecutionResult result = run_with_persistent_server(
       "import net\n"
       "client = net.http.Client(redirects: :safe, max_redirects: 1)\n"
       "client.get(\"http://127.0.0.1:%PORT%/one\")\n",
@@ -1017,7 +1017,7 @@ void test_redirect_max_redirects_raises() {
 void test_redirect_nonreplayable_body_raises() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import net\n"
       "body = net.http.RequestBody.stream(length: null) |w|:\n"
       "  w.write_all!(\"abc\".bytes())\n"
@@ -1035,7 +1035,7 @@ void test_redirect_nonreplayable_body_raises() {
 
 void test_post_body() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().post(\"http://127.0.0.1:%PORT%/\", "
       "body: \"payload\")\n"
@@ -1048,7 +1048,7 @@ void test_post_body() {
 void test_query_body_and_content_type() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import net\n"
       "res = net.http.Client().query(\"http://127.0.0.1:%PORT%/search\", "
       "headers: {\"content-type\": \"application/sql\"}, "
@@ -1070,7 +1070,7 @@ void test_redirect_query_preserves_method_and_body() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_persistent_server(
+  const sputnik::runtime::ExecutionResult result = run_with_persistent_server(
       "import net\n"
       "client = net.http.Client(redirects: :safe)\n"
       "res = client.query(\"http://127.0.0.1:%PORT%/search\", "
@@ -1096,7 +1096,7 @@ void test_redirect_303_rewrites_query_to_get() {
   std::string server_error;
   std::vector<std::string> requests;
   int accepts = 0;
-  const amber::runtime::ExecutionResult result = run_with_persistent_server(
+  const sputnik::runtime::ExecutionResult result = run_with_persistent_server(
       "import net\n"
       "client = net.http.Client(redirects: :safe)\n"
       "res = client.query(\"http://127.0.0.1:%PORT%/search\", "
@@ -1122,7 +1122,7 @@ void test_redirect_303_rewrites_query_to_get() {
 void test_request_body_text_static() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import net\n"
       "body = net.http.RequestBody.text(\"payload\")\n"
       "res = net.http.Client().post(\"http://127.0.0.1:%PORT%/\", body: body)\n"
@@ -1139,7 +1139,7 @@ void test_request_body_text_static() {
 void test_request_body_stream_chunked() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import net\n"
       "body = net.http.RequestBody.stream(length: null) |w|:\n"
       "  w.write_all!(\"abc\".bytes())\n"
@@ -1158,7 +1158,7 @@ void test_request_body_stream_chunked() {
 void test_request_body_from_reader_fixed() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import io\n"
       "import net\n"
       "pair = io.Pipe.new(capacity: 16)\n"
@@ -1179,7 +1179,7 @@ void test_request_body_from_reader_fixed() {
 void test_get_json_helper_and_response_json() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "from net.http.json import get_json\n"
       "payload = get_json(\"http://127.0.0.1:%PORT%/data\").json()\n"
       "payload[:answer]\n",
@@ -1194,7 +1194,7 @@ void test_get_json_helper_and_response_json() {
 void test_post_json_helper_sends_json_defaults() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "from net.http.json import post_json\n"
       "res = post_json(\"http://127.0.0.1:%PORT%/users\", "
       "{name: \"Ada\", n: 2})\n"
@@ -1216,7 +1216,7 @@ void test_post_json_helper_sends_json_defaults() {
 void test_form_body_encodes_and_sets_content_type() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "from net.http import Client\n"
       "from net.http.form import FormBody\n"
       "body = FormBody({name: \"Ada Lovelace\", tags: [\"math\", \"code\"]})\n"
@@ -1234,7 +1234,7 @@ void test_form_body_encodes_and_sets_content_type() {
 
 void test_http_trace_hook_events() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "seen = \"\"\n"
       "client = net.http.Client(trace: net.http.trace |event|:\n"
@@ -1253,7 +1253,7 @@ void test_http_trace_hook_events() {
 void test_manual_request_handle_chunked() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import net\n"
       "h = net.http.Client().begin(method: :post, "
       "url: \"http://127.0.0.1:%PORT%/\", length: null)\n"
@@ -1272,7 +1272,7 @@ void test_manual_request_handle_chunked() {
 void test_manual_request_handle_underwrite() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server_capture("import net\n"
                               "h = net.http.Client().begin(method: :post, "
                               "url: \"http://127.0.0.1:%PORT%/\", length: 4)\n"
@@ -1288,7 +1288,7 @@ void test_manual_request_handle_underwrite() {
 void test_request_handle_write_after_response_state() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result = run_with_server_capture(
+  const sputnik::runtime::ExecutionResult result = run_with_server_capture(
       "import net\n"
       "h = net.http.Client().begin(method: :post, "
       "url: \"http://127.0.0.1:%PORT%/\", length: null)\n"
@@ -1308,7 +1308,7 @@ void test_request_handle_write_after_response_state() {
 void test_request_handle_early_response_is_terminal() {
   std::string server_error;
   std::string request;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server_until_request_contains(
           "import net\n"
           "h = net.http.Client().begin(method: :post, "
@@ -1331,7 +1331,7 @@ void test_request_handle_early_response_is_terminal() {
 
 void test_buffered_request_recovers_early_final_response() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_early_response_server(
+  const sputnik::runtime::ExecutionResult result = run_with_early_response_server(
       "import net\n"
       "body = \"0123456789abcdef\"\n"
       "17.times:\n"
@@ -1352,7 +1352,7 @@ void test_buffered_request_recovers_early_final_response() {
 
 void test_response_body_read_chunks() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import io\n"
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
@@ -1367,7 +1367,7 @@ void test_response_body_read_chunks() {
   expect(result.ok(), "ResponseBody read! should succeed");
   expect(result.value.is_string(), "ResponseBody read! result Str");
   if (result.value.is_heap_string()) {
-    const std::shared_ptr<amber::runtime::RuntimeHeapStringValue> value =
+    const std::shared_ptr<sputnik::runtime::RuntimeHeapStringValue> value =
         result.value.as_heap_string();
     expect(value != nullptr, "ResponseBody read! string value present");
     expect(value != nullptr && value->text == "5:Hello:8:, world!",
@@ -1383,7 +1383,7 @@ void test_response_body_read_chunks() {
 
 void test_response_body_single_consumer() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "res.body().read(max_bytes: 5)\n"
@@ -1397,7 +1397,7 @@ void test_response_body_single_consumer() {
 
 void test_response_body_each_chunk_propagates_block_failure() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "import net\n"
       "res = net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n"
       "body = res.body()\n"
@@ -1417,7 +1417,7 @@ void test_response_body_each_chunk_propagates_block_failure() {
 
 void test_unsupported_scheme_raises() {
   // No server needed; the URL is rejected before any connection.
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("import net\n"
                      "net.http.Client().get(\"ftp://127.0.0.1/\")\n");
   expect(!result.ok() && result.fault.has_value(), "ftp get should fault");
@@ -1433,7 +1433,7 @@ void test_connection_refused_raises() {
   const std::uint16_t port = listening.listener->local_endpoint().port;
   listening.listener->close();
 
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       with_port("import net\n"
                 "net.http.Client().get(\"http://127.0.0.1:%PORT%/\")\n",
                 port));
@@ -1445,7 +1445,7 @@ void test_connection_refused_raises() {
 
 void test_rescue_unsupported_scheme() {
   // The mapped error is a rescuable HttpError subclass.
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("import net\n"
                      "caught = 0\n"
                      "try:\n"
@@ -1458,7 +1458,7 @@ void test_rescue_unsupported_scheme() {
 
 void test_send_request() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server("import net\n"
                       "req = net.http.Request(method: :get, "
                       "url: \"http://127.0.0.1:%PORT%/\")\n"
@@ -1470,7 +1470,7 @@ void test_send_request() {
 
 void test_send_post_request_body() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server("import net\n"
                       "req = net.http.Request(method: :post, "
                       "url: \"http://127.0.0.1:%PORT%/\", body: \"hi\")\n"
@@ -1481,7 +1481,7 @@ void test_send_post_request_body() {
 }
 
 void test_request_method_normalized() {
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("import net\n"
                      "req = net.http.Request(method: :post, url: "
                      "\"http://h/x\")\n"
@@ -1490,7 +1490,7 @@ void test_request_method_normalized() {
 }
 
 void test_request_content_length() {
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("import net\n"
                      "req = net.http.Request(method: \"post\", url: "
                      "\"http://h/x\", body: \"abcd\")\n"
@@ -1499,7 +1499,7 @@ void test_request_content_length() {
 }
 
 void test_request_invalid_method() {
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("import net\n"
                      "net.http.Request(method: \"bad method\", url: "
                      "\"http://h/x\")\n");
@@ -1510,7 +1510,7 @@ void test_request_invalid_method() {
 }
 
 void test_request_invalid_url_scheme() {
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("import net\n"
                      "net.http.Request(method: :get, url: \"ftp://h/x\")\n");
   expect(!result.ok() && result.fault.has_value() &&
@@ -1520,7 +1520,7 @@ void test_request_invalid_url_scheme() {
 }
 
 void test_resumable_tasks_share_canonical_runtime_names() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import json\n"
       "import task\n"
       "stored = null\n"
@@ -1559,14 +1559,14 @@ void test_resumable_task_sparse_string_cache_concat() {
       "joined = consumer.wait()\n"
       "joined.starts_with?(\"runtime-value-0runtime-value-1\") and "
       "joined.ends_with?(\"runtime-value-63\")\n";
-  const amber::runtime::ExecutionResult result = execute_source(source);
+  const sputnik::runtime::ExecutionResult result = execute_source(source);
   expect_ok_true(
       result,
       "sparse runtime string cache keeps concat operands stable across growth");
 }
 
 void test_nested_code_inherits_resumable_task_runtime_names() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import json\n"
       "import task\n"
       "last = null\n"
@@ -1589,7 +1589,7 @@ void test_nested_code_inherits_resumable_task_runtime_names() {
 
 void test_from_import_client() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       run_with_server("from net.http import Client\n"
                       "Client().get(\"http://127.0.0.1:%PORT%/\").status()\n",
                       kResponse, &server_error);
@@ -1599,7 +1599,7 @@ void test_from_import_client() {
 
 void test_from_import_request_send() {
   std::string server_error;
-  const amber::runtime::ExecutionResult result = run_with_server(
+  const sputnik::runtime::ExecutionResult result = run_with_server(
       "from net.http import Client, Request\n"
       "req = Request(method: :get, url: \"http://127.0.0.1:%PORT%/\")\n"
       "Client().send(req).status()\n",
@@ -1609,7 +1609,7 @@ void test_from_import_request_send() {
 }
 
 void test_http_server_serves_request_hook() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "\n"
@@ -1632,7 +1632,7 @@ void test_http_server_serves_request_hook() {
 }
 
 void test_http_server_preserves_runtime_names_across_requests() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import json\n"
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
@@ -1664,7 +1664,7 @@ void test_http_server_preserves_runtime_names_across_requests() {
 }
 
 void test_http_server_rejects_query_without_content_type() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "\n"
@@ -1683,7 +1683,7 @@ void test_http_server_rejects_query_without_content_type() {
 }
 
 void test_http_server_allows_cooperative_concurrency_per_worker() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "\n"
@@ -1711,7 +1711,7 @@ void test_http_server_allows_cooperative_concurrency_per_worker() {
 }
 
 void test_http_server_idle_headers_do_not_occupy_worker() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import net\n"
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
@@ -1736,7 +1736,7 @@ void test_http_server_idle_headers_do_not_occupy_worker() {
 }
 
 void test_http_server_streaming_response_extensions_and_trailer() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "\n"
@@ -1763,7 +1763,7 @@ void test_http_server_streaming_response_extensions_and_trailer() {
 }
 
 void test_http_server_reads_chunked_request_by_wire_chunk() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, RequestBody, Server, ServerResponse\n"
       "\n"
@@ -1790,7 +1790,7 @@ void test_http_server_reads_chunked_request_by_wire_chunk() {
 }
 
 void test_http_server_streaming_is_full_duplex() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import io\n"
       "import net\n"
       "import task\n"
@@ -1834,7 +1834,7 @@ void test_http_server_streaming_is_full_duplex() {
 }
 
 void test_http_server_non_chunked_body_stream_framing() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "\n"
@@ -1864,7 +1864,7 @@ void test_http_server_non_chunked_body_stream_framing() {
 }
 
 void test_http_server_expect_continue_before_body_read() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import io\n"
       "import net\n"
       "import task\n"
@@ -1893,7 +1893,7 @@ void test_http_server_expect_continue_before_body_read() {
 }
 
 void test_http_server_bare_body_text_retries_after_io_park() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import net\n"
       "import task\n"
       "from net.http import Server, ServerResponse\n"
@@ -1916,7 +1916,7 @@ void test_http_server_bare_body_text_retries_after_io_park() {
 }
 
 void test_http_server_keepalive_head_and_contentless_semantics() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "server = Server(host: \"127.0.0.1\", port: 0, idle_timeout: 0.2)\n"
@@ -1948,7 +1948,7 @@ void test_http_server_keepalive_head_and_contentless_semantics() {
 }
 
 void test_http_server_deadline_cancellation_unwinds_ensure() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "events = []\n"
@@ -1983,7 +1983,7 @@ void test_http_server_deadline_cancellation_unwinds_ensure() {
 }
 
 void test_http_server_overload_rejects_excess_connection() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server, ServerResponse\n"
       "server = Server(host: \"127.0.0.1\", port: 0, workers: 1, "
@@ -2010,7 +2010,7 @@ void test_http_server_overload_rejects_excess_connection() {
 }
 
 void test_http_server_control_flow_failure_is_not_a_500_response() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
       "from net.http import Client, Server\n"
       "server = Server(host: \"127.0.0.1\", port: 0)\n"

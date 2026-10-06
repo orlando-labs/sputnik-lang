@@ -7,7 +7,7 @@
 #include <limits>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -1658,4 +1658,4 @@ RuntimeHttpServerServeResult runtime_http_server_serve_native(
   return result;
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

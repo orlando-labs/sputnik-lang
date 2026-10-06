@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -268,4 +268,4 @@ void register_net_http_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -4,7 +4,7 @@ Date: 2026-07-05
 
 ## Goal
 
-Bring `amber-built` polyglot rows into the compiled-competitor band: best-of-N
+Bring `sputnik-built` polyglot rows into the compiled-competitor band: best-of-N
 within ~2x of the C++ row on every workload (i.e. inside or near the Go/Rust
 band), with peak RSS proportional to the live set instead of total allocations.
 
@@ -14,7 +14,7 @@ The 2026-07-05 investigation (session-measured; method reproducible below)
 overturned the "startup floor" hypothesis from
 `PLAN-polyglot-performance-optimizations-2026-07-04.md` item 5:
 
-- An empty `amberc build` executable runs in ~2.75 ms vs ~2.11 ms for an empty
+- An empty `sputnik build` executable runs in ~2.75 ms vs ~2.11 ms for an empty
   C++ binary under the benchmark's own measurement. Zero-iteration variants of
   real workloads run 2.9–3.4 ms. Startup + module init explains ~1 ms of gaps
   that are 5–20 ms wide. Launcher-size work is therefore *not* on this plan.
@@ -23,7 +23,7 @@ overturned the "startup floor" hypothesis from
   sha-digest ~1.15x. The gap tracks boxed-value traffic per iteration.
 - Root cause is that the generated native lane makes every heap value
   immortal:
-  - `NativeArena` (emitted by `tools/amberc/main.cpp`): every
+  - `NativeArena` (emitted by `tools/sputnik/main.cpp`): every
     Time/TimePeriod/List/Map/Bytes/... is `make_unique`d and pushed into
     global vectors, never freed while the program runs. A 100x time-flow run
     reached 1.32 GB RSS (linear in iterations) and spent ~38% of its process
@@ -40,7 +40,7 @@ overturned the "startup floor" hypothesis from
 ## Approach
 
 Give native-lane values a lifetime. All changes live in the generated-C++
-emitter inside `tools/amberc/main.cpp`; the serialized `.amberbc` format, VM,
+emitter inside `tools/sputnik/main.cpp`; the serialized `.sputnikbc` format, VM,
 and runtime archive are untouched. The bailout contract (re-run the whole
 program on the VM) is unaffected because `NativeValue` never crosses into the
 VM mid-flight.
@@ -107,14 +107,14 @@ helper signatures. Adopt only what a post-M2 profile justifies.
 
 Full-suite rerun (10 repeats, fresh build dir, `--no-build` stable pass) with
 all six languages; update `bench/polyglot/README.md` with the new table and a
-note that the amber-built row no longer pays arena teardown; update the
+note that the sputnik-built row no longer pays arena teardown; update the
 project memory. Keep the first-sample cold-exec caveat (macOS first-run
 validation costs 300–450 ms for every language's binary; only `best_s` is
 comparable).
 
 ## Verification gates (every milestone)
 
-1. `make build` then `build/ambertest run corpus` (conformance, 174 expected).
+1. `make build` then `build/sputniktest run corpus` (conformance, 174 expected).
 2. `make backend-equivalence` (VM and native lanes byte-identical, 109).
 3. One generated `.native.cpp` compiled by hand with `-fsanitize=address` and
    run (validates refcount logic; the runtime archive stays uninstrumented).
@@ -125,7 +125,7 @@ comparable).
 
 ## Measurement method (reproducible)
 
-- Floor: `sed` the workload loop bound to 0, `amberc build`, time 25 runs of
+- Floor: `sed` the workload loop bound to 0, `sputnik build`, time 25 runs of
   the executable via `subprocess` `perf_counter` (mirrors the runner).
 - Profile: build a 100x-iteration variant, `sample <pid> 1` while it runs.
 - Benchmark: `python3 bench/polyglot/run_benchmark.py --workload <w>
@@ -134,8 +134,8 @@ comparable).
 
 ## Implementation log (2026-07-05)
 
-All milestones landed same-day in `tools/amberc/main.cpp` (emitter only; no
-`.amberbc`/VM/runtime-archive changes). Gates at every step: corpus 173/0,
+All milestones landed same-day in `tools/sputnik/main.cpp` (emitter only; no
+`.sputnikbc`/VM/runtime-archive changes). Gates at every step: corpus 173/0,
 backend-equivalence 109/0, ASan spot runs clean, checksums 7/7 measured
 workloads.
 
@@ -150,7 +150,7 @@ workloads.
   (`breg_N`) beside the int/float lanes so compare/branch traffic never
   touches `NativeValue` (arithmetic 17.3→6.0 ms, back at parity); (b) clang
   outlined `destroy()` in EH cleanups — lifecycle methods are
-  `AMBER_NATIVE_ALWAYS_INLINE` with the delete switch out-of-line, and
+  `SPUTNIK_NATIVE_ALWAYS_INLINE` with the delete switch out-of-line, and
   `native_list_at`/`native_count`/`native_list_first` stopped copying the
   whole backing vector per element read (a pre-existing waste M1 made
   expensive; calls-collections 8.5→4.7 ms, better than pre-plan).
@@ -172,7 +172,7 @@ workloads.
   an emit-time-resolved `NativeTimeSelector` enum (landed with the
   uncommitted Benchmark/Time work); map/string hot paths call direct helpers.
   No selector-string compares left in post-M2 profiles.
-- **M4 landed.** `AMBER_NATIVE_POOL_NEW` per-type free lists on the hot
+- **M4 landed.** `SPUTNIK_NATIVE_POOL_NEW` per-type free lists on the hot
   payloads (List/Map/Bytes/Tuple/Set/HeapString/Time/TimePeriod/Uuid boxes):
   dead shells recycle instead of malloc/free round-trips; growth bounded by
   peak live count. time-flow 10.2→6.3 ms, map-words 8.6→6.7 ms,
@@ -190,10 +190,10 @@ workloads.
 
 ## Success criteria
 
-- Every amber-built `best_s` ≤ ~2x the same-run C++ `best_s`; inside or near
+- Every sputnik-built `best_s` ≤ ~2x the same-run C++ `best_s`; inside or near
   the Go/Rust band on value-churn workloads (time-flow, string-ops,
   map-words, codecs, json).
-- Peak RSS of amber-built rows within a small constant of the C++ rows
+- Peak RSS of sputnik-built rows within a small constant of the C++ rows
   (excluding the fixed ~5.6 MB binary/runtime footprint effects), and flat
   when iterations scale 100x.
 - No interpreted-lane or conformance regressions; backend equivalence stays

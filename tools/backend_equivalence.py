@@ -3,8 +3,8 @@
 
 Every `corpus/run` fixture is executed through both backends:
 
-- `amberc build --target bytecode-wrapper`: the VM lane (semantic oracle);
-- `amberc build --target native`: the cpp-bytecode-direct lane. Incomplete
+- `sputnik build --target bytecode-wrapper`: the VM lane (semantic oracle);
+- `sputnik build --target native`: the cpp-bytecode-direct lane. Incomplete
   coverage may use the whole-program bailout/restart; full coverage emits no
   VM restart path.
 
@@ -29,14 +29,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CORPUS = ROOT / "corpus" / "run"
-# AMBERC / AMBER_BE_WORKDIR let an alternate build drive the harness without
+# SPUTNIK / SPUTNIK_BE_WORKDIR let an alternate build drive the harness without
 # clobbering build/ -- e.g. the tagged value-repr lane:
-#   make BUILD_DIR=build-tagged VALUE_REPR=tagged build-tagged/amberc
-#   AMBERC=build-tagged/amberc AMBER_BE_WORKDIR=build-tagged/backend-equivalence \
+#   make BUILD_DIR=build-tagged VALUE_REPR=tagged build-tagged/sputnik
+#   SPUTNIK=build-tagged/sputnik SPUTNIK_BE_WORKDIR=build-tagged/backend-equivalence \
 #       python3 tools/backend_equivalence.py
-AMBERC = Path(os.environ.get("AMBERC") or (ROOT / "build" / "amberc"))
+SPUTNIK = Path(os.environ.get("SPUTNIK") or (ROOT / "build" / "sputnik"))
 WORK_DIR = Path(
-    os.environ.get("AMBER_BE_WORKDIR") or (ROOT / "build" / "backend-equivalence")
+    os.environ.get("SPUTNIK_BE_WORKDIR") or (ROOT / "build" / "backend-equivalence")
 )
 
 
@@ -62,8 +62,8 @@ def build_fixture_source(fixture: Path, meta: dict) -> str:
 
 
 def main() -> int:
-    if not AMBERC.exists():
-        print("backend-equivalence: build/amberc is missing; run `make build`",
+    if not SPUTNIK.exists():
+        print("backend-equivalence: build/sputnik is missing; run `make build`",
               file=sys.stderr)
         return 2
 
@@ -81,7 +81,7 @@ def main() -> int:
         if meta.get("phase") != "run":
             continue
         name = fixture.name
-        source_path = WORK_DIR / f"{name}.am"
+        source_path = WORK_DIR / f"{name}.s"
         source_path.write_text(build_fixture_source(fixture, meta))
 
         lanes: dict[str, tuple[int, str, str] | None] = {}
@@ -89,7 +89,7 @@ def main() -> int:
         for lane, target in (("vm", "bytecode-wrapper"), ("native", "native")):
             exe = WORK_DIR / f"{name}.{lane}"
             code, out, err = run_capture([
-                str(AMBERC), "build", str(source_path), "--target", target,
+                str(SPUTNIK), "build", str(source_path), "--target", target,
                 "-o", str(exe), "--out-dir", str(WORK_DIR),
             ])
             if code != 0:

@@ -16,21 +16,21 @@
 namespace {
 
 using namespace std::chrono_literals;
-using amber::runtime::ReactorInterest;
-using amber::runtime::ReactorOutcome;
-using amber::runtime::RuntimeByteBuffer;
-using amber::runtime::RuntimeBytes;
-using amber::runtime::RuntimeEndpoint;
-using amber::runtime::RuntimeFile;
-using amber::runtime::RuntimeFileMode;
-using amber::runtime::RuntimeFileOpenOptions;
-using amber::runtime::RuntimePath;
-using amber::runtime::RuntimePipe;
-using amber::runtime::RuntimeReactor;
-using amber::runtime::RuntimeTaskScope;
-using amber::runtime::RuntimeTcpListener;
-using amber::runtime::RuntimeTcpStream;
-using amber::runtime::RuntimeUdpSocket;
+using sputnik::runtime::ReactorInterest;
+using sputnik::runtime::ReactorOutcome;
+using sputnik::runtime::RuntimeByteBuffer;
+using sputnik::runtime::RuntimeBytes;
+using sputnik::runtime::RuntimeEndpoint;
+using sputnik::runtime::RuntimeFile;
+using sputnik::runtime::RuntimeFileMode;
+using sputnik::runtime::RuntimeFileOpenOptions;
+using sputnik::runtime::RuntimePath;
+using sputnik::runtime::RuntimePipe;
+using sputnik::runtime::RuntimeReactor;
+using sputnik::runtime::RuntimeTaskScope;
+using sputnik::runtime::RuntimeTcpListener;
+using sputnik::runtime::RuntimeTcpStream;
+using sputnik::runtime::RuntimeUdpSocket;
 
 void expect(bool condition, const std::string &message) {
   if (!condition) {
@@ -40,19 +40,19 @@ void expect(bool condition, const std::string &message) {
 }
 
 std::string temp_path(const std::string &suffix) {
-  return "/tmp/amber_io_" + std::to_string(::getpid()) + "_" + suffix;
+  return "/tmp/sputnik_io_" + std::to_string(::getpid()) + "_" + suffix;
 }
 
 void test_name_enums_and_path() {
-  expect(amber::runtime::runtime_file_mode_from_name("read") ==
+  expect(sputnik::runtime::runtime_file_mode_from_name("read") ==
              RuntimeFileMode::Read,
          "read mode should normalize");
-  expect(amber::runtime::runtime_file_mode_from_name("read_write") ==
+  expect(sputnik::runtime::runtime_file_mode_from_name("read_write") ==
              RuntimeFileMode::ReadWrite,
          "read_write mode should normalize");
-  expect(!amber::runtime::runtime_file_mode_from_name("READ").has_value(),
+  expect(!sputnik::runtime::runtime_file_mode_from_name("READ").has_value(),
          "NameEnum normalization must be case-sensitive");
-  expect(!amber::runtime::runtime_file_mode_from_name("r").has_value(),
+  expect(!sputnik::runtime::runtime_file_mode_from_name("r").has_value(),
          "NameEnum normalization must reject aliases");
   RuntimeEndpoint parsed;
   expect(RuntimeEndpoint::parse("localhost:80", &parsed).ok &&
@@ -63,9 +63,9 @@ void test_name_enums_and_path() {
          "endpoint parse must reject trailing port characters");
 
   RuntimePath path("/var");
-  RuntimePath joined = path.join("log").join("amber.log");
-  expect(joined.string() == "/var/log/amber.log", "path join mismatch");
-  expect(joined.basename() == "amber.log", "path basename mismatch");
+  RuntimePath joined = path.join("log").join("sputnik.log");
+  expect(joined.string() == "/var/log/sputnik.log", "path join mismatch");
+  expect(joined.basename() == "sputnik.log", "path basename mismatch");
   expect(joined.extname() == ".log", "path extname mismatch");
   expect(joined.parent().string() == "/var/log", "path parent mismatch");
   expect(joined.absolute(), "path should be absolute");
@@ -170,8 +170,8 @@ void test_file_contract() {
 }
 
 void test_pipe_contract() {
-  std::shared_ptr<amber::runtime::RuntimePipeReader> detached_reader;
-  std::shared_ptr<amber::runtime::RuntimePipeWriter> detached_writer;
+  std::shared_ptr<sputnik::runtime::RuntimePipeReader> detached_reader;
+  std::shared_ptr<sputnik::runtime::RuntimePipeWriter> detached_writer;
   {
     auto detached = RuntimePipe::create(2);
     detached_reader = detached.reader;
@@ -285,8 +285,8 @@ void test_checked_and_unchecked_sharing() {
 // worker/strand TLS via the scopes, so the result is fixed regardless of how a
 // scheduler would have interleaved real workers.
 void test_strand_confinement_owner_namespaces() {
-  using amber::runtime::RuntimeStrandScope;
-  using amber::runtime::RuntimeWorkerScope;
+  using sputnik::runtime::RuntimeStrandScope;
+  using sputnik::runtime::RuntimeWorkerScope;
 
   // Regression for the cross-namespace owner-id collision. A buffer confined to
   // *worker* 7 must not be treated as owned by *strand* 7. The previous check
@@ -389,7 +389,7 @@ void test_tcp_roundtrip_and_shutdown() {
   expect(connected.stream->read(response, 2s).ok && response.bytes() == "pong",
          "TCP roundtrip mismatch");
   expect(
-      connected.stream->shutdown(amber::runtime::RuntimeShutdownSide::Write).ok,
+      connected.stream->shutdown(sputnik::runtime::RuntimeShutdownSide::Write).ok,
       "TCP shutdown write failed");
   connected.stream->close();
   server.join();
@@ -645,7 +645,7 @@ void test_reactor() {
 // read on a socket with no data available must NOT block -- wait_fd records the
 // fd in the thread-local park channel and returns park, which the VM turns into
 // a strand park + reactor wait_async. With parking disabled the read blocks as
-// usual. (The full VM-driven socket e2e is gated on the Amber-source net/io
+// usual. (The full VM-driven socket e2e is gated on the Sputnik-source net/io
 // frontend, which still fails to compile -- BC1313 / class-path-ref.)
 void test_io_park_emission() {
   auto listening = RuntimeTcpListener::listen({"127.0.0.1", 0});
@@ -656,18 +656,18 @@ void test_io_park_emission() {
   auto accepted = listening.listener->accept(2s);
   expect(accepted.ok, "io park: accept failed");
 
-  amber::runtime::tls_runtime_io_park_enabled = true;
-  amber::runtime::tls_runtime_io_park_requested = false;
+  sputnik::runtime::tls_runtime_io_park_enabled = true;
+  sputnik::runtime::tls_runtime_io_park_requested = false;
   RuntimeByteBuffer buf(4);
   auto parked = accepted.stream->read(buf, 2s);
-  amber::runtime::tls_runtime_io_park_enabled = false;
+  sputnik::runtime::tls_runtime_io_park_enabled = false;
   expect(parked.park && !parked.ok,
          "io park: blocking read on no-data socket should park, not block");
-  expect(amber::runtime::tls_runtime_io_park_requested,
+  expect(sputnik::runtime::tls_runtime_io_park_requested,
          "io park: park request flag should be set");
-  expect(amber::runtime::tls_runtime_io_park_request.fd >= 0,
+  expect(sputnik::runtime::tls_runtime_io_park_request.fd >= 0,
          "io park: park request should record the fd");
-  expect(!amber::runtime::tls_runtime_io_park_request.want_write,
+  expect(!sputnik::runtime::tls_runtime_io_park_request.want_write,
          "io park: a read should record read interest");
 
   // Parking disabled: the same read now blocks until data arrives, then reads.

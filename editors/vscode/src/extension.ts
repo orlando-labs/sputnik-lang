@@ -2,14 +2,14 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 
-const AMBER_TASK_TYPE = "amber";
+const SPUTNIK_TASK_TYPE = "sputnik";
 
-interface AmberTaskDefinition extends vscode.TaskDefinition {
-  /** Which amberc action to perform. */
+interface SputnikTaskDefinition extends vscode.TaskDefinition {
+  /** Which sputnik action to perform. */
   command: "run" | "build";
-  /** Path to the .am file. Defaults to the active editor's file. */
+  /** Path to the Sputnik source file. Defaults to the active editor's file. */
   file?: string;
-  /** Extra arguments passed to amberc. */
+  /** Extra arguments passed to sputnik. */
   args?: string[];
 }
 
@@ -45,16 +45,16 @@ function isOnPath(name: string): boolean {
 }
 
 /**
- * Resolves the amberc executable to use.
+ * Resolves the sputnik executable to use.
  *
- * Order: the `amber.compilerPath` setting (if absolute or found on PATH), then a
- * fallback to `<workspaceFolder>/build/amberc` (the in-repo build output).
+ * Order: the `sputnik.compilerPath` setting (if absolute or found on PATH), then a
+ * fallback to `<workspaceFolder>/build/sputnik` (the in-repo build output).
  * Returns `undefined` if nothing resolves.
  */
-function resolveAmberc(resource?: vscode.Uri): string | undefined {
+function resolveSputnik(resource?: vscode.Uri): string | undefined {
   const configured = vscode.workspace
-    .getConfiguration("amber", resource)
-    .get<string>("compilerPath", "amberc");
+    .getConfiguration("sputnik", resource)
+    .get<string>("compilerPath", "sputnik");
 
   if (path.isAbsolute(configured)) {
     return isFile(configured) ? configured : undefined;
@@ -76,7 +76,7 @@ function resolveAmberc(resource?: vscode.Uri): string | undefined {
   // Fallback: in-repo build output.
   const folder = workspaceFolderFor(resource);
   if (folder) {
-    const fallback = path.join(folder.uri.fsPath, "build", "amberc");
+    const fallback = path.join(folder.uri.fsPath, "build", "sputnik");
     if (isFile(fallback)) {
       return fallback;
     }
@@ -94,13 +94,13 @@ function workspaceFolderFor(resource?: vscode.Uri): vscode.WorkspaceFolder | und
   return vscode.workspace.workspaceFolders?.[0];
 }
 
-/** Builds the amberc argv (excluding the executable) for a run/build definition. */
-function ambercArgs(
-  def: AmberTaskDefinition,
+/** Builds the sputnik argv (excluding the executable) for a run/build definition. */
+function sputnikArgs(
+  def: SputnikTaskDefinition,
   file: string,
   resource?: vscode.Uri,
 ): string[] {
-  const config = vscode.workspace.getConfiguration("amber", resource);
+  const config = vscode.workspace.getConfiguration("sputnik", resource);
   if (def.command === "build") {
     const target = config.get<string>("build.target", "native");
     const outDir = config.get<string>("build.outDir", "build");
@@ -118,20 +118,20 @@ function ambercArgs(
 
 /** Constructs a vscode.Task for a run/build definition. */
 function makeTask(
-  def: AmberTaskDefinition,
+  def: SputnikTaskDefinition,
   file: string,
   resource?: vscode.Uri,
 ): vscode.Task | undefined {
-  const amberc = resolveAmberc(resource);
-  if (!amberc) {
+  const sputnik = resolveSputnik(resource);
+  if (!sputnik) {
     return undefined;
   }
   const folder = workspaceFolderFor(resource);
   const scope: vscode.WorkspaceFolder | vscode.TaskScope =
     folder ?? vscode.TaskScope.Workspace;
   const name = `${def.command} ${path.basename(file)}`;
-  const execution = new vscode.ShellExecution(amberc, ambercArgs(def, file, resource));
-  const task = new vscode.Task(def, scope, name, AMBER_TASK_TYPE, execution, []);
+  const execution = new vscode.ShellExecution(sputnik, sputnikArgs(def, file, resource));
+  const task = new vscode.Task(def, scope, name, SPUTNIK_TASK_TYPE, execution, []);
   task.presentationOptions = {
     reveal: vscode.TaskRevealKind.Always,
     panel: vscode.TaskPanelKind.Shared,
@@ -142,15 +142,15 @@ function makeTask(
   return task;
 }
 
-/** The active editor's .am file, or undefined (with a user-facing message). */
-async function activeAmberFile(): Promise<vscode.TextDocument | undefined> {
+/** The active editor's Sputnik source file, or undefined (with a user-facing message). */
+async function activeSputnikFile(): Promise<vscode.TextDocument | undefined> {
   const editor = vscode.window.activeTextEditor;
-  if (!editor || editor.document.languageId !== "amber") {
-    void vscode.window.showErrorMessage("Amber: no active .am file.");
+  if (!editor || editor.document.languageId !== "sputnik") {
+    void vscode.window.showErrorMessage("Sputnik: no active source file (.s, .spu, .sputnik).");
     return undefined;
   }
   if (editor.document.isUntitled) {
-    void vscode.window.showErrorMessage("Amber: save the file before running.");
+    void vscode.window.showErrorMessage("Sputnik: save the file before running.");
     return undefined;
   }
   await editor.document.save();
@@ -158,15 +158,15 @@ async function activeAmberFile(): Promise<vscode.TextDocument | undefined> {
 }
 
 async function runCommand(command: "run" | "build"): Promise<void> {
-  const doc = await activeAmberFile();
+  const doc = await activeSputnikFile();
   if (!doc) {
     return;
   }
   const file = doc.uri.fsPath;
-  const task = makeTask({ type: AMBER_TASK_TYPE, command }, file, doc.uri);
+  const task = makeTask({ type: SPUTNIK_TASK_TYPE, command }, file, doc.uri);
   if (!task) {
     void vscode.window.showErrorMessage(
-      "Amber: could not find the amberc compiler. Set 'amber.compilerPath' or build it with 'make build'.",
+      "Sputnik: could not find the sputnik compiler. Set 'sputnik.compilerPath' or build it with 'make build'.",
     );
     return;
   }
@@ -176,13 +176,13 @@ async function runCommand(command: "run" | "build"): Promise<void> {
 const taskProvider: vscode.TaskProvider = {
   provideTasks(): vscode.Task[] {
     const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.languageId !== "amber" || editor.document.isUntitled) {
+    if (!editor || editor.document.languageId !== "sputnik" || editor.document.isUntitled) {
       return [];
     }
     const file = editor.document.uri.fsPath;
     const tasks: vscode.Task[] = [];
     for (const command of ["run", "build"] as const) {
-      const task = makeTask({ type: AMBER_TASK_TYPE, command }, file, editor.document.uri);
+      const task = makeTask({ type: SPUTNIK_TASK_TYPE, command }, file, editor.document.uri);
       if (task) {
         tasks.push(task);
       }
@@ -190,29 +190,29 @@ const taskProvider: vscode.TaskProvider = {
     return tasks;
   },
   resolveTask(task: vscode.Task): vscode.Task | undefined {
-    const def = task.definition as AmberTaskDefinition;
+    const def = task.definition as SputnikTaskDefinition;
     const file = def.file ?? vscode.window.activeTextEditor?.document.uri.fsPath;
     if (!file || (def.command !== "run" && def.command !== "build")) {
       return undefined;
     }
     const resource = vscode.Uri.file(file);
     // resolveTask must reuse the definition object from the input task.
-    const amberc = resolveAmberc(resource);
-    if (!amberc) {
+    const sputnik = resolveSputnik(resource);
+    if (!sputnik) {
       return undefined;
     }
     const folder = workspaceFolderFor(resource);
     const scope = folder ?? vscode.TaskScope.Workspace;
-    const execution = new vscode.ShellExecution(amberc, ambercArgs(def, file, resource));
-    return new vscode.Task(def, scope, task.name, AMBER_TASK_TYPE, execution, []);
+    const execution = new vscode.ShellExecution(sputnik, sputnikArgs(def, file, resource));
+    return new vscode.Task(def, scope, task.name, SPUTNIK_TASK_TYPE, execution, []);
   },
 };
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.commands.registerCommand("amber.runFile", () => runCommand("run")),
-    vscode.commands.registerCommand("amber.buildFile", () => runCommand("build")),
-    vscode.tasks.registerTaskProvider(AMBER_TASK_TYPE, taskProvider),
+    vscode.commands.registerCommand("sputnik.runFile", () => runCommand("run")),
+    vscode.commands.registerCommand("sputnik.buildFile", () => runCommand("build")),
+    vscode.tasks.registerTaskProvider(SPUTNIK_TASK_TYPE, taskProvider),
   );
 }
 

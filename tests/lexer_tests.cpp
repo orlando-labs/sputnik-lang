@@ -7,21 +7,21 @@
 
 namespace {
 
-using amber::lexer::Lexer;
-using amber::lexer::Token;
-using amber::lexer::TokenKind;
+using sputnik::lexer::Lexer;
+using sputnik::lexer::Token;
+using sputnik::lexer::TokenKind;
 
 std::vector<Token> lex_ok(const std::string &source) {
   Lexer lexer(source, "<test>");
-  amber::lexer::LexResult result = lexer.lex();
+  sputnik::lexer::LexResult result = lexer.lex();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
   return result.tokens;
 }
 
-amber::lexer::LexResult lex_raw(const std::string &source) {
+sputnik::lexer::LexResult lex_raw(const std::string &source) {
   Lexer lexer(source, "<test>");
   return lexer.lex();
 }
@@ -37,11 +37,11 @@ void expect_kinds(const std::string &name, const std::string &source,
   if (actual != expected) {
     std::cerr << "lexer test failed: " << name << "\nexpected:";
     for (TokenKind kind : expected) {
-      std::cerr << " " << amber::lexer::token_kind_name(kind);
+      std::cerr << " " << sputnik::lexer::token_kind_name(kind);
     }
     std::cerr << "\nactual:  ";
     for (TokenKind kind : actual) {
-      std::cerr << " " << amber::lexer::token_kind_name(kind);
+      std::cerr << " " << sputnik::lexer::token_kind_name(kind);
     }
     std::cerr << "\n";
     std::exit(1);
@@ -221,7 +221,7 @@ void test_unicode_identifier_forms() {
 
 void test_w13_comments_ranges_and_numbers() {
   expect_kinds("w13 shebang comments ranges and numeric forms",
-               "#!/usr/bin/env amber\n"
+               "#!/usr/bin/env sputnik\n"
                "x = 1..10 # inclusive range\n"
                "1_000 0xFF 0b1010_0101 0o755 1e9 1.2e-3\n",
                {TokenKind::Identifier, TokenKind::Equal, TokenKind::Integer,
@@ -235,7 +235,7 @@ void test_w13_comments_ranges_and_numbers() {
                {TokenKind::Identifier, TokenKind::Hash,
                 TokenKind::Identifier, TokenKind::Newline, TokenKind::Eof});
 
-  amber::lexer::LexResult bad_number = lex_raw("1__0\n");
+  sputnik::lexer::LexResult bad_number = lex_raw("1__0\n");
   if (bad_number.ok()) {
     std::cerr << "lexer test failed: invalid numeric separators accepted\n";
     std::exit(1);
@@ -269,14 +269,14 @@ void test_string_interpolation_lexing() {
                "\"#{if ok then \"yes\" else \"no\"}\"\n",
                {TokenKind::String, TokenKind::Newline, TokenKind::Eof});
 
-  amber::lexer::LexResult bad_escape = lex_raw("\"bad\\q\"\n");
+  sputnik::lexer::LexResult bad_escape = lex_raw("\"bad\\q\"\n");
   if (bad_escape.ok() || bad_escape.diagnostics.empty() ||
       bad_escape.diagnostics[0].code != "AMB_STRING_BAD_ESCAPE") {
     std::cerr << "lexer test failed: bad escape diagnostic code\n";
     std::exit(1);
   }
 
-  amber::lexer::LexResult unterminated = lex_raw("\"#{value\"\n");
+  sputnik::lexer::LexResult unterminated = lex_raw("\"#{value\"\n");
   if (unterminated.ok() || unterminated.diagnostics.empty() ||
       unterminated.diagnostics[0].code != "AMB_STRING_INTERP_UNTERMINATED" ||
       unterminated.diagnostics[0].phase != "lexer") {

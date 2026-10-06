@@ -12,7 +12,7 @@ Follows: RESEARCH-heap-fragmentation-allocators-2026-06-12.md §7.1; Layer-2a
 interned string is a permanent slot, never reclaimed. A long-running app that
 builds distinct strings (logs, JSON, `+` concatenation, `Str()`/`to_str`) grows
 the table without bound. Layer-2a replaced the O(n) intern scan with a hash
-index, fixing the *time* blowup (O(n²)→O(n), ~125× on `intern_scaling.am`). It
+index, fixing the *time* blowup (O(n²)→O(n), ~125× on `intern_scaling.s`). It
 did **not** bound the *space* — that is this doc.
 
 This is the one growth source no allocator swap touches (RESEARCH §3.3): in the
@@ -88,7 +88,7 @@ and large strings need a heap form anyway — so it is a subset of Option A with
 its own equality complexity and little standalone payoff.
 
 **Option D — observability + bound-by-policy (cheap, safe, now).** Not a reclaim
-fix, but: (1) surface runtime string-table count/bytes in the `AMBER_HEAP_STATS`
+fix, but: (1) surface runtime string-table count/bytes in the `SPUTNIK_HEAP_STATS`
 dump so the leak is *measured* (closes RESEARCH §9's "track it") — computable
 **runner-side** from `ExecutionResult.runtime_strings` vs. the executed module's
 compile-time `module.strings.size()`, with no VM API or `RuntimeHeapStats`

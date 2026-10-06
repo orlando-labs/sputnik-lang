@@ -6,11 +6,11 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
-// --- BigInt magnitude arithmetic (amber.numeric-profile.v1) ---------------
+// --- BigInt magnitude arithmetic (sputnik.numeric-profile.v1) ---------------
 // Magnitudes are little-endian base-2^32 limb vectors internally so that all
 // products and partial divisions fit 64-bit accumulators (-Wpedantic builds
 // stay free of __int128). BigIntValue stores base-2^64 limbs; conversion
@@ -622,4 +622,4 @@ bool numeric_pow_int64(std::int64_t lhs, std::int64_t rhs,
   return numeric_resolve(result, overflowed, positive_overflow, policy, out);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

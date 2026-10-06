@@ -9,7 +9,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct RuntimeWatchCellSnapshot {
   std::uint64_t cell_id = 0;
@@ -307,4 +307,4 @@ private:
   std::shared_ptr<Impl> impl_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

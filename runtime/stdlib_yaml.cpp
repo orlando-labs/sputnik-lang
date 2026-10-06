@@ -12,7 +12,7 @@
 // The generator emits block style: nested collections hang under their `key:`
 // or `-` on the following indented lines, empty collections render inline as
 // `{}` / `[]`. Its output is a fixed point of the parser (round-trips), and it
-// mirrors the native-lane emitter in tools/amberc/main.cpp so both backends
+// mirrors the native-lane emitter in tools/sputnik/main.cpp so both backends
 // produce byte-identical results.
 
 #include "runtime/stdlib_registry.h"
@@ -28,7 +28,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -1246,4 +1246,4 @@ void register_yaml_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

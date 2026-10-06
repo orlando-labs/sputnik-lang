@@ -7,7 +7,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::capability {
+namespace sputnik::capability {
 
 namespace {
 
@@ -303,7 +303,7 @@ std::string request_to_text(const CapabilityRequest &request) {
 std::string resolution_to_json(const CapabilityResolutionResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.capabilities.v1\",\n";
+  out << "  \"schema\": \"sputnik.capabilities.v1\",\n";
   out << "  \"status\": \"" << (result.ok ? "ok" : "error") << "\",\n";
   emit_request_array(out, "requested", result.requested, true);
   emit_request_array(out, "grants", result.grants, true);
@@ -325,4 +325,4 @@ std::string resolution_to_json(const CapabilityResolutionResult &result) {
   return out.str();
 }
 
-} // namespace amber::capability
+} // namespace sputnik::capability

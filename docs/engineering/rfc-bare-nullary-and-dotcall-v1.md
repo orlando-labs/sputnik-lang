@@ -1,18 +1,18 @@
-# Amber RFC: Bare-call для nullary-методов и chained callable-call `expr.()`
+# Sputnik RFC: Bare-call для nullary-методов и chained callable-call `expr.()`
 
 **Статус:** принято как проектное решение; правило расширено 2026-10-03
-**Область:** surface syntax, postfix expressions, properties, callable values, dispatch/lowering, diagnostics  
+**Область:** surface syntax, postfix expressions, properties, callable values, dispatch/lowering, diagnostics
 **Ключевые формы:** `obj.member`, `obj.member()`, `obj.member.()`, `obj.member.call()`, `obj.?.member`, `obj.?.member.?.()`
 
 ---
 
 ## 0. Краткое резюме
 
-Amber принимает ограниченный **bare-call** для nullary-методов: member access вида `receiver.name` может выполнять implicit zero-argument send, если `name` резолвится в метод, принимающий ноль аргументов, в том числе с default-параметрами.
+Sputnik принимает ограниченный **bare-call** для nullary-методов: member access вида `receiver.name` может выполнять implicit zero-argument send, если `name` резолвится в метод, принимающий ноль аргументов, в том числе с default-параметрами.
 
 Одновременно вводится postfix callable-call segment:
 
-```amber
+```sputnik
 expr.()
 expr.(arg1, arg2)
 expr.?.()
@@ -23,7 +23,7 @@ expr.?.(arg1, arg2)
 
 Итоговая триада:
 
-```amber
+```sputnik
 obj.member       # read/query: property get OR implicit nullary method send
 obj.member()     # explicit method send to member `member`
 obj.member.()    # callable-call of the value produced by `obj.member`
@@ -31,7 +31,7 @@ obj.member.()    # callable-call of the value produced by `obj.member`
 
 `&target` сохраняет статус callable-reference контекста и никогда не вызывает target:
 
-```amber
+```sputnik
 &Namespace.fn
 &Class.method
 &Class#method
@@ -41,9 +41,9 @@ obj.member.()    # callable-call of the value produced by `obj.member`
 
 ## 1. Проблематика
 
-В Amber уже существует красивая и строгая парадигма разделения:
+В Sputnik уже существует красивая и строгая парадигма разделения:
 
-```amber
+```sputnik
 prop size:
  @items.length
 
@@ -53,13 +53,13 @@ def size():
 
 `prop` даёт field-like доступ:
 
-```amber
+```sputnik
 collection.size
 ```
 
 `def` даёт method-call доступ:
 
-```amber
+```sputnik
 collection.size()
 ```
 
@@ -74,7 +74,7 @@ collection.size()
 
 Особенно проблемны API, где реализация естественно мигрирует между stored/computed value:
 
-```amber
+```sputnik
 user.full_name
 collection.size
 settings.cache_dir
@@ -93,7 +93,7 @@ Build.version
 
 Если член концептуально является value/query, call site должен иметь устойчивую форму:
 
-```amber
+```sputnik
 collection.size
 user.full_name
 Build.version
@@ -101,7 +101,7 @@ Build.version
 
 Внутренняя реализация может быть property descriptor:
 
-```amber
+```sputnik
 class User:
  prop full_name:
   "#{@first} #{@last}"
@@ -109,7 +109,7 @@ class User:
 
 или nullary method:
 
-```amber
+```sputnik
 class User:
  def full_name():
   "#{@first} #{@last}"
@@ -119,23 +119,23 @@ class User:
 
 ### 2.2. Ruby-like ergonomics без потери callable model
 
-Amber уже ориентирован на Ruby-like object model, chaining, blocks и query-method suffixes `?` / `!`. Для такого языка естественна форма:
+Sputnik уже ориентирован на Ruby-like object model, chaining, blocks и query-method suffixes `?` / `!`. Для такого языка естественна форма:
 
-```amber
+```sputnik
 if users.empty?:
  render_empty_state()
 ```
 
 Она читается лучше, чем:
 
-```amber
+```sputnik
 if users.empty?():
  render_empty_state()
 ```
 
-При этом Amber сохраняет explicit callable references через `&target`, поэтому можно отделить:
+При этом Sputnik сохраняет explicit callable references через `&target`, поэтому можно отделить:
 
-```amber
+```sputnik
 users.empty?     # invoke/read query
 &Array#empty?    # reference to method, no invocation
 ```
@@ -146,13 +146,13 @@ users.empty?     # invoke/read query
 
 Например:
 
-```amber
+```sputnik
 factory.provider
 ```
 
 может вернуть callable object или closure. Тогда нужен удобный способ вызвать это значение в chain без записи:
 
-```amber
+```sputnik
 (factory.provider)()
 ```
 
@@ -160,13 +160,13 @@ factory.provider
 
 Поэтому вводится Elixir-style postfix callable-call:
 
-```amber
+```sputnik
 factory.provider.()
 ```
 
 Он означает именно:
 
-```amber
+```sputnik
 (factory.provider)()
 ```
 
@@ -180,13 +180,13 @@ factory.provider.()
 
 Member access:
 
-```amber
+```sputnik
 receiver.name
 ```
 
 разрешает implicit invocation, если `name` резолвится в метод, принимающий ноль аргументов.
 
-```amber
+```sputnik
 class Collection:
  def size():
   @items.length
@@ -201,7 +201,7 @@ Bare-callable method — метод, которому можно передат�
 коллекции, block получает `null`; defaults вычисляются обычным binder'ом
 при каждом вызове, в том же порядке и с теми же проверками, что при `name()`.
 
-```amber
+```sputnik
 def format(mode = :short):
  ...
 
@@ -224,7 +224,7 @@ Bare-форма теперь отражает допустимую арност�
 
 Форма:
 
-```amber
+```sputnik
 receiver.name()
 ```
 
@@ -234,7 +234,7 @@ receiver.name()
 
 Если `name` является property, то:
 
-```amber
+```sputnik
 receiver.name()
 ```
 
@@ -247,7 +247,7 @@ property `name` is not a method; use `receiver.name` or `receiver.name.()` if th
 
 Для вызова значения, возвращённого property или implicit-nullary member, используется:
 
-```amber
+```sputnik
 receiver.name.()
 ```
 
@@ -255,7 +255,7 @@ receiver.name.()
 
 Вводится postfix segment:
 
-```amber
+```sputnik
 expr.()
 expr.(arg1, arg2)
 expr.(keyword: value)
@@ -264,13 +264,13 @@ expr.(*args, **kwargs)
 
 Семантика:
 
-```amber
+```sputnik
 expr.(args...)
 ```
 
 эквивалентна:
 
-```amber
+```sputnik
 (expr)(args...)
 ```
 
@@ -278,13 +278,13 @@ expr.(args...)
 
 Пример:
 
-```amber
+```sputnik
 factory.provider.().configure().start()
 ```
 
 означает:
 
-```amber
+```sputnik
 (factory.provider)().configure().start()
 ```
 
@@ -292,20 +292,20 @@ factory.provider.().configure().start()
 
 Вводится safe variant:
 
-```amber
+```sputnik
 expr.?.()
 expr.?.(arg1, arg2)
 ```
 
 Семантика:
 
-```amber
+```sputnik
 expr.?.(args...)
 ```
 
 если `expr == null`, результат `null`; иначе вызывается callable value:
 
-```amber
+```sputnik
 tmp = expr
 if tmp == null:
  null
@@ -315,7 +315,7 @@ else:
 
 Пример:
 
-```amber
+```sputnik
 factory.?.provider.?.().configure()
 ```
 
@@ -329,7 +329,7 @@ factory.?.provider.?.().configure()
 
 Форма:
 
-```amber
+```sputnik
 expr.call()
 ```
 
@@ -337,7 +337,7 @@ expr.call()
 
 Это важно, потому что:
 
-```amber
+```sputnik
 factory.provider.call()
 ```
 
@@ -348,7 +348,7 @@ factory.provider.call()
 
 А:
 
-```amber
+```sputnik
 factory.provider.()
 ```
 
@@ -368,7 +368,7 @@ expr.()      -> HCall(expr, [])
 
 `&target` — отдельный syntactic reference context. Он не производит invocation, даже если target является nullary method.
 
-```amber
+```sputnik
 Build.version       # property get OR implicit nullary class-side send
 &Build.version      # callable reference to class-side method, no invocation
 &Build#version      # unbound instance method reference, no invocation
@@ -393,7 +393,7 @@ Build.version       # property get OR implicit nullary class-side send
 
 Пример:
 
-```amber
+```sputnik
 class Account:
  prop balance:
   get:
@@ -411,7 +411,7 @@ account.balance
 
 Nullary `def` не становится assignable:
 
-```amber
+```sputnik
 class Account:
  def balance():
   @balance
@@ -457,7 +457,7 @@ PostfixSegment ::=
 
 Examples:
 
-```amber
+```sputnik
 expr.()
 expr.(x, y)
 expr.?.()
@@ -470,13 +470,13 @@ The form is unambiguous because after `.` the parser sees `(` rather than an ide
 
 The parser must preserve the distinction syntax-faithfully.
 
-```amber
+```sputnik
 obj.member()
 ```
 
 is a method-call segment.
 
-```amber
+```sputnik
 obj.member.()
 ```
 
@@ -492,7 +492,7 @@ The AST must not erase this distinction.
 
 For:
 
-```amber
+```sputnik
 receiver.name
 ```
 
@@ -509,7 +509,7 @@ Property/method conflicts for the same selector remain forbidden by conservative
 
 For:
 
-```amber
+```sputnik
 receiver.name(args...)
 ```
 
@@ -521,7 +521,7 @@ If the selected member is a property, diagnostic is preferred over call-of-prope
 
 For:
 
-```amber
+```sputnik
 expr.(args...)
 ```
 
@@ -541,13 +541,13 @@ Implicit nullary send participates in normal dispatch semantics.
 
 For dynamic receivers:
 
-```amber
+```sputnik
 obj.foo
 ```
 
 if `foo` is not found as a property/readable member but may be a method, the dynamic path may perform zero-argument send and therefore may trigger:
 
-```amber
+```sputnik
 method_missing(:foo)
 ```
 
@@ -572,7 +572,7 @@ Alternatively, `HMemberRead` may be binder-resolved into existing `HSend`/`HCall
 
 Canonical lowerings:
 
-```amber
+```sputnik
 obj.size
 ```
 
@@ -582,7 +582,7 @@ HSend0Implicit(obj, :size)
 
 if `size` is a nullary method.
 
-```amber
+```sputnik
 obj.size()
 ```
 
@@ -590,7 +590,7 @@ obj.size()
 HSend(obj, :size, [], {}, null)
 ```
 
-```amber
+```sputnik
 obj.size.()
 ```
 
@@ -599,7 +599,7 @@ tmp = HMemberReadOrImplicitSend(obj, :size)
 HCall(tmp, [], {}, null)
 ```
 
-```amber
+```sputnik
 obj.size.call()
 ```
 
@@ -610,7 +610,7 @@ HSend(tmp, :call, [], {}, null)
 
 Safe lowering:
 
-```amber
+```sputnik
 obj.?.provider.?.()
 ```
 
@@ -629,13 +629,13 @@ This feature does not require a slow path when type information is available.
 
 If receiver type is known and the member resolves to a nullary method, compiler can lower:
 
-```amber
+```sputnik
 collection.size
 ```
 
 to the same direct call as:
 
-```amber
+```sputnik
 collection.size()
 ```
 
@@ -717,7 +717,7 @@ method marked expensive/io/async should be called with explicit parentheses
 
 For:
 
-```amber
+```sputnik
 factory.provider()
 ```
 
@@ -729,7 +729,7 @@ Use `factory.provider.()` to call the property value.
 
 For:
 
-```amber
+```sputnik
 obj.format
 ```
 
@@ -741,7 +741,7 @@ Method `format` is not bare-callable because it requires arguments. Use `obj.for
 
 For:
 
-```amber
+```sputnik
 cache.clear!
 ```
 
@@ -756,7 +756,7 @@ produces no diagnostic.
 
 Before:
 
-```amber
+```sputnik
 class Collection:
  prop size:
   @items.length
@@ -766,7 +766,7 @@ collection.size
 
 After:
 
-```amber
+```sputnik
 class Collection:
  def size():
   @items.length
@@ -778,7 +778,7 @@ Call sites do not change.
 
 ### 10.2. Explicit method call still works
 
-```amber
+```sputnik
 collection.size
 collection.size()
 ```
@@ -789,7 +789,7 @@ The first is query/read syntax; the second is explicit invocation syntax.
 
 ### 10.3. Callable-returning property
 
-```amber
+```sputnik
 class Factory:
  prop provider:
   | |: Service()
@@ -801,7 +801,7 @@ factory.provider()     # diagnostic: property is not a method
 
 ### 10.4. Callable-returning nullary method
 
-```amber
+```sputnik
 class Factory:
  def provider():
   | |: Service()
@@ -813,13 +813,13 @@ factory.provider.()    # implicit call provider(), then call returned callable
 
 ### 10.5. Ordinary `.call()`
 
-```amber
+```sputnik
 factory.provider.call()
 ```
 
 This sends `:call` to the value returned by `factory.provider`.
 
-```amber
+```sputnik
 factory.provider.()
 ```
 
@@ -827,7 +827,7 @@ This invokes the value returned by `factory.provider` through the generic callab
 
 ### 10.6. Safe chain
 
-```amber
+```sputnik
 service.?.factory.?.provider.?.().start()
 ```
 
@@ -846,7 +846,7 @@ Reading left to right:
 
 The biggest benefit is that public query-like API no longer exposes whether implementation is `prop` or nullary `def`.
 
-```amber
+```sputnik
 user.name
 user.full_name
 collection.size
@@ -858,7 +858,7 @@ can survive internal rewrites between descriptor and method forms.
 
 Methods ending in `?` become visually natural:
 
-```amber
+```sputnik
 if users.empty?:
  ...
 ```
@@ -869,13 +869,13 @@ This improves readability for predicates and cheap query methods.
 
 `expr.()` avoids disruptive grouping:
 
-```amber
+```sputnik
 factory.provider.().configure().start()
 ```
 
 instead of:
 
-```amber
+```sputnik
 (factory.provider)().configure().start()
 ```
 
@@ -883,7 +883,7 @@ instead of:
 
 Because `&target` remains a separate context, bare-call does not steal the ability to refer to methods:
 
-```amber
+```sputnik
 obj.size       # invoke/read
 &Class#size    # reference
 ```
@@ -898,7 +898,7 @@ For dynamic receivers, the operation is an ordinary zero-argument send with inli
 
 The accepted syntax gives a simple rule:
 
-```amber
+```sputnik
 x.y()   # call member y
 x.y.()  # call result of x.y
 ```
@@ -913,7 +913,7 @@ This is more precise than allowing `x.y()` to sometimes mean “call property re
 
 After this change:
 
-```amber
+```sputnik
 obj.name
 ```
 
@@ -929,7 +929,7 @@ The language cannot know whether a nullary method is cheap and pure.
 
 Bad APIs may expose expensive or effectful methods as bare-callable:
 
-```amber
+```sputnik
 socket.read
 random.next
 cache.clear!
@@ -943,7 +943,7 @@ This is the point of the feature, but it also hides assignability and descriptor
 
 A reader cannot tell from:
 
-```amber
+```sputnik
 account.balance
 ```
 
@@ -951,7 +951,7 @@ whether `balance` is a property or nullary method.
 
 If assignment exists:
 
-```amber
+```sputnik
 account.balance = 10
 ```
 
@@ -979,7 +979,7 @@ If `obj.name()` sometimes calls method `name`, sometimes calls result of propert
 
 The accepted rule is sharper:
 
-```amber
+```sputnik
 obj.name()   # method call
 obj.name.()  # result call
 ```
@@ -1037,7 +1037,7 @@ controllers and mixin-heavy DSLs to use inherited APIs without repetitive
 
 Recommended bare-call style:
 
-```amber
+```sputnik
 collection.size
 collection.empty?
 user.full_name
@@ -1048,7 +1048,7 @@ path.dirname
 
 Recommended action style:
 
-```amber
+```sputnik
 cache.clear!
 user.save!
 db.connect
@@ -1069,7 +1069,7 @@ operation is:
 
 `?` query methods are good candidates for bare-call if they are cheap and side-effect-free:
 
-```amber
+```sputnik
 users.empty?
 config.valid?
 connection.open?
@@ -1078,7 +1078,7 @@ connection.open?
 `!` methods should generally use the bare form; the suffix already makes the
 mutation convention visible:
 
-```amber
+```sputnik
 cache.clear!
 record.save!
 ```
@@ -1093,7 +1093,7 @@ This is a compatibility-affecting change relative to the previous property-only 
 
 Previously:
 
-```amber
+```sputnik
 obj.name
 ```
 
@@ -1105,7 +1105,7 @@ After this RFC, it may call `name()` if the method is zero-argument-callable.
 
 Previously, a design could allow:
 
-```amber
+```sputnik
 obj.prop()
 ```
 
@@ -1113,7 +1113,7 @@ to mean call of result returned by `obj.prop`.
 
 This RFC rejects that interpretation and reserves:
 
-```amber
+```sputnik
 obj.prop()
 ```
 
@@ -1121,13 +1121,13 @@ for method call syntax only.
 
 Call-result must be written:
 
-```amber
+```sputnik
 obj.prop.()
 ```
 
 or, if grouping is preferred:
 
-```amber
+```sputnik
 (obj.prop)()
 ```
 
@@ -1135,19 +1135,19 @@ or, if grouping is preferred:
 
 Compiler should provide targeted fix-its:
 
-```amber
+```sputnik
 obj.prop()
 ```
 
 if `prop` is known property returning callable:
 
-```amber
+```sputnik
 obj.prop.()
 ```
 
 if user wanted method call but `prop` is property:
 
-```amber
+```sputnik
 # define `def prop():` or call an actual method
 ```
 
@@ -1157,7 +1157,7 @@ if user wanted method call but `prop` is property:
 
 ### 16.1. Positive tests
 
-```amber
+```sputnik
 class Box:
  def size():
   10
@@ -1167,7 +1167,7 @@ assert box.size == 10
 assert box.size() == 10
 ```
 
-```amber
+```sputnik
 class Box:
  prop provider:
   | |: 42
@@ -1176,7 +1176,7 @@ box = Box()
 assert box.provider.() == 42
 ```
 
-```amber
+```sputnik
 class Box:
  def provider():
   | |: 42
@@ -1186,7 +1186,7 @@ assert box.provider.() == 42
 assert box.provider().() == 42
 ```
 
-```amber
+```sputnik
 class Box:
  prop value:
   10
@@ -1195,7 +1195,7 @@ box = Box()
 assert box.value == 10
 ```
 
-```amber
+```sputnik
 class Build:
  class_method def version():
   "1.0"
@@ -1204,7 +1204,7 @@ assert Build.version == "1.0"
 assert Build.version() == "1.0"
 ```
 
-```amber
+```sputnik
 maybe_provider = null
 assert maybe_provider.?.() == null
 ```
@@ -1216,7 +1216,7 @@ with effects evaluated exactly once, and dependencies on earlier defaults.
 
 ### 16.2. Negative tests
 
-```amber
+```sputnik
 class Box:
  def format(mode):
   "x"
@@ -1226,7 +1226,7 @@ box.format
 ### E_BARE_NON_NULLARY_METHOD or equivalent diagnostic
 ```
 
-```amber
+```sputnik
 class Box:
  prop provider:
   | |: 42
@@ -1236,18 +1236,18 @@ box.provider()
 ### E_PROPERTY_CALLED_AS_METHOD
 ```
 
-```amber
+```sputnik
 x = 10
 x.()
 ### E_NOT_CALLABLE
 ```
 
-```amber
+```sputnik
 .()
 ### E_DOT_CALL_TARGET_REQUIRED
 ```
 
-```amber
+```sputnik
 class Box:
  prop name:
   "a"
@@ -1270,7 +1270,7 @@ class Box:
    syntax without a dedicated warning or strict-profile error.
 7. Whether `expr.()` should support block suffix directly:
 
-```amber
+```sputnik
 provider.() |x|:
  ...
 ```
@@ -1281,9 +1281,9 @@ or only ordinary call arguments in v1.
 
 ## 18. Final accepted rule
 
-Amber adopts this rule set:
+Sputnik adopts this rule set:
 
-```amber
+```sputnik
 obj.member       # property get OR implicit nullary method send
 obj.member()     # explicit method send only
 obj.member.()    # call returned callable value
@@ -1292,7 +1292,7 @@ obj.member.call()# ordinary `call` method send to returned value
 
 Safe variants:
 
-```amber
+```sputnik
 obj.?.member
 obj.?.member()
 obj.?.member.?.()
@@ -1300,7 +1300,7 @@ obj.?.member.?.()
 
 Callable references:
 
-```amber
+```sputnik
 &Namespace.fn
 &Class.method
 &Class#method

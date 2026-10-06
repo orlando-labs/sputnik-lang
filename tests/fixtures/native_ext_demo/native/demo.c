@@ -1,25 +1,25 @@
 /* Native acceleration for `native def doubled` (native-packages 5c-ii test).
- * Deliberately returns a different value than the Amber fallback body
+ * Deliberately returns a different value than the Sputnik fallback body
  * (n * 2, not n * 10) so a passing test proves the native binary calls this
  * thunk rather than running the bytecode body. */
-#include "runtime/amber_ext.h"
+#include "runtime/sputnik_ext.h"
 
-AmberStatus amber_demo_doubled(AmberCtx *cx, const AmberValue *args,
-                               size_t argc, AmberValue *out) {
+SputnikStatus sputnik_demo_doubled(SputnikCtx *cx, const SputnikValue *args,
+                               size_t argc, SputnikValue *out) {
   int64_t n = 0;
-  if (argc != 1 || !amber_as_int(cx, args[0], &n)) {
-    return amber_fault(cx, "TypeError", "doubled expects one Int argument");
+  if (argc != 1 || !sputnik_as_int(cx, args[0], &n)) {
+    return sputnik_fault(cx, "TypeError", "doubled expects one Int argument");
   }
-  *out = amber_make_int(cx, n * 2);
-  return AMBER_OK;
+  *out = sputnik_make_int(cx, n * 2);
+  return SPUTNIK_OK;
 }
 
-AmberStatus amber_demo_fail_leaf(AmberCtx *cx, const AmberValue *args,
-                                 size_t argc, AmberValue *out) {
+SputnikStatus sputnik_demo_fail_leaf(SputnikCtx *cx, const SputnikValue *args,
+                                 size_t argc, SputnikValue *out) {
   (void)args;
   (void)out;
   if (argc != 0) {
-    return amber_fault(cx, "TypeError", "fail_leaf expects no arguments");
+    return sputnik_fault(cx, "TypeError", "fail_leaf expects no arguments");
   }
-  return amber_fault(cx, "Demo.NativeLeafError", "native leaf failed");
+  return sputnik_fault(cx, "Demo.NativeLeafError", "native leaf failed");
 }

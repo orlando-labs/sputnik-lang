@@ -1,9 +1,9 @@
 # UUID
 
-`Uuid` is Amber's immutable 128-bit UUID value type. `UUID` is an equivalent
+`Uuid` is Sputnik's immutable 128-bit UUID value type. `UUID` is an equivalent
 prelude alias for schema and annotation spelling.
 
-```amber
+```sputnik
 id = Uuid.v4()
 ordered_id = Uuid.v7()
 same = Uuid.parse(id.to_str)

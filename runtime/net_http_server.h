@@ -25,7 +25,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct RuntimeHttpServerStats {
   std::uint64_t accepted = 0;
@@ -450,11 +450,11 @@ struct RuntimeHttpServerServeResult : RuntimeIoStatus {
 };
 
 // Runs the accept/request/response loop against a generated native block.
-// The block's typed HTTP entry owns Amber value conversion; this transport
+// The block's typed HTTP entry owns Sputnik value conversion; this transport
 // layer remains independent from Vm, Frame, RuntimeWorld, and bytecode.
 RuntimeHttpServerServeResult runtime_http_server_serve_native(
     const std::shared_ptr<RuntimeHttpServer> &server,
     const std::shared_ptr<RuntimeNativeBlock> &handler,
     std::optional<std::size_t> max_requests = std::nullopt);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

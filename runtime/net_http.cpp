@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime::http {
+namespace sputnik::runtime::http {
 
 namespace {
 
@@ -827,4 +827,4 @@ HttpExchangeResult http_perform(HttpTransport &transport,
   return result;
 }
 
-} // namespace amber::runtime::http
+} // namespace sputnik::runtime::http

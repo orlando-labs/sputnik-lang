@@ -11,17 +11,17 @@
 
 namespace {
 
-using amber::bytecode::BcClass;
-using amber::bytecode::BcCode;
-using amber::bytecode::BcModule;
-using amber::bytecode::CodeKind;
-using amber::bytecode::Constant;
-using amber::bytecode::ConstantKind;
-using amber::bytecode::DepEntry;
-using amber::bytecode::ExportEntry;
-using amber::bytecode::GraphModule;
-using amber::bytecode::Instruction;
-using amber::bytecode::Opcode;
+using sputnik::bytecode::BcClass;
+using sputnik::bytecode::BcCode;
+using sputnik::bytecode::BcModule;
+using sputnik::bytecode::CodeKind;
+using sputnik::bytecode::Constant;
+using sputnik::bytecode::ConstantKind;
+using sputnik::bytecode::DepEntry;
+using sputnik::bytecode::ExportEntry;
+using sputnik::bytecode::GraphModule;
+using sputnik::bytecode::Instruction;
+using sputnik::bytecode::Opcode;
 
 void expect(bool condition, const std::string &message) {
   if (!condition) {
@@ -34,7 +34,7 @@ GraphModule module(const std::string &name,
                    const std::vector<std::string> &dependencies = {}) {
   GraphModule result;
   result.name = name;
-  result.path = name + ".am";
+  result.path = name + ".s";
   result.module.format_version = {1, 0};
   result.module.language_version = {1, 0};
   for (const std::string &dependency : dependencies) {
@@ -100,16 +100,16 @@ void add_function_export(GraphModule *module, const std::string &name) {
       {selector, kind, 0, 1, false, 0});
 }
 
-void expect_valid_output(const amber::bytecode::GraphLinkResult &result) {
+void expect_valid_output(const sputnik::bytecode::GraphLinkResult &result) {
   expect(result.ok, "link should succeed");
-  const auto decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(result.module));
+  const auto decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(result.module));
   expect(decoded.ok(), "linked output should verify after serialization");
 }
 
 void test_root_union_and_determinism() {
   const std::vector<GraphModule> modules = {module("b"), module("a")};
-  const auto result = amber::bytecode::link_graph(
+  const auto result = sputnik::bytecode::link_graph(
       modules, std::vector<std::string>{"a", "b"});
   expect_valid_output(result);
   expect(result.init_order == std::vector<std::string>({"a", "b"}),
@@ -120,7 +120,7 @@ void test_transitive_order_and_external_namespace() {
   const std::vector<GraphModule> modules = {
       module("root", {"dep", "native.ns"}), module("dep", {"leaf"}),
       module("leaf")};
-  const auto result = amber::bytecode::link_graph(
+  const auto result = sputnik::bytecode::link_graph(
       modules, "root", [](const std::string &name) {
         return name == "native.ns";
       });
@@ -130,7 +130,7 @@ void test_transitive_order_and_external_namespace() {
 }
 
 void test_dependency_declaration_order_is_preserved() {
-  const auto result = amber::bytecode::link_graph(
+  const auto result = sputnik::bytecode::link_graph(
       {module("root", {"b", "a", "b"}), module("a"), module("b")},
       "root");
   expect_valid_output(result);
@@ -142,7 +142,7 @@ void test_dependency_compatibility_is_enforced() {
   GraphModule root = module("root", {"dep"});
   GraphModule dep = module("dep");
   root.module.dependencies[0].required_format = {1, 1};
-  expect(!amber::bytecode::link_graph({root, dep}, "root").ok,
+  expect(!sputnik::bytecode::link_graph({root, dep}, "root").ok,
          "required bytecode format must be checked during graph linking");
 
   root = module("root", {"dep"});
@@ -150,14 +150,14 @@ void test_dependency_compatibility_is_enforced() {
   root.module.dependencies[0].abi_requirement.fill(0xABU);
   dep = module("dep");
   dep.module.abi_hash.fill(0xCDU);
-  expect(!amber::bytecode::link_graph({root, dep}, "root").ok,
+  expect(!sputnik::bytecode::link_graph({root, dep}, "root").ok,
          "dependency ABI requirements must be checked during graph linking");
 }
 
 void test_input_verification_and_file_flags_are_rejected() {
   GraphModule invalid = module("invalid");
   invalid.module.file_flags = 0x2U;
-  expect(!amber::bytecode::link_graph({invalid}, "invalid").ok,
+  expect(!sputnik::bytecode::link_graph({invalid}, "invalid").ok,
          "unsupported file flags must not be silently discarded");
 
   invalid = module("invalid");
@@ -165,7 +165,7 @@ void test_input_verification_and_file_flags_are_rejected() {
   BcClass klass;
   klass.class_name_sym_id = 99;
   invalid.module.classes.push_back(klass);
-  expect(!amber::bytecode::link_graph({invalid}, "invalid").ok,
+  expect(!sputnik::bytecode::link_graph({invalid}, "invalid").ok,
          "invalid reachable bytecode must fail before remapping");
 }
 
@@ -182,7 +182,7 @@ void test_pattern_ids_are_module_local_identities() {
     modules[i]->module.methods[0].clause_table.push_back(
         {ids[i], 1, 1, 1, 0});
   }
-  const auto result = amber::bytecode::link_graph(
+  const auto result = sputnik::bytecode::link_graph(
       {left, right, sparse}, std::vector<std::string>{"left", "right", "sparse"});
   expect_valid_output(result);
   std::set<std::uint32_t> mapped;
@@ -196,7 +196,7 @@ void test_pattern_ids_are_module_local_identities() {
 
 void test_import_metadata_cannot_bypass_dependency_admission() {
   GraphModule root = module("root");
-  root.module.strings = {"amber.import.alias:root\tfoo", "F\tmissing\tfoo\t0"};
+  root.module.strings = {"sputnik.import.alias:root\tfoo", "F\tmissing\tfoo\t0"};
   root.module.attrs.push_back({0, 1});
   BcCode init;
   init.code_id = 1;
@@ -206,15 +206,15 @@ void test_import_metadata_cannot_bypass_dependency_admission() {
                        {Opcode::Return, {{0, false}}}};
   root.module.code_objects.push_back(init);
   root.module.init = {true, 1, 0};
-  expect(!amber::bytecode::link_graph({root}, "root").ok,
+  expect(!sputnik::bytecode::link_graph({root}, "root").ok,
          "undeclared alias must not introduce an external namespace");
   root.module.strings.push_back("missing");
   DepEntry dependency;
   dependency.module_name_str_id = 2;
   root.module.dependencies.push_back(dependency);
-  expect(!amber::bytecode::link_graph({root}, "root").ok,
+  expect(!sputnik::bytecode::link_graph({root}, "root").ok,
          "declaring an alias dependency must not bypass host admission");
-  expect_valid_output(amber::bytecode::link_graph(
+  expect_valid_output(sputnik::bytecode::link_graph(
       {root}, "root", [](const std::string &name) { return name == "missing"; }));
 }
 
@@ -236,7 +236,7 @@ void test_pattern_operands_and_targets_are_relocated() {
   const std::uint32_t keyset_id =
       static_cast<std::uint32_t>(root.module.const_pool.size() - 1U);
 
-  root.module.strings.push_back("amber.import.alias:root\tf");
+  root.module.strings.push_back("sputnik.import.alias:root\tf");
   const std::uint32_t import_key =
       static_cast<std::uint32_t>(root.module.strings.size() - 1U);
   root.module.strings.push_back("F\tdep\tf\t0");
@@ -277,7 +277,7 @@ void test_pattern_operands_and_targets_are_relocated() {
   root.module.code_objects.push_back(init);
   root.module.init = {true, 1, 0};
 
-  const auto result = amber::bytecode::link_graph({dependency, root}, "root");
+  const auto result = sputnik::bytecode::link_graph({dependency, root}, "root");
   expect_valid_output(result);
   const auto code_it = std::find_if(
       result.module.code_objects.begin(), result.module.code_objects.end(),
@@ -322,20 +322,20 @@ void test_pattern_operands_and_targets_are_relocated() {
 }
 
 void test_failures_are_explicit() {
-  expect(!amber::bytecode::link_graph({module("root", {"missing"})}, "root")
+  expect(!sputnik::bytecode::link_graph({module("root", {"missing"})}, "root")
               .ok,
          "missing dependency should fail");
-  expect(!amber::bytecode::link_graph(
+  expect(!sputnik::bytecode::link_graph(
                    {module("a", {"b"}), module("b", {"a"})}, "a")
               .ok,
          "dependency cycle should fail");
-  expect(!amber::bytecode::link_graph({module("a"), module("a")}, "a").ok,
+  expect(!sputnik::bytecode::link_graph({module("a"), module("a")}, "a").ok,
          "duplicate module should fail");
   auto reexport = module("reexport");
   reexport.module.symbols = {"X"};
   reexport.module.strings = {"reexport", "dep"};
   reexport.module.exports.push_back({0, 0, 0, 1, true, 1});
-  expect(!amber::bytecode::link_graph({std::move(reexport)}, "reexport").ok,
+  expect(!sputnik::bytecode::link_graph({std::move(reexport)}, "reexport").ok,
          "re-export should be rejected explicitly");
 }
 
@@ -345,7 +345,7 @@ void test_class_paths_are_module_qualified() {
   GraphModule child = module("child", {"base"});
   add_class_export(&child, "Base");
   add_class_export(&child, "Child", "Base");
-  const auto result = amber::bytecode::link_graph({base, child}, "child");
+  const auto result = sputnik::bytecode::link_graph({base, child}, "child");
   expect_valid_output(result);
   expect(result.module.classes.size() == 3U, "all classes should be linked");
   expect(result.module.symbols[result.module.classes[0].class_name_sym_id] ==
@@ -383,20 +383,20 @@ int main() {
     outer.module.symbols = {"Public"};
     outer.module.strings = {"facade", "reexport", "Alias"};
     outer.module.exports.push_back({0, 1, 2, 1, true, 0});
-    auto linked = amber::bytecode::link_graph({outer, leaf, facade}, "outer");
+    auto linked = sputnik::bytecode::link_graph({outer, leaf, facade}, "outer");
     expect_valid_output(linked);
     expect(linked.exports.size() == 3 && linked.exports.back().qualified_path == "leaf.Thing" &&
            linked.exports.back().class_index == linked.exports.front().class_index,
            "transitive re-exports preserve class identity");
     outer.module.strings[2] = "Missing";
-    expect(!amber::bytecode::link_graph({outer, leaf, facade}, "outer").ok,
+    expect(!sputnik::bytecode::link_graph({outer, leaf, facade}, "outer").ok,
            "missing re-export source fails");
   }
   {
     auto native_errors = module("vendor.errors");
     add_class_export(&native_errors, "Vendor.Errors.Failure");
-    native_errors.module.classes.front().flags = amber::bytecode::kClassFlagNativeError;
-    auto linked = amber::bytecode::link_graph({native_errors}, "vendor.errors");
+    native_errors.module.classes.front().flags = sputnik::bytecode::kClassFlagNativeError;
+    auto linked = sputnik::bytecode::link_graph({native_errors}, "vendor.errors");
     expect_valid_output(linked);
     expect(linked.module.symbols.at(linked.module.classes.front().class_name_sym_id) ==
                "Vendor.Errors.Failure", "native error registry names must not be prefixed again");

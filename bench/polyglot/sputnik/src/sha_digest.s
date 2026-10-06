@@ -1,0 +1,28 @@
+package bench.polyglot.sha_digest
+
+export main
+
+def fold_digest(checksum, digest):
+  checksum + digest.count() + digest[0] + digest[digest.count() - 1]
+
+def main():
+  payloads = [
+    Bytes.new("Sputnik digest polyglot benchmark payload zero"),
+    Bytes.new("Sputnik digest polyglot benchmark payload one 1234567890"),
+    Bytes.new("The quick brown fox jumps over the lazy dog"),
+    Bytes.new("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+  ]
+  key = Bytes.new("sputnik-digest-benchmark-key")
+  checksum = 0
+  i = 0
+  while i < 4000:
+    data = payloads[i % payloads.count()]
+    checksum = fold_digest(checksum, Digest.crc32(data))
+    checksum = fold_digest(checksum, Digest.md5(data))
+    checksum = fold_digest(checksum, Digest.sha1(data))
+    checksum = fold_digest(checksum, Digest.sha256(data))
+    checksum = fold_digest(checksum, Digest.hmac_sha256(key, data))
+    i = i + 1
+  checksum
+
+main()

@@ -19,53 +19,53 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<stdlib-codecs-source-test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::BcModule compile_source_or_die(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<stdlib-codecs-source-test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   if (!emit_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(emit_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(emit_result.diagnostics);
     std::exit(1);
   }
 
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emit_result.module));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emit_result.module));
   if (!decoded.ok()) {
-    std::cerr << amber::bytecode::verify_errors_to_json(decoded.errors);
+    std::cerr << sputnik::bytecode::verify_errors_to_json(decoded.errors);
     std::exit(1);
   }
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult execute_source(const std::string &source) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+sputnik::runtime::ExecutionResult execute_source(const std::string &source) {
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "source module should have init code");
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
-void expect_ok_integer(const amber::runtime::ExecutionResult &result,
+void expect_ok_integer(const sputnik::runtime::ExecutionResult &result,
                        std::int64_t expected, const std::string &message) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << message << ": " << result.fault->error_name
@@ -78,7 +78,7 @@ void expect_ok_integer(const amber::runtime::ExecutionResult &result,
 
 void expect_fault(const std::string &source, const std::string &error_name,
                   const std::string &message) {
-  const amber::runtime::ExecutionResult result = execute_source(source);
+  const sputnik::runtime::ExecutionResult result = execute_source(source);
   expect(!result.ok() && result.fault.has_value(), message + " should fault");
   expect(result.fault->error_name == error_name,
          message + " should fault with " + error_name + ", got " +
@@ -86,7 +86,7 @@ void expect_fault(const std::string &source, const std::string &error_name,
 }
 
 void test_base64_hex_roundtrip() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "bytes = Bytes.new(\"hello\")\n"
       "a = Base64.encode(bytes)\n"
       "b = Base64.encode(bytes, padding: false)\n"
@@ -106,7 +106,7 @@ void test_base64_hex_roundtrip() {
 }
 
 void test_buffer_and_slice_inputs() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "buf = io.ByteBuffer(3)\n"
       "buf.put!(0)\n"
       "buf.put!(127)\n"

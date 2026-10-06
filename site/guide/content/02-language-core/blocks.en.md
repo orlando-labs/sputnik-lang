@@ -17,14 +17,14 @@ spec_refs:
 # Blocks, lambdas and block suffix
 
 A block is a piece of code passed to a call through a **dedicated channel**,
-not as a positional argument. This is a signature Amber trait: data pipelines
+not as a positional argument. This is a signature Sputnik trait: data pipelines
 stay on one readable line, without callback forests.
 
 ## Block suffix
 
 A block is written right after a call, with parameters in `|...|`:
 
-```amber
+```sputnik
 def probe():
   xs = [0, 1, 2, 3]
   xs.filter_map |x|:
@@ -46,7 +46,7 @@ a body.
 The same block can be captured as a standalone value — a lambda `|params|: body`.
 A lambda captures its lexical scope and is a first-class callable:
 
-```amber
+```sputnik
 def probe():
   inc = |x|: x + 1
   add = |a, b|: a + b
@@ -70,7 +70,7 @@ A function accepts a block as an explicit `&blk` parameter and forwards it as
 `&blk`. Inside the body `blk` is an ordinary callable; `blk == null` when no
 block was passed:
 
-```amber
+```sputnik
 def each(xs, &blk):
   i = 0
   n = xs.length

@@ -1,4 +1,4 @@
-# amber.data/schema.v1
+# sputnik.data/schema.v1
 
 Status: implemented for the `W11.4` dataframe/schema baseline.
 
@@ -19,8 +19,8 @@ stable query-plan identity without requiring a full table runtime yet.
 CLI:
 
 ```text
-amberc schema-check schema.amberschema
-amberc table-explain query.ambertable
+sputnik schema-check schema.sputnikschema
+sputnik table-explain query.sputniktable
 ```
 
 Both commands use deterministic line-oriented profile documents and emit

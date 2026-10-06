@@ -1,7 +1,7 @@
-# amber.runtime.v1
+# sputnik.runtime.v1
 
 Status: `W5.1` through `W8.3` runtime acceptance is satisfied, the `W8.4`
-full conformance runner gate is satisfied through `ambertest`, `W9.2`
+full conformance runner gate is satisfied through `sputniktest`, `W9.2`
 open-world transaction/freeze plus `W9.3` reflection mirror behavior is covered
 in VM tests, `W9.4` package artifact tooling is covered by package tests, and
 `W9.5` package hot-reload swaps, `W10.1` advanced concurrency runtime behavior,
@@ -54,7 +54,7 @@ Current implemented slice:
   `open -> frozen` state, `WorldFrozenError` guards, and observable
   `world_epoch` / owner `method_version` invalidation;
 - open-world dev-profile package hot reload in `RuntimeWorld`, using
-  `reload_package_artifact` to predecode a whole `.amberpkg` module set,
+  `reload_package_artifact` to predecode a whole `.sputnikpkg` module set,
   reject frozen worlds, enforce manifest identity plus ABI/profile/export
   surface and selector/arity compatibility, publish the root module atomically,
   and invalidate dispatch through a single `world_epoch` bump;
@@ -162,17 +162,17 @@ Current implemented slice:
   implementation writes `Connection: close` after one request per accepted
   connection;
 - `W10.4` native/JIT runtime bridge in `runtime/native_bridge.{h,cpp}` with
-  `amber.native.v1` world-epoch and method-version assumption checks,
+  `sputnik.native.v1` world-epoch and method-version assumption checks,
   frozen-world rejection, deterministic bytecode-trampoline execution through
   `RuntimeWorld::execute`, and explicit bytecode fallback for stale native
   assumptions when the caller discards invalid native code;
 - `W10.5` frozen image runtime loader in `runtime/frozen_image.{h,cpp}` with
-  verified `.amberimg` package load, immediate `RuntimeWorld::freeze_world()`,
+  verified `.sputnikimg` package load, immediate `RuntimeWorld::freeze_world()`,
   native metadata binding to the frozen world mirror when in-memory metadata is
   available, and package hot-reload rejection through the existing
   `WorldFrozenError` barrier;
 - `W8.1`-`W8.2` loader baseline in `runtime/module_loader.{h,cpp}` with
-  serialized `.amberbc` decode/verify on every load path, dependency graph
+  serialized `.sputnikbc` decode/verify on every load path, dependency graph
   linking, deterministic dependency-before-dependent module init, single-run
   init snapshots, missing-dependency/export `ImportError`, dependency
   format/language/ABI compatibility diagnostics, export-cell/import-alias
@@ -240,13 +240,13 @@ Current implemented slice:
   ordered transforms, generated rows, failure collection, isolation edges, and
   cancellation cleanup; `tests/threaded_backend_test.py` checks VM/native parity
   and strict native coverage, including the 10,000-process/500-worker workload;
-- `W8.4` conformance gate in `tools/ambertest` with deterministic fixture
+- `W8.4` conformance gate in `tools/sputniktest` with deterministic fixture
   discovery, focused mismatch rendering, phase aliases for
   `lower`/`compile`/`disasm`, positive `check`/`run`/`load` lanes, and
   cumulative `M1`-`M5` bundle filtering exposed through `make conformance`;
-- `W9.4` package tooling in `package/package.{h,cpp}` and `amberc package-*`
+- `W9.4` package tooling in `package/package.{h,cpp}` and `sputnik package-*`
   commands with restricted manifest parsing, deterministic lock rendering,
-  reproducible `.amberpkg` serialization, SHA-256 dev signatures, artifact
+  reproducible `.sputnikpkg` serialization, SHA-256 dev signatures, artifact
   verification, and filesystem registry install/publish smoke;
 - `W9.5` package hot-reload runtime path in `runtime/vm.{h,cpp}` with
   compatible body-swap success, incompatible export/arity rejection,
@@ -308,7 +308,7 @@ Current implemented slice:
   allocation/call/back-edge safepoints, native trampoline argument roots,
   reflective `SEND_DYN` stubs, frozen-world execution, and stale-assumption
   bytecode fallback, plus W10.5 frozen image coverage for reproducible
-  `.amberimg` build/verify, frozen runtime load, bound native execution, and
+  `.sputnikimg` build/verify, frozen runtime load, bound native execution, and
   reload-barrier rejection, plus W13 runtime coverage for uninitialized
   register reads, object `call` protocol dispatch through `CALL`, and structured
   source-span trace fields.

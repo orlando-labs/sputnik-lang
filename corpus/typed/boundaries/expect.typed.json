@@ -1,5 +1,5 @@
 {
-  "schema": "amber.typed.v1",
+  "schema": "sputnik.typed.v1",
   "status": "ok",
   "module": "typed.demo",
   "boundaries": [

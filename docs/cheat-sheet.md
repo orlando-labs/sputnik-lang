@@ -1,10 +1,10 @@
-# Amber cheat sheet
+# Sputnik cheat sheet
 
-Compact syntax reference + everyday recipes. Based on the working-tree [language spec](../amber_unified_final_spec.md), especially Parts I–III; [runtime grammar](../amber_runtime_project_design.md) fills in block parameters and lexical rules. Examples are independent; names such as `users`, `cfg`, and `load` stand for application values/APIs. Optional profiles and reference additions are marked separately.
+Compact syntax reference + everyday recipes. Based on the working-tree [language spec](../sputnik_unified_final_spec.md), especially Parts I–III; [runtime grammar](../sputnik_runtime_project_design.md) fills in block parameters and lexical rules. Examples are independent; names such as `users`, `cfg`, and `load` stand for application values/APIs. Optional profiles and reference additions are marked separately.
 
 ## 1. Essentials
 
-```amber
+```sputnik
 # Indentation defines suites; a colon opens a nonempty body.
 def double(x): x * 2                 # implicit return: last expression
 def no_op()                         # intentionally empty: omit the colon
@@ -33,7 +33,7 @@ Only `false` and `null` are falsy: `0`, `""`, `[]`, `{}` are truthy. Names may e
 
 ## 2. Collections, ranges, and absence
 
-```amber
+```sputnik
 xs = [1, 2, 3]                      # Array
 pair = (1, "a"); single = (1,)      # Tuple: comma matters
 tags = {:read, :write}; empty = Set{}
@@ -68,7 +68,7 @@ Array.filled(3, 0)                 # repeated value; objects share one reference
 
 ## 3. Blocks and chains — spaces matter
 
-```amber
+```sputnik
 users.map |u|: u.email.trimmed
 users.map: $it.email.trimmed         # $it == $it1 == _1; $it2 == _2, etc.
 numbers.map: $it * 2 .select: $it > 0 .reduce(0): $it1 + $it2
@@ -86,7 +86,7 @@ Conditional chain segments use `.call(args) if condition` or `.call if condition
 
 ## 4. Functions, types, and callable values
 
-```amber
+```sputnik
 def greet(name as Str, prefix: "Hi") -> Str:
   "#{prefix}, #{name}"
 greet("Ada", prefix: "Hello")
@@ -120,7 +120,7 @@ Types: `T?` = `T | Null`; unions `Int | Str`; tuples `(Int, Str)`; generics `Arr
 
 ## 5. Classes, properties, and composition
 
-```amber
+```sputnik
 mixin Named:
   def label(): self.name
 
@@ -148,7 +148,7 @@ Reopen with another `class User:` / `mixin Named:`. `include A, B` mixes into in
 
 ## 6. Pattern matching and multi-clause functions
 
-```amber
+```sputnik
 [head, *tail] = xs                  # mismatch → MatchError
 {id: user_id, **rest} = payload
 
@@ -182,7 +182,7 @@ First matching clause whose guard passes wins. Unmatched `case` returns `null`; 
 
 ## 7. Conditions and control flow
 
-```amber
+```sputnik
 label = if ready? then "ready" else "waiting"
 print "ready" if ready?             # statement modifier; also unless
 unless ready?: print "waiting"
@@ -239,7 +239,7 @@ Collections are eager unless made lazy. Prefer an explicit seed for `reduce` on 
 
 ## 9. Errors, cleanup, and explicit results
 
-```amber
+```sputnik
 class InputError < Exception:
   def init(@message)
   attr message
@@ -269,7 +269,7 @@ Err(InputError("bad")).or_raise    # bridge to raise/rescue
 
 ## 10. Concurrency and output
 
-```amber
+```sputnik
 import task
 from sync import Channel, Mutex, Atomic
 
@@ -291,7 +291,7 @@ Structured scopes join children. The spec's explicit root scope is `async |task|
 
 ## 11. Modules
 
-```amber
+```sputnik
 package app.users                    # first non-comment form; optional for scripts
 import net.http as http              # bare import net.http binds http
 from app.models import User as Person
@@ -300,13 +300,13 @@ def display(user): user.name
 export display, Person as User       # private by default; explicit re-export
 ```
 
-Imports are static, top-level, before ordinary declarations/statements. Imported names are live, read-only aliases. `.am` and `.amber` source files are accepted. From the repository root: `build/amberc program.am` runs a file; `build/amberc parse program.am` inspects syntax.
+Imports are static, top-level, before ordinary declarations/statements. Imported names are live, read-only aliases. `.s` and `.sputnik` source files are accepted. From the repository root: `build/sputnik program.s` runs a file; `build/sputnik parse program.s` inspects syntax.
 
 ## 12. Optional profiles and reference additions
 
 These extend the everyday core; availability depends on the selected toolchain/host.
 
-**Local binary note:** the checked `build/amberc` parses the main examples, but rejects the specified `??` operator and root `async |task|:` form. For a null-only default today, bind once and use `if value == null then fallback else value`; the imported `task.async` / `task.spawn` API provides the current task spelling. Spec coverage is not a promise of full runtime/profile support.
+**Local binary note:** the checked `build/sputnik` parses the main examples, but rejects the specified `??` operator and root `async |task|:` form. For a null-only default today, bind once and use `if value == null then fallback else value`; the imported `task.async` / `task.spawn` API provides the current task spelling. Spec coverage is not a promise of full runtime/profile support.
 
 | Profile | Compact surface |
 | --- | --- |
@@ -321,11 +321,11 @@ These extend the everyday core; availability depends on the selected toolchain/h
 
 The current reference corpus also includes useful forms not fully consolidated into the main spec:
 
-```amber
+```sputnik
 inc = |x|: x + 1                     # standalone lexical closure
 make_adder = |n|: |x|: x + n
 def collect(*args, **kwargs): (args, kwargs)  # rest: Tuple / keyword map
 [first, *middle, last] = [1, 2, 3, 4]       # middle sequence rest
 ```
 
-Sources: [lambda](../corpus/run/lambda_literal/source.am), [rest parameters](../corpus/run/rest_middle_combo/source.am), [middle destructuring](../corpus/run/destructure_mid_rest/source.am). The separate [named multiblock RFC](../amber_v20.9_named_multiblock_rfc.md) is **Draft**, not part of this core sheet: it proposes `def request(url, &success:, &error:)` with `request(url) with:` and named callback suites.
+Sources: [lambda](../corpus/run/lambda_literal/source.s), [rest parameters](../corpus/run/rest_middle_combo/source.s), [middle destructuring](../corpus/run/destructure_mid_rest/source.s). The separate [named multiblock RFC](../sputnik_v20.9_named_multiblock_rfc.md) is **Draft**, not part of this core sheet: it proposes `def request(url, &success:, &error:)` with `request(url) with:` and named callback suites.

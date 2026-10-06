@@ -5,7 +5,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -167,4 +167,4 @@ execute_native_code(RuntimeWorld &world, const native::NativeModule &module,
                        std::move(block));
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -1,4 +1,4 @@
-# amber.modern-profiles.v1
+# sputnik.modern-profiles.v1
 
 Status: implemented for the `W11.6` AI-agent tooling, contracts/property,
 privacy/lineage, and durable workflow metadata baseline.
@@ -24,5 +24,5 @@ conflicting re-execution of an already committed idempotency key.
 
 Runtime worlds expose these sections through `agent_validation()`,
 `contract_validation()`, `privacy_validation()`, `workflow_validation()`, and
-the read-only package mirror. `.amberbc` verification maps profile failures to
+the read-only package mirror. `.sputnikbc` verification maps profile failures to
 `BC1410`-`BC1413`.

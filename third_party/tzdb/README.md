@@ -1,4 +1,4 @@
-# Amber tzdb snapshot
+# Sputnik tzdb snapshot
 
 This directory vendors a compiled IANA time-zone database snapshot for the
 `TimeZone` runtime.
@@ -14,7 +14,7 @@ and `tzdata.zi`.
 
 The runtime lookup order is:
 
-1. `AMBER_TZDB_DIR`, when set;
+1. `SPUTNIK_TZDB_DIR`, when set;
 2. executable-relative bundled roots;
 3. working-directory-relative bundled roots;
 4. host system zoneinfo directories as fallback.

@@ -16,25 +16,25 @@
 #include <utility>
 #include <vector>
 
-using amber::runtime::NativeRegistry;
-using amber::runtime::NativeStdlibCall;
-using amber::runtime::NativeStdlibHandler;
-using amber::runtime::NativeTypeDescriptor;
-using amber::runtime::RuntimeBindingKind;
-using amber::runtime::RuntimeBindingRef;
-using amber::runtime::RuntimeDispatchRegistry;
-using amber::runtime::RuntimeErrorRegistry;
-using amber::runtime::RuntimeIoValueHandlerDescriptor;
-using amber::runtime::RuntimeModuleRegistry;
-using amber::runtime::RuntimeNativeFunctionKind;
-using amber::runtime::RuntimeNativePackageCodeBindingDescriptor;
-using amber::runtime::RuntimeNativePackageDescriptor;
-using amber::runtime::RuntimeNativeTypeKind;
-using amber::runtime::RuntimeTypeCallDescriptor;
-using amber::runtime::RuntimeTypeRegistry;
-using amber::runtime::SendStatus;
-using amber::runtime::StdlibHost;
-using amber::runtime::Value;
+using sputnik::runtime::NativeRegistry;
+using sputnik::runtime::NativeStdlibCall;
+using sputnik::runtime::NativeStdlibHandler;
+using sputnik::runtime::NativeTypeDescriptor;
+using sputnik::runtime::RuntimeBindingKind;
+using sputnik::runtime::RuntimeBindingRef;
+using sputnik::runtime::RuntimeDispatchRegistry;
+using sputnik::runtime::RuntimeErrorRegistry;
+using sputnik::runtime::RuntimeIoValueHandlerDescriptor;
+using sputnik::runtime::RuntimeModuleRegistry;
+using sputnik::runtime::RuntimeNativeFunctionKind;
+using sputnik::runtime::RuntimeNativePackageCodeBindingDescriptor;
+using sputnik::runtime::RuntimeNativePackageDescriptor;
+using sputnik::runtime::RuntimeNativeTypeKind;
+using sputnik::runtime::RuntimeTypeCallDescriptor;
+using sputnik::runtime::RuntimeTypeRegistry;
+using sputnik::runtime::SendStatus;
+using sputnik::runtime::StdlibHost;
+using sputnik::runtime::Value;
 
 namespace {
 
@@ -136,17 +136,17 @@ struct MockHost : StdlibHost {
                              std::vector<Value> * /*out*/) override {
     return false;
   }
-  amber::runtime::StdlibBlockResult
+  sputnik::runtime::StdlibBlockResult
   stdlib_call_stream_block(const void * /*frame*/, const Value & /*block*/,
                            Value /*value*/) override {
     return {};
   }
-  amber::runtime::StdlibBlockResult
+  sputnik::runtime::StdlibBlockResult
   stdlib_call_path_block(const void * /*frame*/, const Value & /*block*/,
                          Value /*value*/, Value /*accumulator*/) override {
     return {};
   }
-  amber::runtime::StdlibBlockResult
+  sputnik::runtime::StdlibBlockResult
   stdlib_call_block(const void * /*frame*/, const Value & /*block*/,
                     std::vector<Value> /*args*/) override {
     return {};
@@ -159,7 +159,7 @@ struct MockHost : StdlibHost {
                               std::optional<Value> /*value*/) override {}
   bool
   stdlib_integer_range(const void * /*frame*/, const Value & /*value*/,
-                       amber::runtime::StdlibIntegerRange * /*out*/) override {
+                       sputnik::runtime::StdlibIntegerRange * /*out*/) override {
     return false;
   }
   bool stdlib_fs_exists(const void * /*frame*/, const std::string & /*path*/,
@@ -234,9 +234,9 @@ struct MockHost : StdlibHost {
     return false;
   }
   bool stdlib_fs_open_file(const void * /*frame*/, const std::string & /*path*/,
-                           amber::runtime::RuntimeFileMode /*mode*/,
-                           amber::runtime::RuntimeFileOpenOptions /*options*/,
-                           amber::runtime::RuntimeIsolationMode /*isolation*/,
+                           sputnik::runtime::RuntimeFileMode /*mode*/,
+                           sputnik::runtime::RuntimeFileOpenOptions /*options*/,
+                           sputnik::runtime::RuntimeIsolationMode /*isolation*/,
                            Value * /*out*/) override {
     return false;
   }
@@ -245,30 +245,30 @@ struct MockHost : StdlibHost {
     return false;
   }
   bool stdlib_net_udp_bind(const void * /*frame*/,
-                           const amber::runtime::RuntimeEndpoint & /*endpoint*/,
-                           amber::runtime::RuntimeIsolationMode /*isolation*/,
+                           const sputnik::runtime::RuntimeEndpoint & /*endpoint*/,
+                           sputnik::runtime::RuntimeIsolationMode /*isolation*/,
                            Value * /*out*/) override {
     return false;
   }
   bool stdlib_net_udp_open(const void * /*frame*/,
                            const std::string & /*family*/,
-                           amber::runtime::RuntimeIsolationMode /*isolation*/,
+                           sputnik::runtime::RuntimeIsolationMode /*isolation*/,
                            Value * /*out*/) override {
     return false;
   }
   bool
   stdlib_net_tcp_connect(const void * /*frame*/,
-                         const amber::runtime::RuntimeEndpoint & /*endpoint*/,
+                         const sputnik::runtime::RuntimeEndpoint & /*endpoint*/,
                          std::chrono::milliseconds /*timeout*/,
-                         amber::runtime::RuntimeIsolationMode /*isolation*/,
+                         sputnik::runtime::RuntimeIsolationMode /*isolation*/,
                          Value * /*out*/) override {
     return false;
   }
   bool
   stdlib_net_tcp_listen(const void * /*frame*/,
-                        const amber::runtime::RuntimeEndpoint & /*endpoint*/,
+                        const sputnik::runtime::RuntimeEndpoint & /*endpoint*/,
                         int /*backlog*/, bool /*reuse_addr*/,
-                        amber::runtime::RuntimeIsolationMode /*isolation*/,
+                        sputnik::runtime::RuntimeIsolationMode /*isolation*/,
                         Value * /*out*/) override {
     return false;
   }
@@ -366,13 +366,13 @@ struct MockHost : StdlibHost {
                                   std::string * /*out*/) override {
     return false;
   }
-  std::optional<amber::runtime::RuntimeTimeValue>
+  std::optional<sputnik::runtime::RuntimeTimeValue>
   stdlib_wall_time_now(const void * /*frame*/) override {
-    return amber::runtime::RuntimeTimeValue{};
+    return sputnik::runtime::RuntimeTimeValue{};
   }
-  std::optional<amber::runtime::RuntimeTimePeriodValue>
+  std::optional<sputnik::runtime::RuntimeTimePeriodValue>
   stdlib_monotonic_time(const void * /*frame*/) override {
-    return amber::runtime::RuntimeTimePeriodValue{};
+    return sputnik::runtime::RuntimeTimePeriodValue{};
   }
 };
 
@@ -464,9 +464,9 @@ void test_path_resolution(const NativeRegistry &registry) {
 
 void test_module_registry_imports_native_paths(const NativeRegistry &registry) {
   RuntimeModuleRegistry modules;
-  amber::runtime::register_core_prelude_bindings(modules);
+  sputnik::runtime::register_core_prelude_bindings(modules);
   modules.import_native_paths(registry);
-  amber::runtime::register_legacy_native_type_paths(modules);
+  sputnik::runtime::register_legacy_native_type_paths(modules);
 
   const std::optional<RuntimeBindingRef> print =
       modules.binding_for_path("print");
@@ -567,8 +567,8 @@ void test_builtin_runtime_module_descriptors() {
   RuntimeModuleRegistry modules;
   RuntimeDispatchRegistry dispatch;
   RuntimeTypeRegistry types;
-  amber::runtime::register_builtin_runtime_modules(modules, dispatch, types);
-  amber::runtime::register_core_prelude_bindings(modules);
+  sputnik::runtime::register_builtin_runtime_modules(modules, dispatch, types);
+  sputnik::runtime::register_core_prelude_bindings(modules);
 
   expect(modules.has_namespace("task"),
          "runtime module registry recognizes task namespace");
@@ -760,7 +760,7 @@ void test_task_channel_descriptor_instance_lifecycle() {
   RuntimeModuleRegistry modules;
   RuntimeDispatchRegistry dispatch;
   RuntimeTypeRegistry types;
-  amber::runtime::register_builtin_runtime_modules(modules, dispatch, types);
+  sputnik::runtime::register_builtin_runtime_modules(modules, dispatch, types);
 
   const std::optional<NativeStdlibHandler> handler =
       dispatch.native_handler(RuntimeNativeTypeKind::Channel);
@@ -772,7 +772,7 @@ void test_task_channel_descriptor_instance_lifecycle() {
   const Value block = Value::null();
   const std::vector<std::pair<std::uint32_t, Value>> kw_args;
   const Value receiver =
-      Value::channel(std::make_shared<amber::runtime::RuntimeChannel>(1));
+      Value::channel(std::make_shared<sputnik::runtime::RuntimeChannel>(1));
 
   std::string closed_selector = "closed?";
   Value out = Value::null();
@@ -821,7 +821,7 @@ void test_task_channel_descriptor_instance_lifecycle() {
          "Channel lifecycle descriptor dispatch should not fault");
 
   const Value buffered =
-      Value::channel(std::make_shared<amber::runtime::RuntimeChannel>(1));
+      Value::channel(std::make_shared<sputnik::runtime::RuntimeChannel>(1));
   const std::vector<Value> send_args{Value::integer(42)};
   std::string send_selector = "send";
   out = Value::null();
@@ -885,19 +885,19 @@ void test_type_call_registry() {
 }
 
 void test_dispatch_registry_imports_native_package_bindings() {
-  amber::bytecode::BcModule module;
+  sputnik::bytecode::BcModule module;
   module.strings = {
-      "amber.native.bind:7",
+      "sputnik.native.bind:7",
       "F:pkg.free",
-      "amber.native.bind:9",
+      "sputnik.native.bind:9",
       "M:pkg.method",
-      "amber.native.method:pkg.Handle\tbump!",
+      "sputnik.native.method:pkg.Handle\tbump!",
       "pkg.bump",
-      "amber.native.bind:bad",
+      "sputnik.native.bind:bad",
       "F:ignored",
-      "amber.native.bind:0",
+      "sputnik.native.bind:0",
       "F:nope",
-      "amber.native.method:malformed",
+      "sputnik.native.method:malformed",
       "pkg.bad",
   };
   module.attrs = {
@@ -912,7 +912,7 @@ void test_dispatch_registry_imports_native_package_bindings() {
   };
 
   const RuntimeNativePackageDescriptor descriptor =
-      amber::runtime::runtime_native_package_descriptor_from_module(module);
+      sputnik::runtime::runtime_native_package_descriptor_from_module(module);
   expect(descriptor.code_bindings.size() == 2U &&
              descriptor.method_bindings.size() == 1U,
          "native package module attrs decode into descriptor entries");
@@ -970,7 +970,7 @@ void test_runtime_native_package_descriptor() {
   RuntimeDispatchRegistry dispatch;
   RuntimeTypeRegistry types;
   RuntimeErrorRegistry errors;
-  amber::runtime::register_runtime_native_package_descriptor(dispatch, types,
+  sputnik::runtime::register_runtime_native_package_descriptor(dispatch, types,
                                                              errors,
                                                              descriptor);
 
@@ -1104,7 +1104,7 @@ void test_runtime_error_registry() {
   expect(std::string(errors.error_default_message(*help)) == "help requested",
          "runtime error registry exposes default message");
   expect((errors.error_effective_field_mask(*help) &
-          amber::runtime::kRuntimeErrorFieldHelp) != 0U,
+          sputnik::runtime::kRuntimeErrorFieldHelp) != 0U,
          "runtime error registry exposes inherited field masks");
   expect(!errors.error_is_a(*invalid_value, *unknown_option),
          "sibling ArgParser errors do not match");
@@ -1165,7 +1165,7 @@ void test_runtime_module_error_descriptors() {
   expect(!errors.error_id("PoolTimeoutError").has_value(),
          "empty error registry starts without net.http errors");
 
-  amber::runtime::register_builtin_runtime_modules(modules, dispatch, types,
+  sputnik::runtime::register_builtin_runtime_modules(modules, dispatch, types,
                                                    &errors);
 
   const auto http_error = errors.error_id("HttpError");
@@ -1228,7 +1228,7 @@ void test_runtime_module_error_descriptors() {
              *errors.error_default_exit_code(*parse_error) == 2,
          "ArgParser descriptor registers default exit code");
   expect((errors.error_effective_field_mask(*invalid_value) &
-          amber::runtime::kRuntimeErrorFieldOption) != 0U,
+          sputnik::runtime::kRuntimeErrorFieldOption) != 0U,
          "ArgParser descriptor registers structured fields");
 
   const auto task_failed = errors.error_id("TaskFailedError");
@@ -1252,7 +1252,7 @@ void test_runtime_module_error_descriptors() {
 
 int main() {
   NativeRegistry registry;
-  amber::runtime::register_builtin_stdlib(registry);
+  sputnik::runtime::register_builtin_stdlib(registry);
 
   test_path_resolution(registry);
   test_module_registry_imports_native_paths(registry);

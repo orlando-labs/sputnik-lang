@@ -8,7 +8,7 @@
 #include <map>
 #include <utility>
 
-namespace amber::pattern {
+namespace sputnik::pattern {
 namespace {
 
 using Node = ast::Expr;
@@ -1461,4 +1461,4 @@ bool is_tuple_subject_pattern(const ast::Expr &pattern) {
   return pattern.kind == "PatTuple";
 }
 
-} // namespace amber::pattern
+} // namespace sputnik::pattern

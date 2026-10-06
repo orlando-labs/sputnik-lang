@@ -1,0 +1,9 @@
+{
+  "schema": "sputnik.build.v1",
+  "name": "native_private_classes",
+  "root": "native_private_classes",
+  "modules": [
+    {"name": "native_private_classes", "path": "main.s"},
+    {"name": "native_private_helpers", "path": "helpers.s"}
+  ]
+}

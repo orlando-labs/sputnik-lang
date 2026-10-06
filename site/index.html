@@ -1,563 +1,73 @@
-<!doctype html>
-<html lang="ru">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta
-      name="description"
-      content="Amber — expressive language for a no-GIL VM, native threading, cooperative tasks, verified bytecode and full native builds."
-    />
-    <meta name="theme-color" content="#f7f0e2" />
-    <title>Amber — выразительный язык для no-GIL VM</title>
-    <link rel="icon" href="./assets/amber-logo.jpg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Code+Pro:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
-    <link rel="stylesheet" href="./styles.css" />
-  </head>
-  <body>
-    <div class="page-glow" aria-hidden="true"></div>
-    <header class="site-header">
-      <a class="brand" href="./index.html" aria-label="Amber home">
-        <span class="brand-gem">
-          <img src="./assets/amber-logo.jpg" alt="" />
-        </span>
-        <span>Amber</span>
-      </a>
-      <nav class="main-nav" aria-label="Primary navigation">
-        <a href="#features" data-i18n="nav.features">Возможности</a>
-        <a href="#examples" data-i18n="nav.examples">Примеры</a>
-        <a href="#inside" data-i18n="nav.technology">Технологии</a>
-        <a href="./learn.html" data-i18n="nav.guide">Гид</a>
-        <a href="./modules.html" data-i18n="nav.modules">Модули VM</a>
-        <a href="./spec.html" data-i18n="nav.spec">Спека</a>
-      </nav>
-      <div class="header-actions">
-        <div class="language-switch" role="group" aria-label="Language">
-          <button type="button" data-lang="ru" aria-pressed="true">RU</button>
-          <button type="button" data-lang="en" aria-pressed="false">EN</button>
-        </div>
-        <a class="header-cta" href="./spec.html">
-          <span data-i18n="nav.docs">Документация</span>
-          <span aria-hidden="true">↗</span>
-        </a>
-      </div>
-    </header>
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="description" content="Sputnik — an expressive programming language. No-GIL VM, native builds. Technical preview."><meta name="theme-color" content="#f4f1e9"><title>Sputnik — Technical Preview</title><link rel="icon" href="./assets/sputnik-mark.png"><link rel="stylesheet" href="./styles.css">
+</head><body><header class="site-header"><a class="brand" href="./index.html"><img src="./assets/sputnik-mark.png" alt=""><span>Sputnik</span>
+</a><nav class="main-nav" aria-label="Navigation"><a href="./learn.html" data-i18n="nav.guide">Гид</a><a href="./modules.html" data-i18n="nav.modules">Стандартная библиотека</a><a href="./spec.html" data-i18n="nav.spec">Спецификация</a><a href="https://github.com/orlando-labs/amber-lang">GitHub ↗</a>
+</nav><div class="language-switch" role="group" aria-label="Language"><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button>
+</div>
+</header><main class="landing"><section class="launch"><div class="launch-copy"><p class="eyebrow"><span class="status-dot">
+</span> TECHNICAL PREVIEW / 2026</p><h1>Sputnik<span class="wordmark-period">.</span>
+</h1><p data-ru="Выразительный код.
+Своя орбита." data-en="Expressive code.
+An orbit of its own." class="launch-title">Выразительный код.
+Своя орбита.</p><p data-ru="Динамический язык с лаконичным синтаксисом, VM без GIL и нативной компиляцией. Для тех, кому интересно строить и исследовать." data-en="A dynamic language with concise syntax, a no-GIL VM and native compilation. For people who like to build and explore." class="launch-lead">Динамический язык с лаконичным синтаксисом, VM без GIL и нативной компиляцией. Для тех, кому интересно строить и исследовать.</p><div class="hero-actions"><a class="button button-primary" href="#start"><span data-ru="Начать знакомство ↘" data-en="Get started ↘" >Начать знакомство ↘</span>
+</a><a class="text-link" href="./learn.html"><span data-ru="Читать гид →" data-en="Read the guide →" >Читать гид →</span>
+</a>
+</div>
+</div><figure class="launch-art"><img src="./assets/sputnik-mark.png" alt="Sputnik satellite with a vermilion orbit"><figcaption>SPUTNIK / СПУТНИК<br>EXPERIMENTAL LANGUAGE SYSTEM</figcaption>
+</figure>
+</section><div class="telemetry"><span>NO-GIL VM</span><span>NATIVE BUILDS</span><span>LINUX / macOS</span><span>.s / .spu / .sputnik</span>
+</div><section class="preview-note"><h2 data-ru="Ранняя орбита" data-en="Early orbit" >Ранняя орбита</h2><p data-ru="Sputnik — техническое превью. Синтаксис, API и форматы артефактов ещё меняются. Пробуйте, исследуйте, сообщайте об ошибках; стабильность для production пока не обещается." data-en="Sputnik is a technical preview. Syntax, APIs and artifact formats are still changing. Try it, explore it, report issues; production stability is not promised yet." >Sputnik — техническое превью. Синтаксис, API и форматы артефактов ещё меняются. Пробуйте, исследуйте, сообщайте об ошибках; стабильность для production пока не обещается.</p>
+</section><section id="features" class="feature-grid"><article><p class="eyebrow">01 / SYNTAX</p><h2 data-ru="Выразительность в каждой строке" data-en="Expression in every line" >Выразительность в каждой строке</h2><p data-ru="Отступы, блоки, pattern matching и несколько клаузул def. Классы, mixin, интерполяция строк и коллекции с spread." data-en="Indentation, blocks, pattern matching and multi-clause def. Classes, mixins, string interpolation and collection spreads." >Отступы, блоки, pattern matching и несколько клаузул def. Классы, mixin, интерполяция строк и коллекции с spread.</p>
+</article><article><p class="eyebrow">02 / EXECUTION</p><h2 data-ru="Один язык. Два пути исполнения." data-en="One language. Two ways to run." >Один язык. Два пути исполнения.</h2><p data-ru="Быстрый цикл разработки в VM и сборка нативного исполняемого файла. Строгий режим --require-full-native проверяет отсутствие fallback в VM." data-en="An interactive VM development loop and native executables. The strict --require-full-native mode checks that no VM fallback remains." >Быстрый цикл разработки в VM и сборка нативного исполняемого файла. Строгий режим --require-full-native проверяет отсутствие fallback в VM.</p>
+</article><article><p class="eyebrow">03 / CONCURRENCY</p><h2 data-ru="Параллельность без глобального lock" data-en="Concurrency without a global lock" >Параллельность без глобального lock</h2><p data-ru="VM без GIL: системные потоки, strands, кооперативные задачи, каналы и структурированная отмена." data-en="A no-GIL VM with native threads, strands, cooperative tasks, channels and structured cancellation." >VM без GIL: системные потоки, strands, кооперативные задачи, каналы и структурированная отмена.</p>
+</article>
+</section><section id="examples" class="code-section"><div><p class="eyebrow">01 / FIRST CONTACT</p><h2 data-ru="Меньше церемоний.
+Больше смысла." data-en="Less ceremony.
+More meaning." >Меньше церемоний.
+Больше смысла.</h2><p data-ru="Коллекции, блоки и функции остаются рядом с задачей. Последнее выражение становится результатом." data-en="Collections, blocks and functions stay close to the problem. The last expression becomes the result." >Коллекции, блоки и функции остаются рядом с задачей. Последнее выражение становится результатом.</p>
+</div><div class="code-window"><div class="code-window-bar"><span>orbit.s</span><button type="button" data-copy-target="orbit-code"><span data-i18n="common.copy">Копировать</span>
+</button>
+</div><pre id="orbit-code"><code><span class="tok-key">def</span> square(x):
+  x * x
 
-    <main>
-      <section class="hero">
-        <div class="hero-art" aria-hidden="true">
-          <div class="hero-art-image"></div>
-          <div class="floating-facet facet-one"></div>
-          <div class="floating-facet facet-two"></div>
-          <div class="orbit orbit-one"></div>
-          <div class="orbit orbit-two"></div>
-        </div>
+squares = [1, 2, 3, 4].map: square(_1)
+squares
+<span class="tok-comment"># [1, 4, 9, 16]</span>
+</code>
+</pre>
+</div>
+</section><section id="inside" class="library-section"><div class="section-heading"><p class="eyebrow">02 / ON BOARD</p><h2 data-ru="Стандартная библиотека" data-en="Standard library" >Стандартная библиотека</h2><p data-ru="От JSON и регулярных выражений до процессов, HTTP и цифровых подписей. Встроенные модули доступны из prelude." data-en="From JSON and regular expressions to processes, HTTP and digital signatures. Built-in modules are available from the prelude." >От JSON и регулярных выражений до процессов, HTTP и цифровых подписей. Встроенные модули доступны из prelude.</p>
+</div><div class="library-grid"><article><h3 data-ru="Данные и текст" data-en="Data &amp; text" >Данные и текст</h3><p>Json · Yaml · Regexp · Base64 · Base64Url · Hex</p>
+</article><article><h3 data-ru="Система и сеть" data-en="System &amp; network" >Система и сеть</h3><p>IO · fs · System · net.tcp · net.http · TLS</p>
+</article><article><h3 data-ru="Время и вычисления" data-en="Time &amp; computation" >Время и вычисления</h3><p>Time · Time::Period · Math · Benchmark</p>
+</article><article><h3 data-ru="Инструменты" data-en="Utilities" >Инструменты</h3><p>ArgParser · Bool · Url · Uuid · SecureRandom</p>
+</article><article><h3 data-ru="Криптография" data-en="Cryptography" >Криптография</h3><p>Digest · Signature · EdDSA · ECDSA · RSA-PSS · ГОСТ</p>
+</article><article><h3 data-ru="Конкурентность" data-en="Concurrency" >Конкурентность</h3><p>Task · Strand · Channel · Mutex · Atomic</p>
+</article>
+</div><a class="text-link" href="./modules.html"><span data-ru="Открыть справочник →" data-en="Open the reference →" >Открыть справочник →</span>
+</a>
+</section><section class="ecosystem"><p class="eyebrow">03 / NEARBY ORBITS</p><h2 data-ru="За пределами ядра" data-en="Beyond the core" >За пределами ядра</h2><div class="ecosystem-grid"><article><h3>Sputnik Notebook</h3><p data-ru="Отдельное приложение: нативный macOS UI и терминальный интерфейс, реактивные ячейки и графики." data-en="A standalone app: native macOS and terminal interfaces, reactive cells and plots." >Отдельное приложение: нативный macOS UI и терминальный интерфейс, реактивные ячейки и графики.</p>
+</article><article><h3>sputniktorch</h3><p data-ru="Тензоры и нейросети на LibTorch; публичный API на Sputnik, включая модели и обучение." data-en="LibTorch tensors and neural networks; models and training exposed through Sputnik." >Тензоры и нейросети на LibTorch; публичный API на Sputnik, включая модели и обучение.</p>
+</article><article><h3>sqlite3-sputnik / sputnik-orm</h3><p data-ru="SQLite и объектный слой для работы с данными." data-en="SQLite bindings and an object layer for working with data." >SQLite и объектный слой для работы с данными.</p>
+</article><article><h3>sputnik-plot / Ember</h3><p data-ru="Визуализация данных и веб-фреймворк. Экосистема развивается вместе с языком." data-en="Data visualization and a web framework. The ecosystem evolves with the language." >Визуализация данных и веб-фреймворк. Экосистема развивается вместе с языком.</p>
+</article>
+</div>
+</section><section id="start" class="start-section"><div><p class="eyebrow">04 / LAUNCH SEQUENCE</p><h2 data-ru="Попробовать Sputnik" data-en="Try Sputnik" >Попробовать Sputnik</h2><p data-ru="Нужны C++17, make и OpenSSL. Обычный make собирает пользовательский CLI; тесты запускаются отдельно." data-en="You need C++17, make and OpenSSL. Plain make builds the user CLI; tests are opt-in." >Нужны C++17, make и OpenSSL. Обычный make собирает пользовательский CLI; тесты запускаются отдельно.</p><p data-ru="Выбирайте .s для повседневного кода, .spu для Sputnik Program Unit или .sputnik для выразительного имени. Семантика одинакова." data-en="Choose .s for everyday code, .spu for Sputnik Program Unit or .sputnik for a distinctive filename. The semantics are identical." >Выбирайте .s для повседневного кода, .spu для Sputnik Program Unit или .sputnik для выразительного имени. Семантика одинакова.</p>
+</div><div class="code-window"><div class="code-window-bar"><span>TERMINAL</span><button type="button" data-copy-target="start-code"><span data-i18n="common.copy">Копировать</span>
+</button>
+</div><pre id="start-code"><code>git clone https://github.com/orlando-labs/amber-lang.git sputnik-lang
+cd sputnik-lang
+make -j4
 
-        <div class="hero-copy reveal">
-          <div class="eyebrow">
-            <span class="eyebrow-dot"></span>
-            <span data-i18n="hero.eyebrow">No-GIL VM · native threads · compact syntax</span>
-          </div>
-          <h1 data-i18n="hero.title">
-            Лаконичный язык для <em>no-GIL</em> runtime.
-          </h1>
-          <p class="hero-lead" data-i18n="hero.lead">
-            Amber берёт читаемость Python, пластичность Ruby, pattern matching и
-            современный data-flow syntax — и ведёт их в VM без глобального lock:
-            worker threads, strands, cooperative tasks, verified bytecode и
-            full-native build pipeline живут в одной модели.
-          </p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#taste">
-              <span data-i18n="hero.ctaPrimary">Попробовать синтаксис</span>
-              <span aria-hidden="true">↓</span>
-            </a>
-            <a class="button button-ghost" href="./spec.html">
-              <span data-i18n="hero.ctaSecondary">Открыть спеку</span>
-              <span aria-hidden="true">→</span>
-            </a>
-          </div>
-          <div class="hero-proof">
-            <span><i></i><b>no-GIL</b> VM</span>
-            <span><i></i><b>native</b> threads</span>
-            <span><i></i><b>full native</b> build</span>
-          </div>
-        </div>
-
-        <div class="hero-code-shell reveal reveal-delay" id="taste">
-          <div class="code-window">
-            <div class="code-window-bar">
-              <div class="window-dots"><span></span><span></span><span></span></div>
-              <span class="file-label">pipeline.am</span>
-              <button class="copy-button" type="button" data-copy-target="hero-code">
-                <span data-i18n="common.copy">Копировать</span>
-              </button>
-            </div>
-            <pre id="hero-code"><code><span class="tok-key">def</span> <span class="tok-fn">hot_users</span>(users, min_score):
-  users
-    .select: _1.active? <span class="tok-key">and</span> _1.score >= min_score
-    .map: {id: _1.id, city: _1.?.profile.?.city <span class="tok-key">or</span> <span class="tok-str">"unknown"</span>}
-    .uniq_by: _1.id
-
-async |task|:
-  jobs = urls.map:
-    url = _1
-    task.spawn |child|:
-      fetch_json(url).?.items <span class="tok-key">or</span> []
-
-  jobs.flat_map: _1.wait(timeout: <span class="tok-num">2</span>)</code></pre>
-            <div class="code-result">
-              <span class="result-pulse"></span>
-              <span data-i18n="hero.codeCaption">Block suffix, safe navigation и real strands — без синтаксического шума</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="scroll-cue" aria-hidden="true">
-          <span></span>
-          <small>SCROLL</small>
-        </div>
-      </section>
-
-      <section class="section feature-section" id="features">
-        <div class="section-heading reveal">
-          <p class="section-kicker" data-i18n="features.kicker">Синтаксис без лишней позы</p>
-          <h2 data-i18n="features.title">Сахар есть, но он компилируется в понятные формы.</h2>
-          <p data-i18n="features.lead">
-            Amber не пытается быть «ещё одним Python» или «ещё одним Ruby».
-            Он собирает удачные идеи из разных миров и задаёт им строгую
-            lowering-модель: удобно писать, не стыдно компилировать.
-          </p>
-        </div>
-
-        <div class="feature-grid">
-          <article class="feature-card feature-card-large reveal">
-            <div class="feature-number">01</div>
-            <div class="feature-card-copy">
-              <span class="feature-tag" data-i18n="features.pattern.tag">blocks</span>
-              <h3 data-i18n="features.pattern.title">Block suffix вместо callback-лесов</h3>
-              <p data-i18n="features.pattern.text">
-                Блок привязывается к вызову как отдельный channel, `_1/_2`
-                работают только внутри implicit-block, а HIR видит уже явную closure.
-              </p>
-            </div>
-            <pre><code>scores
-  .select: _1 >= <span class="tok-num">80</span>
-  .map: _1 * <span class="tok-num">2</span>
-  .reduce <span class="tok-num">0</span>: _1 + _2</code></pre>
-          </article>
-
-          <article class="feature-card reveal">
-            <div class="feature-number">02</div>
-            <span class="feature-tag" data-i18n="features.safe.tag">matching</span>
-            <h3 data-i18n="features.safe.title">Pattern matching и multi-clause def</h3>
-            <p data-i18n="features.safe.text">
-              Деструктурирование, guards, pin-pattern и dispatch по клаузам —
-              часть языка, а не протокол поверх `if`.
-            </p>
-            <pre><code><span class="tok-key">def</span> <span class="tok-fn">area</span>(Point(x, y)): x * y
-<span class="tok-key">def</span> <span class="tok-fn">area</span>(Rect(w:, h:)): w * h
-<span class="tok-key">def</span> <span class="tok-fn">area</span>(_): <span class="tok-num">0</span></code></pre>
-          </article>
-
-          <article class="feature-card reveal">
-            <div class="feature-number">03</div>
-            <span class="feature-tag" data-i18n="features.collections.tag">literals</span>
-            <h3 data-i18n="features.collections.title">Spread и условия в коллекциях</h3>
-            <p data-i18n="features.collections.text">
-              `*` и `**` — контекстный spread, conditional entries вычисляются
-              слева направо и не притворяются магическими операторами.
-            </p>
-            <pre><code>flags = [
-  :base,
-  :debug <span class="tok-key">if</span> debug?,
-  *plugins,
-]
-
-opts = {**env, cache: true <span class="tok-key">unless</span> test?}</code></pre>
-          </article>
-
-          <article class="feature-card reveal">
-            <div class="feature-number">04</div>
-            <span class="feature-tag" data-i18n="features.expressions.tag">data flow</span>
-            <h3 data-i18n="features.expressions.title">Safe navigation без `nil`-акробатики</h3>
-            <p data-i18n="features.expressions.text">
-              `.?.` работает для методов, полей, индексов и callable-call;
-              `if`, `unless`, `case` и циклы остаются выражениями.
-            </p>
-            <pre><code>city = user
-  .?.address
-  .?.city
-  .?.trim() <span class="tok-key">or</span> <span class="tok-str">"unknown"</span></code></pre>
-          </article>
-
-          <article class="feature-card feature-card-wide reveal">
-            <div class="feature-number">05</div>
-            <div class="feature-card-copy">
-              <span class="feature-tag" data-i18n="features.callables.tag">call ABI</span>
-              <h3 data-i18n="features.callables.title">Callable references без FFI-дыр</h3>
-              <p data-i18n="features.callables.text">
-                `&target` создаёт callable object, class object вызывается как
-                constructor, а call/send/block-pass сходятся в единый VM ABI.
-              </p>
-            </div>
-            <pre><code>normalize = &Text.normalize
-make_user = &User
-
-names.map(normalize)
-admin = make_user(name: <span class="tok-str">"Ada"</span>)</code></pre>
-          </article>
-        </div>
-      </section>
-
-      <section class="section examples-section" id="examples">
-        <div class="examples-head reveal">
-          <div class="section-heading">
-            <p class="section-kicker" data-i18n="examples.kicker">Меньше ритуала, больше смысла</p>
-            <h2 data-i18n="examples.title">Amber оставляет в коде действие, а не церемонию вокруг него.</h2>
-            <p data-i18n="examples.lead">
-              Те же идеи, которые в других языках часто распухают в служебные
-              конструкции, в Amber остаются рядом с доменной мыслью: поля,
-              цепочки, matching, условные элементы и безопасный доступ.
-            </p>
-          </div>
-          <div class="examples-controls" aria-label="Example carousel controls" data-i18n-aria-label="examples.controls.label">
-            <button class="carousel-button" type="button" data-carousel-prev aria-label="Предыдущий пример" data-i18n-aria-label="examples.controls.prev">
-              <span aria-hidden="true">←</span>
-            </button>
-            <span class="example-counter"><b data-carousel-current>01</b><span>/05</span></span>
-            <button class="carousel-button" type="button" data-carousel-next aria-label="Следующий пример" data-i18n-aria-label="examples.controls.next">
-              <span aria-hidden="true">→</span>
-            </button>
-          </div>
-        </div>
-
-        <div class="example-carousel reveal" data-example-carousel tabindex="0" aria-label="Amber code comparisons" data-i18n-aria-label="examples.carouselLabel">
-          <div class="example-track" data-carousel-track>
-            <article class="example-slide" data-carousel-slide aria-roledescription="slide">
-              <div class="example-slide-header">
-                <span class="example-tag" data-i18n="examples.fields.tag">constructor</span>
-                <h3 data-i18n="examples.fields.title">Поля конструктора без ручного перекладывания аргументов</h3>
-                <p data-i18n="examples.fields.text">
-                  `@attr` в сигнатуре сразу задаёт поле экземпляра, а class object
-                  вызывается как конструктор.
-                </p>
-              </div>
-              <div class="code-compare">
-                <div class="compare-pane amber-pane">
-                  <div class="compare-title">
-                    <span>Amber</span>
-                    <b data-i18n="examples.fields.amberLines">3 строки</b>
-                  </div>
-                  <pre><code>class X:
-  def init(@attr_1, @attr_2): pass
-
-X(42, 100500)</code></pre>
-                </div>
-                <div class="compare-pane other-pane">
-                  <div class="compare-title">
-                    <span>Python</span>
-                    <b data-i18n="examples.fields.otherLines">6 строк</b>
-                  </div>
-                  <pre><code>class X:
-    def __init__(self, attr_1, attr_2):
-        self.attr_1 = attr_1
-        self.attr_2 = attr_2
-
-X(42, 100500)</code></pre>
-                </div>
-              </div>
-            </article>
-
-            <article class="example-slide" data-carousel-slide aria-roledescription="slide">
-              <div class="example-slide-header">
-                <span class="example-tag" data-i18n="examples.pipeline.tag">collections</span>
-                <h3 data-i18n="examples.pipeline.title">Цепочка данных без callback-обвязки</h3>
-                <p data-i18n="examples.pipeline.text">
-                  Block suffix оставляет фильтрацию, проекцию и дедупликацию в
-                  одной читаемой линии потока.
-                </p>
-              </div>
-              <div class="code-compare">
-                <div class="compare-pane amber-pane">
-                  <div class="compare-title">
-                    <span>Amber</span>
-                    <b data-i18n="examples.pipeline.amberLines">4 строки</b>
-                  </div>
-                  <pre><code>users
-  .select: _1.active? and _1.score >= 80
-  .map: {id: _1.id, city: _1.?.profile.?.city or "unknown"}
-  .uniq_by: _1.id</code></pre>
-                </div>
-                <div class="compare-pane other-pane">
-                  <div class="compare-title">
-                    <span>JavaScript</span>
-                    <b data-i18n="examples.pipeline.otherLines">13 строк</b>
-                  </div>
-                  <pre><code>const seen = new Set();
-const result = users
-  .filter((user) => user.active && user.score >= 80)
-  .map((user) => ({
-    id: user.id,
-    city: user?.profile?.city ?? "unknown"
-  }))
-  .filter((user) => {
-    if (seen.has(user.id)) return false;
-    seen.add(user.id);
-    return true;
-  });</code></pre>
-                </div>
-              </div>
-            </article>
-
-            <article class="example-slide" data-carousel-slide aria-roledescription="slide">
-              <div class="example-slide-header">
-                <span class="example-tag" data-i18n="examples.matching.tag">matching</span>
-                <h3 data-i18n="examples.matching.title">Варианты формы как клаузулы, а не лестница проверок</h3>
-                <p data-i18n="examples.matching.text">
-                  Multi-clause `def` показывает dispatch прямо в объявлении
-                  функции и не прячет его в условных ветках.
-                </p>
-              </div>
-              <div class="code-compare">
-                <div class="compare-pane amber-pane">
-                  <div class="compare-title">
-                    <span>Amber</span>
-                    <b data-i18n="examples.matching.amberLines">3 строки</b>
-                  </div>
-                  <pre><code>def area(Point(x, y)): x * y
-def area(Rect(w:, h:)): w * h
-def area(_): 0</code></pre>
-                </div>
-                <div class="compare-pane other-pane">
-                  <div class="compare-title">
-                    <span>TypeScript</span>
-                    <b data-i18n="examples.matching.otherLines">10 строк</b>
-                  </div>
-                  <pre><code>function area(shape: Shape): number {
-  if (shape.kind === "point") {
-    return shape.x * shape.y;
-  }
-  if (shape.kind === "rect") {
-    return shape.w * shape.h;
-  }
-  return 0;
-}</code></pre>
-                </div>
-              </div>
-            </article>
-
-            <article class="example-slide" data-carousel-slide aria-roledescription="slide">
-              <div class="example-slide-header">
-                <span class="example-tag" data-i18n="examples.collections.tag">literals</span>
-                <h3 data-i18n="examples.collections.title">Условия и spread внутри литералов</h3>
-                <p data-i18n="examples.collections.text">
-                  Коллекция собирается там, где она объявлена: без временных
-                  переменных, `push` и мутаций ради формы.
-                </p>
-              </div>
-              <div class="code-compare">
-                <div class="compare-pane amber-pane">
-                  <div class="compare-title">
-                    <span>Amber</span>
-                    <b data-i18n="examples.collections.amberLines">2 строки</b>
-                  </div>
-                  <pre><code>flags = [:base, :debug if debug?, *plugins]
-opts = {**env, cache: true unless test?}</code></pre>
-                </div>
-                <div class="compare-pane other-pane">
-                  <div class="compare-title">
-                    <span>JavaScript</span>
-                    <b data-i18n="examples.collections.otherLines">6 строк</b>
-                  </div>
-                  <pre><code>const flags = ["base"];
-if (debug) flags.push("debug");
-flags.push(...plugins);
-
-const opts = {...env};
-if (!test) opts.cache = true;</code></pre>
-                </div>
-              </div>
-            </article>
-
-            <article class="example-slide" data-carousel-slide aria-roledescription="slide">
-              <div class="example-slide-header">
-                <span class="example-tag" data-i18n="examples.safe.tag">safe nav</span>
-                <h3 data-i18n="examples.safe.title">Безопасный доступ без защитной пирамиды</h3>
-                <p data-i18n="examples.safe.text">
-                  `.?.` проходит через поля, методы и вызовы, а fallback остаётся
-                  обычным выражением.
-                </p>
-              </div>
-              <div class="code-compare">
-                <div class="compare-pane amber-pane">
-                  <div class="compare-title">
-                    <span>Amber</span>
-                    <b data-i18n="examples.safe.amberLines">1 строка</b>
-                  </div>
-                  <pre><code>city = user.?.profile.?.address.?.city.?.trim() or "unknown"</code></pre>
-                </div>
-                <div class="compare-pane other-pane">
-                  <div class="compare-title">
-                    <span>Java</span>
-                    <b data-i18n="examples.safe.otherLines">9 строк</b>
-                  </div>
-                  <pre><code>String city = "unknown";
-if (user != null
-    && user.getProfile() != null
-    && user.getProfile().getAddress() != null
-    && user.getProfile().getAddress().getCity() != null) {
-  city = user.getProfile()
-      .getAddress()
-      .getCity()
-      .trim();
-}</code></pre>
-                </div>
-              </div>
-            </article>
-          </div>
-        </div>
-
-        <div class="example-dots reveal" aria-label="Example slides" data-i18n-aria-label="examples.dotsLabel">
-          <button type="button" data-carousel-dot="0" aria-label="Пример 1" aria-current="true"></button>
-          <button type="button" data-carousel-dot="1" aria-label="Пример 2"></button>
-          <button type="button" data-carousel-dot="2" aria-label="Пример 3"></button>
-          <button type="button" data-carousel-dot="3" aria-label="Пример 4"></button>
-          <button type="button" data-carousel-dot="4" aria-label="Пример 5"></button>
-        </div>
-      </section>
-
-      <section class="section inside-section" id="inside">
-        <div class="inside-orb" aria-hidden="true"></div>
-        <div class="section-heading section-heading-light reveal">
-          <p class="section-kicker" data-i18n="inside.kicker">Runtime без глобального замка</p>
-          <h2 data-i18n="inside.title">No-GIL VM: параллельность — часть модели исполнения.</h2>
-          <p data-i18n="inside.lead">
-            Amber строит concurrency вокруг Worker → Strand → Task. `task.async`
-            даёт кооперативные задачи внутри strand, `task.spawn` выносит работу
-            в новый strand на worker thread, а verifier/root maps держат runtime
-            безопасным для байткода и native backend.
-          </p>
-        </div>
-
-        <div class="architecture reveal">
-          <div class="arch-line" aria-hidden="true"></div>
-          <div class="arch-step">
-            <span>01</span><b>Surface</b><small data-i18n="inside.source">syntax sugar</small>
-          </div>
-          <div class="arch-step">
-            <span>02</span><b>HIR / MIR</b><small data-i18n="inside.ir">explicit lowering</small>
-          </div>
-          <div class="arch-step">
-            <span>03</span><b>amber.bc.v1</b><small data-i18n="inside.bytecode">verify first</small>
-          </div>
-          <div class="arch-step">
-            <span>04</span><b>VM / Native</b><small data-i18n="inside.runtime">no-GIL execution</small>
-          </div>
-        </div>
-
-        <div class="tech-grid">
-          <article class="tech-card reveal">
-            <span class="tech-icon">⇄</span>
-            <h3 data-i18n="inside.cards.verified.title">Worker / Strand / Task</h3>
-            <p data-i18n="inside.cards.verified.text">
-              Несколько strands реально исполняются параллельно на worker threads;
-              ordinary mutable state по умолчанию остаётся strand-confined.
-            </p>
-          </article>
-          <article class="tech-card reveal">
-            <span class="tech-icon">↯</span>
-            <h3 data-i18n="inside.cards.concurrent.title">Кооперативная многозадачность</h3>
-            <p data-i18n="inside.cards.concurrent.text">
-              `wait`, `sleep`, `yield` и cancellation работают на safepoints;
-              `task.sync:` временно запрещает same-strand переключение.
-            </p>
-          </article>
-          <article class="tech-card reveal">
-            <span class="tech-icon">◇</span>
-            <h3 data-i18n="inside.cards.effects.title">Verifier, root maps, safepoints</h3>
-            <p data-i18n="inside.cards.effects.text">
-              `.amberbc` — data, not trusted code: loader проверяет структуру,
-              dataflow, handler ranges и GC roots до исполнения.
-            </p>
-          </article>
-          <article class="tech-card reveal">
-            <span class="tech-icon">✦</span>
-            <h3 data-i18n="inside.cards.frozen.title">Full native build</h3>
-            <p data-i18n="inside.cards.frozen.text">
-              Native profile сохраняет bytecode как source-of-truth, добавляет
-              MIR/native metadata, root maps и безопасный fallback на VM.
-            </p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section modules-preview">
-        <div class="section-heading reveal">
-          <p class="section-kicker" data-i18n="modules.kicker">Prelude, а не случайный набор пакетов</p>
-          <h2 data-i18n="modules.title">VM-модули документированы как часть runtime-контракта.</h2>
-          <p data-i18n="modules.lead">
-            JSON, URL, UUID, crypto-grade randomness, digest, codecs, time, math
-            и CLI parsing доступны как native prelude-типы; каждый метод имеет
-            отдельную страницу и пример Amber-кода.
-          </p>
-        </div>
-        <div class="module-marquee reveal" aria-label="Built-in modules">
-          <div class="module-track">
-            <a href="./modules/json.html"><span>{ }</span>Json</a>
-            <a href="./modules/url.html"><span>↗</span>Url</a>
-            <a href="./modules/uuid.html"><span>#</span>Uuid</a>
-            <a href="./modules/time.html"><span>◷</span>Time</a>
-            <a href="./modules/digest.html"><span>⌁</span>Digest</a>
-            <a href="./modules/secure-random.html"><span>✦</span>SecureRandom</a>
-            <a href="./modules/base64.html"><span>64</span>Base64</a>
-            <a href="./modules/math.html"><span>π</span>Math</a>
-            <a href="./modules/argparser.html"><span>›_</span>ArgParser</a>
-            <a href="./modules/json.html"><span>{ }</span>Json</a>
-            <a href="./modules/url.html"><span>↗</span>Url</a>
-            <a href="./modules/uuid.html"><span>#</span>Uuid</a>
-          </div>
-        </div>
-        <a class="modules-link reveal" href="./modules.html">
-          <span data-i18n="modules.cta">Все модули, методы и примеры</span>
-          <i aria-hidden="true">→</i>
-        </a>
-      </section>
-
-      <section class="closing">
-        <div class="closing-gem" aria-hidden="true"></div>
-        <p class="section-kicker" data-i18n="closing.kicker">Спека подключена</p>
-        <h2 data-i18n="closing.title">Если хочется проверить детали — они рядом, не в рекламной дымке.</h2>
-        <p data-i18n="closing.text">
-          На сайте есть rendered HTML-версия единой Markdown-спеки с боковым
-          оглавлением, anchors и ссылкой на исходную копию.
-        </p>
-        <div class="hero-actions">
-          <a class="button button-primary" href="./spec.html">
-            <span data-i18n="closing.cta">Читать спеку</span>
-            <span aria-hidden="true">→</span>
-          </a>
-          <a class="button button-ghost" href="./modules/json.html">
-            <span>VM modules</span>
-            <span aria-hidden="true">↗</span>
-          </a>
-        </div>
-      </section>
-    </main>
-
-    <footer>
-      <a class="brand" href="./index.html">
-        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
-        <span>Amber</span>
-      </a>
-      <p data-i18n="footer.text">No-GIL runtime. Expressive surface. Native path.</p>
-      <span>amber.bc.v1 · 2026</span>
-    </footer>
-
-    <script src="./app.js"></script>
-  </body>
+printf 'p("Hello, orbit!")\n' &gt; hello.s
+build/sputnik run hello.s
+build/sputnik build hello.s -o hello
+./hello</code>
+</pre>
+</div>
+</section>
+</main><footer><a class="brand" href="./index.html">Sputnik</a><span>TECHNICAL PREVIEW</span><a href="https://github.com/orlando-labs/amber-lang"><span data-ru="Исходный код ↗" data-en="Source code ↗" >Исходный код ↗</span>
+</a>
+</footer><script src="./app.js">
+</script>
+</body>
 </html>

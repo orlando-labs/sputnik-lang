@@ -8,7 +8,7 @@ import statistics
 import subprocess
 
 ROOT = Path(__file__).resolve().parent
-CASES = {"local_function", "qualified_function", "amber_class", "builtin_type",
+CASES = {"local_function", "qualified_function", "sputnik_class", "builtin_type",
          "error_class", "task_module"}
 PREFIX = "LOOKUP_ATOM "
 
@@ -39,7 +39,7 @@ def run(binary, iterations, repeats, log):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--before", type=Path, required=True)
-    parser.add_argument("--after", type=Path, default=ROOT.parents[2] / "build/amberc")
+    parser.add_argument("--after", type=Path, default=ROOT.parents[2] / "build/sputnik")
     parser.add_argument("--iterations", type=int, default=300000)
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument("--processes", type=int, default=5)
@@ -48,7 +48,7 @@ def main():
     if min(args.iterations, args.repeats, args.processes) <= 0:
         parser.error("counts must be positive")
     binaries = {"before": args.before.resolve(), "after": args.after.resolve()}
-    inputs = [ROOT / name for name in ("main.am", "provider.am", "manifest.json", "run.py")]
+    inputs = [ROOT / name for name in ("main.s", "provider.s", "manifest.json", "run.py")]
     hashes = {str(path): sha256(path) for path in [*inputs, *binaries.values()]}
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -58,8 +58,8 @@ def main():
         run(binary, 2, 1, output / f"prepare-{lane}.log")
     # Verify that this benchmark really executes the instruction under study.
     disassembly = subprocess.run(
-        [str(binaries["after"]), "amberbc-disasm",
-         str(ROOT / ".amber/vm/out/bench.vm.lookup_constant.provider.amberbc")],
+        [str(binaries["after"]), "sputnikbc-disasm",
+         str(ROOT / ".sputnik/vm/out/bench.vm.lookup_constant.provider.sputnikbc")],
         capture_output=True, text=True, check=True).stdout
     if "LOOKUP_CONST" not in disassembly or "bench.vm.lookup_constant.provider" not in disassembly:
         raise ValueError("Benchmark does not contain LOOKUP_CONST")

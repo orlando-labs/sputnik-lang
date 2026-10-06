@@ -1,12 +1,12 @@
-# Json в Amber
+# Json в Sputnik
 
 `Json` - встроенная стандартная библиотека для чтения, записи и потоковой
 обработки JSON. Её не нужно импортировать: `Json` доступен как runtime native
-тип в обычном Amber-коде.
+тип в обычном Sputnik-коде.
 
 Короткий пример:
 
-```amber
+```sputnik
 payload = {id: 42, name: "Ada", tags: ["compiler", "vm"]}
 
 compact = payload.to_json
@@ -19,9 +19,9 @@ parsed[:id] + parsed[:tags][0].count()
 
 ## Модель Значений
 
-`Json.parse` переводит JSON в обычные Amber-значения:
+`Json.parse` переводит JSON в обычные Sputnik-значения:
 
-| JSON | Amber |
+| JSON | Sputnik |
 | --- | --- |
 | object | `Map` по умолчанию |
 | array | `List` |
@@ -31,10 +31,10 @@ parsed[:id] + parsed[:tags][0].count()
 | `true` / `false` | `Bool` |
 | `null` | `null` |
 
-Обычный `Map` в Amber name-indifferent: ключи JSON-объекта можно читать строкой
+Обычный `Map` в Sputnik name-indifferent: ключи JSON-объекта можно читать строкой
 или символом.
 
-```amber
+```sputnik
 user = Json.parse("{\"id\": 7, \"name\": \"Iris\"}")
 
 user["id"]   # 7
@@ -45,7 +45,7 @@ user[:name]  # "Iris"
 Если важно сохранить точное строковое имя ключа и не смешивать строковые ключи с
 символами, используйте `StrictMap`:
 
-```amber
+```sputnik
 user = Json.parse("{\"id\": 7}", map: StrictMap)
 
 user["id"]           # 7
@@ -57,7 +57,7 @@ user.has_key?(:id)   # false
 
 ## Parse
 
-```amber
+```sputnik
 value = Json.parse("{\"ok\": true, \"count\": 3}")
 strict = Json.parse("{\"ok\": true}", map: StrictMap)
 ```
@@ -71,7 +71,7 @@ offset. Слишком глубокие документы также счита
 
 ## Generate
 
-```amber
+```sputnik
 Json.generate({ok: true, count: 3})
 # "{\"ok\":true,\"count\":3}"
 
@@ -109,7 +109,7 @@ Json.pretty_generate({ok: true, items: [1, 2]}, indent: 4)
 
 ## Файлы
 
-```amber
+```sputnik
 config = Json.load_from_file("config.json")
 
 Json.save_to_file("config.json", {enabled: true, retry: 3})
@@ -121,11 +121,11 @@ Json.save_to_file("config.pretty.json", config, pretty: true, indent: 2)
 перевод строки. С `pretty: true` используется форматирование
 `Json.pretty_generate`.
 
-В capability-aware запуске и в собранном `amberc build` executable для файлового
+В capability-aware запуске и в собранном `sputnik build` executable для файлового
 I/O нужны grants:
 
 ```sh
-build/amberc build app.am -o build/app \
+build/sputnik build app.s -o build/app \
   --grant fs.read=config.json \
   --grant fs.write=out.json
 ```
@@ -138,7 +138,7 @@ build/amberc build app.am -o build/app \
 JSONL, или NDJSON, - это формат "одно JSON-значение на строку". Включается только
 явным `jsonl: true`; расширение файла не переключает режим автоматически.
 
-```amber
+```sputnik
 rows = [
   {id: 1, value: 10},
   {id: 2, value: 20}
@@ -162,9 +162,9 @@ loaded[0][:value] + loaded[1][:value]
 ## Path
 
 `Json.path` и `Json.paths` выполняют маленький стабильный subset JSONPath-like
-навигации по обычным Amber-значениям (`Map`, `StrictMap`, `List` и скаляры).
+навигации по обычным Sputnik-значениям (`Map`, `StrictMap`, `List` и скаляры).
 Это не отдельный язык выражений: фильтры, условия и агрегация пишутся обычным
-Amber-блоком.
+Sputnik-блоком.
 
 Поддерживаемый синтаксис:
 
@@ -176,7 +176,7 @@ Amber-блоком.
 | `[0]` | индекс списка |
 | `[*]` | все элементы списка или все значения map |
 
-```amber
+```sputnik
 payload = Json.parse("{\"items\":[{\"id\":1},{\"id\":2}],\"user\":{\"name\":\"Ada\"}}")
 
 payload.path("$.user.name")        # "Ada"
@@ -194,7 +194,7 @@ Json.paths(payload, "$.items[*].id")
 же функций. Обычный `Map` использует name-indifferent lookup, а `StrictMap`
 ищет точный строковый ключ:
 
-```amber
+```sputnik
 {name: 1}.path("$.name")                       # 1
 StrictMap{name: 1, "name": 2}.path("$.name")   # 2
 ```
@@ -204,7 +204,7 @@ StrictMap{name: 1, "name": 2}.path("$.name")   # 2
 accumulator; если возвращает `null`, сохраняется текущий accumulator, что удобно
 для мутации коллекции.
 
-```amber
+```sputnik
 ids = payload.paths("$.items[*]", []) |item, acc|:
   if item[:id] > 1:
     acc.push!(item[:id])
@@ -215,7 +215,7 @@ ids = payload.paths("$.items[*]", []) |item, acc|:
 accumulator. `Json.stop(value)` прекращает обход и возвращает `value` как
 финальный accumulator.
 
-```amber
+```sputnik
 first_big = payload.paths("$.items[*]", null) |item, acc|:
   if item[:id] > 1:
     Json.stop(item)
@@ -227,7 +227,7 @@ first_big = payload.paths("$.items[*]", null) |item, acc|:
 `Json.stream_parse` и `Json.stream_parse_file` вызывают блок для уже разобранных
 значений на выбранной глубине и возвращают количество переданных в блок значений.
 
-```amber
+```sputnik
 sum = 0
 
 count = Json.stream_parse("[1, 2, 3, 4]", depth: 1) |value|:
@@ -247,7 +247,7 @@ sum + count
 
 Для `Json.stream_parse(text)` default `depth` равен `1`.
 
-```amber
+```sputnik
 seen = []
 
 n = Json.stream_parse("[{\"id\":1}, {\"id\":2}]", depth: 1) |row|:
@@ -259,7 +259,7 @@ n
 Для `Json.stream_parse_file(path, jsonl: true)` default `depth` равен `0`, чтобы
 блок получал каждую JSONL-строку как отдельное значение:
 
-```amber
+```sputnik
 total = 0
 
 count = Json.stream_parse_file("events.jsonl", jsonl: true) |row|:
@@ -270,7 +270,7 @@ count = Json.stream_parse_file("events.jsonl", jsonl: true) |row|:
 
 Для большого top-level массива используйте обычный JSON-режим и `depth: 1`:
 
-```amber
+```sputnik
 checksum = 0
 
 count = Json.stream_parse_file("events.json", depth: 1) |event|:
@@ -288,7 +288,7 @@ checksum + count
 управляющий выход: парсер прекращает чтение, а `stream_parse` возвращает число
 уже переданных значений.
 
-```amber
+```sputnik
 sum = 0
 limit = 100
 seen_so_far = 0
@@ -349,7 +349,7 @@ python3 bench/polyglot/run_benchmark.py --workload json --repeats 5
 
 ## Частые Ошибки
 
-- В Amber-строке JSON нужно экранировать кавычки: `"{\"id\": 1}"`.
+- В Sputnik-строке JSON нужно экранировать кавычки: `"{\"id\": 1}"`.
 - Для JSONL всегда пишите `jsonl: true`; runtime не угадывает режим по
   расширению `.jsonl`.
 - `load_from_file` читает файл целиком. Для логов и больших массивов берите

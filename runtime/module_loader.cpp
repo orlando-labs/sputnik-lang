@@ -11,7 +11,7 @@
 #include <sstream>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -1058,4 +1058,4 @@ RuntimeModuleLoader::import_alias_snapshot(
   return snapshot_for_import_alias(alias, export_cell);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

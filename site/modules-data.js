@@ -2,7 +2,7 @@
 // Do not edit by hand; edit the sidecars and regenerate.
 const method = (sig, ru, en, example) => ({ sig, ru, en, example });
 
-window.AMBER_MODULES = [
+window.SPUTNIK_MODULES = [
   {
     id: "argparser",
     path: "argparser.html",
@@ -11,15 +11,15 @@ window.AMBER_MODULES = [
     description: { ru: "Fluent builder для options, flags, positional args, env fallback и help.", en: "A fluent builder for options, flags, positional args, env fallback and help." },
     note: { ru: "Явные cmdline/env deterministic; CLI-вывод проходит через runtime I/O.", en: "Explicit cmdline/env are deterministic; CLI output uses runtime I/O." },
     methods: [
-      method("ArgParser.new(cmdline:, name:, about:, env:, add_help: true)", "Создаёт parser.", "Creates a parser.", "cli = ArgParser.new(\n  name: \"amberfmt\",\n  about: \"Format Amber source\"\n)"),
-      method("parser.name(text)", "Устанавливает имя программы и возвращает parser.", "Sets the program name and returns the parser.", "cli = ArgParser.new().name(\"amberfmt\")"),
+      method("ArgParser.new(cmdline:, name:, about:, env:, add_help: true)", "Создаёт parser.", "Creates a parser.", "cli = ArgParser.new(\n  name: \"sputnikfmt\",\n  about: \"Format Sputnik source\"\n)"),
+      method("parser.name(text)", "Устанавливает имя программы и возвращает parser.", "Sets the program name and returns the parser.", "cli = ArgParser.new().name(\"sputnikfmt\")"),
       method("parser.about(text)", "Устанавливает описание и возвращает parser.", "Sets the description and returns the parser.", "cli = ArgParser.new().about(\"Format source files\")"),
-      method("parser.arg(*spellings, ...)", "Добавляет option со значением.", "Adds a value option.", "cli.arg(\"-o\", \"--output\", default: \"out.am\")"),
+      method("parser.arg(*spellings, ...)", "Добавляет option со значением.", "Adds a value option.", "cli.arg(\"-o\", \"--output\", default: \"out.s\")"),
       method("parser.flag(*spellings, ...)", "Добавляет Bool-флаг.", "Adds a Bool flag.", "cli.flag(\"-v\", \"--verbose\", negatable: true)"),
       method("parser.pos(name, ...)", "Добавляет positional argument.", "Adds a positional argument.", "cli.pos(\"source\", required: true)"),
       method("parser.rest(name, ...)", "Собирает остаток argv в List.", "Collects remaining argv values into a List.", "cli.rest(\"files\", type: Str)"),
       method("parser.try_parse(cmdline:)", "Возвращает Ok/Err-подобный результат.", "Returns an Ok/Err-like result.", "result = cli.try_parse(cmdline: [\"--bad\"])\nif result.err?(): result.error"),
-      method("parser.parse_or_raise(cmdline:)", "Возвращает Map или бросает ArgParser error.", "Returns a Map or raises an ArgParser error.", "args = cli.parse_or_raise(\n  cmdline: [\"--output\", \"x.am\", \"main.am\"]\n)"),
+      method("parser.parse_or_raise(cmdline:)", "Возвращает Map или бросает ArgParser error.", "Returns a Map or raises an ArgParser error.", "args = cli.parse_or_raise(\n  cmdline: [\"--output\", \"x.s\", \"main.s\"]\n)"),
       method("parser.parse(cmdline:)", "CLI-режим с автоматическим help/error output.", "CLI mode with automatic help/error output.", "args = cli.parse()\nformat(args[:source])"),
     ]
   },
@@ -55,19 +55,19 @@ window.AMBER_MODULES = [
     description: { ru: "Однопроходные checksum, hash и HMAC-функции с результатом Bytes.", en: "One-shot checksum, hash and HMAC functions returning Bytes." },
     note: { ru: "Pure: алгоритмы исполняются внутри runtime.", en: "Pure: algorithms execute inside the runtime." },
     methods: [
-      method("Digest.crc32(bytes)", "CRC-32 checksum.", "CRC-32 checksum.", "sum = Digest.crc32(Bytes.new(\"amber\")).hex()"),
-      method("Digest.md5(bytes)", "MD5 digest для совместимости.", "MD5 digest for compatibility.", "hash = Digest.md5(Bytes.new(\"amber\")).hex()"),
-      method("Digest.sha1(bytes)", "SHA-1 digest для совместимости.", "SHA-1 digest for compatibility.", "hash = Digest.sha1(Bytes.new(\"amber\")).hex()"),
-      method("Digest.sha256(bytes)", "SHA-256 digest.", "SHA-256 digest.", "hash = Digest.sha256(Bytes.new(\"amber\")).hex()"),
+      method("Digest.crc32(bytes)", "CRC-32 checksum.", "CRC-32 checksum.", "sum = Digest.crc32(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.md5(bytes)", "MD5 digest для совместимости.", "MD5 digest for compatibility.", "hash = Digest.md5(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.sha1(bytes)", "SHA-1 digest для совместимости.", "SHA-1 digest for compatibility.", "hash = Digest.sha1(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.sha256(bytes)", "SHA-256 digest.", "SHA-256 digest.", "hash = Digest.sha256(Bytes.new(\"sputnik\")).hex()"),
       method("Digest.hmac_sha256(key, bytes)", "HMAC-SHA-256 по ключу и payload.", "HMAC-SHA-256 over a key and payload.", "mac = Digest.hmac_sha256(\n  Bytes.new(\"secret\"),\n  Bytes.new(\"payload\")\n).hex()"),
-      method("Digest.streebog256(bytes)", "Стрибог-256.", "Streebog-256.", "hash = Digest.streebog256(Bytes.new(\"amber\")).hex()"),
-      method("Digest.streebog512(bytes)", "Стрибог-512.", "Streebog-512.", "hash = Digest.streebog512(Bytes.new(\"amber\")).hex()"),
-      method("Digest.gost256(bytes)", "Alias для streebog256.", "Alias for streebog256.", "hash = Digest.gost256(Bytes.new(\"amber\")).hex()"),
-      method("Digest.gost512(bytes)", "Alias для streebog512.", "Alias for streebog512.", "hash = Digest.gost512(Bytes.new(\"amber\")).hex()"),
-      method("Digest.гост256(bytes)", "Кириллический alias для streebog256.", "Cyrillic alias for streebog256.", "hash = Digest.гост256(Bytes.new(\"amber\")).hex()"),
-      method("Digest.гост512(bytes)", "Кириллический alias для streebog512.", "Cyrillic alias for streebog512.", "hash = Digest.гост512(Bytes.new(\"amber\")).hex()"),
-      method("Digest.стрибог256(bytes)", "Кириллический alias для streebog256.", "Cyrillic alias for streebog256.", "hash = Digest.стрибог256(Bytes.new(\"amber\")).hex()"),
-      method("Digest.стрибог512(bytes)", "Кириллический alias для streebog512.", "Cyrillic alias for streebog512.", "hash = Digest.стрибог512(Bytes.new(\"amber\")).hex()"),
+      method("Digest.streebog256(bytes)", "Стрибог-256.", "Streebog-256.", "hash = Digest.streebog256(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.streebog512(bytes)", "Стрибог-512.", "Streebog-512.", "hash = Digest.streebog512(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.gost256(bytes)", "Alias для streebog256.", "Alias for streebog256.", "hash = Digest.gost256(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.gost512(bytes)", "Alias для streebog512.", "Alias for streebog512.", "hash = Digest.gost512(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.гост256(bytes)", "Кириллический alias для streebog256.", "Cyrillic alias for streebog256.", "hash = Digest.гост256(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.гост512(bytes)", "Кириллический alias для streebog512.", "Cyrillic alias for streebog512.", "hash = Digest.гост512(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.стрибог256(bytes)", "Кириллический alias для streebog256.", "Cyrillic alias for streebog256.", "hash = Digest.стрибог256(Bytes.new(\"sputnik\")).hex()"),
+      method("Digest.стрибог512(bytes)", "Кириллический alias для streebog512.", "Cyrillic alias for streebog512.", "hash = Digest.стрибог512(Bytes.new(\"sputnik\")).hex()"),
     ]
   },
   {
@@ -90,7 +90,7 @@ window.AMBER_MODULES = [
     description: { ru: "Парсинг, генерация, JSONL, path-навигация и потоковая обработка.", en: "Parsing, generation, JSONL, path navigation and streaming processing." },
     note: { ru: "Файловые методы требуют fs.read или fs.write; остальные операции pure.", en: "File methods require fs.read or fs.write; all other operations are pure." },
     methods: [
-      method("Json.parse(text, map: Map)", "Преобразует JSON-текст в Amber-значение.", "Converts JSON text into an Amber value.", "user = Json.parse(\"{\\\"id\\\":7,\\\"name\\\":\\\"Iris\\\"}\")\nuser[:name]\n# => \"Iris\""),
+      method("Json.parse(text, map: Map)", "Преобразует JSON-текст в Sputnik-значение.", "Converts JSON text into an Sputnik value.", "user = Json.parse(\"{\\\"id\\\":7,\\\"name\\\":\\\"Iris\\\"}\")\nuser[:name]\n# => \"Iris\""),
       method("Json.generate(value)", "Создаёт компактный JSON.", "Generates compact JSON.", "text = Json.generate({ok: true, count: 3})\n# \"{\\\"ok\\\":true,\\\"count\\\":3}\""),
       method("Json.pretty_generate(value, indent: 2)", "Создаёт форматированный JSON.", "Generates formatted JSON.", "text = Json.pretty_generate(\n  {ok: true, items: [1, 2]},\n  indent: 4\n)"),
       method("Json.path(value, query)", "Возвращает первое совпадение или null.", "Returns the first match or null.", "doc = Json.parse(\"{\\\"user\\\":{\\\"name\\\":\\\"Ada\\\"}}\")\nname = Json.path(doc, \"$.user.name\")\n# \"Ada\""),
@@ -153,6 +153,21 @@ window.AMBER_MODULES = [
       method("SecureRandom.base64(n, padding: true)", "Создаёт стандартный Base64-токен.", "Creates a standard Base64 token.", "token = SecureRandom.base64(18)"),
       method("SecureRandom.base64url(n, padding: false)", "Создаёт URL-safe токен.", "Creates a URL-safe token.", "token = SecureRandom.base64url(24)"),
       method("SecureRandom.uuid", "Создаёт UUID v4.", "Creates a UUID v4.", "request_id = SecureRandom.uuid\nrequest_id.version\n# 4"),
+    ]
+  },
+  {
+    id: "signature",
+    path: "signature.html",
+    title: "Signature",
+    icon: "◈",
+    description: { ru: "Цифровые подписи EdDSA, ECDSA, RSA-PSS, ML-DSA и ГОСТ Р 34.10-2012.", en: "EdDSA, ECDSA, RSA-PSS, ML-DSA, and GOST R 34.10-2012 digital signatures." },
+    note: { ru: "Ключи и сообщения передаются как Bytes; ГОСТ требует Nettle и GMP.", en: "Keys and messages use Bytes; GOST requires Nettle and GMP." },
+    methods: [
+      method("Signature.generate(algorithm)", "Создать пару ключей; возвращает Map с private_key и public_key.", "Generate a key pair in a Map with private_key and public_key.", "keys = Signature.generate(:ed25519)"),
+      method("Signature.public_key(algorithm, private_key)", "Получить открытый ключ из закрытого.", "Derive a public key from a private key.", "public = Signature.public_key(:ed25519, keys[\"private_key\"])"),
+      method("Signature.sign(algorithm, private_key, message)", "Подписать бинарное сообщение.", "Sign a binary message.", "signature = Signature.sign(:ed25519, keys[\"private_key\"], Bytes.new(\"sputnik\"))"),
+      method("Signature.verify(algorithm, public_key, message, signature)", "Проверить подпись; изменённое сообщение возвращает false.", "Verify a signature; a changed message returns false.", "valid = Signature.verify(:ed25519, keys[\"public_key\"], Bytes.new(\"sputnik\"), signature)"),
+      method("Signature.available?(algorithm)", "Проверить, доступен ли алгоритм в данной сборке.", "Check whether an algorithm is available in this build.", "gost_enabled = Signature.available?(:gost2012_256)"),
     ]
   },
   {
@@ -231,12 +246,12 @@ window.AMBER_MODULES = [
     description: { ru: "URL parse/build, percent coding и вложенные query maps.", en: "URL parsing/building, percent coding and nested query maps." },
     note: { ru: "Pure: модуль не выполняет сетевые запросы.", en: "Pure: this module performs no network requests." },
     methods: [
-      method("Url.parse(text)", "Разбирает URL в Map частей.", "Parses a URL into a parts Map.", "url = Url.parse(\"https://example.com:8443/api?q=amber\")\nurl[:host]\n# => \"example.com\""),
+      method("Url.parse(text)", "Разбирает URL в Map частей.", "Parses a URL into a parts Map.", "url = Url.parse(\"https://example.com:8443/api?q=sputnik\")\nurl[:host]\n# => \"example.com\""),
       method("Url.build(parts)", "Собирает URL из Map частей.", "Builds a URL from a parts Map.", "text = Url.build({\n  scheme: \"https\", host: \"example.com\", path: \"/api\"\n})"),
       method("Url.percent_encode(text)", "Кодирует bytes вне unreserved set.", "Encodes bytes outside the unreserved set.", "text = Url.percent_encode(\"a b/!\")\n# => \"a%20b%2F%21\""),
       method("Url.percent_decode(text)", "Декодирует percent escapes.", "Decodes percent escapes.", "text = Url.percent_decode(\"a%20b%2F%21\")\n# => \"a b/!\""),
       method("Url.parse_query(text)", "Разбирает repeated/bracket query keys.", "Parses repeated and bracketed query keys.", "query = Url.parse_query(\"tag[]=vm&tag[]=lang\")\nquery[\"tag\"]\n# [\"vm\", \"lang\"]"),
-      method("Url.build_query(map)", "Строит query string из nested Map/List.", "Builds a query string from nested Map/List values.", "query = Url.build_query({q: \"amber\", tag: [\"vm\", \"lang\"]})"),
+      method("Url.build_query(map)", "Строит query string из nested Map/List.", "Builds a query string from nested Map/List values.", "query = Url.build_query({q: \"sputnik\", tag: [\"vm\", \"lang\"]})"),
     ]
   },
   {

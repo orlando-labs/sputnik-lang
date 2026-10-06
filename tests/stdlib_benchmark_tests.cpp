@@ -18,52 +18,52 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<stdlib-benchmark-source-test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::BcModule compile_source_or_die(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<stdlib-benchmark-source-test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   if (!emit_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(emit_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(emit_result.diagnostics);
     std::exit(1);
   }
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emit_result.module));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emit_result.module));
   if (!decoded.ok()) {
-    std::cerr << amber::bytecode::verify_errors_to_json(decoded.errors);
+    std::cerr << sputnik::bytecode::verify_errors_to_json(decoded.errors);
     std::exit(1);
   }
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult execute_source(const std::string &source) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+sputnik::runtime::ExecutionResult execute_source(const std::string &source) {
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "source module should have init code");
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
-void expect_ok_integer(const amber::runtime::ExecutionResult &result,
+void expect_ok_integer(const sputnik::runtime::ExecutionResult &result,
                        std::int64_t expected, const std::string &message) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << message << ": " << result.fault->error_name
@@ -76,7 +76,7 @@ void expect_ok_integer(const amber::runtime::ExecutionResult &result,
 
 void expect_fault(const std::string &source, const std::string &error_name,
                   const std::string &message) {
-  const amber::runtime::ExecutionResult result = execute_source(source);
+  const sputnik::runtime::ExecutionResult result = execute_source(source);
   expect(!result.ok() && result.fault.has_value(), message + " should fault");
   expect(result.fault->error_name == error_name,
          message + " should fault with " + error_name + ", got " +
@@ -84,7 +84,7 @@ void expect_fault(const std::string &source, const std::string &error_name,
 }
 
 void test_measure_chain_exports() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "r = Benchmark.measure(\"calc\"):\n"
       "  21 * 2\n"
       "m = r.map\n"
@@ -92,11 +92,11 @@ void test_measure_chain_exports() {
       "json = r.to_json(pretty: true)\n"
       "copy = Benchmark.from_json(json)\n"
       "text = r.pretty(unit: :ns)\n"
-      "if m[\"schema\"] == \"amber.benchmark.v1\" and "
+      "if m[\"schema\"] == \"sputnik.benchmark.v1\" and "
       "m[\"kind\"] == \"measurement\" and m2[\"kind\"] == \"measurement\" and "
       "m.has_key?(\"value\") == false and r[\"value\"] == 42 and "
       "copy[\"data\"][\"elapsed_ns\"] >= 0 and "
-      "json.contains?(\"amber.benchmark.v1\") and text.contains?(\"calc\"):\n"
+      "json.contains?(\"sputnik.benchmark.v1\") and text.contains?(\"calc\"):\n"
       "  42\n"
       "else:\n"
       "  0\n");
@@ -104,7 +104,7 @@ void test_measure_chain_exports() {
 }
 
 void test_run_compare_and_ansi_table() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "a = Benchmark.run(\"a\", iterations: 2, samples: 2) |i|:\n"
       "  i + 1\n"
       "b = Benchmark.run(\"b\", iterations: 2, samples: 2) |i|:\n"
@@ -124,7 +124,7 @@ void test_run_compare_and_ansi_table() {
 }
 
 void test_profile_sections() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "profile = Benchmark.profile(\"checkout\") |p|:\n"
       "  loaded = p.section(\"load\"):\n"
       "    2\n"
@@ -145,7 +145,7 @@ void test_profile_sections() {
 }
 
 void test_result_accessors() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "measurement = Benchmark.measure(\"calc\"):\n"
       "  21 * 2\n"
       "report = Benchmark.run(\"loop\", iterations: 2, samples: 2) |i|:\n"
@@ -182,7 +182,7 @@ void test_faults() {
   expect_fault("Benchmark.from_json(\"{}\")\n", "BenchmarkImportError",
                "invalid import");
   expect_fault(
-      "Benchmark.from_map({\"schema\": \"amber.benchmark.v1\", "
+      "Benchmark.from_map({\"schema\": \"sputnik.benchmark.v1\", "
       "\"kind\": \"report\", \"label\": null, \"data\": {}})\n",
       "BenchmarkImportError", "invalid report import");
   expect_fault("r = Benchmark.measure(\"x\"):\n  1\nr.pretty(sort: :bogus)\n",

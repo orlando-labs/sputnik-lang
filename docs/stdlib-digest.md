@@ -1,11 +1,11 @@
 # Digest
 
-`Digest` is Amber's dependency-free, one-shot hashing module. Every method
+`Digest` is Sputnik's dependency-free, one-shot hashing module. Every method
 accepts explicit binary values (`Bytes`, `ByteSlice`, or `ByteBuffer`) and
 returns raw `Bytes`; use `Hex.encode`, `Base64.encode`, or `bytes.hex()` for
 text formatting.
 
-```amber
+```sputnik
 data = Bytes.new("abc")
 
 Digest.sha256(data).hex()

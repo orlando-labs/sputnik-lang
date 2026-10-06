@@ -16,7 +16,7 @@ void expect(bool condition, const std::string &message) {
 void test_manifest_parses_and_normalizes() {
   const std::string source =
       "{\n"
-      "  \"schema\": \"amber.build.v1\",\n"
+      "  \"schema\": \"sputnik.build.v1\",\n"
       "  \"name\": \"demo\",\n"
       "  \"root\": \"demo.main\",\n"
       "  \"profiles\": {\n"
@@ -25,16 +25,16 @@ void test_manifest_parses_and_normalizes() {
       "    \"forbidden\": [\"ffi.v1\"]\n"
       "  },\n"
       "  \"stdlib\": [\n"
-      "    {\"name\": \"amber.core\", \"path\": \"stdlib/core.am\"}\n"
+      "    {\"name\": \"sputnik.core\", \"path\": \"stdlib/core.s\"}\n"
       "  ],\n"
       "  \"modules\": [\n"
-      "    {\"name\": \"demo.main\", \"path\": \"src/main.am\"},\n"
-      "    {\"name\": \"demo.util\", \"path\": \"src/util.am\"}\n"
+      "    {\"name\": \"demo.main\", \"path\": \"src/main.s\"},\n"
+      "    {\"name\": \"demo.util\", \"path\": \"src/util.s\"}\n"
       "  ]\n"
       "}\n";
-  const amber::build::BuildManifestResult parsed =
-      amber::build::parse_build_manifest(source, "amber.build.json");
-  expect(parsed.ok(), amber::build::diagnostics_to_string(parsed.diagnostics));
+  const sputnik::build::BuildManifestResult parsed =
+      sputnik::build::parse_build_manifest(source, "sputnik.build.json");
+  expect(parsed.ok(), sputnik::build::diagnostics_to_string(parsed.diagnostics));
   expect(parsed.manifest.profiles.required_features.size() == 2,
          "required features should be unique");
   expect(parsed.manifest.profiles.required_features[0] == "core.v1",
@@ -47,7 +47,7 @@ void test_manifest_parses_and_normalizes() {
          "modules should sort by name");
 
   const std::uint32_t flags =
-      amber::build::profile_flags_for(parsed.manifest.profiles);
+      sputnik::build::profile_flags_for(parsed.manifest.profiles);
   expect((flags & (1U << 0U)) != 0U, "core profile flag should be set");
   expect((flags & (1U << 1U)) != 0U, "typed profile flag should be set");
   expect((flags & (1U << 3U)) != 0U, "effects profile flag should be set");
@@ -55,7 +55,7 @@ void test_manifest_parses_and_normalizes() {
 
 void test_yaml_manifest_parses_and_normalizes() {
   const std::string source =
-      "schema: amber.build.v1\n"
+      "schema: sputnik.build.v1\n"
       "name: demo.yaml\n"
       "root: demo.main\n"
       "profiles:\n"
@@ -67,13 +67,13 @@ void test_yaml_manifest_parses_and_normalizes() {
       "    int: Int64\n"
       "    overflow: checked\n"
       "stdlib:\n"
-      "  - name: amber.core\n"
-      "    path: stdlib/core.am\n"
+      "  - name: sputnik.core\n"
+      "    path: stdlib/core.s\n"
       "modules:\n"
       "  - name: demo.util\n"
-      "    path: src/util.am\n"
+      "    path: src/util.s\n"
       "  - name: demo.main\n"
-      "    path: src/main.am\n"
+      "    path: src/main.s\n"
       "native_extensions:\n"
       "  - name: tiny\n"
       "    language: c\n"
@@ -84,9 +84,9 @@ void test_yaml_manifest_parses_and_normalizes() {
       "    symbols:\n"
       "      - logical: tiny.answer\n"
       "        symbol: tiny_answer\n";
-  const amber::build::BuildManifestResult parsed =
-      amber::build::parse_build_manifest(source, "amber.build.yaml");
-  expect(parsed.ok(), amber::build::diagnostics_to_string(parsed.diagnostics));
+  const sputnik::build::BuildManifestResult parsed =
+      sputnik::build::parse_build_manifest(source, "sputnik.build.yaml");
+  expect(parsed.ok(), sputnik::build::diagnostics_to_string(parsed.diagnostics));
   expect(parsed.manifest.profiles.required_features.size() == 3,
          "YAML required features should be unique");
   expect(parsed.manifest.profiles.required_features[0] == "core.v1",
@@ -98,7 +98,7 @@ void test_yaml_manifest_parses_and_normalizes() {
          "YAML modules should sort by name");
   expect(parsed.manifest.native_extensions.size() == 1,
          "YAML native extension should parse");
-  const amber::pkg::PackageNativeExtension &extension =
+  const sputnik::pkg::PackageNativeExtension &extension =
       parsed.manifest.native_extensions[0];
   expect(extension.sources.size() == 1 &&
              extension.sources[0] == "native/tiny.c",
@@ -115,32 +115,32 @@ void test_yaml_manifest_parses_and_normalizes() {
          "YAML blocking native symbols should parse");
 
   const std::string obsolete =
-      "schema: amber.build.v1\n"
+      "schema: sputnik.build.v1\n"
       "name: obsolete\n"
       "root: obsolete.main\n"
       "profiles:\n"
       "  required: [core.v1, ffi.v1]\n"
       "modules:\n"
       "  - name: obsolete.main\n"
-      "    path: main.am\n"
+      "    path: main.s\n"
       "native_extensions:\n"
       "  - name: tiny\n"
       "    language: c\n"
       "    capabilities: [ffi]\n";
-  const amber::build::BuildManifestResult rejected =
-      amber::build::parse_build_manifest_yaml(obsolete, "amber.build.yaml");
+  const sputnik::build::BuildManifestResult rejected =
+      sputnik::build::parse_build_manifest_yaml(obsolete, "sputnik.build.yaml");
   expect(!rejected.ok(),
          "YAML native extension capabilities should be rejected");
 }
 
 void test_manifest_rejects_profile_conflict() {
   const std::string source =
-      "{\"schema\":\"amber.build.v1\",\"name\":\"bad\",\"root\":\"bad.main\","
+      "{\"schema\":\"sputnik.build.v1\",\"name\":\"bad\",\"root\":\"bad.main\","
       "\"profiles\":{\"required\":[\"core.v1\"],"
       "\"forbidden\":[\"core.v1\"]},"
-      "\"modules\":[{\"name\":\"bad.main\",\"path\":\"main.am\"}]}";
-  const amber::build::BuildManifestResult parsed =
-      amber::build::parse_build_manifest_json(source, "bad.json");
+      "\"modules\":[{\"name\":\"bad.main\",\"path\":\"main.s\"}]}";
+  const sputnik::build::BuildManifestResult parsed =
+      sputnik::build::parse_build_manifest_json(source, "bad.json");
   expect(!parsed.ok(), "conflicting profile manifest should fail");
   expect(parsed.diagnostics[0].message.find("both required and forbidden") !=
              std::string::npos,
@@ -148,26 +148,26 @@ void test_manifest_rejects_profile_conflict() {
 }
 
 void test_runtime_feature_support_surface() {
-  expect(amber::build::runtime_supports_feature("core.v1"),
+  expect(sputnik::build::runtime_supports_feature("core.v1"),
          "runtime should support core.v1");
-  expect(!amber::build::runtime_supports_feature("ffi.v1"),
+  expect(!sputnik::build::runtime_supports_feature("ffi.v1"),
          "runtime should not support ffi.v1 by default");
   // macro.v1 is an opt-in build profile (DESIGN-macro-system §14). Post-
   // expansion bytecode carries no macro nodes, so the loader must accept a
   // module that stamps macro.v1 in its PROF metadata.
-  expect(amber::build::runtime_supports_feature("macro.v1"),
+  expect(sputnik::build::runtime_supports_feature("macro.v1"),
          "runtime should support macro.v1");
-  const amber::build::BuildProfileSet macro_profiles = {{"macro.v1"}, {}, {}};
-  expect((amber::build::profile_flags_for(macro_profiles) & (1U << 16U)) != 0U,
+  const sputnik::build::BuildProfileSet macro_profiles = {{"macro.v1"}, {}, {}};
+  expect((sputnik::build::profile_flags_for(macro_profiles) & (1U << 16U)) != 0U,
          "macro.v1 profile flag should be set");
 }
 
 void test_native_extensions_parse_and_gate() {
   const std::string source =
-      "{\"schema\":\"amber.build.v1\",\"name\":\"crypto\","
+      "{\"schema\":\"sputnik.build.v1\",\"name\":\"crypto\","
       "\"root\":\"crypto.blake3\","
       "\"profiles\":{\"required\":[\"core.v1\",\"ffi.v1\"]},"
-      "\"modules\":[{\"name\":\"crypto.blake3\",\"path\":\"src/blake3.am\"}],"
+      "\"modules\":[{\"name\":\"crypto.blake3\",\"path\":\"src/blake3.s\"}],"
       "\"native_extensions\":[{"
       "\"name\":\"blake3\",\"language\":\"c\","
       "\"sources\":[\"native/blake3.c\"],"
@@ -175,18 +175,18 @@ void test_native_extensions_parse_and_gate() {
       "\"runtime_library_dirs\":[\"@loader_path/lib\"],"
       "\"blocking_symbols\":[\"blake3.wait\"],"
       "\"symbols\":[{\"logical\":\"blake3.hash\","
-      "\"symbol\":\"amber_blake3_hash\"}],"
-      "\"types\":[{\"amber\":\"crypto.blake3.Hasher\",\"tag\":\"blake3.Hasher\","
+      "\"symbol\":\"sputnik_blake3_hash\"}],"
+      "\"types\":[{\"sputnik\":\"crypto.blake3.Hasher\",\"tag\":\"blake3.Hasher\","
       "\"ownership\":\"owned\",\"destructor\":\"blake3.hasher_free\"}],"
       "\"errors\":[{\"name\":\"crypto.blake3.HashError\","
       "\"parent\":\"NativeError\",\"default_message\":\"hash failed\"}]"
       "}]}";
-  const amber::build::BuildManifestResult parsed =
-      amber::build::parse_build_manifest_json(source, "amber.build.json");
-  expect(parsed.ok(), amber::build::diagnostics_to_string(parsed.diagnostics));
+  const sputnik::build::BuildManifestResult parsed =
+      sputnik::build::parse_build_manifest_json(source, "sputnik.build.json");
+  expect(parsed.ok(), sputnik::build::diagnostics_to_string(parsed.diagnostics));
   expect(parsed.manifest.native_extensions.size() == 1,
          "one native extension should parse");
-  const amber::pkg::PackageNativeExtension &extension =
+  const sputnik::pkg::PackageNativeExtension &extension =
       parsed.manifest.native_extensions[0];
   expect(extension.name == "blake3" && extension.language == "c",
          "native extension name/language");
@@ -200,7 +200,7 @@ void test_native_extensions_parse_and_gate() {
              extension.runtime_library_dirs == std::vector<std::string>{"@loader_path/lib"},
          "native link and runtime directories");
   expect(extension.symbols.size() == 1 &&
-             extension.symbols[0].symbol == "amber_blake3_hash",
+             extension.symbols[0].symbol == "sputnik_blake3_hash",
          "native extension symbol map");
   expect(extension.types.size() == 1 &&
              extension.types[0].tag == "blake3.Hasher" &&
@@ -212,30 +212,30 @@ void test_native_extensions_parse_and_gate() {
          "native extension error descriptor");
 
   const std::string obsolete_extension_caps =
-      "{\"schema\":\"amber.build.v1\",\"name\":\"crypto\","
+      "{\"schema\":\"sputnik.build.v1\",\"name\":\"crypto\","
       "\"root\":\"crypto.blake3\","
       "\"profiles\":{\"required\":[\"core.v1\",\"ffi.v1\"]},"
-      "\"modules\":[{\"name\":\"crypto.blake3\",\"path\":\"src/blake3.am\"}],"
+      "\"modules\":[{\"name\":\"crypto.blake3\",\"path\":\"src/blake3.s\"}],"
       "\"native_extensions\":[{\"name\":\"blake3\",\"language\":\"c\","
       "\"capabilities\":[\"ffi\"]}]}";
-  const amber::build::BuildManifestResult obsolete =
-      amber::build::parse_build_manifest_json(obsolete_extension_caps,
-                                              "amber.build.json");
+  const sputnik::build::BuildManifestResult obsolete =
+      sputnik::build::parse_build_manifest_json(obsolete_extension_caps,
+                                              "sputnik.build.json");
   expect(!obsolete.ok(),
          "native extension capabilities should be rejected as obsolete");
 
   // Without ffi.v1 the same manifest is rejected.
   const std::string ungated =
-      "{\"schema\":\"amber.build.v1\",\"name\":\"crypto\","
+      "{\"schema\":\"sputnik.build.v1\",\"name\":\"crypto\","
       "\"root\":\"crypto.blake3\","
       "\"profiles\":{\"required\":[\"core.v1\"]},"
-      "\"modules\":[{\"name\":\"crypto.blake3\",\"path\":\"src/blake3.am\"}],"
+      "\"modules\":[{\"name\":\"crypto.blake3\",\"path\":\"src/blake3.s\"}],"
       "\"native_extensions\":[{\"name\":\"blake3\",\"language\":\"c\"}]}";
-  const amber::build::BuildManifestResult gated =
-      amber::build::parse_build_manifest_json(ungated, "amber.build.json");
+  const sputnik::build::BuildManifestResult gated =
+      sputnik::build::parse_build_manifest_json(ungated, "sputnik.build.json");
   expect(!gated.ok(), "native extensions without ffi.v1 should be rejected");
   bool mentions_ffi = false;
-  for (const amber::build::BuildDiagnostic &diagnostic : gated.diagnostics) {
+  for (const sputnik::build::BuildDiagnostic &diagnostic : gated.diagnostics) {
     mentions_ffi =
         mentions_ffi || diagnostic.message.find("ffi.v1") != std::string::npos;
   }

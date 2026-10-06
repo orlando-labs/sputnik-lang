@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Live notebook values deliberately contain no Value, heap pointer, or VM
 // object.  A host can retain a snapshot after the VM and its image have gone
@@ -377,4 +377,4 @@ public:
 
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::macros {
+namespace sputnik::macros {
 
 struct ExpandResult {
   bool ok = true;
@@ -40,13 +40,13 @@ collect_macro_exports(const std::vector<std::unique_ptr<ast::Expr>> &items);
 // Persisted artifact macro section (§11): a macro-providing module's build
 // artifact embeds its `export macro` table under this module attribute, so a
 // later build can stage against the artifact without re-parsing provider
-// source. The payload is schema-tagged (`amber.macro.exports.v2`) and
+// source. The payload is schema-tagged (`sputnik.macro.exports.v2`) and
 // carries, per staged macro: public/helper visibility, public name, surface kind
 // (`call` / `string_tag`), the definition's source line, and the `macro def`
 // source slice itself — the parser is the deserializer, so staging from an
 // artifact is exactly staging from source. v1 payloads remain readable as
 // public-only tables.
-inline constexpr const char *kMacroExportsAttrKey = "amber.macro.exports";
+inline constexpr const char *kMacroExportsAttrKey = "sputnik.macro.exports";
 
 // Encode `exports` (harvested from a module whose text is `module_source`)
 // as an artifact macro-section payload.
@@ -91,4 +91,4 @@ ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
                            const std::string &source,
                            const MacroProviderMap &providers);
 
-} // namespace amber::macros
+} // namespace sputnik::macros

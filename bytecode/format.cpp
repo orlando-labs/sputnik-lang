@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 
 namespace {
 
@@ -5430,7 +5430,7 @@ DecodeResult deserialize_module(const std::vector<std::uint8_t> &bytes) {
   DecodeResult result;
   if (bytes.size() < kHeaderSize) {
     result.errors.push_back(
-        {"BC1002", "file is smaller than AmberBcHeader", "header", 0});
+        {"BC1002", "file is smaller than SputnikBcHeader", "header", 0});
     return result;
   }
 
@@ -5946,7 +5946,7 @@ std::string module_to_json(const BcModule &module,
                            const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.bc.v1\",\n";
+  out << "  \"schema\": \"sputnik.bc.v1\",\n";
   out << "  \"source_hash\": \"" << json_escape(source_hash) << "\",\n";
   out << "  \"format_version\": {\"major\": " << module.format_version.major
       << ", \"minor\": " << module.format_version.minor << "},\n";
@@ -6622,7 +6622,7 @@ std::string module_to_disasm(const BcModule &module,
                              const std::vector<SectionEntry> &sections,
                              const std::string &source_hash) {
   std::ostringstream out;
-  out << "; amber.bc.v1 sha256=" << source_hash << "\n";
+  out << "; sputnik.bc.v1 sha256=" << source_hash << "\n";
   out << ".header format=" << module.format_version.major << "."
       << module.format_version.minor
       << " language=" << module.language_version.major << "."
@@ -7166,7 +7166,7 @@ std::string module_to_disasm(const BcModule &module,
 std::string verify_errors_to_json(const std::vector<VerifyError> &errors) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.bc.verify.v1\",\n";
+  out << "  \"schema\": \"sputnik.bc.verify.v1\",\n";
   out << "  \"errors\": [\n";
   for (std::size_t i = 0; i < errors.size(); ++i) {
     const VerifyError &error = errors[i];
@@ -7184,4 +7184,4 @@ std::string verify_errors_to_json(const std::vector<VerifyError> &errors) {
   return out.str();
 }
 
-} // namespace amber::bytecode
+} // namespace sputnik::bytecode

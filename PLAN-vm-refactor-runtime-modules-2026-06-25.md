@@ -78,7 +78,7 @@ fallback registries no longer seed module/dispatch bindings from
   `rescue PoolTimeoutError` or `rescue HttpTimeoutError` cannot match it.
 - Third-party native packages already have `RuntimeForeignHandle`,
   `NativeTagRegistry`, `NativeExtRegistry`, generated thunk registration, and
-  `amber_ext` fault plumbing, but they do not yet have one unified route for
+  `sputnik_ext` fault plumbing, but they do not yet have one unified route for
   registering package-owned types, constructors, dispatch, and rescue-able error
   classes into the same runtime namespace as first-party modules.
 - The compatibility stdlib registry is now world-owned and still feeds legacy
@@ -163,7 +163,7 @@ Then make error lookup world-scoped:
   <: Exception`;
 - frontend binding imports known error exports so `rescue SomePackage.Error`
   resolves like other exported names;
-- `amber_fault` and VM-side `raise_runtime_error` resolve error names through the
+- `sputnik_fault` and VM-side `raise_runtime_error` resolve error names through the
   active world registry.
 
 This lets third-party native code raise rescue-able package errors without
@@ -184,7 +184,7 @@ Status: baseline recorded before Phase 2.
   fault translation.
 - Run and record the relevant gates before and after each phase:
   `vm_tests`, `stdlib_registry_tests`, `vm_net_http_tests`,
-  `amber_ext_tests`, `module_loader_tests`, `native_tests`,
+  `sputnik_ext_tests`, `module_loader_tests`, `native_tests`,
   `make test`, `make backend-equivalence`, and the tagged `VALUE_REPR` build
   where value layout is touched.
 - If a gate is intentionally skipped, record the reason in the phase commit or
@@ -194,10 +194,10 @@ Status: baseline recorded before Phase 2.
 Baseline record, 2026-06-26 on `codex/vm-runtime-world-registry`:
 
 - Passed focused gates: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, `build/native_tests`, `build/module_loader_tests`,
+  `build/sputnik_ext_tests`, `build/native_tests`, `build/module_loader_tests`,
   and elevated `build/vm_net_http_tests` (`566 checks`).
 - Passed full gate: elevated `make test`, including unit binaries, native
-  backend smoke checks, net.http TCP checks, and `ambertest run corpus`
+  backend smoke checks, net.http TCP checks, and `sputniktest run corpus`
   (`139 passed, 0 failed`).
 - Passed backend gate: `make backend-equivalence` (`80 passed, 0 failed`).
 - Passed conformance gate: elevated `make conformance`
@@ -257,12 +257,12 @@ Slice record, 2026-06-26:
 - Split text writer/logger declarations from `runtime/vm.h` into
   `runtime/text.h`; `runtime/vm.h` remains the compatibility umbrella.
 - Verified with focused build targets: `build/vm_tests`,
-  `build/stdlib_registry_tests`, `build/amber_ext_tests`,
+  `build/stdlib_registry_tests`, `build/sputnik_ext_tests`,
   `build/module_loader_tests`, `build/native_tests`,
-  `build/stdlib_argparser_tests`, and `build/iamber_tests`.
+  `build/stdlib_argparser_tests`, and `build/isputnik_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/stdlib_registry_tests`,
-  `build/amber_ext_tests`, `build/module_loader_tests`, `build/native_tests`,
-  `build/stdlib_argparser_tests`, and `build/iamber_tests`.
+  `build/sputnik_ext_tests`, `build/module_loader_tests`, `build/native_tests`,
+  `build/stdlib_argparser_tests`, and `build/isputnik_tests`.
 
 Slice record, 2026-06-26:
 
@@ -273,11 +273,11 @@ Slice record, 2026-06-26:
 - Left `Value` method implementations in `runtime/vm.cpp`; this slice is a
   declaration split and does not change `Value` storage or ABI.
 - Verified with forced focused build targets: `make -B build/vm_tests
-  build/stdlib_registry_tests build/amber_ext_tests build/module_loader_tests
+  build/stdlib_registry_tests build/sputnik_ext_tests build/module_loader_tests
   build/native_tests build/stdlib_argparser_tests build/stdlib_time_tests
   build/stdlib_uuid_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/stdlib_registry_tests`,
-  `build/amber_ext_tests`, `build/module_loader_tests`, `build/native_tests`,
+  `build/sputnik_ext_tests`, `build/module_loader_tests`, `build/native_tests`,
   `build/stdlib_argparser_tests`, `build/stdlib_time_tests`, and
   `build/stdlib_uuid_tests`.
 - Verified tagged representation smoke in a separate build directory:
@@ -303,10 +303,10 @@ Slice record, 2026-06-26:
   `runtime/vm.h`; those remain for a later `runtime/heap.h` slice.
 - Verified with forced focused build targets: `make -B build/vm_tests
   build/stdlib_collections_tests build/stdlib_json_tests
-  build/stdlib_task_tests build/native_tests build/amber_ext_tests`.
+  build/stdlib_task_tests build/native_tests build/sputnik_ext_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/stdlib_collections_tests`,
   `build/stdlib_json_tests`, elevated `build/stdlib_task_tests` for loopback
-  socket coverage, `build/native_tests`, and `build/amber_ext_tests`.
+  socket coverage, `build/native_tests`, and `build/sputnik_ext_tests`.
 - Verified tagged representation smoke in a separate build directory:
   `make -B BUILD_DIR=build-tagged VALUE_REPR=tagged build-tagged/vm_tests`
   and `build-tagged/vm_tests`.
@@ -321,10 +321,10 @@ Slice record, 2026-06-26:
   split and does not move GC/pinning behavior.
 - Verified with forced focused build targets: `make -B build/vm_tests
   build/stdlib_collections_tests build/stdlib_task_tests build/native_tests
-  build/amber_ext_tests`.
+  build/sputnik_ext_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/stdlib_collections_tests`,
   elevated `build/stdlib_task_tests` for loopback socket coverage,
-  `build/native_tests`, and `build/amber_ext_tests`.
+  `build/native_tests`, and `build/sputnik_ext_tests`.
 - Verified tagged representation smoke in a separate build directory:
   `make -B BUILD_DIR=build-tagged VALUE_REPR=tagged build-tagged/vm_tests`
   and `build-tagged/vm_tests`.
@@ -341,10 +341,10 @@ Slice record, 2026-06-26:
   `runtime/text.h` directly instead of depending on the full `runtime/vm.h`
   umbrella.
 - Verified with forced focused build targets: `make -B build/vm_tests
-  build/stdlib_task_tests build/native_tests build/amber_ext_tests`.
+  build/stdlib_task_tests build/native_tests build/sputnik_ext_tests`.
 - Verified focused binaries: `build/vm_tests`, elevated
   `build/stdlib_task_tests` for loopback socket coverage, `build/native_tests`,
-  and `build/amber_ext_tests`. A sandboxed `build/stdlib_task_tests` attempt
+  and `build/sputnik_ext_tests`. A sandboxed `build/stdlib_task_tests` attempt
   failed first at `cooperative socket read`, matching the known loopback
   sandbox limitation.
 - Verified include smoke: standalone `runtime/concurrency.h` compile and
@@ -366,12 +366,12 @@ Slice record, 2026-06-26:
 - Verified with standalone `runtime/world.h` compile smoke.
 - Verified with forced focused build targets: `make -B build/vm_tests
   build/module_loader_tests build/native_tests build/frozen_image_tests
-  build/amber_ext_tests`. The first attempt exposed the missing explicit
+  build/sputnik_ext_tests`. The first attempt exposed the missing explicit
   `runtime/vm.h` include in `tests/module_loader_tests.cpp`; after fixing that,
   the listed targets rebuilt successfully.
 - Verified focused binaries: `build/vm_tests`, `build/module_loader_tests`,
   `build/native_tests`, `build/frozen_image_tests`, and
-  `build/amber_ext_tests`.
+  `build/sputnik_ext_tests`.
 
 Slice record, 2026-06-26:
 
@@ -386,9 +386,9 @@ Slice record, 2026-06-26:
   and standalone `runtime/vm.cpp` compile.
 - Verified with forced focused build targets: `make -B build/vm_tests
   build/module_loader_tests build/stdlib_task_tests build/native_tests
-  build/amber_ext_tests`.
+  build/sputnik_ext_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/module_loader_tests`,
-  `build/native_tests`, and `build/amber_ext_tests`. A sandboxed
+  `build/native_tests`, and `build/sputnik_ext_tests`. A sandboxed
   `build/stdlib_task_tests` attempt failed first at `cooperative socket read`,
   matching the known loopback sandbox limitation; the elevated retry could not
   be run in this session because the approval request was rejected by the
@@ -421,12 +421,12 @@ Slice record, 2026-06-26:
 - Verified compile smoke: standalone `runtime/value.cpp` compile, standalone
   `runtime/vm.cpp` compile, and standalone tagged `runtime/value.cpp` compile.
 - Verified with forced focused build targets: `make -B build/vm_tests
-  build/module_loader_tests build/native_tests build/amber_ext_tests`, `make -B
+  build/module_loader_tests build/native_tests build/sputnik_ext_tests`, `make -B
   build/stdlib_registry_tests build/stdlib_time_tests build/stdlib_uuid_tests
   build/stdlib_argparser_tests`, and `make -B BUILD_DIR=build-tagged
   VALUE_REPR=tagged build-tagged/vm_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/module_loader_tests`,
-  `build/native_tests`, `build/amber_ext_tests`, `build/stdlib_registry_tests`,
+  `build/native_tests`, `build/sputnik_ext_tests`, `build/stdlib_registry_tests`,
   `build/stdlib_time_tests`, `build/stdlib_uuid_tests`,
   `build/stdlib_argparser_tests`, and `build-tagged/vm_tests`.
 
@@ -559,9 +559,9 @@ Slice record, 2026-06-26:
   `runtime/stdlib_registry.cpp`, and `runtime/stdlib_argparser.cpp` compile.
 - Verified with forced focused build targets: `make -B build/vm_tests
   build/stdlib_registry_tests build/stdlib_argparser_tests
-  build/amber_ext_tests`.
+  build/sputnik_ext_tests`.
 - Verified focused binaries: `build/vm_tests`, `build/stdlib_registry_tests`,
-  `build/stdlib_argparser_tests`, and `build/amber_ext_tests`.
+  `build/stdlib_argparser_tests`, and `build/sputnik_ext_tests`.
 - Tagged `VALUE_REPR=tagged` was not rerun for this slice because it does not
   touch `Value` layout, object layout, or representation-specific code.
 
@@ -633,9 +633,9 @@ Slice record, 2026-06-27:
 - Verified compile smoke: standalone `runtime/value_display.cpp`,
   `runtime/vm.cpp`, and `runtime/value.cpp` compile.
 - Verified with forced focused build targets: `make -B build/vm_tests
-  build/amber_ext_tests` and `make -B BUILD_DIR=build-tagged
+  build/sputnik_ext_tests` and `make -B BUILD_DIR=build-tagged
   VALUE_REPR=tagged build-tagged/vm_tests`.
-- Verified focused binaries: `build/vm_tests`, `build/amber_ext_tests`, and
+- Verified focused binaries: `build/vm_tests`, `build/sputnik_ext_tests`, and
   `build-tagged/vm_tests`.
 
 Slice record, 2026-06-27:
@@ -707,12 +707,12 @@ Slice record, 2026-06-27:
   tagged `runtime/concurrency.cpp`, and standalone `runtime/vm.cpp` compile
   after formatting.
 - Verified with forced focused build targets: `make -B build/vm_tests
-  build/stdlib_task_tests build/native_tests build/amber_ext_tests
+  build/stdlib_task_tests build/native_tests build/sputnik_ext_tests
   build/module_loader_tests` and `make -B BUILD_DIR=build-tagged
   VALUE_REPR=tagged build-tagged/vm_tests`.
 - Verified focused binaries: `build/vm_tests`, elevated
   `build/stdlib_task_tests` for loopback cooperative socket coverage,
-  `build/native_tests`, `build/amber_ext_tests`, `build/module_loader_tests`,
+  `build/native_tests`, `build/sputnik_ext_tests`, `build/module_loader_tests`,
   and `build-tagged/vm_tests`. A sandboxed `build/stdlib_task_tests` attempt
   failed first at `cooperative socket read`, matching the known loopback
   sandbox limitation.
@@ -1028,9 +1028,9 @@ Slice record, 2026-06-28:
 - Verified compile smoke: standalone `runtime/stdlib_io.cpp`, standalone
   `runtime/vm.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/iamber_tests`.
+  build/stdlib_registry_tests build/vm_tests build/isputnik_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  and `build/iamber_tests`.
+  and `build/isputnik_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1069,10 +1069,10 @@ Slice record, 2026-06-28:
 - Verified compile smoke: standalone `runtime/stdlib_io.cpp`, standalone
   `runtime/vm.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/iamber_tests build/io_tests
+  build/stdlib_registry_tests build/vm_tests build/isputnik_tests build/io_tests
   build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/iamber_tests`, elevated `build/io_tests`, and elevated
+  `build/isputnik_tests`, elevated `build/io_tests`, and elevated
   `build/vm_net_http_tests` (`566 checks`).
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
@@ -1089,10 +1089,10 @@ Slice record, 2026-06-28:
 - Verified compile smoke: standalone `runtime/stdlib_io.cpp`, standalone
   `runtime/vm.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/iamber_tests build/io_tests
+  build/stdlib_registry_tests build/vm_tests build/isputnik_tests build/io_tests
   build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/iamber_tests`, elevated `build/io_tests`, and elevated
+  `build/isputnik_tests`, elevated `build/io_tests`, and elevated
   `build/vm_net_http_tests` (`566 checks`).
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
@@ -1118,7 +1118,7 @@ Slice record, 2026-06-28:
 - Sandboxed `build/io_tests` was blocked by loopback listen policy
   (`PermissionDeniedError listen: Operation not permitted`). Elevated rerun was
   not available in this environment because auto-approval hit the usage limit.
-- Sandboxed `make conformance` rebuilt `build/ambertest` and reached
+- Sandboxed `make conformance` rebuilt `build/sputniktest` and reached
   `137 passed, 3 failed, 0 skipped for M11`; the three failures were the known
   loopback corpus cases (`net_socket_handoff_to_task` twice and
   `net_tcp_loopback`) failing with `PermissionDeniedError listen: Operation not
@@ -1186,12 +1186,12 @@ Slice record, 2026-06-28:
   metadata selectors and metadata value access.
 - Verified compile smoke: standalone `runtime/stdlib_fs.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, and elevated `build/io_tests`.
+  `build/sputnik_ext_tests`, and elevated `build/io_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1210,12 +1210,12 @@ Slice record, 2026-06-28:
   `fs.read_text` and `fs.read_bytes(limit:)`.
 - Verified compile smoke: standalone `runtime/stdlib_fs.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, and elevated `build/io_tests`.
+  `build/sputnik_ext_tests`, and elevated `build/io_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1234,12 +1234,12 @@ Slice record, 2026-06-29:
   directory create/remove operations.
 - Verified compile smoke: standalone `runtime/stdlib_fs.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, and elevated `build/io_tests`.
+  `build/sputnik_ext_tests`, and elevated `build/io_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1260,12 +1260,12 @@ Slice record, 2026-06-29:
   `fs.write_bytes` and `fs.write_text`.
 - Verified compile smoke: standalone `runtime/stdlib_fs.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, and elevated `build/io_tests`.
+  `build/sputnik_ext_tests`, and elevated `build/io_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1284,12 +1284,12 @@ Slice record, 2026-06-29:
   copy and rename operations.
 - Verified compile smoke: standalone `runtime/stdlib_fs.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, and elevated `build/io_tests`.
+  `build/sputnik_ext_tests`, and elevated `build/io_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1308,12 +1308,12 @@ Slice record, 2026-06-29:
   block-scoped closing, and provider-backed close commits.
 - Verified compile smoke: standalone `runtime/stdlib_fs.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, and elevated `build/io_tests`.
+  `build/sputnik_ext_tests`, and elevated `build/io_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 
@@ -1332,12 +1332,12 @@ Slice record, 2026-06-29:
   without opening sockets in the non-elevated `vm_tests` gate.
 - Verified compile smoke: standalone `runtime/stdlib_net.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, elevated `build/io_tests`, and elevated
+  `build/sputnik_ext_tests`, elevated `build/io_tests`, and elevated
   `build/vm_net_http_tests` (`566 checks`).
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
@@ -1357,12 +1357,12 @@ Slice record, 2026-06-29:
   without opening sockets in the non-elevated `vm_tests` gate.
 - Verified compile smoke: standalone `runtime/stdlib_net.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  and `build/amber_ext_tests`.
+  and `build/sputnik_ext_tests`.
 - Elevated `build/io_tests`, elevated `build/vm_net_http_tests`, and elevated
   `make conformance` could not be run in this session because the approval
   request was rejected by the automatic reviewer after hitting the usage limit.
@@ -1388,13 +1388,13 @@ Slice record, 2026-06-29:
   dispatch remains in VM for later Phase 3 slices.
 - Verified compile smoke: standalone `runtime/stdlib_net_http.cpp`,
   standalone `runtime/stdlib_net.cpp`, standalone `runtime/vm.cpp`, standalone
-  `tests/stdlib_registry_tests.cpp`, standalone `tests/amber_ext_tests.cpp`,
+  `tests/stdlib_registry_tests.cpp`, standalone `tests/sputnik_ext_tests.cpp`,
   and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  and `build/amber_ext_tests`.
+  and `build/sputnik_ext_tests`.
 - Elevated `build/io_tests`, elevated `build/vm_net_http_tests`, and elevated
   `make conformance` could not be run in this session because escalation
   remained unavailable after the automatic reviewer hit the usage limit.
@@ -1423,12 +1423,12 @@ Slice record, 2026-06-29:
   standalone `runtime/stdlib_io.cpp`, standalone `runtime/stdlib_net.cpp`,
   standalone `runtime/stdlib_net_http.cpp`, standalone `runtime/vm.cpp`,
   standalone `tests/stdlib_registry_tests.cpp`, standalone
-  `tests/amber_ext_tests.cpp`, and `git diff --check`.
+  `tests/sputnik_ext_tests.cpp`, and `git diff --check`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  and `build/amber_ext_tests`.
+  and `build/sputnik_ext_tests`.
 - Elevated `build/io_tests`, elevated `build/vm_net_http_tests`, and elevated
   `make conformance` remain unavailable in this session because escalation is
   blocked after the automatic reviewer hit the usage limit. Sandboxed
@@ -1841,12 +1841,12 @@ Slice record, 2026-06-29:
 - Updated `StdlibHost` test doubles for the new display-string facade.
 - Verified compile smoke: standalone `runtime/stdlib_io.cpp`, standalone
   `runtime/vm.cpp`, standalone `tests/stdlib_registry_tests.cpp`, and
-  standalone `tests/amber_ext_tests.cpp`.
+  standalone `tests/sputnik_ext_tests.cpp`.
 - Verified with forced focused build targets: `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests
   build/io_tests build/vm_net_http_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  and `build/amber_ext_tests`.
+  and `build/sputnik_ext_tests`.
 - Sandboxed `build/io_tests` failed with `PermissionDeniedError listen:
   Operation not permitted`, and sandboxed `build/vm_net_http_tests` failed with
   `PermissionDeniedError`; both failures are the known loopback/listen sandbox
@@ -1906,23 +1906,23 @@ Slice record, 2026-06-29:
 - Registered descriptor IO value handlers for the remaining net.http runtime
   values: clients, request/response bodies, redirects, requests, responses,
   request handles, headers, servers, server requests, and server responses.
-- Updated `amberc`'s native-runtime archive source list so native builds link
+- Updated `sputnik`'s native-runtime archive source list so native builds link
   the split runtime support graph and descriptor module translation units.
   This fixed the full-suite native link failure exposed by the Phase 3 split.
 - Extended registry coverage to assert descriptor-owned handlers for the
   remaining IO/fs/net/net.http/task runtime values and descriptor-routed
   `Channel.send`/`Channel.recv`.
 - Verified compile/check gates: `git diff --check`, `make -B
-  build/stdlib_registry_tests build/vm_tests build/amber_ext_tests`, and
+  build/stdlib_registry_tests build/vm_tests build/sputnik_ext_tests`, and
   `make -B build/io_tests build/vm_net_http_tests build/stdlib_task_tests`.
 - Verified focused binaries: `build/stdlib_registry_tests`, `build/vm_tests`,
-  `build/amber_ext_tests`, elevated `build/io_tests`, elevated
+  `build/sputnik_ext_tests`, elevated `build/io_tests`, elevated
   `build/vm_net_http_tests` (`566 checks`), and elevated
   `build/stdlib_task_tests`.
 - Verified conformance gate: elevated `make conformance`
   (`140 passed, 0 failed, 0 skipped for M11`).
 - Verified full and backend gates after the native-runtime source-list fix:
-  elevated `make test` (`ambertest: 139 passed, 0 failed`) and
+  elevated `make test` (`sputniktest: 139 passed, 0 failed`) and
   `make backend-equivalence` (`80 passed, 0 failed`).
 
 Audit record, 2026-06-30:
@@ -1953,7 +1953,7 @@ package manifests and `NativeExtRegistry` exposed package error descriptors.
   frontend knowledge until package/module error exports are loaded through the
   compiler/module loader.
 - Add a native package test where a thunk raises a package-defined error and
-  Amber catches it by exact class and by parent class.
+  Sputnik catches it by exact class and by parent class.
 
 Slice record, 2026-06-30:
 
@@ -1982,7 +1982,7 @@ Slice record, 2026-06-30:
   build/stdlib_url_tests`, and binaries `build/stdlib_registry_tests`,
   `build/vm_tests`, `build/stdlib_url_tests`.
 - Verified broader gates during this slice before the final generated mirror
-  write: elevated `make test` (`ambertest: 139 passed, 0 failed`), elevated
+  write: elevated `make test` (`sputniktest: 139 passed, 0 failed`), elevated
   `make conformance` (`140 passed, 0 failed, 0 skipped for M11`), elevated
   `build/io_tests`, elevated `build/vm_net_http_tests` (`566 checks`),
   elevated `build/stdlib_task_tests`, and `make backend-equivalence`
@@ -2006,8 +2006,8 @@ runtime world exists; the remaining VM reduction is completed in Phase 6 below.
 - Register package-owned foreign-handle types, constructors, methods, ownership
   rules, and errors through the same world registries used by first-party
   modules.
-- Route `amber_fault(ctx, "...", ...)` through the active world's error registry.
-- Preserve current native package semantics: pure Amber fallback in bytecode,
+- Route `sputnik_fault(ctx, "...", ...)` through the active world's error registry.
+- Preserve current native package semantics: pure Sputnik fallback in bytecode,
   native thunk in native builds, native-only leaves fail closed without native
   support, and foreign-handle lifetime rules remain deterministic.
 
@@ -2021,22 +2021,22 @@ Slice record, 2026-06-30:
   tags. Missing parents default to `NativeError`.
 - Taught `RuntimeWorld` and direct VM fallback construction to import
   `NativeExtRegistry` error descriptors into the active `RuntimeErrorRegistry`
-  before code execution, so `amber_fault(ctx, "Package.Error", ...)` resolves
+  before code execution, so `sputnik_fault(ctx, "Package.Error", ...)` resolves
   into structured, typed-rescuable errors.
 - Updated the `native_ext_demo` fixture with `Demo.NativeError` and
   `Demo.NativeLeafError`; the native thunk raises `Demo.NativeLeafError`, and
-  Amber catches it by exact class and parent class while preserving the existing
+  Sputnik catches it by exact class and parent class while preserving the existing
   native (`42`) and bytecode fallback (`210`) outputs.
 - Verified focused gates: `git diff --check`, `make -B build/build_tests
-  build/package_tests build/amber_ext_tests build/vm_tests build/amberc`, and
-  binaries `build/build_tests`, `build/package_tests`, `build/amber_ext_tests`,
+  build/package_tests build/sputnik_ext_tests build/vm_tests build/sputnik`, and
+  binaries `build/build_tests`, `build/package_tests`, `build/sputnik_ext_tests`,
   `build/vm_tests`, `build/native_tests`.
 - Verified native package behavior directly:
-  `build/amberc build tests/fixtures/native_ext_demo/amber.build.json --target
+  `build/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target
   native --out-dir build/native_ext_demo_phase5/out --cache-dir
   build/native_ext_demo_phase5/cache`, executable output `42`, and bytecode
   fallback output `210`.
-- Verified broad gates: elevated `make test` (`ambertest: 139 passed, 0
+- Verified broad gates: elevated `make test` (`sputniktest: 139 passed, 0
   failed`), elevated `make conformance` (`140 passed, 0 failed, 0 skipped for
   M11`), and `make backend-equivalence` (`80 passed, 0 failed`). The first
   backend-equivalence attempts hit the harness's fixed 60s per-command timeout
@@ -2051,16 +2051,16 @@ Slice record, 2026-06-30:
   reading `NativeExtRegistry::global().tags()` directly.
 - Switched VM native-handle construction, method dispatch marshalling, and
   deterministic foreign-handle teardown to pass
-  `type_registry().native_package_tags()` into the amber_ext bridge. Thunk
+  `type_registry().native_package_tags()` into the sputnik_ext bridge. Thunk
   lookup still uses `NativeExtRegistry` while the next Phase 5 dispatch slice
   decides how logical thunk bindings become descriptor-owned dispatch entries.
-- Made the amber_ext bridge accept a const `NativeTagRegistry`, matching its
+- Made the sputnik_ext bridge accept a const `NativeTagRegistry`, matching its
   lookup-only use, and added registry coverage proving extension type
   descriptors import into `RuntimeTypeRegistry`.
-- Verified focused gates: `git diff --check`, `make -B build/amber_ext_tests
-  build/vm_tests build/amberc`, binaries `build/amber_ext_tests` and
+- Verified focused gates: `git diff --check`, `make -B build/sputnik_ext_tests
+  build/vm_tests build/sputnik`, binaries `build/sputnik_ext_tests` and
   `build/vm_tests`, native-class fixture build
-  `build/amberc build tests/fixtures/native_class_demo/amber.build.json
+  `build/sputnik build tests/fixtures/native_class_demo/sputnik.build.json
   --target native --out-dir build/native_class_demo_phase5_types/out
   --cache-dir build/native_class_demo_phase5_types/cache`, native output `24`,
   and bytecode fallback still failing closed with `NativeRequiredError`.
@@ -2074,16 +2074,16 @@ Slice record, 2026-06-30:
   foreign-handle method lookup to use
   `dispatch_registry().native_package_thunk(...)` instead of direct
   `NativeExtRegistry::global().lookup(...)` calls in the VM.
-- Added amber_ext registry coverage proving thunk bindings import into
+- Added sputnik_ext registry coverage proving thunk bindings import into
   `RuntimeDispatchRegistry` and preserve missing-thunk misses.
-- Verified focused gates: `git diff --check`, `make -B build/amber_ext_tests
-  build/vm_tests build/amberc`, binaries `build/amber_ext_tests` and
+- Verified focused gates: `git diff --check`, `make -B build/sputnik_ext_tests
+  build/vm_tests build/sputnik`, binaries `build/sputnik_ext_tests` and
   `build/vm_tests`, native def fixture build
-  `build/amberc build tests/fixtures/native_ext_demo/amber.build.json --target
+  `build/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target
   native --out-dir build/native_ext_demo_phase5_dispatch/out --cache-dir
   build/native_ext_demo_phase5_dispatch/cache`, native output `42`, bytecode
   fallback output `210`, native-class fixture build
-  `build/amberc build tests/fixtures/native_class_demo/amber.build.json
+  `build/sputnik build tests/fixtures/native_class_demo/sputnik.build.json
   --target native --out-dir build/native_class_demo_phase5_dispatch/out
   --cache-dir build/native_class_demo_phase5_dispatch/cache`, native output
   `24`, and native-class bytecode fallback still failing closed with
@@ -2092,8 +2092,8 @@ Slice record, 2026-06-30:
 Slice record, 2026-06-30:
 
 - Moved module-native binding metadata out of VM-local maps and into
-  `RuntimeDispatchRegistry`. The registry now imports `amber.native.bind:*`
-  code-object attrs and `amber.native.method:*` foreign-handle method attrs from
+  `RuntimeDispatchRegistry`. The registry now imports `sputnik.native.bind:*`
+  code-object attrs and `sputnik.native.method:*` foreign-handle method attrs from
   the active bytecode module.
 - Taught `RuntimeWorld` and direct VM fallback construction to import native
   package binding attrs into the active dispatch registry before execution.
@@ -2104,13 +2104,13 @@ Slice record, 2026-06-30:
 - Added registry coverage proving attr import for free bindings, method
   bindings, handle method bindings, malformed attrs, and missing entries.
 - Verified focused gates: `git diff --check`, `make -B
-  build/stdlib_registry_tests build/vm_tests build/amberc`, binaries
+  build/stdlib_registry_tests build/vm_tests build/sputnik`, binaries
   `build/stdlib_registry_tests` and `build/vm_tests`, native def fixture build
-  `build/amberc build tests/fixtures/native_ext_demo/amber.build.json --target
+  `build/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target
   native --out-dir build/native_ext_demo_phase5_bindings/out --cache-dir
   build/native_ext_demo_phase5_bindings/cache`, native output `42`, bytecode
   fallback output `210`, native-class fixture build
-  `build/amberc build tests/fixtures/native_class_demo/amber.build.json
+  `build/sputnik build tests/fixtures/native_class_demo/sputnik.build.json
   --target native --out-dir build/native_class_demo_phase5_bindings/out
   --cache-dir build/native_class_demo_phase5_bindings/cache`, native output
   `24`, and native-class bytecode fallback still failing closed with
@@ -2125,10 +2125,10 @@ Slice record, 2026-06-30:
 - Refreshed native executable generation comments to describe the generated
   startup table as feeding world registries rather than being consulted by VM
   dispatch directly.
-- Verified focused gates: `git diff --check`, `make -B build/amber_ext_tests
-  build/vm_tests build/amberc`, binaries `build/amber_ext_tests` and
+- Verified focused gates: `git diff --check`, `make -B build/sputnik_ext_tests
+  build/vm_tests build/sputnik`, binaries `build/sputnik_ext_tests` and
   `build/vm_tests`, native def fixture build
-  `build/amberc build tests/fixtures/native_ext_demo/amber.build.json --target
+  `build/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target
   native --out-dir build/native_ext_demo_phase5_trim/out --cache-dir
   build/native_ext_demo_phase5_trim/cache`, native output `42`, and bytecode
   fallback output `210`.
@@ -2142,12 +2142,12 @@ Slice record, 2026-06-30:
 - Kept the direct VM fallback on granular imports because tests and embedders
   can inject only some registries; that path must preserve its partial
   ownership semantics until registry wiring is fully world-owned.
-- Added amber_ext coverage proving the contributor helper imports thunk, type,
+- Added sputnik_ext coverage proving the contributor helper imports thunk, type,
   and default-parent error descriptors into the runtime registries.
-- Verified focused gates: `git diff --check`, `make -B build/amber_ext_tests
-  build/vm_tests build/amberc`, binaries `build/amber_ext_tests` and
+- Verified focused gates: `git diff --check`, `make -B build/sputnik_ext_tests
+  build/vm_tests build/sputnik`, binaries `build/sputnik_ext_tests` and
   `build/vm_tests`, native def fixture build
-  `build/amberc build tests/fixtures/native_ext_demo/amber.build.json --target
+  `build/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target
   native --out-dir build/native_ext_demo_phase5_contrib/out --cache-dir
   build/native_ext_demo_phase5_contrib/cache`, native output `42`, and bytecode
   fallback output `210`.
@@ -2159,7 +2159,7 @@ Slice record, 2026-06-30:
   constructor/method bindings, handle method bindings, and package-owned
   errors.
 - Added `runtime_native_package_descriptor_from_module(...)` so bytecode
-  `amber.native.bind:*` and `amber.native.method:*` attrs decode into the same
+  `sputnik.native.bind:*` and `sputnik.native.method:*` attrs decode into the same
   descriptor shape instead of being a dispatch-registry-only side channel.
 - Changed generated native startup to build a `RuntimeNativePackageDescriptor`
   and stage it through `NativeExtRegistry::register_package(...)`; the startup
@@ -2169,22 +2169,22 @@ Slice record, 2026-06-30:
   dispatch, type, and error registries. Direct VM fallback uses the same path
   when it owns all three registries, while keeping granular imports for partial
   injected-registry tests/embedders.
-- Extended registry and amber_ext coverage for descriptor decoding and
+- Extended registry and sputnik_ext coverage for descriptor decoding and
   descriptor registration across thunks, code bindings, handle method bindings,
   foreign-handle types, and default-parent package errors.
 - Verified focused gates: `git diff --check`, `make -B
-  build/stdlib_registry_tests build/amber_ext_tests build/vm_tests
-  build/amberc`, binaries `build/stdlib_registry_tests`,
-  `build/amber_ext_tests`, and `build/vm_tests`, native def fixture build
-  `build/amberc build tests/fixtures/native_ext_demo/amber.build.json --target
+  build/stdlib_registry_tests build/sputnik_ext_tests build/vm_tests
+  build/sputnik`, binaries `build/stdlib_registry_tests`,
+  `build/sputnik_ext_tests`, and `build/vm_tests`, native def fixture build
+  `build/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target
   native --out-dir build/native_ext_demo_phase5_final/out --cache-dir
   build/native_ext_demo_phase5_final/cache`, native output `42`, bytecode
   fallback output `210`, native-class fixture build
-  `build/amberc build tests/fixtures/native_class_demo/amber.build.json
+  `build/sputnik build tests/fixtures/native_class_demo/sputnik.build.json
   --target native --out-dir build/native_class_demo_phase5_final/out
   --cache-dir build/native_class_demo_phase5_final/cache`, native output `24`,
   and bytecode fallback still failing closed with `NativeRequiredError`.
-- Verified broad gates: elevated `make test` (`ambertest: 139 passed, 0
+- Verified broad gates: elevated `make test` (`sputniktest: 139 passed, 0
   failed`), elevated `make conformance` (`140 passed, 0 failed, 0 skipped for
   M11`), and `make backend-equivalence` (`80 passed, 0 failed`). Non-elevated
   `make test` / `make conformance` attempts failed only because sandboxed
@@ -2224,10 +2224,10 @@ Slice record, 2026-06-30:
 
 Verification, 2026-06-30:
 
-- Built `build/stdlib_registry_tests`, `build/amber_ext_tests`,
-  `build/vm_tests`, `build/amberc`, `build/stdlib_task_tests`,
+- Built `build/stdlib_registry_tests`, `build/sputnik_ext_tests`,
+  `build/vm_tests`, `build/sputnik`, `build/stdlib_task_tests`,
   `build/io_tests`, `build/net_http_tests`, and `build/net_http_tcp_tests`.
-- Passed `build/stdlib_registry_tests`, `build/amber_ext_tests`,
+- Passed `build/stdlib_registry_tests`, `build/sputnik_ext_tests`,
   `build/vm_tests`, and `build/net_http_tests`.
 - `build/io_tests`, `build/stdlib_task_tests`, and
   `build/net_http_tcp_tests` were blocked by sandboxed loopback/listen
@@ -2252,7 +2252,7 @@ surface:
 - `NativeExtRegistry`: becomes a contributor to `RuntimeWorld` registration
   rather than a parallel global namespace.
 
-No Amber source-level behavior should change as part of this refactor.
+No Sputnik source-level behavior should change as part of this refactor.
 
 ## 6. Test Plan
 
@@ -2264,7 +2264,7 @@ No Amber source-level behavior should change as part of this refactor.
 - net.http tests: active-slot pool timeout raises `PoolTimeoutError`; rescue by
   `PoolTimeoutError`, `HttpTimeoutError`, `HttpError`, and `Exception` all work.
 - Native extension tests: a generated native package registers a type, method,
-  constructor, and package error; its thunk raises that error; Amber catches it
+  constructor, and package error; its thunk raises that error; Sputnik catches it
   by exact class and parent class.
 - Regression gates: `make test`, `make conformance`, `make backend-equivalence`,
   plus tagged value representation coverage for phases that touch `Value` or

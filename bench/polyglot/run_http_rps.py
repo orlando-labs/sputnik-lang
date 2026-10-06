@@ -34,12 +34,12 @@ WORKSPACE = ROOT.parent
 EMBER = WORKSPACE / "ember"
 BUILD = ROOT / "bench" / "polyglot" / "build" / "http-rps"
 RESULTS = ROOT / "bench" / "polyglot" / "results"
-AMBER_SERVER_NAMES = {
-    "raw": "amber.bench.polyglot.raw_http_rps_server",
-    "ember": "amber.bench.polyglot.http_rps_server",
+SPUTNIK_SERVER_NAMES = {
+    "raw": "sputnik.bench.polyglot.raw_http_rps_server",
+    "ember": "sputnik.bench.polyglot.http_rps_server",
 }
-AMBER_CLIENT_NAME = "ember.example.soak.client"
-PINNED_CLIENT = BUILD / "amber-client-pinned" / AMBER_CLIENT_NAME
+SPUTNIK_CLIENT_NAME = "ember.example.soak.client"
+PINNED_CLIENT = BUILD / "sputnik-client-pinned" / SPUTNIK_CLIENT_NAME
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
@@ -91,30 +91,30 @@ def build_all(
     client: Path,
     stack: str,
     languages: Sequence[str],
-    amber_execution: str,
+    sputnik_execution: str,
 ) -> Dict[str, Path]:
-    amber_out = BUILD / f"amber-{stack}-server-{amber_execution}"
+    sputnik_out = BUILD / f"sputnik-{stack}-server-{sputnik_execution}"
     go_out = BUILD / "go-server"
     rust_out = BUILD / "rust-server"
-    for directory in (amber_out, go_out, rust_out):
+    for directory in (sputnik_out, go_out, rust_out):
         directory.mkdir(parents=True, exist_ok=True)
 
-    if "amber" in languages and amber_execution == "native":
-        amber_build = [
+    if "sputnik" in languages and sputnik_execution == "native":
+        sputnik_build = [
             str(compiler),
             "build",
-            f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+            f"bench/polyglot/sputnik/{stack}_http_rps_server.build.yaml"
             if stack == "raw"
-            else "bench/polyglot/amber/http_rps_server.build.yaml",
+            else "bench/polyglot/sputnik/http_rps_server.build.yaml",
             "--target",
             "native",
             "--out-dir",
-            str(amber_out),
+            str(sputnik_out),
             "--cache-dir",
-            str(amber_out / "cache"),
+            str(sputnik_out / "cache"),
         ]
-        amber_build.append("--require-full-native")
-        amber_build += [
+        sputnik_build.append("--require-full-native")
+        sputnik_build += [
             "--grant",
             "net.listen",
             "--grant",
@@ -122,7 +122,7 @@ def build_all(
             "--grant",
             "ffi",
         ]
-        command(amber_build)
+        command(sputnik_build)
     if "go" in languages:
         go_env = os.environ.copy()
         go_env["GOCACHE"] = str(BUILD / "go-cache")
@@ -148,13 +148,13 @@ def build_all(
             ]
         )
     return {
-        "amber": (
-            amber_out / AMBER_SERVER_NAMES[stack]
-            if amber_execution == "native"
+        "sputnik": (
+            sputnik_out / SPUTNIK_SERVER_NAMES[stack]
+            if sputnik_execution == "native"
             else (
-                ROOT / f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+                ROOT / f"bench/polyglot/sputnik/{stack}_http_rps_server.build.yaml"
                 if stack == "raw"
-                else ROOT / "bench/polyglot/amber/http_rps_server.build.yaml"
+                else ROOT / "bench/polyglot/sputnik/http_rps_server.build.yaml"
             )
         ),
         "compiler": compiler,
@@ -167,18 +167,18 @@ def build_all(
 
 
 def built_paths(
-    compiler: Path, client: Path, stack: str, amber_execution: str
+    compiler: Path, client: Path, stack: str, sputnik_execution: str
 ) -> Dict[str, Path]:
     return {
-        "amber": (
+        "sputnik": (
             BUILD
-            / f"amber-{stack}-server-{amber_execution}"
-            / AMBER_SERVER_NAMES[stack]
-            if amber_execution == "native"
+            / f"sputnik-{stack}-server-{sputnik_execution}"
+            / SPUTNIK_SERVER_NAMES[stack]
+            if sputnik_execution == "native"
             else (
-                ROOT / f"bench/polyglot/amber/{stack}_http_rps_server.build.yaml"
+                ROOT / f"bench/polyglot/sputnik/{stack}_http_rps_server.build.yaml"
                 if stack == "raw"
-                else ROOT / "bench/polyglot/amber/http_rps_server.build.yaml"
+                else ROOT / "bench/polyglot/sputnik/http_rps_server.build.yaml"
             )
         ),
         "compiler": compiler,
@@ -191,7 +191,7 @@ def built_paths(
 
 
 def rails_ruby() -> Path:
-    override = os.environ.get("AMBER_BENCH_RUBY")
+    override = os.environ.get("SPUTNIK_BENCH_RUBY")
     candidates = [Path(override).expanduser()] if override else []
     candidates += sorted(
         (Path.home() / ".rvm" / "rubies").glob("ruby-*/bin/ruby"),
@@ -217,7 +217,7 @@ def rails_ruby() -> Path:
             return candidate
     raise RuntimeError(
         "Rails 8 and Puma are required for the Ember framework lane; "
-        "set AMBER_BENCH_RUBY to a suitable Ruby executable"
+        "set SPUTNIK_BENCH_RUBY to a suitable Ruby executable"
     )
 
 
@@ -318,7 +318,7 @@ def loaded_native_extensions(pid: int) -> List[str]:
             line[1:]
             for line in result.stdout.splitlines()
             if line.startswith("n")
-            and line.endswith("amber_manifest_extensions.dylib")
+            and line.endswith("sputnik_manifest_extensions.dylib")
         }
     )
 
@@ -341,20 +341,20 @@ def run_one(
     clients: int,
     port: int,
     stack: str,
-    amber_execution: str,
-    amber_pool_size: int,
+    sputnik_execution: str,
+    sputnik_pool_size: int,
     sample_seconds: int,
     server_max_requests_per_connection: int | None,
     series_id: str,
     repeat_index: int,
     order_position: int,
 ) -> Dict[str, Any]:
-    if name == "amber":
+    if name == "sputnik":
         program_args = [
             "--host", "127.0.0.1", "--port", str(port), "--workers", "4"
         ]
         if stack == "ember":
-            program_args += ["--pool-size", str(amber_pool_size)]
+            program_args += ["--pool-size", str(sputnik_pool_size)]
         if stack == "raw" and server_max_requests_per_connection is not None:
             program_args += [
                 "--max-requests-per-connection",
@@ -362,7 +362,7 @@ def run_one(
             ]
         server_args = (
             [str(paths[name]), *program_args]
-            if amber_execution == "native"
+            if sputnik_execution == "native"
             else [
                 str(paths["compiler"]),
                 "run",
@@ -420,7 +420,7 @@ def run_one(
             wait_ready(server, base_url)
             native_extensions = (
                 loaded_native_extensions(server.pid)
-                if name == "amber" and amber_execution == "vm"
+                if name == "sputnik" and sputnik_execution == "vm"
                 else []
             )
             smoke = subprocess.run(
@@ -504,8 +504,8 @@ def run_one(
                 "server": name,
                 "repeat_index": repeat_index + 1,
                 "order_position": order_position + 1,
-                "stack": stack if name in {"amber", "rails"} else "raw",
-                "execution": amber_execution if name == "amber" else "native",
+                "stack": stack if name in {"sputnik", "rails"} else "raw",
+                "execution": sputnik_execution if name == "sputnik" else "native",
                 "duration_seconds": duration,
                 "client_count": clients,
                 "requests": requests,
@@ -516,16 +516,16 @@ def run_one(
                 "requests_per_second": requests / elapsed,
                 "server_peak_rss_bytes": peak_rss,
                 "contract_smoke_requests": smoke_result["requests"],
-                "amber_pool_size": (
-                    amber_pool_size
-                    if name == "amber" and stack == "ember"
+                "sputnik_pool_size": (
+                    sputnik_pool_size
+                    if name == "sputnik" and stack == "ember"
                     else None
                 ),
                 "sample_profile": str(sample_path) if sampler is not None else None,
                 "loaded_native_extensions": native_extensions,
                 "server_max_requests_per_connection": (
                     server_max_requests_per_connection
-                    if name == "amber" and stack == "raw"
+                    if name == "sputnik" and stack == "raw"
                     else None
                 ),
                 "client_results": client_results,
@@ -585,20 +585,20 @@ def paired_comparisons(
         ] = sample["requests_per_second"]
     comparisons = []
     for name in languages:
-        if name == "amber":
+        if name == "sputnik":
             continue
         ratios = []
         deltas = []
         for repeat_index in sorted(by_repeat):
             repeat = by_repeat[repeat_index]
-            if "amber" not in repeat or name not in repeat:
+            if "sputnik" not in repeat or name not in repeat:
                 continue
-            ratio = repeat[name] / repeat["amber"]
+            ratio = repeat[name] / repeat["sputnik"]
             ratios.append(ratio)
             deltas.append((ratio - 1.0) * 100.0)
         comparisons.append(
             {
-                "baseline": "amber",
+                "baseline": "sputnik",
                 "competitor": name,
                 "paired_ratio": summary_stats(ratios),
                 "paired_delta_percent": summary_stats(deltas),
@@ -609,13 +609,13 @@ def paired_comparisons(
 
 def benchmark_provenance(
     paths: Dict[str, Path], languages: Sequence[str], stack: str,
-    amber_execution: str, samples: Sequence[Dict[str, Any]],
+    sputnik_execution: str, samples: Sequence[Dict[str, Any]],
 ) -> Dict[str, Any]:
     dependency_roots = {
-        "amber": ROOT,
+        "sputnik": ROOT,
         "ember": EMBER,
-        "amber_orm": EMBER / ".build/dependencies/amber-orm",
-        "sqlite3_amber": EMBER / ".build/dependencies/sqlite3-amber",
+        "sputnik_orm": EMBER / ".build/dependencies/sputnik-orm",
+        "sqlite3_sputnik": EMBER / ".build/dependencies/sqlite3-sputnik",
     }
     repositories = {
         name: git_provenance(path)
@@ -638,48 +638,48 @@ def benchmark_provenance(
         }
     )
     for index, extension in enumerate(extension_paths, start=1):
-        artifacts[f"amber_vm_extension_{index}"] = file_provenance(
+        artifacts[f"sputnik_vm_extension_{index}"] = file_provenance(
             Path(extension)
         )
     source_paths = [
         ROOT / "bench/polyglot/run_http_rps.py",
         ROOT / "bench/polyglot/benchmark_support.py",
-        EMBER / "examples/soak/client.am",
+        EMBER / "examples/soak/client.s",
         EMBER / "examples/soak/client.build.yaml",
-        EMBER / "amber.lock",
+        EMBER / "sputnik.lock",
         EMBER / "release/dependencies.lock.json",
     ]
     if stack == "ember":
         source_paths.extend(
             [
-                ROOT / "bench/polyglot/amber/http_rps_server.am",
-                ROOT / "bench/polyglot/amber/http_rps_server.build.yaml",
+                ROOT / "bench/polyglot/sputnik/http_rps_server.s",
+                ROOT / "bench/polyglot/sputnik/http_rps_server.build.yaml",
                 ROOT / "bench/polyglot/rails/config.ru",
                 ROOT / "bench/polyglot/rails/http_rps_app.rb",
-                EMBER / "src/ember.am",
-                EMBER / "src/ember/telemetry.am",
+                EMBER / "src/ember.s",
+                EMBER / "src/ember/telemetry.s",
                 EMBER / "packages/ember-orm/src",
-                EMBER / ".build/dependencies/amber-orm/src",
-                EMBER / ".build/dependencies/sqlite3-amber/src",
-                EMBER / ".build/dependencies/sqlite3-amber/native/sqlite3_ext.c",
+                EMBER / ".build/dependencies/sputnik-orm/src",
+                EMBER / ".build/dependencies/sqlite3-sputnik/src",
+                EMBER / ".build/dependencies/sqlite3-sputnik/native/sqlite3_ext.c",
             ]
         )
     else:
         source_paths.extend(
             [
-                ROOT / "bench/polyglot/amber/raw_http_rps_server.am",
-                ROOT / "bench/polyglot/amber/raw_http_rps_server.build.yaml",
+                ROOT / "bench/polyglot/sputnik/raw_http_rps_server.s",
+                ROOT / "bench/polyglot/sputnik/raw_http_rps_server.build.yaml",
                 ROOT / "bench/polyglot/go/http_rps_server.go",
                 ROOT / "bench/polyglot/rust/http_rps_server.rs",
                 ROOT / "bench/polyglot/python/http_rps_server.py",
             ]
         )
     runtime_bundles = {}
-    if "amber" in languages and amber_execution == "vm":
-        amber_state = ROOT / "bench/polyglot/amber/.amber"
+    if "sputnik" in languages and sputnik_execution == "vm":
+        sputnik_state = ROOT / "bench/polyglot/sputnik/.sputnik"
         runtime_bundles = {
-            "amber_vm_bytecode": tree_provenance(
-                [amber_state / "vm/out"], relative_to=ROOT
+            "sputnik_vm_bytecode": tree_provenance(
+                [sputnik_state / "vm/out"], relative_to=ROOT
             ),
         }
     return {
@@ -689,7 +689,7 @@ def benchmark_provenance(
         "runtime_bundles": runtime_bundles,
         "source_tree": tree_provenance(source_paths, relative_to=WORKSPACE),
         "environment": relevant_environment(
-            ["AMBER_BENCH_RUBY", "CXX", "CC", "RUSTFLAGS", "GOFLAGS"]
+            ["SPUTNIK_BENCH_RUBY", "CXX", "CC", "RUSTFLAGS", "GOFLAGS"]
         ),
         "argv": sys.argv,
     }
@@ -698,7 +698,7 @@ def benchmark_provenance(
 def runtime_versions(
     languages: Sequence[str], compiler: Path
 ) -> Dict[str, str]:
-    versions = {"amber": captured([str(compiler), "--version"])}
+    versions = {"sputnik": captured([str(compiler), "--version"])}
     if "go" in languages:
         versions["go"] = captured(["go", "version"])
     if "rust" in languages:
@@ -720,23 +720,23 @@ def runtime_versions(
 def markdown_report(payload: Dict[str, Any]) -> str:
     rows = payload["results"]
     stack = payload["stack"]
-    amber_execution = payload["amber_execution"]
-    amber_pool_size = payload["amber_pool_size"]
+    sputnik_execution = payload["sputnik_execution"]
+    sputnik_pool_size = payload["sputnik_pool_size"]
     comparisons = {
         row["competitor"]: row for row in payload["paired_comparisons"]
     }
     labels = {
-        "amber": (
+        "sputnik": (
             (
-                "Amber `net.http` (full native; VM-independent server)"
+                "Sputnik `net.http` (full native; VM-independent server)"
                 if stack == "raw"
-                else "Amber + Ember (full native; VM-independent server)"
+                else "Sputnik + Ember (full native; VM-independent server)"
             )
-            if amber_execution == "native"
+            if sputnik_execution == "native"
             else (
-                "Amber `net.http` (interpreted bytecode VM)"
+                "Sputnik `net.http` (interpreted bytecode VM)"
                 if stack == "raw"
-                else "Amber + Ember (interpreted bytecode VM)"
+                else "Sputnik + Ember (interpreted bytecode VM)"
             )
         ),
         "go": "Go `net/http`",
@@ -750,7 +750,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "The raw lane keeps its mutex-protected in-memory store. This makes the "
         "framework table include model lifecycle, SQL generation, connection-pool, "
         "and SQLite costs while keeping the database local and deterministic. "
-        f"The Amber pool contains {amber_pool_size} connection(s) for this run."
+        f"The Sputnik pool contains {sputnik_pool_size} connection(s) for this run."
         if stack == "ember"
         else "All raw benchmark servers use a process-local, mutex-protected "
         "in-memory store so the table compares HTTP routing, JSON/schema handling, "
@@ -765,13 +765,13 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         f"Date: `{payload['timestamp']}`<br>",
         f"Host: `{payload['host']}`<br>",
-        "Client: pinned native-body-covered Amber client from "
-        f"`ember/examples/soak/client.am`; SHA-256 `{payload['client']['sha256']}` "
+        "Client: pinned native-body-covered Sputnik client from "
+        f"`ember/examples/soak/client.s`; SHA-256 `{payload['client']['sha256']}` "
         "(`vm-stdlib-send-v1` client bridge)<br>",
         f"Stack: `{stack}`<br>",
-        f"Amber execution: `{amber_execution}`<br>",
+        f"Sputnik execution: `{sputnik_execution}`<br>",
         (
-            f"Amber SQLite pool size: `{amber_pool_size}`<br>"
+            f"Sputnik SQLite pool size: `{sputnik_pool_size}`<br>"
             if stack == "ember"
             else ""
         ),
@@ -783,7 +783,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
             else f"this diagnostic run samples each server for `{payload['sample_seconds']}` seconds."
         ),
         "",
-        "| Server | Median RPS | Mean RPS | Stdev | CV | Mean 95% CI | Median peak RSS | Paired vs Amber |",
+        "| Server | Median RPS | Mean RPS | Stdev | CV | Mean 95% CI | Median peak RSS | Paired vs Sputnik |",
         "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
@@ -792,7 +792,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         rss_text = f"{rss / 1024 / 1024:.1f} MiB" if rss is not None else "n/a"
         paired = (
             "1.000×"
-            if row["server"] == "amber"
+            if row["server"] == "sputnik"
             else f"{comparisons[row['server']]['paired_ratio']['median']:.3f}×"
         )
         lines.append(
@@ -816,7 +816,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         ratio = comparison["paired_ratio"]["median"]
         delta = comparison["paired_delta_percent"]["median"]
         competitor_text.append(
-            f"{labels[name]}: {ratio:.3f}× Amber ({delta:+.2f}%)"
+            f"{labels[name]}: {ratio:.3f}× Sputnik ({delta:+.2f}%)"
         )
     lines += [
         "",
@@ -825,7 +825,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         (
             "; ".join(competitor_text) + ". "
             if competitor_text
-            else "This run contains only the Amber baseline. "
+            else "This run contains only the Sputnik baseline. "
         )
         + (
             "The raw lane bypasses Ember and isolates language/runtime, HTTP, JSON, validation, and in-memory-store costs."
@@ -835,11 +835,11 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         "## Method",
         "",
-        "This is a server-side polyglot comparison, not a replacement-client microbenchmark. Every row is driven by the same compiled Amber executable and therefore performs the same persistent-connection CRUD cycle, JSON checks, schema failures, model-validation failures, optimistic-lock conflicts, method/Host rejection, and oversized-body case.",
+        "This is a server-side polyglot comparison, not a replacement-client microbenchmark. Every row is driven by the same compiled Sputnik executable and therefore performs the same persistent-connection CRUD cycle, JSON checks, schema failures, model-validation failures, optimistic-lock conflicts, method/Host rejection, and oversized-body case.",
         "",
         storage_method,
         "",
-        "Before every timed sample, the runner starts a fresh server and executes one complete mixed Amber-client iteration (76 requests), rejecting the sample on any contract mismatch. Each repeat rotates server order so every implementation occupies different thermal/cache positions. Timed RPS is total requests divided by the maximum elapsed time reported by the concurrent Amber clients. The table reports per-server distributions and paired competitor/Amber ratios from the same repeat.",
+        "Before every timed sample, the runner starts a fresh server and executes one complete mixed Sputnik-client iteration (76 requests), rejecting the sample on any contract mismatch. Each repeat rotates server order so every implementation occupies different thermal/cache positions. Timed RPS is total requests divided by the maximum elapsed time reported by the concurrent Sputnik clients. The table reports per-server distributions and paired competitor/Sputnik ratios from the same repeat.",
         "",
         "Profiler samples are forbidden in multi-repeat throughput mode. Server and clients share the same host, so client CPU is part of the available-machine budget; results are comparative for this machine, not universal language rankings.",
         "",
@@ -882,10 +882,10 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "",
         "```sh",
         "python3 bench/polyglot/run_http_rps.py "
-        f"--stack {stack} --amber-execution {amber_execution} "
+        f"--stack {stack} --sputnik-execution {sputnik_execution} "
         f"--duration {payload['duration_seconds']} --clients {payload['client_count']} "
         f"--repeats {payload['repeats']} --order-seed {payload['order_seed']} "
-        f"--amber-pool-size {amber_pool_size} "
+        f"--sputnik-pool-size {sputnik_pool_size} "
         f"--languages {','.join(payload['languages'])} "
         f"--compiler {payload['provenance']['artifacts']['compiler']['path']} "
         f"--client {payload['client']['path']}",
@@ -914,26 +914,26 @@ def parse_args() -> argparse.Namespace:
         help="deterministic seed for the initial server order",
     )
     parser.add_argument(
-        "--amber-pool-size",
+        "--sputnik-pool-size",
         type=int,
         default=1,
-        help="SQLite pool size for the Amber/Ember workload",
+        help="SQLite pool size for the Sputnik/Ember workload",
     )
     parser.add_argument("--port", type=int, default=3340)
     parser.add_argument(
         "--languages",
-        help="comma-separated servers (default: raw=amber,go,rust,python; ember=amber,rails)",
+        help="comma-separated servers (default: raw=sputnik,go,rust,python; ember=sputnik,rails)",
     )
     parser.add_argument("--stack", choices=("raw", "ember"), default="raw")
     parser.add_argument(
-        "--amber-execution", choices=("native", "vm"), default="native"
+        "--sputnik-execution", choices=("native", "vm"), default="native"
     )
-    parser.add_argument("--compiler", type=Path, default=ROOT / "build/amberc")
+    parser.add_argument("--compiler", type=Path, default=ROOT / "build/sputnik")
     parser.add_argument(
         "--client",
         type=Path,
         default=PINNED_CLIENT,
-        help="prebuilt native Amber load client; never rebuilt implicitly",
+        help="prebuilt native Sputnik load client; never rebuilt implicitly",
     )
     parser.add_argument(
         "--refresh-client-pin",
@@ -945,7 +945,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--server-max-requests-per-connection",
         type=int,
-        help="override the raw Amber server keep-alive rotation limit",
+        help="override the raw Sputnik server keep-alive rotation limit",
     )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
@@ -957,11 +957,11 @@ def main() -> None:
         args.duration <= 0
         or args.clients <= 0
         or args.repeats <= 0
-        or args.amber_pool_size <= 0
+        or args.sputnik_pool_size <= 0
         or args.sample_seconds < 0
     ):
         raise RuntimeError(
-            "duration, clients, repeats, and amber-pool-size must be positive"
+            "duration, clients, repeats, and sputnik-pool-size must be positive"
         )
     if args.sample_seconds and args.repeats != 1:
         raise RuntimeError(
@@ -976,21 +976,21 @@ def main() -> None:
             "server-max-requests-per-connection must be positive"
         )
     language_text = args.languages or (
-        "amber,go,rust,python" if args.stack == "raw" else "amber,rails"
+        "sputnik,go,rust,python" if args.stack == "raw" else "sputnik,rails"
     )
     languages = [name.strip() for name in language_text.split(",") if name.strip()]
     supported = (
-        {"amber", "go", "rust", "python"}
+        {"sputnik", "go", "rust", "python"}
         if args.stack == "raw"
-        else {"amber", "rails"}
+        else {"sputnik", "rails"}
     )
     unknown = sorted(set(languages) - supported)
     if unknown:
         raise RuntimeError("unknown languages: " + ", ".join(unknown))
     if len(set(languages)) != len(languages):
         raise RuntimeError("languages must not contain duplicates")
-    if "amber" not in languages:
-        raise RuntimeError("the Amber baseline must be included")
+    if "sputnik" not in languages:
+        raise RuntimeError("the Sputnik baseline must be included")
     compiler = args.compiler.resolve()
     client = args.client.resolve()
     if args.refresh_client_pin:
@@ -1000,10 +1000,10 @@ def main() -> None:
             )
         refresh_client_pin(compiler)
     paths = (
-        built_paths(compiler, client, args.stack, args.amber_execution)
+        built_paths(compiler, client, args.stack, args.sputnik_execution)
         if args.skip_build
         else build_all(
-            compiler, client, args.stack, languages, args.amber_execution
+            compiler, client, args.stack, languages, args.sputnik_execution
         )
     )
     ensure_paths(paths, languages)
@@ -1015,7 +1015,7 @@ def main() -> None:
     RESULTS.mkdir(parents=True, exist_ok=True)
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
     series_id = (
-        f"{args.stack}-{args.amber_execution}-r{args.repeats}-{stamp}"
+        f"{args.stack}-{args.sputnik_execution}-r{args.repeats}-{stamp}"
     )
     run_orders = balanced_orders(languages, args.repeats, args.order_seed)
     ports = {name: args.port + index for index, name in enumerate(languages)}
@@ -1035,8 +1035,8 @@ def main() -> None:
                     args.clients,
                     ports[name],
                     args.stack,
-                    args.amber_execution,
-                    args.amber_pool_size,
+                    args.sputnik_execution,
+                    args.sputnik_pool_size,
                     args.sample_seconds,
                     args.server_max_requests_per_connection,
                     series_id,
@@ -1047,13 +1047,13 @@ def main() -> None:
     results = aggregate_http_results(samples, languages)
     comparisons = paired_comparisons(samples, languages)
     provenance = benchmark_provenance(
-        paths, languages, args.stack, args.amber_execution, samples
+        paths, languages, args.stack, args.sputnik_execution, samples
     )
     pool_suffix = (
-        f"-pool{args.amber_pool_size}" if args.stack == "ember" else ""
+        f"-pool{args.sputnik_pool_size}" if args.stack == "ember" else ""
     )
     result_stem = (
-        f"{args.stack}-http-rps-{args.amber_execution}{pool_suffix}"
+        f"{args.stack}-http-rps-{args.sputnik_execution}{pool_suffix}"
         f"-r{args.repeats}-{stamp}"
     )
     json_path = RESULTS / f"{result_stem}.json"
@@ -1061,9 +1061,9 @@ def main() -> None:
         args.output.resolve() if args.output else RESULTS / f"{result_stem}.md"
     )
     payload = {
-        "schema": "amber.polyglot.http-rps.v5",
+        "schema": "sputnik.polyglot.http-rps.v5",
         "stack": args.stack,
-        "amber_execution": args.amber_execution,
+        "sputnik_execution": args.sputnik_execution,
         "timestamp": dt.datetime.now().astimezone().isoformat(),
         "host": provenance["host"]["platform"],
         "duration_seconds": args.duration,
@@ -1071,7 +1071,7 @@ def main() -> None:
         "repeats": args.repeats,
         "order_seed": args.order_seed,
         "run_orders": run_orders,
-        "amber_pool_size": args.amber_pool_size,
+        "sputnik_pool_size": args.sputnik_pool_size,
         "languages": languages,
         "client": {
             "path": str(paths["client"]),

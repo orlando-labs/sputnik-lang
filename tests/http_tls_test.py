@@ -37,7 +37,7 @@ keyUsage=critical,keyCertSign,cRLSign
 subjectKeyIdentifier=hash
 authorityKeyIdentifier=keyid:always
 """)
-    cmd("req", "-config", "ca-req.cnf", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=Amber test CA",
+    cmd("req", "-config", "ca-req.cnf", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2", "-subj", "/CN=Sputnik test CA",
         "-keyout", "ca.key", "-out", "ca.pem")
     for name, san in [("good", "DNS:localhost,IP:127.0.0.1"), ("wrong", "DNS:wrong.invalid"), ("client", "DNS:client")]:
         cmd("req", "-new", "-newkey", "rsa:2048", "-nodes", "-subj", f"/CN={name}",
@@ -182,9 +182,9 @@ def context(work, name="good", version=None, mtls=False):
     return ctx
 
 
-def build(amberc, root, work, source, env):
+def build(sputnik, root, work, source, env):
     executable = work / source.stem
-    result = run([str(amberc), "build", str(source), "--target", "native", "--entry", "main-only",
+    result = run([str(sputnik), "build", str(source), "--target", "native", "--entry", "main-only",
                   "--require-full-native", "--grant", "net.connect", "--grant", "net.listen",
                   "-o", str(executable), "--out-dir", str(work)], cwd=root, env=env, timeout=600)
     metadata = json.loads(result.stdout)
@@ -194,17 +194,17 @@ def build(amberc, root, work, source, env):
     assert metadata.get("native_bytecode_fallback", metadata.get("bytecode_fallback")) is False, metadata
     generated = source.with_suffix(".native.cpp")
     if generated.exists():
-        assert "amber_native_bridge_world()" not in generated.read_text()
+        assert "sputnik_native_bridge_world()" not in generated.read_text()
     return executable
 
 
 def main():
     root = Path(__file__).resolve().parents[1]
-    amberc = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / "build/amberc"
+    sputnik = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else root / "build/sputnik"
     work = Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else root / "build/http-tls"
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
-    env.setdefault("AMBER_NATIVE_RT_CACHE", str(root / "build/native-rt-cache"))
+    env.setdefault("SPUTNIK_NATIVE_RT_CACHE", str(root / "build/native-rt-cache"))
     certificates(work)
     servers = []
     try:
@@ -222,7 +222,7 @@ def main():
         redirect = Server(redirect=f"https://localhost:{good.port}/redirected"); servers.append(redirect)
         ca = json.dumps(str(work / "ca.pem"))
         good_url = f"https://localhost:{good.port}"
-        source = work / "client.am"
+        source = work / "client.s"
         source.write_text(f'''package test.http_tls_client
 from net.http import Client, Server
 import net
@@ -270,7 +270,7 @@ def main():
   rescue TlsCertificateError:
     null
   try:
-    Client(timeout: 2, tls_ca_file: "/amber/no-such-ca.pem").get("{good_url}/invalid-ca")
+    Client(timeout: 2, tls_ca_file: "/sputnik/no-such-ca.pem").get("{good_url}/invalid-ca")
     ok = false
   rescue TlsError:
     null
@@ -298,11 +298,11 @@ def main():
   mutual.close!()
   if ok then "tls-client-ok" else "tls-client-failed"
 ''')
-        # VM and full native execute precisely the same Amber client source.
-        vm = run([str(amberc), "run", str(source), "--grant", "net.connect", "--grant", "net.listen"], cwd=root, env=env)
+        # VM and full native execute precisely the same Sputnik client source.
+        vm = run([str(sputnik), "run", str(source), "--grant", "net.connect", "--grant", "net.listen"], cwd=root, env=env)
         assert '"tls-client-ok"' in vm.stdout, vm.stdout
         print("HTTPS client VM: ok", flush=True)
-        executable = build(amberc, root, work, source, env)
+        executable = build(sputnik, root, work, source, env)
         native = run([str(executable)], cwd=root, env=env, timeout=30)
         assert native.stdout == '"tls-client-ok"\n', native.stdout
         print("HTTPS client full native: ok", flush=True)
@@ -319,7 +319,7 @@ def main():
             if path == b"/redirected":
                 assert b"authorization" not in headers and b"cookie" not in headers
                 assert headers[b"host"] == f"localhost:{good.port}".encode()
-        server_source = work / "server.am"
+        server_source = work / "server.s"
         probe = socket.socket(); probe.bind(("127.0.0.1", 0)); port = probe.getsockname()[1]; probe.close()
         server_source.write_text(f'''package test.http_tls_server
 from net.http import Server, ServerResponse
@@ -331,10 +331,10 @@ def main():
     ServerResponse(status: 200, body: request.body_text())
   "tls-server-ok"
 ''')
-        server_executable = build(amberc, root, work, server_source, env)
+        server_executable = build(sputnik, root, work, server_source, env)
         client_context = ssl.create_default_context(cafile=str(work / "ca.pem"))
         client_context.set_alpn_protocols(["http/1.1"])
-        for mode, command in [("VM", [str(amberc), "run", str(server_source), "--grant", "net.listen"]),
+        for mode, command in [("VM", [str(sputnik), "run", str(server_source), "--grant", "net.listen"]),
                               ("full native", [str(server_executable)])]:
             process = subprocess.Popen(command, cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             try:

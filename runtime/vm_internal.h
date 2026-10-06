@@ -26,7 +26,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Private interpreter state for runtime/vm.cpp. This header exists to make the
 // VM implementation editable during the split; it is not a public runtime API.
@@ -1308,4 +1308,4 @@ ExecutionResult execute_runtime_vm(
     const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value self,
     Value block);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

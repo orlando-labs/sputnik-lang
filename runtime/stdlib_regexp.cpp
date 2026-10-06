@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -646,4 +646,4 @@ void register_regexp_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

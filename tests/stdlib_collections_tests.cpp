@@ -18,7 +18,7 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-std::uint32_t ensure_symbol_id(amber::bytecode::BcModule *module,
+std::uint32_t ensure_symbol_id(sputnik::bytecode::BcModule *module,
                                const std::string &name) {
   for (std::uint32_t i = 0; i < module->symbols.size(); ++i) {
     if (module->symbols[i] == name) {
@@ -29,7 +29,7 @@ std::uint32_t ensure_symbol_id(amber::bytecode::BcModule *module,
   return static_cast<std::uint32_t>(module->symbols.size() - 1U);
 }
 
-std::uint32_t append_string(amber::bytecode::BcModule *module,
+std::uint32_t append_string(sputnik::bytecode::BcModule *module,
                             const std::string &value) {
   for (std::uint32_t i = 0; i < module->strings.size(); ++i) {
     if (module->strings[i] == value) {
@@ -40,7 +40,7 @@ std::uint32_t append_string(amber::bytecode::BcModule *module,
   return static_cast<std::uint32_t>(module->strings.size() - 1U);
 }
 
-std::uint32_t string_id_or_die(const amber::bytecode::BcModule &module,
+std::uint32_t string_id_or_die(const sputnik::bytecode::BcModule &module,
                                const std::string &value) {
   for (std::uint32_t i = 0; i < module.strings.size(); ++i) {
     if (module.strings[i] == value) {
@@ -52,7 +52,7 @@ std::uint32_t string_id_or_die(const amber::bytecode::BcModule &module,
   std::exit(1);
 }
 
-std::uint32_t symbol_id_or_die(const amber::bytecode::BcModule &module,
+std::uint32_t symbol_id_or_die(const sputnik::bytecode::BcModule &module,
                                const std::string &name) {
   for (std::uint32_t i = 0; i < module.symbols.size(); ++i) {
     if (module.symbols[i] == name) {
@@ -64,7 +64,7 @@ std::uint32_t symbol_id_or_die(const amber::bytecode::BcModule &module,
   std::exit(1);
 }
 
-std::uint32_t class_index_or_die(const amber::bytecode::BcModule &module,
+std::uint32_t class_index_or_die(const sputnik::bytecode::BcModule &module,
                                  const std::string &name) {
   const std::uint32_t symbol_id = symbol_id_or_die(module, name);
   for (std::uint32_t i = 0; i < module.classes.size(); ++i) {
@@ -77,32 +77,32 @@ std::uint32_t class_index_or_die(const amber::bytecode::BcModule &module,
   std::exit(1);
 }
 
-std::uint32_t append_integer_const(amber::bytecode::BcModule *module,
+std::uint32_t append_integer_const(sputnik::bytecode::BcModule *module,
                                    std::int64_t value) {
-  amber::bytecode::Constant constant;
-  constant.kind = amber::bytecode::ConstantKind::Integer;
+  sputnik::bytecode::Constant constant;
+  constant.kind = sputnik::bytecode::ConstantKind::Integer;
   constant.int_value = value;
   module->const_pool.push_back(constant);
   return static_cast<std::uint32_t>(module->const_pool.size() - 1U);
 }
 
-std::uint32_t append_symbol_const(amber::bytecode::BcModule *module,
+std::uint32_t append_symbol_const(sputnik::bytecode::BcModule *module,
                                   const std::string &name) {
-  amber::bytecode::Constant constant;
-  constant.kind = amber::bytecode::ConstantKind::SymbolRef;
+  sputnik::bytecode::Constant constant;
+  constant.kind = sputnik::bytecode::ConstantKind::SymbolRef;
   constant.ref_id = ensure_symbol_id(module, name);
   module->const_pool.push_back(constant);
   return static_cast<std::uint32_t>(module->const_pool.size() - 1U);
 }
 
-amber::bytecode::Instruction
+sputnik::bytecode::Instruction
 send_instr(std::uint32_t dst, std::uint32_t recv, std::uint32_t selector,
            const std::vector<std::uint32_t> &arg_regs = {},
            std::int64_t block_reg = -1,
            const std::vector<std::pair<std::uint32_t, std::uint32_t>>
                &kw_regs = {}) {
-  amber::bytecode::Instruction insn;
-  insn.opcode = amber::bytecode::Opcode::Send;
+  sputnik::bytecode::Instruction insn;
+  insn.opcode = sputnik::bytecode::Opcode::Send;
   insn.operands.push_back({dst, false});
   insn.operands.push_back({recv, false});
   insn.operands.push_back({selector, false});
@@ -120,66 +120,66 @@ send_instr(std::uint32_t dst, std::uint32_t recv, std::uint32_t selector,
   return insn;
 }
 
-amber::bytecode::BcCode
+sputnik::bytecode::BcCode
 make_send_code(std::uint32_t code_id, std::uint32_t selector, bool with_block) {
-  amber::bytecode::BcCode code;
+  sputnik::bytecode::BcCode code;
   code.code_id = code_id;
-  code.kind = amber::bytecode::CodeKind::Method;
+  code.kind = sputnik::bytecode::CodeKind::Method;
   code.reg_count = 3;
   code.instructions.push_back(
       send_instr(2, 0, selector, {}, with_block ? 1 : -1));
-  code.instructions.push_back({amber::bytecode::Opcode::Return, {{2, false}}});
+  code.instructions.push_back({sputnik::bytecode::Opcode::Return, {{2, false}}});
   return code;
 }
 
-amber::bytecode::BcCode make_unary_send_code(std::uint32_t code_id,
+sputnik::bytecode::BcCode make_unary_send_code(std::uint32_t code_id,
                                              std::uint32_t selector) {
-  amber::bytecode::BcCode code;
+  sputnik::bytecode::BcCode code;
   code.code_id = code_id;
-  code.kind = amber::bytecode::CodeKind::Method;
+  code.kind = sputnik::bytecode::CodeKind::Method;
   code.reg_count = 3;
   code.instructions.push_back(send_instr(2, 0, selector, {1}));
-  code.instructions.push_back({amber::bytecode::Opcode::Return, {{2, false}}});
+  code.instructions.push_back({sputnik::bytecode::Opcode::Return, {{2, false}}});
   return code;
 }
 
-amber::runtime::Value
+sputnik::runtime::Value
 make_closure_value(std::uint32_t code_id,
-                   std::vector<amber::runtime::Value> captures = {}) {
-  auto closure = amber::runtime::make_intrusive<amber::runtime::ClosureValue>();
-  closure->header.kind = amber::runtime::HeapObjectKind::Closure;
+                   std::vector<sputnik::runtime::Value> captures = {}) {
+  auto closure = sputnik::runtime::make_intrusive<sputnik::runtime::ClosureValue>();
+  closure->header.kind = sputnik::runtime::HeapObjectKind::Closure;
   closure->code_id = code_id;
   closure->captures = std::move(captures);
-  return amber::runtime::Value::closure(std::move(closure));
+  return sputnik::runtime::Value::closure(std::move(closure));
 }
 
-amber::runtime::Value make_symbol_map(
-    const amber::bytecode::BcModule &module,
-    std::initializer_list<std::pair<const char *, amber::runtime::Value>>
+sputnik::runtime::Value make_symbol_map(
+    const sputnik::bytecode::BcModule &module,
+    std::initializer_list<std::pair<const char *, sputnik::runtime::Value>>
         entries) {
-  std::vector<amber::runtime::MapEntry> map_entries;
+  std::vector<sputnik::runtime::MapEntry> map_entries;
   map_entries.reserve(entries.size());
   for (const auto &entry : entries) {
     map_entries.push_back(
         {symbol_id_or_die(module, entry.first), entry.second});
   }
-  return amber::runtime::make_symbol_map_value(std::move(map_entries));
+  return sputnik::runtime::make_symbol_map_value(std::move(map_entries));
 }
 
-amber::runtime::Value make_range_value(
-    const amber::bytecode::BcModule &module, std::int64_t start,
+sputnik::runtime::Value make_range_value(
+    const sputnik::bytecode::BcModule &module, std::int64_t start,
     std::int64_t finish, bool inclusive_end = true, std::int64_t step = 1) {
-  auto instance = amber::runtime::default_runtime_heap().make_instance_value(
+  auto instance = sputnik::runtime::default_runtime_heap().make_instance_value(
       class_index_or_die(module, "Range"));
-  instance->ivars["start"] = amber::runtime::Value::integer(start);
-  instance->ivars["finish"] = amber::runtime::Value::integer(finish);
+  instance->ivars["start"] = sputnik::runtime::Value::integer(start);
+  instance->ivars["finish"] = sputnik::runtime::Value::integer(finish);
   instance->ivars["inclusive_end"] =
-      amber::runtime::Value::boolean(inclusive_end);
-  instance->ivars["step"] = amber::runtime::Value::integer(step);
-  return amber::runtime::Value::instance(std::move(instance));
+      sputnik::runtime::Value::boolean(inclusive_end);
+  instance->ivars["step"] = sputnik::runtime::Value::integer(step);
+  return sputnik::runtime::Value::instance(std::move(instance));
 }
 
-void expect_ok(const amber::runtime::ExecutionResult &result,
+void expect_ok(const sputnik::runtime::ExecutionResult &result,
                const std::string &message) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << message << ": " << result.fault->error_name
@@ -188,30 +188,30 @@ void expect_ok(const amber::runtime::ExecutionResult &result,
   expect(result.ok(), message + " should succeed");
 }
 
-void expect_fault(const amber::runtime::ExecutionResult &result,
+void expect_fault(const sputnik::runtime::ExecutionResult &result,
                   const std::string &error_name, const std::string &message) {
   expect(!result.ok(), message + " should fault");
   expect(result.fault.has_value() && result.fault->error_name == error_name,
          message + " should report " + error_name);
 }
 
-void expect_integer(const amber::runtime::Value &value, std::int64_t expected,
+void expect_integer(const sputnik::runtime::Value &value, std::int64_t expected,
                     const std::string &message) {
   expect(value.is_integer(), message + " should be integer");
   expect(value.as_integer() == expected, message + " value");
 }
 
-void expect_bool(const amber::runtime::Value &value, bool expected,
+void expect_bool(const sputnik::runtime::Value &value, bool expected,
                  const std::string &message) {
   expect(value.is_bool(), message + " should be bool");
   expect(value.as_bool() == expected, message + " value");
 }
 
-void expect_integer_list(const amber::runtime::Value &value,
+void expect_integer_list(const sputnik::runtime::Value &value,
                          const std::vector<std::int64_t> &expected,
                          const std::string &message) {
   expect(value.is_list(), message + " should be a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list = value.as_list();
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list = value.as_list();
   expect(list != nullptr, message + " list payload");
   expect(list->items.size() == expected.size(), message + " list size");
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -220,11 +220,11 @@ void expect_integer_list(const amber::runtime::Value &value,
   }
 }
 
-void expect_set_integer_items(const amber::runtime::Value &value,
+void expect_set_integer_items(const sputnik::runtime::Value &value,
                               const std::vector<std::int64_t> &expected,
                               const std::string &message) {
   expect(value.is_set(), message + " should be a set");
-  const amber::runtime::IntrusivePtr<amber::runtime::SetValue> set = value.as_set();
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::SetValue> set = value.as_set();
   expect(set != nullptr, message + " set payload");
   expect(set->items.size() == expected.size(), message + " set size");
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -234,11 +234,11 @@ void expect_set_integer_items(const amber::runtime::Value &value,
 }
 
 void expect_nested_integer_lists(
-    const amber::runtime::Value &value,
+    const sputnik::runtime::Value &value,
     const std::vector<std::vector<std::int64_t>> &expected,
     const std::string &message) {
   expect(value.is_list(), message + " should be a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> outer = value.as_list();
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> outer = value.as_list();
   expect(outer != nullptr, message + " outer payload");
   expect(outer->items.size() == expected.size(), message + " outer size");
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -247,12 +247,12 @@ void expect_nested_integer_lists(
   }
 }
 
-void expect_symbol_list(const amber::bytecode::BcModule &module,
-                        const amber::runtime::Value &value,
+void expect_symbol_list(const sputnik::bytecode::BcModule &module,
+                        const sputnik::runtime::Value &value,
                         const std::vector<std::string> &expected,
                         const std::string &message) {
   expect(value.is_list(), message + " should be a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list = value.as_list();
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list = value.as_list();
   expect(list != nullptr, message + " list payload");
   expect(list->items.size() == expected.size(), message + " list size");
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -264,17 +264,17 @@ void expect_symbol_list(const amber::bytecode::BcModule &module,
 }
 
 void expect_entry_list(
-    const amber::bytecode::BcModule &module, const amber::runtime::Value &value,
+    const sputnik::bytecode::BcModule &module, const sputnik::runtime::Value &value,
     const std::vector<std::pair<std::string, std::int64_t>> &expected,
     const std::string &message) {
   expect(value.is_list(), message + " should be a list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> list = value.as_list();
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> list = value.as_list();
   expect(list != nullptr, message + " list payload");
   expect(list->items.size() == expected.size(), message + " list size");
   for (std::size_t i = 0; i < expected.size(); ++i) {
     expect(list->items[i].is_tuple(),
            message + " entry " + std::to_string(i) + " should be tuple");
-    const amber::runtime::IntrusivePtr<amber::runtime::TupleValue> tuple =
+    const sputnik::runtime::IntrusivePtr<sputnik::runtime::TupleValue> tuple =
         list->items[i].as_tuple();
     expect(tuple != nullptr && tuple->items.size() == 2,
            message + " entry " + std::to_string(i) + " shape");
@@ -289,11 +289,11 @@ void expect_entry_list(
 }
 
 void expect_symbol_map_entries(
-    const amber::bytecode::BcModule &module, const amber::runtime::Value &value,
+    const sputnik::bytecode::BcModule &module, const sputnik::runtime::Value &value,
     const std::vector<std::pair<std::string, std::int64_t>> &expected,
     const std::string &message) {
   expect(value.is_map(), message + " should be a map");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> map = value.as_map();
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> map = value.as_map();
   expect(map != nullptr, message + " map payload");
   expect(map->entries.size() == expected.size(), message + " map size");
   for (std::size_t i = 0; i < expected.size(); ++i) {
@@ -305,8 +305,8 @@ void expect_symbol_map_entries(
   }
 }
 
-amber::bytecode::BcModule make_sequence_protocol_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule make_sequence_protocol_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   for (const std::string &symbol :
@@ -616,20 +616,20 @@ amber::bytecode::BcModule make_sequence_protocol_module() {
   return module;
 }
 
-void assert_sequence_protocol_for(const amber::bytecode::BcModule &module,
-                                  const amber::runtime::Value &source,
+void assert_sequence_protocol_for(const sputnik::bytecode::BcModule &module,
+                                  const sputnik::runtime::Value &source,
                                   const std::string &label) {
-  const amber::runtime::Value inc = make_closure_value(100);
-  const amber::runtime::Value gt_one = make_closure_value(101);
-  const amber::runtime::Value add = make_closure_value(102);
-  const amber::runtime::Value pairify = make_closure_value(103);
-  const amber::runtime::Value gt_zero = make_closure_value(104);
-  const amber::runtime::Value gt_three = make_closure_value(105);
-  const amber::runtime::Value low_high_key = make_closure_value(106);
-  const amber::runtime::Value keep_gt_one_plus_one = make_closure_value(108);
+  const sputnik::runtime::Value inc = make_closure_value(100);
+  const sputnik::runtime::Value gt_one = make_closure_value(101);
+  const sputnik::runtime::Value add = make_closure_value(102);
+  const sputnik::runtime::Value pairify = make_closure_value(103);
+  const sputnik::runtime::Value gt_zero = make_closure_value(104);
+  const sputnik::runtime::Value gt_three = make_closure_value(105);
+  const sputnik::runtime::Value low_high_key = make_closure_value(106);
+  const sputnik::runtime::Value keep_gt_one_plus_one = make_closure_value(108);
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 1, {source, inc});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 1, {source, inc});
   expect_ok(result, label + " each");
   if (source.is_list()) {
     expect(result.value.is_list() && result.value.as_list() == source.as_list(),
@@ -648,71 +648,71 @@ void assert_sequence_protocol_for(const amber::bytecode::BcModule &module,
            label + " each should return receiver");
   }
 
-  result = amber::runtime::execute_code(module, 2, {source, inc});
+  result = sputnik::runtime::execute_code(module, 2, {source, inc});
   expect_ok(result, label + " map");
   expect_integer_list(result.value, {2, 3, 4}, label + " map");
 
-  result = amber::runtime::execute_code(module, 3, {source, pairify});
+  result = sputnik::runtime::execute_code(module, 3, {source, pairify});
   expect_ok(result, label + " flat_map");
   expect_integer_list(result.value, {1, 2, 2, 3, 3, 4}, label + " flat_map");
 
   result =
-      amber::runtime::execute_code(module, 44, {source, keep_gt_one_plus_one});
+      sputnik::runtime::execute_code(module, 44, {source, keep_gt_one_plus_one});
   expect_ok(result, label + " filter_map");
   expect_integer_list(result.value, {3, 4}, label + " filter_map");
 
-  result = amber::runtime::execute_code(module, 4, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 4, {source, gt_one});
   expect_ok(result, label + " select");
   expect_integer_list(result.value, {2, 3}, label + " select");
 
-  result = amber::runtime::execute_code(module, 5, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 5, {source, gt_one});
   expect_ok(result, label + " reject");
   expect_integer_list(result.value, {1}, label + " reject");
 
-  result = amber::runtime::execute_code(module, 6, {source, add});
+  result = sputnik::runtime::execute_code(module, 6, {source, add});
   expect_ok(result, label + " reduce(init)");
   expect_integer(result.value, 6, label + " reduce(init)");
 
-  result = amber::runtime::execute_code(module, 7, {source, add});
+  result = sputnik::runtime::execute_code(module, 7, {source, add});
   expect_ok(result, label + " reduce");
   expect_integer(result.value, 6, label + " reduce");
 
-  result = amber::runtime::execute_code(module, 8, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 8, {source, gt_one});
   expect_ok(result, label + " find");
   expect_integer(result.value, 2, label + " find");
 
-  result = amber::runtime::execute_code(module, 9, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 9, {source, gt_one});
   expect_ok(result, label + " any?");
   expect_bool(result.value, true, label + " any?");
 
-  result = amber::runtime::execute_code(module, 10, {source, gt_zero});
+  result = sputnik::runtime::execute_code(module, 10, {source, gt_zero});
   expect_ok(result, label + " all?");
   expect_bool(result.value, true, label + " all?");
 
-  result = amber::runtime::execute_code(module, 11, {source, gt_three});
+  result = sputnik::runtime::execute_code(module, 11, {source, gt_three});
   expect_ok(result, label + " none?");
   expect_bool(result.value, true, label + " none?");
 
-  result = amber::runtime::execute_code(module, 12, {source});
+  result = sputnik::runtime::execute_code(module, 12, {source});
   expect_ok(result, label + " first");
   expect_integer(result.value, 1, label + " first");
 
-  result = amber::runtime::execute_code(module, 13, {source});
+  result = sputnik::runtime::execute_code(module, 13, {source});
   expect_ok(result, label + " count");
   expect_integer(result.value, 3, label + " count");
 
-  result = amber::runtime::execute_code(module, 14, {source});
+  result = sputnik::runtime::execute_code(module, 14, {source});
   expect_ok(result, label + " to_a");
   expect_integer_list(result.value, {1, 2, 3}, label + " to_a");
 
-  result = amber::runtime::execute_code(module, 15, {source, inc});
+  result = sputnik::runtime::execute_code(module, 15, {source, inc});
   expect_ok(result, label + " lazy materialization");
   expect_integer_list(result.value, {2, 3, 4}, label + " lazy materialization");
 
-  result = amber::runtime::execute_code(module, 16, {source, low_high_key});
+  result = sputnik::runtime::execute_code(module, 16, {source, low_high_key});
   expect_ok(result, label + " group_by");
   expect(result.value.is_map(), label + " group_by should return map");
-  const amber::runtime::IntrusivePtr<amber::runtime::MapValue> groups =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::MapValue> groups =
       result.value.as_map();
   expect(groups != nullptr && groups->entries.size() == 2,
          label + " group_by shape");
@@ -724,313 +724,313 @@ void assert_sequence_protocol_for(const amber::bytecode::BcModule &module,
   expect_integer_list(groups->entries[1].value, {2, 3},
                       label + " group_by high");
 
-  result = amber::runtime::execute_code(module, 31, {source, inc});
+  result = sputnik::runtime::execute_code(module, 31, {source, inc});
   expect_ok(result, label + " collect alias");
   expect_integer_list(result.value, {2, 3, 4}, label + " collect alias");
 
-  result = amber::runtime::execute_code(module, 32, {source, pairify});
+  result = sputnik::runtime::execute_code(module, 32, {source, pairify});
   expect_ok(result, label + " collect_concat alias");
   expect_integer_list(result.value, {1, 2, 2, 3, 3, 4},
                       label + " collect_concat alias");
 
-  result = amber::runtime::execute_code(module, 33, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 33, {source, gt_one});
   expect_ok(result, label + " filter alias");
   expect_integer_list(result.value, {2, 3}, label + " filter alias");
 
-  result = amber::runtime::execute_code(module, 34, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 34, {source, gt_one});
   expect_ok(result, label + " find_all alias");
   expect_integer_list(result.value, {2, 3}, label + " find_all alias");
 
-  result = amber::runtime::execute_code(module, 35, {source, gt_one});
+  result = sputnik::runtime::execute_code(module, 35, {source, gt_one});
   expect_ok(result, label + " detect alias");
   expect_integer(result.value, 2, label + " detect alias");
 
-  result = amber::runtime::execute_code(module, 36, {source, add});
+  result = sputnik::runtime::execute_code(module, 36, {source, add});
   expect_ok(result, label + " inject alias");
   expect_integer(result.value, 6, label + " inject alias");
 
-  result = amber::runtime::execute_code(
-      module, 37, {source, amber::runtime::Value::integer(2)});
+  result = sputnik::runtime::execute_code(
+      module, 37, {source, sputnik::runtime::Value::integer(2)});
   expect_ok(result, label + " member? alias");
   expect_bool(result.value, true, label + " member? alias");
 
-  result = amber::runtime::execute_code(module, 38, {source});
+  result = sputnik::runtime::execute_code(module, 38, {source});
   expect_ok(result, label + " length alias");
   expect_integer(result.value, 3, label + " length alias");
 
-  result = amber::runtime::execute_code(module, 39, {source});
+  result = sputnik::runtime::execute_code(module, 39, {source});
   expect_ok(result, label + " size alias");
   expect_integer(result.value, 3, label + " size alias");
 
-  result = amber::runtime::execute_code(module, 40, {source});
+  result = sputnik::runtime::execute_code(module, 40, {source});
   expect_ok(result, label + " entries alias");
   expect_integer_list(result.value, {1, 2, 3}, label + " entries alias");
 }
 
 void test_std001_sequence_protocol_matrix() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
-  const std::vector<amber::runtime::Value> items = {
-      amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
-      amber::runtime::Value::integer(3)};
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  const std::vector<sputnik::runtime::Value> items = {
+      sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+      sputnik::runtime::Value::integer(3)};
 
-  assert_sequence_protocol_for(module, amber::runtime::make_list_value(items),
+  assert_sequence_protocol_for(module, sputnik::runtime::make_list_value(items),
                                "Array");
-  assert_sequence_protocol_for(module, amber::runtime::make_tuple_value(items),
+  assert_sequence_protocol_for(module, sputnik::runtime::make_tuple_value(items),
                                "Tuple");
-  assert_sequence_protocol_for(module, amber::runtime::make_set_value(items),
+  assert_sequence_protocol_for(module, sputnik::runtime::make_set_value(items),
                                "Set");
 }
 
 void test_std002_range_eager_methods() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
   assert_sequence_protocol_for(module, make_range_value(module, 1, 3),
                                "Range");
 }
 
 void test_std001_empty_sequence_edges() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
-  const amber::runtime::Value add = make_closure_value(102);
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  const sputnik::runtime::Value add = make_closure_value(102);
 
-  for (const auto &entry : {std::pair<std::string, amber::runtime::Value>{
-                                "Array", amber::runtime::make_list_value({})},
-                            {"Tuple", amber::runtime::make_tuple_value({})},
-                            {"Set", amber::runtime::make_set_value({})}}) {
+  for (const auto &entry : {std::pair<std::string, sputnik::runtime::Value>{
+                                "Array", sputnik::runtime::make_list_value({})},
+                            {"Tuple", sputnik::runtime::make_tuple_value({})},
+                            {"Set", sputnik::runtime::make_set_value({})}}) {
     const std::string &label = entry.first;
-    const amber::runtime::Value &source = entry.second;
+    const sputnik::runtime::Value &source = entry.second;
 
-    amber::runtime::ExecutionResult result =
-        amber::runtime::execute_code(module, 7, {source, add});
+    sputnik::runtime::ExecutionResult result =
+        sputnik::runtime::execute_code(module, 7, {source, add});
     expect_fault(result, "EmptyCollectionError",
                  label + " empty reduce without init");
 
-    result = amber::runtime::execute_code(module, 12, {source});
+    result = sputnik::runtime::execute_code(module, 12, {source});
     expect_ok(result, label + " empty first");
     expect(result.value.is_null(), label + " empty first should be null");
 
-    result = amber::runtime::execute_code(module, 13, {source});
+    result = sputnik::runtime::execute_code(module, 13, {source});
     expect_ok(result, label + " empty count");
     expect_integer(result.value, 0, label + " empty count");
 
-    result = amber::runtime::execute_code(module, 17, {source});
+    result = sputnik::runtime::execute_code(module, 17, {source});
     expect_ok(result, label + " empty any?");
     expect_bool(result.value, false, label + " empty any?");
 
-    result = amber::runtime::execute_code(module, 18, {source});
+    result = sputnik::runtime::execute_code(module, 18, {source});
     expect_ok(result, label + " empty all?");
     expect_bool(result.value, true, label + " empty all?");
 
-    result = amber::runtime::execute_code(module, 19, {source});
+    result = sputnik::runtime::execute_code(module, 19, {source});
     expect_ok(result, label + " empty none?");
     expect_bool(result.value, true, label + " empty none?");
   }
 }
 
 void test_std002_empty_range_edges() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
-  const amber::runtime::Value add = make_closure_value(102);
-  const amber::runtime::Value empty = make_range_value(module, 3, 1);
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  const sputnik::runtime::Value add = make_closure_value(102);
+  const sputnik::runtime::Value empty = make_range_value(module, 3, 1);
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 7, {empty, add});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 7, {empty, add});
   expect_fault(result, "EmptyCollectionError",
                "Range empty reduce without init");
 
-  result = amber::runtime::execute_code(module, 12, {empty});
+  result = sputnik::runtime::execute_code(module, 12, {empty});
   expect_ok(result, "Range empty first");
   expect(result.value.is_null(), "Range empty first should be null");
 
-  result = amber::runtime::execute_code(module, 13, {empty});
+  result = sputnik::runtime::execute_code(module, 13, {empty});
   expect_ok(result, "Range empty count");
   expect_integer(result.value, 0, "Range empty count");
 
-  result = amber::runtime::execute_code(module, 17, {empty});
+  result = sputnik::runtime::execute_code(module, 17, {empty});
   expect_ok(result, "Range empty any?");
   expect_bool(result.value, false, "Range empty any?");
 
-  result = amber::runtime::execute_code(module, 18, {empty});
+  result = sputnik::runtime::execute_code(module, 18, {empty});
   expect_ok(result, "Range empty all?");
   expect_bool(result.value, true, "Range empty all?");
 
-  result = amber::runtime::execute_code(module, 19, {empty});
+  result = sputnik::runtime::execute_code(module, 19, {empty});
   expect_ok(result, "Range empty none?");
   expect_bool(result.value, true, "Range empty none?");
 }
 
 void test_std002_range_exclusive_and_open_end_edges() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
-  const amber::runtime::Value inclusive = make_range_value(module, 1, 3);
-  const amber::runtime::Value exclusive = make_range_value(module, 1, 3, false);
-  const amber::runtime::Value open_end =
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  const sputnik::runtime::Value inclusive = make_range_value(module, 1, 3);
+  const sputnik::runtime::Value exclusive = make_range_value(module, 1, 3, false);
+  const sputnik::runtime::Value open_end =
       make_range_value(module, 4, 0, true);
   open_end.as_instance_object()->ivars["finish"] =
-      amber::runtime::Value::null();
+      sputnik::runtime::Value::null();
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 20,
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 20,
                                    {inclusive,
-                                    amber::runtime::Value::integer(3)});
+                                    sputnik::runtime::Value::integer(3)});
   expect_ok(result, "Range inclusive contains?");
   expect_bool(result.value, true, "Range inclusive contains?");
 
-  result = amber::runtime::execute_code(
-      module, 20, {exclusive, amber::runtime::Value::integer(3)});
+  result = sputnik::runtime::execute_code(
+      module, 20, {exclusive, sputnik::runtime::Value::integer(3)});
   expect_ok(result, "Range exclusive contains?");
   expect_bool(result.value, false, "Range exclusive contains?");
 
-  result = amber::runtime::execute_code(module, 21,
+  result = sputnik::runtime::execute_code(module, 21,
                                         {exclusive,
-                                         amber::runtime::Value::integer(3)});
+                                         sputnik::runtime::Value::integer(3)});
   expect_ok(result, "Range exclusive === finish");
   expect_bool(result.value, false, "Range exclusive === finish");
 
-  result = amber::runtime::execute_code(module, 14, {exclusive});
+  result = sputnik::runtime::execute_code(module, 14, {exclusive});
   expect_ok(result, "Range exclusive to_a");
   expect_integer_list(result.value, {1, 2}, "Range exclusive to_a");
 
-  result = amber::runtime::execute_code(module, 41, {exclusive});
+  result = sputnik::runtime::execute_code(module, 41, {exclusive});
   expect_ok(result, "Range exclusive to_array");
   expect_integer_list(result.value, {1, 2}, "Range exclusive to_array");
 
-  const amber::runtime::Value stepped =
+  const sputnik::runtime::Value stepped =
       make_range_value(module, 1, 5, true, 2);
-  result = amber::runtime::execute_code(module, 41, {stepped});
+  result = sputnik::runtime::execute_code(module, 41, {stepped});
   expect_ok(result, "Range stepped to_array");
   expect_integer_list(result.value, {1, 3, 5}, "Range stepped to_array");
 
-  const amber::runtime::Value descending =
+  const sputnik::runtime::Value descending =
       make_range_value(module, 5, 1, true, -2);
-  result = amber::runtime::execute_code(module, 41, {descending});
+  result = sputnik::runtime::execute_code(module, 41, {descending});
   expect_ok(result, "Range descending to_array");
   expect_integer_list(result.value, {5, 3, 1}, "Range descending to_array");
 
-  result = amber::runtime::execute_code(
-      module, 20, {open_end, amber::runtime::Value::integer(100)});
+  result = sputnik::runtime::execute_code(
+      module, 20, {open_end, sputnik::runtime::Value::integer(100)});
   expect_ok(result, "Range open-end contains?");
   expect_bool(result.value, true, "Range open-end contains?");
 
-  result = amber::runtime::execute_code(
-      module, 30, {open_end, amber::runtime::Value::integer(100)});
+  result = sputnik::runtime::execute_code(
+      module, 30, {open_end, sputnik::runtime::Value::integer(100)});
   expect_ok(result, "Range open-end include?");
   expect_bool(result.value, true, "Range open-end include?");
 
-  result = amber::runtime::execute_code(module, 12, {open_end});
+  result = sputnik::runtime::execute_code(module, 12, {open_end});
   expect_ok(result, "Range open-end first");
   expect_integer(result.value, 4, "Range open-end first");
 
-  result = amber::runtime::execute_code(
-      module, 23, {open_end, amber::runtime::Value::integer(3)});
+  result = sputnik::runtime::execute_code(
+      module, 23, {open_end, sputnik::runtime::Value::integer(3)});
   expect_ok(result, "Range open-end first(count)");
   expect_integer_list(result.value, {4, 5, 6},
                       "Range open-end first(count)");
 
-  result = amber::runtime::execute_code(
-      module, 24, {open_end, amber::runtime::Value::integer(2)});
+  result = sputnik::runtime::execute_code(
+      module, 24, {open_end, sputnik::runtime::Value::integer(2)});
   expect_ok(result, "Range open-end []");
   expect_integer(result.value, 6, "Range open-end []");
 
-  result = amber::runtime::execute_code(module, 14, {open_end});
+  result = sputnik::runtime::execute_code(module, 14, {open_end});
   expect_fault(result, "InfiniteCollectionError",
                "Range open-end eager to_a");
 
-  const amber::runtime::Value open_begin = make_range_value(module, 0, 5);
+  const sputnik::runtime::Value open_begin = make_range_value(module, 0, 5);
   open_begin.as_instance_object()->ivars["start"] =
-      amber::runtime::Value::null();
-  result = amber::runtime::execute_code(
-      module, 20, {open_begin, amber::runtime::Value::integer(-100)});
+      sputnik::runtime::Value::null();
+  result = sputnik::runtime::execute_code(
+      module, 20, {open_begin, sputnik::runtime::Value::integer(-100)});
   expect_ok(result, "Range open-begin contains?");
   expect_bool(result.value, true, "Range open-begin contains?");
 }
 
 void test_std002_int_times() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
-  const amber::runtime::Value inc = make_closure_value(100);
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  const sputnik::runtime::Value inc = make_closure_value(100);
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 42,
-                                   {amber::runtime::Value::integer(5)});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 42,
+                                   {sputnik::runtime::Value::integer(5)});
   expect_ok(result, "Int#times enumerable");
   expect_integer_list(result.value, {0, 1, 2, 3, 4},
                       "Int#times enumerable");
 
-  result = amber::runtime::execute_code(module, 42,
-                                        {amber::runtime::Value::integer(0)});
+  result = sputnik::runtime::execute_code(module, 42,
+                                        {sputnik::runtime::Value::integer(0)});
   expect_ok(result, "zero Int#times enumerable");
   expect_integer_list(result.value, {}, "zero Int#times enumerable");
 
-  result = amber::runtime::execute_code(module, 42,
-                                        {amber::runtime::Value::integer(-3)});
+  result = sputnik::runtime::execute_code(module, 42,
+                                        {sputnik::runtime::Value::integer(-3)});
   expect_ok(result, "negative Int#times enumerable");
   expect_integer_list(result.value, {}, "negative Int#times enumerable");
 
-  result = amber::runtime::execute_code(module, 43,
-                                        {amber::runtime::Value::integer(3),
+  result = sputnik::runtime::execute_code(module, 43,
+                                        {sputnik::runtime::Value::integer(3),
                                          inc});
   expect_ok(result, "direct block Int#times");
   expect(result.value.is_null(), "direct block Int#times returns null");
 
-  const amber::runtime::Value times =
-      amber::runtime::make_list_value({amber::runtime::Value::integer(0),
-                                       amber::runtime::Value::integer(1),
-                                       amber::runtime::Value::integer(2)});
-  result = amber::runtime::execute_code(module, 2, {times, inc});
+  const sputnik::runtime::Value times =
+      sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(0),
+                                       sputnik::runtime::Value::integer(1),
+                                       sputnik::runtime::Value::integer(2)});
+  result = sputnik::runtime::execute_code(module, 2, {times, inc});
   expect_ok(result, "times map equivalent");
   expect_integer_list(result.value, {1, 2, 3}, "times map equivalent");
 }
 
 void test_std003_lazy_pipeline_and_materialization() {
-  const amber::bytecode::BcModule module = make_sequence_protocol_module();
-  const amber::runtime::Value source = amber::runtime::make_list_value(
-      {amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
-       amber::runtime::Value::integer(3)});
-  const amber::runtime::Value inc = make_closure_value(100);
-  const amber::runtime::Value gt_one = make_closure_value(101);
-  const amber::runtime::Value pairify = make_closure_value(103);
-  const amber::runtime::Value raise_after_one = make_closure_value(107);
+  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  const sputnik::runtime::Value source = sputnik::runtime::make_list_value(
+      {sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+       sputnik::runtime::Value::integer(3)});
+  const sputnik::runtime::Value inc = make_closure_value(100);
+  const sputnik::runtime::Value gt_one = make_closure_value(101);
+  const sputnik::runtime::Value pairify = make_closure_value(103);
+  const sputnik::runtime::Value raise_after_one = make_closure_value(107);
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 25, {source, raise_after_one});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 25, {source, raise_after_one});
   expect_ok(result, "LazySeq pipeline construction");
   expect(result.value.is_instance_object(),
          "LazySeq pipeline construction should return wrapper");
 
-  result = amber::runtime::execute_code(module, 26, {source, raise_after_one});
+  result = sputnik::runtime::execute_code(module, 26, {source, raise_after_one});
   expect_ok(result, "LazySeq first short-circuit");
   expect_integer(result.value, 2, "LazySeq first short-circuit");
 
-  result = amber::runtime::execute_code(module, 15, {source, raise_after_one});
+  result = sputnik::runtime::execute_code(module, 15, {source, raise_after_one});
   expect_fault(result, "Boom", "LazySeq to_a materialization");
 
-  result = amber::runtime::execute_code(module, 28, {source, inc, gt_one});
+  result = sputnik::runtime::execute_code(module, 28, {source, inc, gt_one});
   expect_ok(result, "LazySeq map/select/to_a pipeline");
   expect_integer_list(result.value, {2, 3, 4},
                       "LazySeq map/select/to_a pipeline");
 
-  result = amber::runtime::execute_code(module, 29, {source, pairify});
+  result = sputnik::runtime::execute_code(module, 29, {source, pairify});
   expect_ok(result, "LazySeq flat_map/to_a pipeline");
   expect_integer_list(result.value, {1, 2, 2, 3, 3, 4},
                       "LazySeq flat_map/to_a pipeline");
 
-  result = amber::runtime::execute_code(module, 45,
+  result = sputnik::runtime::execute_code(module, 45,
                                         {source, make_closure_value(108)});
   expect_ok(result, "LazySeq filter_map/to_a pipeline");
   expect_integer_list(result.value, {3, 4},
                       "LazySeq filter_map/to_a pipeline");
 
-  amber::runtime::Value open_end = make_range_value(module, 4, 0, true);
+  sputnik::runtime::Value open_end = make_range_value(module, 4, 0, true);
   open_end.as_instance_object()->ivars["finish"] =
-      amber::runtime::Value::null();
-  result = amber::runtime::execute_code(module, 27, {open_end, inc});
+      sputnik::runtime::Value::null();
+  result = sputnik::runtime::execute_code(module, 27, {open_end, inc});
   expect_ok(result, "LazySeq open-ended Range first(count)");
   expect_integer_list(result.value, {5, 6, 7},
                       "LazySeq open-ended Range first(count)");
 
-  result = amber::runtime::execute_code(module, 15, {open_end, inc});
+  result = sputnik::runtime::execute_code(module, 15, {open_end, inc});
   expect_fault(result, "InfiniteCollectionError",
                "LazySeq open-ended to_a");
 }
 
-amber::bytecode::BcModule make_std005_collection_ops_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule make_std005_collection_ops_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   for (const std::string &symbol :
@@ -1227,240 +1227,240 @@ amber::bytecode::BcModule make_std005_collection_ops_module() {
 }
 
 void test_std005_collection_operations() {
-  const amber::bytecode::BcModule module = make_std005_collection_ops_module();
+  const sputnik::bytecode::BcModule module = make_std005_collection_ops_module();
   auto integer = [](std::int64_t value) {
-    return amber::runtime::Value::integer(value);
+    return sputnik::runtime::Value::integer(value);
   };
 
-  const amber::runtime::Value left =
-      amber::runtime::make_list_value({integer(1), integer(2), integer(3),
+  const sputnik::runtime::Value left =
+      sputnik::runtime::make_list_value({integer(1), integer(2), integer(3),
                                        integer(2)});
-  const amber::runtime::Value right =
-      amber::runtime::make_list_value({integer(3), integer(4), integer(2)});
+  const sputnik::runtime::Value right =
+      sputnik::runtime::make_list_value({integer(3), integer(4), integer(2)});
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 1, {left, right});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 1, {left, right});
   expect_ok(result, "Array#union");
   expect_integer_list(result.value, {1, 2, 3, 4}, "Array#union");
 
-  result = amber::runtime::execute_code(module, 2, {left, right});
+  result = sputnik::runtime::execute_code(module, 2, {left, right});
   expect_ok(result, "Array#intersection");
   expect_integer_list(result.value, {2, 3}, "Array#intersection");
 
-  result = amber::runtime::execute_code(module, 3, {left, right});
+  result = sputnik::runtime::execute_code(module, 3, {left, right});
   expect_ok(result, "Array#difference");
   expect_integer_list(result.value, {1}, "Array#difference");
 
-  result = amber::runtime::execute_code(module, 4, {left, right});
+  result = sputnik::runtime::execute_code(module, 4, {left, right});
   expect_ok(result, "Array#left_difference");
   expect_integer_list(result.value, {1}, "Array#left_difference");
 
-  result = amber::runtime::execute_code(module, 5, {left, right});
+  result = sputnik::runtime::execute_code(module, 5, {left, right});
   expect_ok(result, "Array#symmetric_difference");
   expect_integer_list(result.value, {1, 4}, "Array#symmetric_difference");
 
-  const amber::runtime::Value small =
-      amber::runtime::make_list_value({integer(1), integer(2)});
-  result = amber::runtime::execute_code(module, 6, {small, left});
+  const sputnik::runtime::Value small =
+      sputnik::runtime::make_list_value({integer(1), integer(2)});
+  result = sputnik::runtime::execute_code(module, 6, {small, left});
   expect_ok(result, "Array#subset?");
   expect_bool(result.value, true, "Array#subset?");
 
-  result = amber::runtime::execute_code(module, 7, {small, left});
+  result = sputnik::runtime::execute_code(module, 7, {small, left});
   expect_ok(result, "Array#proper_subset?");
   expect_bool(result.value, true, "Array#proper_subset?");
 
-  result = amber::runtime::execute_code(module, 8, {left, small});
+  result = sputnik::runtime::execute_code(module, 8, {left, small});
   expect_ok(result, "Array#superset?");
   expect_bool(result.value, true, "Array#superset?");
 
-  result = amber::runtime::execute_code(module, 9, {left, small});
+  result = sputnik::runtime::execute_code(module, 9, {left, small});
   expect_ok(result, "Array#proper_superset?");
   expect_bool(result.value, true, "Array#proper_superset?");
 
-  const amber::runtime::Value far =
-      amber::runtime::make_list_value({integer(8), integer(9)});
-  result = amber::runtime::execute_code(module, 10, {left, far});
+  const sputnik::runtime::Value far =
+      sputnik::runtime::make_list_value({integer(8), integer(9)});
+  result = sputnik::runtime::execute_code(module, 10, {left, far});
   expect_ok(result, "Array#disjoint?");
   expect_bool(result.value, true, "Array#disjoint?");
 
-  result = amber::runtime::execute_code(module, 11, {left, integer(3)});
+  result = sputnik::runtime::execute_code(module, 11, {left, integer(3)});
   expect_ok(result, "Array#contains?");
   expect_bool(result.value, true, "Array#contains?");
 
-  result = amber::runtime::execute_code(module, 12, {left, integer(99)});
+  result = sputnik::runtime::execute_code(module, 12, {left, integer(99)});
   expect_ok(result, "Array#include?");
   expect_bool(result.value, false, "Array#include?");
 
-  const amber::runtime::Value set_left =
-      amber::runtime::make_set_value({integer(2), integer(3)});
-  const amber::runtime::Value set_right =
-      amber::runtime::make_set_value({integer(3), integer(4)});
-  result = amber::runtime::execute_code(module, 1, {set_left, set_right});
+  const sputnik::runtime::Value set_left =
+      sputnik::runtime::make_set_value({integer(2), integer(3)});
+  const sputnik::runtime::Value set_right =
+      sputnik::runtime::make_set_value({integer(3), integer(4)});
+  result = sputnik::runtime::execute_code(module, 1, {set_left, set_right});
   expect_ok(result, "Set#union");
   expect_set_integer_items(result.value, {2, 3, 4}, "Set#union");
 
-  const amber::runtime::Value ordered =
-      amber::runtime::make_list_value({integer(1), integer(2), integer(3)});
-  result = amber::runtime::execute_code(module, 13, {ordered, integer(2)});
+  const sputnik::runtime::Value ordered =
+      sputnik::runtime::make_list_value({integer(1), integer(2), integer(3)});
+  result = sputnik::runtime::execute_code(module, 13, {ordered, integer(2)});
   expect_ok(result, "Array#permutation");
   expect_nested_integer_lists(result.value,
                               {{1, 2}, {1, 3}, {2, 1}, {2, 3}, {3, 1},
                                {3, 2}},
                               "Array#permutation");
 
-  result = amber::runtime::execute_code(module, 14, {ordered, integer(2)});
+  result = sputnik::runtime::execute_code(module, 14, {ordered, integer(2)});
   expect_ok(result, "Array#combination");
   expect_nested_integer_lists(result.value, {{1, 2}, {1, 3}, {2, 3}},
                               "Array#combination");
 
-  const amber::runtime::Value left_map =
+  const sputnik::runtime::Value left_map =
       make_symbol_map(module, {{"alpha", integer(1)}, {"beta", integer(2)}});
-  const amber::runtime::Value right_map =
+  const sputnik::runtime::Value right_map =
       make_symbol_map(module, {{"beta", integer(20)}, {"gamma", integer(3)}});
 
-  result = amber::runtime::execute_code(module, 15, {left_map, right_map});
+  result = sputnik::runtime::execute_code(module, 15, {left_map, right_map});
   expect_ok(result, "Map#merge");
   expect_symbol_map_entries(module, result.value,
                             {{"alpha", 1}, {"beta", 20}, {"gamma", 3}},
                             "Map#merge");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 16, {left_map, right_map, make_closure_value(100)});
   expect_ok(result, "Map#merge block");
   expect_symbol_map_entries(module, result.value,
                             {{"alpha", 1}, {"beta", 22}, {"gamma", 3}},
                             "Map#merge block");
 
-  result = amber::runtime::execute_code(module, 17, {left, right});
+  result = sputnik::runtime::execute_code(module, 17, {left, right});
   expect_ok(result, "Array#&");
   expect_integer_list(result.value, {2, 3}, "Array#&");
 
-  result = amber::runtime::execute_code(module, 18, {left, right});
+  result = sputnik::runtime::execute_code(module, 18, {left, right});
   expect_ok(result, "Array#|");
   expect_integer_list(result.value, {1, 2, 3, 4}, "Array#|");
 
-  result = amber::runtime::execute_code(module, 19, {left, right});
+  result = sputnik::runtime::execute_code(module, 19, {left, right});
   expect_ok(result, "Array#+");
   expect_integer_list(result.value, {1, 2, 3, 2, 3, 4, 2}, "Array#+");
 
-  result = amber::runtime::execute_code(module, 20, {left, right});
+  result = sputnik::runtime::execute_code(module, 20, {left, right});
   expect_ok(result, "Array#-");
   expect_integer_list(result.value, {1}, "Array#-");
 
-  result = amber::runtime::execute_code(module, 21, {left, right});
+  result = sputnik::runtime::execute_code(module, 21, {left, right});
   expect_ok(result, "Array#^");
   expect_integer_list(result.value, {1, 4}, "Array#^");
 
-  result = amber::runtime::execute_code(module, 22, {small, left});
+  result = sputnik::runtime::execute_code(module, 22, {small, left});
   expect_ok(result, "Array#<=");
   expect_bool(result.value, true, "Array#<=");
 
-  result = amber::runtime::execute_code(module, 23, {small, left});
+  result = sputnik::runtime::execute_code(module, 23, {small, left});
   expect_ok(result, "Array#<");
   expect_bool(result.value, true, "Array#<");
 
-  result = amber::runtime::execute_code(module, 24, {left, small});
+  result = sputnik::runtime::execute_code(module, 24, {left, small});
   expect_ok(result, "Array#>=");
   expect_bool(result.value, true, "Array#>=");
 
-  result = amber::runtime::execute_code(module, 25, {left, small});
+  result = sputnik::runtime::execute_code(module, 25, {left, small});
   expect_ok(result, "Array#>");
   expect_bool(result.value, true, "Array#>");
 
-  result = amber::runtime::execute_code(module, 26, {small, far});
+  result = sputnik::runtime::execute_code(module, 26, {small, far});
   expect_ok(result, "Array#concat");
   expect_integer_list(result.value, {1, 2, 8, 9}, "Array#concat");
 
-  result = amber::runtime::execute_code(module, 27, {small, integer(3)});
+  result = sputnik::runtime::execute_code(module, 27, {small, integer(3)});
   expect_ok(result, "Array#*");
   expect_integer_list(result.value, {1, 2, 1, 2, 1, 2}, "Array#*");
 
-  const amber::runtime::Value four_items = amber::runtime::make_list_value(
+  const sputnik::runtime::Value four_items = sputnik::runtime::make_list_value(
       {integer(1), integer(2), integer(3), integer(4)});
-  result = amber::runtime::execute_code(module, 28,
+  result = sputnik::runtime::execute_code(module, 28,
                                         {four_items, make_closure_value(103)});
   expect_ok(result, "Array#take_while");
   expect_integer_list(result.value, {1, 2, 3}, "Array#take_while");
 
-  result = amber::runtime::execute_code(module, 29, {ordered});
+  result = sputnik::runtime::execute_code(module, 29, {ordered});
   expect_ok(result, "Array#reversed");
   expect_integer_list(result.value, {3, 2, 1}, "Array#reversed");
 
-  const amber::runtime::Value unsorted =
-      amber::runtime::make_list_value({integer(3), integer(1), integer(2)});
-  result = amber::runtime::execute_code(module, 30, {unsorted});
+  const sputnik::runtime::Value unsorted =
+      sputnik::runtime::make_list_value({integer(3), integer(1), integer(2)});
+  result = sputnik::runtime::execute_code(module, 30, {unsorted});
   expect_ok(result, "Array#sorted");
   expect_integer_list(result.value, {1, 2, 3}, "Array#sorted");
 
   // RFC §7.2: the block is an arity-1 key extractor (key = 10 - x), so
   // ascending key order produces descending value order.
-  result = amber::runtime::execute_code(module, 31,
+  result = sputnik::runtime::execute_code(module, 31,
                                         {unsorted, make_closure_value(104)});
   expect_ok(result, "Array#sorted key block");
   expect_integer_list(result.value, {3, 2, 1}, "Array#sorted key block");
 
   // reverse: keyword flips the natural ascending order.
-  result = amber::runtime::execute_code(module, 40, {unsorted});
+  result = sputnik::runtime::execute_code(module, 40, {unsorted});
   expect_ok(result, "Array#sorted reverse:");
   expect_integer_list(result.value, {3, 2, 1}, "Array#sorted reverse:");
 
   // using: is the explicit comparator escape hatch (a value, not a block).
-  result = amber::runtime::execute_code(module, 41,
+  result = sputnik::runtime::execute_code(module, 41,
                                         {unsorted, make_closure_value(101)});
   expect_ok(result, "Array#sorted using:");
   expect_integer_list(result.value, {3, 2, 1}, "Array#sorted using:");
 
-  const amber::runtime::Value duplicates = amber::runtime::make_list_value(
+  const sputnik::runtime::Value duplicates = sputnik::runtime::make_list_value(
       {integer(1), integer(2), integer(1), integer(3), integer(2)});
-  result = amber::runtime::execute_code(module, 32, {duplicates});
+  result = sputnik::runtime::execute_code(module, 32, {duplicates});
   expect_ok(result, "Array#uniq");
   expect_integer_list(result.value, {1, 2, 3}, "Array#uniq");
 
-  result = amber::runtime::execute_code(module, 33,
+  result = sputnik::runtime::execute_code(module, 33,
                                         {four_items, make_closure_value(102)});
   expect_ok(result, "Array#uniq block");
   expect_integer_list(result.value, {1, 3}, "Array#uniq block");
 
-  result = amber::runtime::execute_code(module, 34, {ordered});
+  result = sputnik::runtime::execute_code(module, 34, {ordered});
   expect_ok(result, "Array#each_pair");
   expect_nested_integer_lists(result.value, {{1, 2}, {2, 3}},
                               "Array#each_pair");
 
-  result = amber::runtime::execute_code(module, 35, {four_items, integer(3)});
+  result = sputnik::runtime::execute_code(module, 35, {four_items, integer(3)});
   expect_ok(result, "Array#each_cons");
   expect_nested_integer_lists(result.value, {{1, 2, 3}, {2, 3, 4}},
                               "Array#each_cons");
 
-  result = amber::runtime::execute_code(module, 36, {four_items, integer(2)});
+  result = sputnik::runtime::execute_code(module, 36, {four_items, integer(2)});
   expect_ok(result, "Array#each step");
   expect_nested_integer_lists(result.value, {{1, 2}, {3, 4}},
                               "Array#each step");
 
-  result = amber::runtime::execute_code(module, 39, {four_items, integer(2)});
+  result = sputnik::runtime::execute_code(module, 39, {four_items, integer(2)});
   expect_ok(result, "Array#each_slice");
   expect_nested_integer_lists(result.value, {{1, 2}, {3, 4}},
                               "Array#each_slice");
 
-  result = amber::runtime::execute_code(module, 37, {left_map, right_map});
+  result = sputnik::runtime::execute_code(module, 37, {left_map, right_map});
   expect_ok(result, "Map#|");
   expect_symbol_map_entries(module, result.value,
                             {{"alpha", 1}, {"beta", 20}, {"gamma", 3}},
                             "Map#|");
 
-  result = amber::runtime::execute_code(module, 38, {left_map, right_map});
+  result = sputnik::runtime::execute_code(module, 38, {left_map, right_map});
   expect_ok(result, "Map#+");
   expect_symbol_map_entries(module, result.value,
                             {{"alpha", 1}, {"beta", 20}, {"gamma", 3}},
                             "Map#+");
 
-  result = amber::runtime::execute_code(module, 34, {left_map});
+  result = sputnik::runtime::execute_code(module, 34, {left_map});
   expect_ok(result, "Map#each_pair");
   expect_entry_list(module, result.value, {{"alpha", 1}, {"beta", 2}},
                     "Map#each_pair");
 }
 
-amber::bytecode::BcModule make_map_protocol_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule make_map_protocol_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   for (const std::string &symbol :
@@ -1650,353 +1650,353 @@ amber::bytecode::BcModule make_map_protocol_module() {
 }
 
 void test_std001_map_protocol_matrix() {
-  const amber::bytecode::BcModule module = make_map_protocol_module();
-  const amber::runtime::Value map =
-      make_symbol_map(module, {{"alpha", amber::runtime::Value::integer(1)},
-                               {"beta", amber::runtime::Value::integer(2)}});
-  const amber::runtime::Value value_gt_one = make_closure_value(100);
-  const amber::runtime::Value inc_value = make_closure_value(101);
-  const amber::runtime::Value map_value_plus_one = make_closure_value(102);
-  const amber::runtime::Value key_eq_alpha = make_closure_value(103);
-  const amber::runtime::Value key_value_tuple = make_closure_value(104);
-  const amber::runtime::Value transform_rekey = make_closure_value(105);
-  const amber::runtime::Value transform_value_with_key =
+  const sputnik::bytecode::BcModule module = make_map_protocol_module();
+  const sputnik::runtime::Value map =
+      make_symbol_map(module, {{"alpha", sputnik::runtime::Value::integer(1)},
+                               {"beta", sputnik::runtime::Value::integer(2)}});
+  const sputnik::runtime::Value value_gt_one = make_closure_value(100);
+  const sputnik::runtime::Value inc_value = make_closure_value(101);
+  const sputnik::runtime::Value map_value_plus_one = make_closure_value(102);
+  const sputnik::runtime::Value key_eq_alpha = make_closure_value(103);
+  const sputnik::runtime::Value key_value_tuple = make_closure_value(104);
+  const sputnik::runtime::Value transform_rekey = make_closure_value(105);
+  const sputnik::runtime::Value transform_value_with_key =
       make_closure_value(106);
-  const amber::runtime::Value map_filter_map_value = make_closure_value(107);
-  amber::runtime::Value string_key_map =
-      amber::runtime::make_symbol_map_value(
-          std::vector<amber::runtime::MapEntry>{
-              amber::runtime::MapEntry{
-                  amber::runtime::Value::string(
+  const sputnik::runtime::Value map_filter_map_value = make_closure_value(107);
+  sputnik::runtime::Value string_key_map =
+      sputnik::runtime::make_symbol_map_value(
+          std::vector<sputnik::runtime::MapEntry>{
+              sputnik::runtime::MapEntry{
+                  sputnik::runtime::Value::string(
                       string_id_or_die(module, "beta")),
-                  amber::runtime::Value::integer(2)}});
+                  sputnik::runtime::Value::integer(2)}});
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 1, {map});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 1, {map});
   expect_ok(result, "Map#keys");
   expect_symbol_list(module, result.value, {"alpha", "beta"}, "Map#keys");
 
-  result = amber::runtime::execute_code(module, 2, {map});
+  result = sputnik::runtime::execute_code(module, 2, {map});
   expect_ok(result, "Map#values");
   expect_integer_list(result.value, {1, 2}, "Map#values");
 
-  result = amber::runtime::execute_code(module, 3, {map});
+  result = sputnik::runtime::execute_code(module, 3, {map});
   expect_ok(result, "Map#entries");
   expect_entry_list(module, result.value, {{"alpha", 1}, {"beta", 2}},
                     "Map#entries");
 
-  result = amber::runtime::execute_code(module, 4, {map});
+  result = sputnik::runtime::execute_code(module, 4, {map});
   expect_ok(result, "Map#to_a");
   expect_entry_list(module, result.value, {{"alpha", 1}, {"beta", 2}},
                     "Map#to_a");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 10,
-      {map, amber::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
+      {map, sputnik::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
   expect_ok(result, "Map#[] symbol key");
   expect_integer(result.value, 1, "Map#[] symbol key");
 
   // v20.7/v20.8: ordinary maps are name-indifferent, so a Str probe resolves a
   // Symbol-keyed entry with the same text (was a KeyError under exact-key).
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 10,
-      {map, amber::runtime::Value::string(string_id_or_die(module, "beta"))});
+      {map, sputnik::runtime::Value::string(string_id_or_die(module, "beta"))});
   expect_ok(result, "Map#[] Str probe of Symbol key");
   expect_integer(result.value, 2, "Map#[] Str probe of Symbol key");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 10,
       {string_key_map,
-       amber::runtime::Value::string(string_id_or_die(module, "beta"))});
+       sputnik::runtime::Value::string(string_id_or_die(module, "beta"))});
   expect_ok(result, "Map#[] stored string key");
   expect_integer(result.value, 2, "Map#[] stored string key");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 10,
-      {map, amber::runtime::Value::symbol(symbol_id_or_die(module, "missing"))});
+      {map, sputnik::runtime::Value::symbol(symbol_id_or_die(module, "missing"))});
   expect_fault(result, "KeyError", "Map#[] missing key");
 
-  result = amber::runtime::execute_code(module, 5, {map, map_value_plus_one});
+  result = sputnik::runtime::execute_code(module, 5, {map, map_value_plus_one});
   expect_ok(result, "Map#each");
   expect(result.value.is_map() && result.value.as_map() == map.as_map(),
          "Map#each should return receiver");
 
-  result = amber::runtime::execute_code(module, 6, {map, map_value_plus_one});
+  result = sputnik::runtime::execute_code(module, 6, {map, map_value_plus_one});
   expect_ok(result, "Map#map");
   expect_integer_list(result.value, {2, 3}, "Map#map");
 
-  result = amber::runtime::execute_code(module, 6, {map, key_value_tuple});
+  result = sputnik::runtime::execute_code(module, 6, {map, key_value_tuple});
   expect_ok(result, "Map#map key/value args");
   expect_entry_list(module, result.value, {{"alpha", 1}, {"beta", 2}},
                     "Map#map key/value args");
 
   result =
-      amber::runtime::execute_code(module, 25, {map, map_filter_map_value});
+      sputnik::runtime::execute_code(module, 25, {map, map_filter_map_value});
   expect_ok(result, "Map#filter_map");
   expect_integer_list(result.value, {3}, "Map#filter_map");
 
-  result = amber::runtime::execute_code(module, 7, {map, value_gt_one});
+  result = sputnik::runtime::execute_code(module, 7, {map, value_gt_one});
   expect_ok(result, "Map#select");
   expect_symbol_map_entries(module, result.value, {{"beta", 2}},
                             "Map#select");
 
-  result = amber::runtime::execute_code(module, 7, {map, key_eq_alpha});
+  result = sputnik::runtime::execute_code(module, 7, {map, key_eq_alpha});
   expect_ok(result, "Map#select key/value args");
   expect_symbol_map_entries(module, result.value, {{"alpha", 1}},
                             "Map#select key/value args");
 
-  result = amber::runtime::execute_code(module, 8, {map, value_gt_one});
+  result = sputnik::runtime::execute_code(module, 8, {map, value_gt_one});
   expect_ok(result, "Map#reject");
   expect_symbol_map_entries(module, result.value, {{"alpha", 1}},
                             "Map#reject");
 
-  result = amber::runtime::execute_code(module, 8, {map, key_eq_alpha});
+  result = sputnik::runtime::execute_code(module, 8, {map, key_eq_alpha});
   expect_ok(result, "Map#reject key/value args");
   expect_symbol_map_entries(module, result.value, {{"beta", 2}},
                             "Map#reject key/value args");
 
-  result = amber::runtime::execute_code(module, 9, {map, inc_value});
+  result = sputnik::runtime::execute_code(module, 9, {map, inc_value});
   expect_ok(result, "Map#transform_values");
   expect_symbol_map_entries(module, result.value, {{"alpha", 2}, {"beta", 3}},
                             "Map#transform_values");
 
-  result = amber::runtime::execute_code(module, 9,
+  result = sputnik::runtime::execute_code(module, 9,
                                         {map, transform_value_with_key});
   expect_ok(result, "Map#transform_values key-aware");
   expect_symbol_map_entries(module, result.value, {{"alpha", 2}, {"beta", 2}},
                             "Map#transform_values key-aware");
 
-  result = amber::runtime::execute_code(module, 11, {map, transform_rekey});
+  result = sputnik::runtime::execute_code(module, 11, {map, transform_rekey});
   expect_ok(result, "Map#transform");
   expect_symbol_map_entries(module, result.value, {{"beta", 2}, {"gamma", 3}},
                             "Map#transform");
 
-  result = amber::runtime::execute_code(module, 14, {map});
+  result = sputnik::runtime::execute_code(module, 14, {map});
   expect_ok(result, "Map#count");
   expect_integer(result.value, 2, "Map#count");
 
-  result = amber::runtime::execute_code(module, 15, {map});
+  result = sputnik::runtime::execute_code(module, 15, {map});
   expect_ok(result, "Map#length");
   expect_integer(result.value, 2, "Map#length");
 
-  result = amber::runtime::execute_code(module, 16, {map});
+  result = sputnik::runtime::execute_code(module, 16, {map});
   expect_ok(result, "Map#size");
   expect_integer(result.value, 2, "Map#size");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 17,
-      {map, amber::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
+      {map, sputnik::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
   expect_ok(result, "Map#key?");
   expect_bool(result.value, true, "Map#key?");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 18,
-      {map, amber::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
+      {map, sputnik::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
   expect_ok(result, "Map#has_key?");
   expect_bool(result.value, true, "Map#has_key?");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       module, 19,
-      {map, amber::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
+      {map, sputnik::runtime::Value::symbol(symbol_id_or_die(module, "alpha"))});
   expect_ok(result, "Map#member?");
   expect_bool(result.value, true, "Map#member?");
 
-  result = amber::runtime::execute_code(
-      module, 20, {map, amber::runtime::Value::integer(2)});
+  result = sputnik::runtime::execute_code(
+      module, 20, {map, sputnik::runtime::Value::integer(2)});
   expect_ok(result, "Map#value?");
   expect_bool(result.value, true, "Map#value?");
 
-  result = amber::runtime::execute_code(
-      module, 21, {map, amber::runtime::Value::integer(2)});
+  result = sputnik::runtime::execute_code(
+      module, 21, {map, sputnik::runtime::Value::integer(2)});
   expect_ok(result, "Map#has_value?");
   expect_bool(result.value, true, "Map#has_value?");
 
-  result = amber::runtime::execute_code(module, 22, {map, map_value_plus_one});
+  result = sputnik::runtime::execute_code(module, 22, {map, map_value_plus_one});
   expect_ok(result, "Map#collect alias");
   expect_integer_list(result.value, {2, 3}, "Map#collect alias");
 
-  result = amber::runtime::execute_code(module, 23, {map, value_gt_one});
+  result = sputnik::runtime::execute_code(module, 23, {map, value_gt_one});
   expect_ok(result, "Map#filter alias");
   expect_symbol_map_entries(module, result.value, {{"beta", 2}},
                             "Map#filter alias");
 
-  result = amber::runtime::execute_code(module, 24, {map, value_gt_one});
+  result = sputnik::runtime::execute_code(module, 24, {map, value_gt_one});
   expect_ok(result, "Map#find_all alias");
   expect_symbol_map_entries(module, result.value, {{"beta", 2}},
                             "Map#find_all alias");
 }
 
 void test_std001_empty_map_edges() {
-  const amber::bytecode::BcModule module = make_map_protocol_module();
-  const amber::runtime::Value empty = amber::runtime::make_symbol_map_value({});
-  const amber::runtime::Value value_gt_one = make_closure_value(100);
-  const amber::runtime::Value inc_value = make_closure_value(101);
-  const amber::runtime::Value map_value_plus_one = make_closure_value(102);
-  const amber::runtime::Value transform_rekey = make_closure_value(105);
-  const amber::runtime::Value map_filter_map_value = make_closure_value(107);
+  const sputnik::bytecode::BcModule module = make_map_protocol_module();
+  const sputnik::runtime::Value empty = sputnik::runtime::make_symbol_map_value({});
+  const sputnik::runtime::Value value_gt_one = make_closure_value(100);
+  const sputnik::runtime::Value inc_value = make_closure_value(101);
+  const sputnik::runtime::Value map_value_plus_one = make_closure_value(102);
+  const sputnik::runtime::Value transform_rekey = make_closure_value(105);
+  const sputnik::runtime::Value map_filter_map_value = make_closure_value(107);
 
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, 1, {empty});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, 1, {empty});
   expect_ok(result, "empty Map#keys");
   expect_integer_list(result.value, {}, "empty Map#keys");
 
-  result = amber::runtime::execute_code(module, 2, {empty});
+  result = sputnik::runtime::execute_code(module, 2, {empty});
   expect_ok(result, "empty Map#values");
   expect_integer_list(result.value, {}, "empty Map#values");
 
-  result = amber::runtime::execute_code(module, 3, {empty});
+  result = sputnik::runtime::execute_code(module, 3, {empty});
   expect_ok(result, "empty Map#entries");
   expect_integer_list(result.value, {}, "empty Map#entries");
 
-  result = amber::runtime::execute_code(module, 14, {empty});
+  result = sputnik::runtime::execute_code(module, 14, {empty});
   expect_ok(result, "empty Map#count");
   expect_integer(result.value, 0, "empty Map#count");
 
-  result = amber::runtime::execute_code(module, 15, {empty});
+  result = sputnik::runtime::execute_code(module, 15, {empty});
   expect_ok(result, "empty Map#length");
   expect_integer(result.value, 0, "empty Map#length");
 
-  result = amber::runtime::execute_code(module, 16, {empty});
+  result = sputnik::runtime::execute_code(module, 16, {empty});
   expect_ok(result, "empty Map#size");
   expect_integer(result.value, 0, "empty Map#size");
 
-  result = amber::runtime::execute_code(module, 5, {empty, map_value_plus_one});
+  result = sputnik::runtime::execute_code(module, 5, {empty, map_value_plus_one});
   expect_ok(result, "empty Map#each");
   expect(result.value.is_map() && result.value.as_map() == empty.as_map(),
          "empty Map#each should return receiver");
 
-  result = amber::runtime::execute_code(module, 6, {empty, map_value_plus_one});
+  result = sputnik::runtime::execute_code(module, 6, {empty, map_value_plus_one});
   expect_ok(result, "empty Map#map");
   expect_integer_list(result.value, {}, "empty Map#map");
 
   result =
-      amber::runtime::execute_code(module, 25, {empty, map_filter_map_value});
+      sputnik::runtime::execute_code(module, 25, {empty, map_filter_map_value});
   expect_ok(result, "empty Map#filter_map");
   expect_integer_list(result.value, {}, "empty Map#filter_map");
 
-  result = amber::runtime::execute_code(module, 7, {empty, value_gt_one});
+  result = sputnik::runtime::execute_code(module, 7, {empty, value_gt_one});
   expect_ok(result, "empty Map#select");
   expect(result.value.is_map() && result.value.as_map()->entries.empty(),
          "empty Map#select should return empty map");
 
-  result = amber::runtime::execute_code(module, 8, {empty, value_gt_one});
+  result = sputnik::runtime::execute_code(module, 8, {empty, value_gt_one});
   expect_ok(result, "empty Map#reject");
   expect(result.value.is_map() && result.value.as_map()->entries.empty(),
          "empty Map#reject should return empty map");
 
-  result = amber::runtime::execute_code(module, 9, {empty, inc_value});
+  result = sputnik::runtime::execute_code(module, 9, {empty, inc_value});
   expect_ok(result, "empty Map#transform_values");
   expect(result.value.is_map() && result.value.as_map()->entries.empty(),
          "empty Map#transform_values should return empty map");
 
-  result = amber::runtime::execute_code(module, 11, {empty, transform_rekey});
+  result = sputnik::runtime::execute_code(module, 11, {empty, transform_rekey});
   expect_ok(result, "empty Map#transform");
   expect(result.value.is_map() && result.value.as_map()->entries.empty(),
          "empty Map#transform should return empty map");
 }
 
 void test_std006_collection_error_edges() {
-  const amber::bytecode::BcModule sequence_module =
+  const sputnik::bytecode::BcModule sequence_module =
       make_sequence_protocol_module();
   auto integer = [](std::int64_t value) {
-    return amber::runtime::Value::integer(value);
+    return sputnik::runtime::Value::integer(value);
   };
 
-  const amber::runtime::Value list =
-      amber::runtime::make_list_value({integer(1), integer(2), integer(3),
+  const sputnik::runtime::Value list =
+      sputnik::runtime::make_list_value({integer(1), integer(2), integer(3),
                                        integer(4), integer(5)});
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(sequence_module, 24, {list, integer(-1)});
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(sequence_module, 24, {list, integer(-1)});
   expect_ok(result, "Array#[] negative index");
   expect_integer(result.value, 5, "Array#[] negative index");
 
   result =
-      amber::runtime::execute_code(sequence_module, 24, {list, integer(99)});
+      sputnik::runtime::execute_code(sequence_module, 24, {list, integer(99)});
   expect_fault(result, "IndexError", "Array#[] out of bounds");
 
-  const amber::runtime::Value tail_slice =
+  const sputnik::runtime::Value tail_slice =
       make_range_value(sequence_module, -3, -1);
   result =
-      amber::runtime::execute_code(sequence_module, 24, {list, tail_slice});
+      sputnik::runtime::execute_code(sequence_module, 24, {list, tail_slice});
   expect_ok(result, "Array#[] negative endpoint slice");
   expect_integer_list(result.value, {3, 4, 5},
                       "Array#[] negative endpoint slice");
 
-  amber::runtime::Value open_slice =
+  sputnik::runtime::Value open_slice =
       make_range_value(sequence_module, 2, 0, true);
   open_slice.as_instance_object()->ivars["finish"] =
-      amber::runtime::Value::null();
+      sputnik::runtime::Value::null();
   result =
-      amber::runtime::execute_code(sequence_module, 24, {list, open_slice});
+      sputnik::runtime::execute_code(sequence_module, 24, {list, open_slice});
   expect_ok(result, "Array#[] open-ended slice");
   expect_integer_list(result.value, {3, 4, 5}, "Array#[] open-ended slice");
 
-  const amber::runtime::Value stepped_slice =
+  const sputnik::runtime::Value stepped_slice =
       make_range_value(sequence_module, 4, 0, true, -2);
   result =
-      amber::runtime::execute_code(sequence_module, 24, {list, stepped_slice});
+      sputnik::runtime::execute_code(sequence_module, 24, {list, stepped_slice});
   expect_ok(result, "Array#[] stepped descending slice");
   expect_integer_list(result.value, {5, 3, 1},
                       "Array#[] stepped descending slice");
 
-  const amber::runtime::Value range = make_range_value(sequence_module, 1, 3);
+  const sputnik::runtime::Value range = make_range_value(sequence_module, 1, 3);
   result =
-      amber::runtime::execute_code(sequence_module, 24, {range, integer(9)});
+      sputnik::runtime::execute_code(sequence_module, 24, {range, integer(9)});
   expect_fault(result, "IndexError", "Range#[] out of bounds");
 
-  amber::runtime::Value open_end =
+  sputnik::runtime::Value open_end =
       make_range_value(sequence_module, 4, 0, true);
   open_end.as_instance_object()->ivars["finish"] =
-      amber::runtime::Value::null();
-  result = amber::runtime::execute_code(sequence_module, 24,
+      sputnik::runtime::Value::null();
+  result = sputnik::runtime::execute_code(sequence_module, 24,
                                         {open_end, integer(-1)});
   expect_fault(result, "IndexError", "open-ended Range#[] negative index");
 
-  result = amber::runtime::execute_code(sequence_module, 25,
+  result = sputnik::runtime::execute_code(sequence_module, 25,
                                         {list, make_closure_value(100)});
   expect_ok(result, "LazySeq construction for error edges");
-  const amber::runtime::Value lazy = result.value;
+  const sputnik::runtime::Value lazy = result.value;
   result =
-      amber::runtime::execute_code(sequence_module, 24, {lazy, integer(99)});
+      sputnik::runtime::execute_code(sequence_module, 24, {lazy, integer(99)});
   expect_fault(result, "IndexError", "LazySeq#[] out of bounds");
 
-  const amber::bytecode::BcModule map_module = make_map_protocol_module();
-  const amber::runtime::Value map =
+  const sputnik::bytecode::BcModule map_module = make_map_protocol_module();
+  const sputnik::runtime::Value map =
       make_symbol_map(map_module, {{"alpha", integer(1)},
                                    {"beta", integer(2)}});
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       map_module, 10,
       {map,
-       amber::runtime::Value::symbol(symbol_id_or_die(map_module, "missing"))});
+       sputnik::runtime::Value::symbol(symbol_id_or_die(map_module, "missing"))});
   expect_fault(result, "KeyError", "Map#[] missing symbol key");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       map_module, 10,
-      {map, amber::runtime::Value::string(string_id_or_die(map_module,
+      {map, sputnik::runtime::Value::string(string_id_or_die(map_module,
                                                            "delta"))});
   expect_fault(result, "KeyError", "Map#[] missing string key");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       map_module, 12,
       {map,
-       amber::runtime::Value::symbol(symbol_id_or_die(map_module, "alpha"))});
+       sputnik::runtime::Value::symbol(symbol_id_or_die(map_module, "alpha"))});
   expect_ok(result, "Map#contains? present key");
   expect_bool(result.value, true, "Map#contains? present key");
 
-  result = amber::runtime::execute_code(
+  result = sputnik::runtime::execute_code(
       map_module, 13,
       {map,
-       amber::runtime::Value::symbol(symbol_id_or_die(map_module, "missing"))});
+       sputnik::runtime::Value::symbol(symbol_id_or_die(map_module, "missing"))});
   expect_ok(result, "Map#include? missing key");
   expect_bool(result.value, false, "Map#include? missing key");
 
-  result = amber::runtime::execute_code(map_module, 10, {map, integer(1)});
+  result = sputnik::runtime::execute_code(map_module, 10, {map, integer(1)});
   expect_fault(result, "KeyError", "Map#[] missing integer key");
 }
 
-amber::bytecode::BcModule make_collection_block_edge_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule make_collection_block_edge_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   for (const std::string &symbol : {"each", "map", "Boom"}) {
@@ -2034,35 +2034,35 @@ amber::bytecode::BcModule make_collection_block_edge_module() {
 }
 
 void test_std001_block_exception_propagation() {
-  const amber::bytecode::BcModule module = make_collection_block_edge_module();
-  const amber::runtime::Value source =
-      amber::runtime::make_list_value({amber::runtime::Value::integer(1)});
+  const sputnik::bytecode::BcModule module = make_collection_block_edge_module();
+  const sputnik::runtime::Value source =
+      sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(1)});
 
-  const amber::runtime::ExecutionResult result = amber::runtime::execute_code(
+  const sputnik::runtime::ExecutionResult result = sputnik::runtime::execute_code(
       module, 1, {source, make_closure_value(100)});
   expect_fault(result, "Boom", "collection block exception propagation");
 }
 
 void test_std001_mutation_during_iteration_edges() {
-  const amber::bytecode::BcModule module = make_collection_block_edge_module();
+  const sputnik::bytecode::BcModule module = make_collection_block_edge_module();
 
-  amber::runtime::Value list = amber::runtime::make_list_value(
-      {amber::runtime::Value::integer(1), amber::runtime::Value::integer(2)});
-  amber::runtime::ExecutionResult result = amber::runtime::execute_code(
+  sputnik::runtime::Value list = sputnik::runtime::make_list_value(
+      {sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2)});
+  sputnik::runtime::ExecutionResult result = sputnik::runtime::execute_code(
       module, 2, {list, make_closure_value(101, {list})});
   expect_fault(result, "DestroyedAccessError",
                "Array mutation during iteration");
 
-  amber::runtime::Value map = amber::runtime::make_symbol_map_value(
-      {{symbol_id_or_die(module, "Boom"), amber::runtime::Value::integer(1)}});
-  result = amber::runtime::execute_code(module, 2,
+  sputnik::runtime::Value map = sputnik::runtime::make_symbol_map_value(
+      {{symbol_id_or_die(module, "Boom"), sputnik::runtime::Value::integer(1)}});
+  result = sputnik::runtime::execute_code(module, 2,
                                         {map, make_closure_value(101, {map})});
   expect_fault(result, "DestroyedAccessError", "Map mutation during iteration");
 }
 
 void test_counts_block_errors() {
-  using namespace amber::bytecode;
-  using namespace amber::runtime;
+  using namespace sputnik::bytecode;
+  using namespace sputnik::runtime;
 
   for (const std::string selector : {"tally", "counts"}) {
     BcModule module = make_collection_block_edge_module();

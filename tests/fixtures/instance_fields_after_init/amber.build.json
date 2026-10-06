@@ -1,9 +1,0 @@
-{
-  "schema": "amber.build.v1",
-  "name": "object_lifecycle",
-  "root": "conformance.run",
-  "profiles": {"required": ["core.v1"]},
-  "modules": [
-    {"name": "conformance.run", "path": "../../../corpus/run/instance_fields_after_init/source.am"}
-  ]
-}

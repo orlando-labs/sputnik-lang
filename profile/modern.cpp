@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::modern {
+namespace sputnik::modern {
 
 namespace {
 
@@ -1281,7 +1281,7 @@ ModernDocumentParseResult parse_modern_document(const std::string &source) {
 std::string agent_validation_to_json(const AgentValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.agent_tooling.v1\",\n";
+  out << "  \"schema\": \"sputnik.agent_tooling.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   out << "  \"symbols\": [";
   for (std::size_t i = 0; i < result.symbols.size(); ++i) {
@@ -1371,7 +1371,7 @@ std::string
 contract_validation_to_json(const ContractValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.contracts.v1\",\n";
+  out << "  \"schema\": \"sputnik.contracts.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   out << "  \"contracts\": [";
   for (std::size_t i = 0; i < result.contracts.size(); ++i) {
@@ -1425,7 +1425,7 @@ contract_validation_to_json(const ContractValidationResult &result) {
 std::string privacy_validation_to_json(const PrivacyValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.privacy_lineage.v1\",\n";
+  out << "  \"schema\": \"sputnik.privacy_lineage.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   out << "  \"labels\": [";
   for (std::size_t i = 0; i < result.labels.size(); ++i) {
@@ -1489,7 +1489,7 @@ std::string
 workflow_validation_to_json(const WorkflowValidationResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.workflow.v1\",\n";
+  out << "  \"schema\": \"sputnik.workflow.v1\",\n";
   out << "  \"ok\": " << (result.ok ? "true" : "false") << ",\n";
   out << "  \"steps\": [";
   for (std::size_t i = 0; i < result.steps.size(); ++i) {
@@ -1547,7 +1547,7 @@ std::string explain_result_to_json(const AgentValidationResult &symbols,
                                    const SourceLocation &source) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.explain.v1\",\n";
+  out << "  \"schema\": \"sputnik.explain.v1\",\n";
   out << "  \"query\": ";
   emit_source_location(out, source);
   out << ",\n";
@@ -1596,4 +1596,4 @@ std::string explain_result_to_json(const AgentValidationResult &symbols,
   return out.str();
 }
 
-} // namespace amber::modern
+} // namespace sputnik::modern

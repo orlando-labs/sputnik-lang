@@ -8,7 +8,7 @@
 #include <set>
 #include <sstream>
 
-namespace amber::binder {
+namespace sputnik::binder {
 namespace {
 
 const std::string kLastValueName = "$_";
@@ -630,7 +630,7 @@ private:
     const bool has_setter = bool_value(item, "has_setter");
     if (graph_.scopes[parent_scope].kind == "module" && has_setter) {
       diagnostic("AMB_PROP_TOP_LEVEL_SETTER", "error", "binder",
-                 "top-level writable properties are not part of Amber v20.3",
+                 "top-level writable properties are not part of Sputnik v20.3",
                  item.span);
     }
     declare_property_binding(parent_scope, name,
@@ -1118,7 +1118,7 @@ private:
       return;
     }
     // F1.5 consumes this shape when the callee resolves to a macro. Otherwise
-    // it remains Amber's ordinary bare-call + block-suffix form.
+    // it remains Sputnik's ordinary bare-call + block-suffix form.
     if (base != nullptr && base->kind == "AstName" && !tails->values.empty() &&
         tails->values.front()->kind == "AstTailCall") {
       const Binding *binding =
@@ -1398,7 +1398,7 @@ bool contains_name_ref_key(const std::vector<NameRefKey> &keys,
 
 bool native_prelude_name_impl(const std::string &name) {
   static const std::set<std::string> names = {
-      "Amber",
+      "Sputnik",
       "Array",
       "Atomic",
       "Barrier",
@@ -1453,11 +1453,11 @@ bool native_prelude_name_impl(const std::string &name) {
   // may be referenced in expression position too -- e.g. ValueError.new(msg)
   // or Err(OverflowError.new(msg)). Shared X-macro list keeps the binder and
   // the VM's kRuntimeErrorNames in lockstep with the spec registry.
-#define AMBER_RUNTIME_ERROR(error_name, parent, default_message,                 \
+#define SPUTNIK_RUNTIME_ERROR(error_name, parent, default_message,                 \
                             default_exit_code, field_mask)                       \
   error_name,
 #include "spec/registries/runtime_errors.def"
-#undef AMBER_RUNTIME_ERROR
+#undef SPUTNIK_RUNTIME_ERROR
   };
   return names.count(name) != 0U;
 }
@@ -1829,7 +1829,7 @@ std::string bind_graph_to_json(const BindGraph &graph,
                                const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.bind.v1\",\n";
+  out << "  \"format\": \"sputnik.bind.v1\",\n";
   if (module_name.empty()) {
     out << "  \"module\": null,\n";
   } else {
@@ -1979,4 +1979,4 @@ std::string bind_graph_to_json(const BindGraph &graph,
   return out.str();
 }
 
-} // namespace amber::binder
+} // namespace sputnik::binder

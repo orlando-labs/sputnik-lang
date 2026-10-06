@@ -11,12 +11,12 @@ from pathlib import Path
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    amberc = (root / (sys.argv[1] if len(sys.argv) > 1 else "build/amberc")).resolve()
+    sputnik = (root / (sys.argv[1] if len(sys.argv) > 1 else "build/sputnik")).resolve()
     work = (root / (sys.argv[2] if len(sys.argv) > 2 else "build/conditional-chain")).resolve()
     work.mkdir(parents=True, exist_ok=True)
     fixture = root / "corpus/run/conditional_chain_segments"
-    source = work / "source.am"
-    source.write_text((fixture / "source.am").read_text() + "\nprobe()\n")
+    source = work / "source.s"
+    source.write_text((fixture / "source.s").read_text() + "\nprobe()\n")
 
     def run(*args: str) -> subprocess.CompletedProcess[str]:
         result = subprocess.run(args, cwd=root, text=True, capture_output=True, timeout=300)
@@ -25,12 +25,12 @@ def main() -> int:
         return result
 
     # Validate the optimizer path as well as the bytecode used by native codegen.
-    run(str(amberc), "mir-verify", str(source))
-    run(str(amberc), "native-verify", str(source))
+    run(str(sputnik), "mir-verify", str(source))
+    run(str(sputnik), "native-verify", str(source))
     results = []
     for target in ("bytecode-wrapper", "native"):
         exe = work / target
-        args = [str(amberc), "build", str(source), "--target", target,
+        args = [str(sputnik), "build", str(source), "--target", target,
                 "-o", str(exe), "--out-dir", str(work)]
         if target == "native":
             args.append("--require-full-native")

@@ -10,7 +10,7 @@
 #include <string>
 #include <unordered_set>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -1126,4 +1126,4 @@ void register_argparser_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

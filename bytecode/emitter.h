@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 
 struct EmitResult {
   BcModule module;
@@ -64,4 +64,4 @@ private:
   std::unique_ptr<Impl> impl_;
 };
 
-} // namespace amber::bytecode
+} // namespace sputnik::bytecode

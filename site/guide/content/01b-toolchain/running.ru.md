@@ -1,6 +1,6 @@
 ---
 id: running
-title: Запуск и сборка с amberc
+title: Запуск и сборка с sputnik
 summary: Как запустить, собрать в нативный бинарник и заглянуть в стадии компиляции.
 category: toolchain
 order: 15
@@ -9,9 +9,9 @@ related: [overview, functions]
 status: draft
 ---
 
-# Запуск и сборка с amberc
+# Запуск и сборка с sputnik
 
-`amberc` — это компилятор и раннер Amber. Одной командой он выполняет программу,
+`sputnik` — это компилятор и раннер Sputnik. Одной командой он выполняет программу,
 другой — собирает автономный нативный исполняемый файл. Ниже — рабочий цикл на
 проверенных примерах.
 
@@ -21,27 +21,27 @@ status: draft
 хосты — Linux и macOS; внешних зависимостей для сборки компилятора нет.
 
 ```sh
-make build/amberc     # собрать только amberc
-make build            # собрать весь тулчейн (amberc, ambertest, тесты)
+make build/sputnik     # собрать только sputnik
+make build            # собрать весь тулчейн (sputnik, sputniktest, тесты)
 ```
 
-Готовый бинарник появится в `build/amberc`.
+Готовый бинарник появится в `build/sputnik`.
 
 ## Запуск программы
 
-`amberc <файл.am>` выполняет модуль и печатает значение последнего выражения
+`sputnik <файл.s>` выполняет модуль и печатает значение последнего выражения
 верхнего уровня в его каноническом виде (repr).
 
-```amber
+```sputnik
 def greet(name):
   "Hello, #{name}!"
 
-greet("Amber")
+greet("Sputnik")
 ```
 
 ```sh
-build/amberc hello.am
-# => "Hello, Amber!"
+build/sputnik hello.s
+# => "Hello, Sputnik!"
 ```
 
 > [!note]
@@ -50,15 +50,15 @@ build/amberc hello.am
 
 ## Сборка нативного исполняемого файла
 
-`amberc build <файл.am> -o <путь>` компилирует программу в автономный нативный
+`sputnik build <файл.s> -o <путь>` компилирует программу в автономный нативный
 бинарник. В stdout печатается JSON-отчёт о сборке, рядом сохраняется
 сгенерированный C++ (`<путь>.native.cpp`), а по указанному пути — исполняемый
 файл.
 
 ```sh
-build/amberc build hello.am -o hello
+build/sputnik build hello.s -o hello
 ./hello
-# => "Hello, Amber!"
+# => "Hello, Sputnik!"
 ```
 
 ## Цели и опции сборки
@@ -72,16 +72,16 @@ build/amberc build hello.am -o hello
 
 ```sh
 # байткод-обёртка вместо нативного кода
-build/amberc build hello.am --target bytecode-wrapper -o hello.bc
+build/sputnik build hello.s --target bytecode-wrapper -o hello.bc
 ```
 
 ## Сборка проекта из нескольких файлов
 
-Для проекта используется манифест `amber.build.json`: он описывает исходники,
-цели и кэш. `amberc build` принимает манифест вместо одиночного файла.
+Для проекта используется манифест `sputnik.build.json`: он описывает исходники,
+цели и кэш. `sputnik build` принимает манифест вместо одиночного файла.
 
 ```sh
-build/amberc build amber.build.json \
+build/sputnik build sputnik.build.json \
   --out-dir build/out \
   --cache-dir build/cache
 ```
@@ -92,29 +92,29 @@ build/amberc build amber.build.json \
 подкоманда, печатающая свою форму программы; программу они не запускают.
 
 ```sh
-build/amberc lex   source.am   # токены
-build/amberc parse source.am   # дерево разбора
-build/amberc hir   source.am   # высокоуровневый IR (видна явная lowering-форма)
-build/amberc mir   source.am   # среднеуровневый IR
-build/amberc bc    source.am   # байткод
-build/amberc native-dump source.am   # сгенерированный нативный код
+build/sputnik lex   source.s   # токены
+build/sputnik parse source.s   # дерево разбора
+build/sputnik hir   source.s   # высокоуровневый IR (видна явная lowering-форма)
+build/sputnik mir   source.s   # среднеуровневый IR
+build/sputnik bc    source.s   # байткод
+build/sputnik native-dump source.s   # сгенерированный нативный код
 ```
 
-Артефакты `.amberbc` — это данные, а не доверенный код: перед исполнением их
+Артефакты `.sputnikbc` — это данные, а не доверенный код: перед исполнением их
 структуру проверяет верификатор.
 
 ```sh
-build/amberc verify   module.amberbc --json   # проверить байткод
-build/amberc metadata module.amberbc --json   # прочитать метаданные модуля
+build/sputnik verify   module.sputnikbc --json   # проверить байткод
+build/sputnik metadata module.sputnikbc --json   # прочитать метаданные модуля
 ```
 
 ## Прогон конформанс-набора
 
-Корпус проверяемых программ гоняется через `ambertest`:
+Корпус проверяемых программ гоняется через `sputniktest`:
 
 ```sh
-build/ambertest run corpus              # весь корпус
-build/ambertest run corpus --bundle M11 # отдельный бандл
+build/sputniktest run corpus              # весь корпус
+build/sputniktest run corpus --bundle M11 # отдельный бандл
 ```
 
 Дальше: как устроены сами программы — начните с [обзора языка](guide:overview) и

@@ -1,6 +1,6 @@
-# Amber for Visual Studio Code
+# Sputnik for Visual Studio Code
 
-Editor support for the [Amber](https://github.com/orlando-labs/amber-lang) programming language (`.am` files).
+Editor support for the [Sputnik](https://github.com/orlando-labs/amber-lang) programming language (`.s`, `.spu`, and `.sputnik` files).
 
 ## Features (v1)
 
@@ -9,22 +9,22 @@ Editor support for the [Amber](https://github.com/orlando-labs/amber-lang) progr
   properties, instance/class variables (`@x`, `@@x`), placeholders and `$_`, symbols,
   numeric forms, operators, strings and tagged text blocks. Double-quoted strings support
   nested `#{ }` interpolation. Unicode identifiers (e.g. `α`, `@масса`) are supported.
-- **Run / Build tasks** — run or compile the current file via `amberc`:
-  - **Amber: Run File** — `amberc <file>` (output streams to the integrated terminal).
-  - **Amber: Build File** — `amberc build <file> -o <outDir>/<stem> --target <target>`.
-  - Both are also exposed as VS Code tasks (type `amber`) so you can bind keys or use
+- **Run / Build tasks** — run or compile the current file via `sputnik`:
+  - **Sputnik: Run File** — `sputnik <file>` (output streams to the integrated terminal).
+  - **Sputnik: Build File** — `sputnik build <file> -o <outDir>/<stem> --target <target>`.
+  - Both are also exposed as VS Code tasks (type `sputnik`) so you can bind keys or use
     *Tasks: Run Task*.
 
-Diagnostics, outline, hover, go-to-definition and rename are planned follow-ups — the Amber
-compiler already emits the JSON needed for them (`amber.diag.v1`, `amber.agent_tooling.v1`,
-`amber.explain.v1`).
+Diagnostics, outline, hover, go-to-definition and rename are planned follow-ups — the Sputnik
+compiler already emits the JSON needed for them (`sputnik.diag.v1`, `sputnik.agent_tooling.v1`,
+`sputnik.explain.v1`).
 
 ## Requirements
 
-The `amberc` compiler must be available. The extension resolves it in this order:
+The `sputnik` compiler must be available. The extension resolves it in this order:
 
-1. `amber.compilerPath` setting (default `"amberc"`), if it is absolute or found on `PATH`.
-2. Fallback to `<workspace>/build/amberc` (the in-repo build output).
+1. `sputnik.compilerPath` setting (default `"sputnik"`), if it is absolute or found on `PATH`.
+2. Fallback to `<workspace>/build/sputnik` (the in-repo build output).
 
 Build it from the repository root with `make build`.
 
@@ -32,10 +32,10 @@ Build it from the repository root with `make build`.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `amber.compilerPath` | `"amberc"` | Path to the `amberc` executable. |
-| `amber.build.target` | `"native"` | `--target` for `amberc build`. |
-| `amber.build.outDir` | `"build"` | Output directory for build artifacts. |
-| `amber.run.args` | `[]` | Extra args appended to `amberc <file>`. |
+| `sputnik.compilerPath` | `"sputnik"` | Path to the `sputnik` executable. |
+| `sputnik.build.target` | `"native"` | `--target` for `sputnik build`. |
+| `sputnik.build.outDir` | `"build"` | Output directory for build artifacts. |
+| `sputnik.run.args` | `[]` | Extra args appended to `sputnik <file>`. |
 
 ## Developing
 
@@ -47,4 +47,4 @@ npm test             # TextMate/Oniguruma grammar regression tests
 ```
 
 Press **F5** to launch an Extension Development Host. Package a `.vsix` with
-`npx vsce package`, then install via `code --install-extension amber-lang-*.vsix`.
+`npx vsce package`, then install via `code --install-extension sputnik-lang-*.vsix`.

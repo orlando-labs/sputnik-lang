@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::hir {
+namespace sputnik::hir {
 
 struct ProcedureLocal {
   std::string slot;
@@ -96,4 +96,4 @@ std::string program_to_json(const Program &program,
                             const std::string &module_name,
                             const std::string &source_hash);
 
-} // namespace amber::hir
+} // namespace sputnik::hir

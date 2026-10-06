@@ -3,7 +3,7 @@
 #include "optimizer/native.h"
 #include "runtime/world.h"
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct NativeExecutionOptions {
   bool allow_bytecode_fallback = false;
@@ -21,4 +21,4 @@ ExecutionResult execute_native_code(RuntimeWorld &world,
                                     Value block = Value::null(),
                                     NativeExecutionOptions options = {});
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -24,7 +24,7 @@
 
 extern char **environ;
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 namespace {
 thread_local std::shared_ptr<std::recursive_mutex> callback_gate;
 thread_local unsigned callback_depth = 0;
@@ -885,7 +885,7 @@ SystemValue system_dispatch(const SystemCall &call) {
         command->argv = {kw(kwargs, "executable").kind == Kind::Null
                              ? "/bin/sh"
                              : string(kw(kwargs, "executable")),
-                         "-c", string(args[0]), "amber-shell"};
+                         "-c", string(args[0]), "sputnik-shell"};
         const auto &extra = kw(kwargs, "args");
         if (extra.kind != Kind::Null) {
           check(extra.kind == Kind::List, "args must be an Array");
@@ -1134,4 +1134,4 @@ SystemValue system_dispatch(const SystemCall &call) {
   }
   fail("NoMethodError", "unknown system method: " + name);
 }
-} // namespace amber::runtime
+} // namespace sputnik::runtime

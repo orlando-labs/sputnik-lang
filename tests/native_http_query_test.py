@@ -41,10 +41,10 @@ def receive_request(connection: socket.socket) -> bytes:
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    amberc = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/amberc"
+    sputnik = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/sputnik"
     work = Path(sys.argv[2]) if len(sys.argv) > 2 else root / "build/native-http-query"
-    if not amberc.is_absolute():
-        amberc = (root / amberc).resolve()
+    if not sputnik.is_absolute():
+        sputnik = (root / sputnik).resolve()
     if not work.is_absolute():
         work = (root / work).resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -79,7 +79,7 @@ def main() -> int:
     server = threading.Thread(target=serve, daemon=True)
     server.start()
 
-    source = work / "query.am"
+    source = work / "query.s"
     source.write_text(
         "package native.http_query\n\n"
         "import task\n"
@@ -153,7 +153,7 @@ def main() -> int:
     executable = work / "query"
     build = subprocess.run(
         [
-            str(amberc),
+            str(sputnik),
             "build",
             str(source),
             "--target",

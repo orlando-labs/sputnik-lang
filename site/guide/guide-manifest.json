@@ -1,5 +1,5 @@
 {
-  "schema": "amber.guide.manifest.v1",
+  "schema": "sputnik.guide.manifest.v1",
   "show_spec_refs": true,
   "categories": [
     {
@@ -57,8 +57,8 @@
         "en": "Language overview"
       },
       "summaries": {
-        "ru": "Что такое Amber, как читать этот Гид и как устроен граф знаний.",
-        "en": "What Amber is, how to read this Guide, and how the knowledge graph works."
+        "ru": "Что такое Sputnik, как читать этот Гид и как устроен граф знаний.",
+        "en": "What Sputnik is, how to read this Guide, and how the knowledge graph works."
       },
       "paths": {
         "ru": "guide/content/01-intro/overview.ru.md",
@@ -77,8 +77,8 @@
       ],
       "spec_refs": [],
       "titles": {
-        "ru": "Запуск и сборка с amberc",
-        "en": "Running and building with amberc"
+        "ru": "Запуск и сборка с sputnik",
+        "en": "Running and building with sputnik"
       },
       "summaries": {
         "ru": "Как запустить, собрать в нативный бинарник и заглянуть в стадии компиляции.",

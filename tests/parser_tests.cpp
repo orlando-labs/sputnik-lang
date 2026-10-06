@@ -8,51 +8,51 @@
 
 namespace {
 
-using amber::ast::Expr;
+using sputnik::ast::Expr;
 
 std::unique_ptr<Expr> parse_ok(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseResult parse_result = parser.parse_expression_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseResult parse_result = parser.parse_expression_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
   return std::move(parse_result.expr);
 }
 
-amber::parser::ParseResult parse_raw(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::parser::ParseResult parse_raw(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::Parser parser(lex_result.tokens);
   return parser.parse_expression_unit();
 }
 
-amber::parser::ParseModuleResult parse_module_raw(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::parser::ParseModuleResult parse_module_raw(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::Parser parser(lex_result.tokens);
   return parser.parse_module_unit();
 }
 
 const Expr &node_field(const Expr &expr, const std::string &name) {
-  for (const amber::ast::NodeField &field : expr.node_fields) {
+  for (const sputnik::ast::NodeField &field : expr.node_fields) {
     if (field.name == name) {
       return *field.value;
     }
@@ -62,7 +62,7 @@ const Expr &node_field(const Expr &expr, const std::string &name) {
 }
 
 const std::string &string_field(const Expr &expr, const std::string &name) {
-  for (const amber::ast::StringField &field : expr.string_fields) {
+  for (const sputnik::ast::StringField &field : expr.string_fields) {
     if (field.name == name) {
       return field.value;
     }
@@ -72,7 +72,7 @@ const std::string &string_field(const Expr &expr, const std::string &name) {
 }
 
 bool bool_field(const Expr &expr, const std::string &name) {
-  for (const amber::ast::BoolField &field : expr.bool_fields) {
+  for (const sputnik::ast::BoolField &field : expr.bool_fields) {
     if (field.name == name) {
       return field.value;
     }
@@ -86,21 +86,21 @@ void collect_placeholder_names(const Expr &expr,
   if (expr.kind == "AstPlaceholder") {
     names->push_back(string_field(expr, "name"));
   }
-  for (const amber::ast::NodeField &field : expr.node_fields) {
+  for (const sputnik::ast::NodeField &field : expr.node_fields) {
     if (field.value != nullptr) {
       collect_placeholder_names(*field.value, names);
     }
   }
-  for (const amber::ast::ListField &field : expr.list_fields) {
+  for (const sputnik::ast::ListField &field : expr.list_fields) {
     for (const std::unique_ptr<Expr> &value : field.values) {
       collect_placeholder_names(*value, names);
     }
   }
 }
 
-const amber::ast::ListField &list_field(const Expr &expr,
+const sputnik::ast::ListField &list_field(const Expr &expr,
                                         const std::string &name) {
-  for (const amber::ast::ListField &field : expr.list_fields) {
+  for (const sputnik::ast::ListField &field : expr.list_fields) {
     if (field.name == name) {
       return field;
     }
@@ -116,9 +116,9 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-bool has_diagnostic(const amber::parser::ParseResult &result,
+bool has_diagnostic(const sputnik::parser::ParseResult &result,
                     const std::string &code) {
-  for (const amber::lexer::Diagnostic &diagnostic : result.diagnostics) {
+  for (const sputnik::lexer::Diagnostic &diagnostic : result.diagnostics) {
     if (diagnostic.code == code) {
       return true;
     }
@@ -126,9 +126,9 @@ bool has_diagnostic(const amber::parser::ParseResult &result,
   return false;
 }
 
-bool has_diagnostic(const amber::parser::ParseModuleResult &result,
+bool has_diagnostic(const sputnik::parser::ParseModuleResult &result,
                     const std::string &code) {
-  for (const amber::lexer::Diagnostic &diagnostic : result.diagnostics) {
+  for (const sputnik::lexer::Diagnostic &diagnostic : result.diagnostics) {
     if (diagnostic.code == code) {
       return true;
     }
@@ -155,7 +155,7 @@ void test_compound_assignment() {
   expect(node_field(*expr, "right").kind == "AstLiteral",
          "compound assignment right");
 
-  amber::parser::ParseModuleResult module = parse_module_raw("x += 1\n");
+  sputnik::parser::ParseModuleResult module = parse_module_raw("x += 1\n");
   expect(module.ok(), "compound assignment module parse should not recurse");
   expect(module.items.size() == 1, "compound assignment module item count");
   const Expr &stmt = *module.items[0];
@@ -250,12 +250,12 @@ void test_new_binary_operators() {
 }
 
 void test_index_method_names() {
-  amber::parser::ParseModuleResult module = parse_module_raw(
+  sputnik::parser::ParseModuleResult module = parse_module_raw(
       "class Indexable:\n"
       "  def [](key): key\n"
       "  def []=(key, value): value\n");
   expect(module.ok(), "index getter and setter methods parse");
-  const amber::ast::ListField &body = list_field(*module.items[0], "body");
+  const sputnik::ast::ListField &body = list_field(*module.items[0], "body");
   expect(body.values.size() == 2, "index method count");
   expect(string_field(*body.values[0], "name") == "[]",
          "index getter selector");
@@ -269,7 +269,7 @@ void test_comparison_chains() {
          "ascending comparison chain parses as chain");
   expect(node_field(*ascending, "first").kind == "AstName",
          "chain first operand");
-  const amber::ast::ListField &ascending_links =
+  const sputnik::ast::ListField &ascending_links =
       list_field(*ascending, "links");
   expect(ascending_links.values.size() == 2, "ascending chain link count");
   expect(string_field(*ascending_links.values[0], "op") == "<",
@@ -280,7 +280,7 @@ void test_comparison_chains() {
   std::unique_ptr<Expr> descending = parse_ok("a > x >= b\n");
   expect(descending->kind == "AstCompareChain",
          "descending comparison chain parses as chain");
-  const amber::ast::ListField &descending_links =
+  const sputnik::ast::ListField &descending_links =
       list_field(*descending, "links");
   expect(descending_links.values.size() == 2, "descending chain link count");
   expect(string_field(*descending_links.values[0], "op") == ">",
@@ -300,7 +300,7 @@ void test_comparison_chains() {
 void test_bare_call() {
   std::unique_ptr<Expr> expr = parse_ok("puts x + 1\n");
   expect(expr->kind == "AstPostfixChain", "bare call produces postfix chain");
-  const amber::ast::ListField &tails = list_field(*expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(*expr, "tails");
   expect(tails.values.size() == 1, "one bare call tail");
   expect(tails.values[0]->kind == "AstTailCall", "bare call tail kind");
   expect(string_field(*tails.values[0], "call_style") == "bare",
@@ -311,9 +311,9 @@ void test_bare_call() {
          "bare arg parses as expression");
 
   std::unique_ptr<Expr> same_name = parse_ok("puts 1, x:, y: 2\n");
-  const amber::ast::ListField &same_name_tails =
+  const sputnik::ast::ListField &same_name_tails =
       list_field(*same_name, "tails");
-  const amber::ast::ListField &same_name_args =
+  const sputnik::ast::ListField &same_name_args =
       list_field(*same_name_tails.values[0], "args");
   expect(same_name_args.values.size() == 3, "same-name bare arg count");
   expect(same_name_args.values[1]->kind == "AstKeywordArg",
@@ -327,12 +327,12 @@ void test_bare_call() {
          "same-name bare keyword value name");
 
   std::unique_ptr<Expr> array_arg = parse_ok("before [&auth, &audit]\n");
-  const amber::ast::ListField &array_tails = list_field(*array_arg, "tails");
+  const sputnik::ast::ListField &array_tails = list_field(*array_arg, "tails");
   expect(array_tails.values.size() == 1 &&
              array_tails.values[0]->kind == "AstTailCall" &&
              string_field(*array_tails.values[0], "call_style") == "bare",
          "spaced bracket starts a bare Array argument");
-  const amber::ast::ListField &array_args =
+  const sputnik::ast::ListField &array_args =
       list_field(*array_tails.values[0], "args");
   expect(array_args.values.size() == 1 &&
              array_args.values[0]->kind == "AstListLiteral" &&
@@ -343,7 +343,7 @@ void test_bare_call() {
 void test_dot_call_segment() {
   std::unique_ptr<Expr> expr = parse_ok("factory.provider.(1, 2)\n");
   expect(expr->kind == "AstPostfixChain", "dot-call postfix chain");
-  const amber::ast::ListField &tails = list_field(*expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(*expr, "tails");
   expect(tails.values.size() == 2, "dot-call tail count");
   expect(tails.values[0]->kind == "AstTailDotMember", "member tail first");
   expect(string_field(*tails.values[0], "name") == "provider",
@@ -353,7 +353,7 @@ void test_dot_call_segment() {
          "dot-call argument count");
 
   std::unique_ptr<Expr> zero = parse_ok("fn.()\n");
-  const amber::ast::ListField &zero_tails = list_field(*zero, "tails");
+  const sputnik::ast::ListField &zero_tails = list_field(*zero, "tails");
   expect(zero_tails.values.size() == 1, "zero-arg dot-call tail count");
   expect(zero_tails.values[0]->kind == "AstTailDotCall",
          "zero-arg dot-call tail kind");
@@ -361,11 +361,11 @@ void test_dot_call_segment() {
          "zero-arg dot-call has no args");
 
   std::unique_ptr<Expr> safe = parse_ok("fn.?.(1)\n");
-  const amber::ast::ListField &safe_tails = list_field(*safe, "tails");
+  const sputnik::ast::ListField &safe_tails = list_field(*safe, "tails");
   expect(safe_tails.values[0]->kind == "AstTailSafeCall",
          "safe dot-call tail kind");
 
-  amber::parser::ParseResult orphan = parse_raw(".()\n");
+  sputnik::parser::ParseResult orphan = parse_raw(".()\n");
   expect(has_diagnostic(orphan, "AMB_DOT_CALL_TARGET"),
          "dot-call without target diagnostic");
 }
@@ -396,16 +396,16 @@ void test_callable_references() {
              string_field(*instance, "selector") == "show",
          "unbound instance callable ref metadata");
   const Expr &closure = node_field(*instance, "closure");
-  const amber::ast::ListField &params = list_field(closure, "params");
+  const sputnik::ast::ListField &params = list_field(closure, "params");
   expect(params.values.size() == 2 &&
              string_field(*params.values[1], "param_kind") == "rest",
          "unbound callable forwards surplus arguments through rest param");
 
-  amber::parser::ParseResult called = parse_raw("&handler()\n");
+  sputnik::parser::ParseResult called = parse_raw("&handler()\n");
   expect(has_diagnostic(called, "AMB_CALLABLE_REF_TARGET"),
          "callable ref rejects an immediate call target");
 
-  amber::parser::ParseResult orphan_hash = parse_raw("foo#bar\n");
+  sputnik::parser::ParseResult orphan_hash = parse_raw("foo#bar\n");
   expect(!orphan_hash.ok(),
          "hash separator is rejected outside an unbound callable reference");
 }
@@ -413,7 +413,7 @@ void test_callable_references() {
 void test_safe_nav_and_index() {
   std::unique_ptr<Expr> expr = parse_ok("obj.?.items[0].?.name\n");
   expect(expr->kind == "AstPostfixChain", "safe nav postfix chain");
-  const amber::ast::ListField &tails = list_field(*expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(*expr, "tails");
   expect(tails.values.size() == 3, "safe nav tail count");
   expect(tails.values[0]->kind == "AstTailSafeMember", "safe member tail");
   expect(string_field(*tails.values[0], "name") == "items", "safe member name");
@@ -426,7 +426,7 @@ void test_safe_nav_and_index() {
 void test_optional_bracket_access() {
   std::unique_ptr<Expr> expr = parse_ok("xs[?i]\n");
   expect(expr->kind == "AstPostfixChain", "optional index postfix chain");
-  const amber::ast::ListField &tails = list_field(*expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(*expr, "tails");
   expect(tails.values.size() == 1, "optional index tail count");
   expect(tails.values[0]->kind == "AstTailIndex", "optional index tail kind");
   expect(bool_field(*tails.values[0], "optional"), "optional index marker");
@@ -434,15 +434,15 @@ void test_optional_bracket_access() {
          "optional index expression");
 
   std::unique_ptr<Expr> negative = parse_ok("xs[?-1]\n");
-  const amber::ast::ListField &negative_tails = list_field(*negative, "tails");
+  const sputnik::ast::ListField &negative_tails = list_field(*negative, "tails");
   expect(bool_field(*negative_tails.values[0], "optional"),
          "optional negative index marker");
 
-  amber::parser::ParseResult assignment = parse_raw("xs[?i] = 1\n");
+  sputnik::parser::ParseResult assignment = parse_raw("xs[?i] = 1\n");
   expect(has_diagnostic(assignment, "E_OPTIONAL_BRACKET_ASSIGNMENT"),
          "optional index assignment diagnostic");
 
-  amber::parser::ParseModuleResult module_assignment =
+  sputnik::parser::ParseModuleResult module_assignment =
       parse_module_raw("xs[?i] = 1\n");
   expect(has_diagnostic(module_assignment, "E_OPTIONAL_BRACKET_ASSIGNMENT"),
          "optional index assignment module diagnostic");
@@ -452,7 +452,7 @@ void test_inline_block_chain_boundary() {
   std::unique_ptr<Expr> expr =
       parse_ok("numbers.map: _1.email.downcase() .uniq()\n");
   expect(expr->kind == "AstPostfixChain", "inline block postfix chain");
-  const amber::ast::ListField &tails = list_field(*expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(*expr, "tails");
   expect(tails.values.size() == 4, "inline chain tail count");
   expect(tails.values[0]->kind == "AstTailDotMember", "map member tail");
   expect(string_field(*tails.values[0], "name") == "map", "map method name");
@@ -480,19 +480,19 @@ void test_indented_block_suffix_body() {
                "  doubled = x * 2\n"
                "  doubled + 1\n");
   expect(expr->kind == "AstPostfixChain", "indented block postfix chain");
-  const amber::ast::ListField &tails = list_field(*expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(*expr, "tails");
   expect(tails.values.size() == 2, "indented block chain tail count");
   expect(tails.values[1]->kind == "AstTailBlockSuffix",
          "indented block suffix tail");
 
   const Expr &block = node_field(*tails.values[1], "block");
   expect(block.kind == "AstBlock", "indented suffix block");
-  const amber::ast::ListField &params = list_field(block, "params");
+  const sputnik::ast::ListField &params = list_field(block, "params");
   expect(params.values.size() == 1, "indented block param count");
   expect(string_field(*params.values[0], "pattern") == "x",
          "indented block param pattern");
 
-  const amber::ast::ListField &body = list_field(block, "body");
+  const sputnik::ast::ListField &body = list_field(block, "body");
   expect(body.values.size() == 2, "indented block body statement count");
   expect(body.values[0]->kind == "AstExprStmt",
          "indented block first statement");
@@ -505,11 +505,11 @@ void test_indented_block_suffix_body() {
 }
 
 void test_indented_postfix_continuation() {
-  amber::parser::ParseModuleResult result =
+  sputnik::parser::ParseModuleResult result =
       parse_module_raw("[1, 2]\n"
                        "  .each _1 * 2\n");
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -518,7 +518,7 @@ void test_indented_postfix_continuation() {
   expect(stmt.kind == "AstExprStmt", "continued postfix statement");
   const Expr &expr = node_field(stmt, "expr");
   expect(expr.kind == "AstPostfixChain", "continued postfix chain");
-  const amber::ast::ListField &tails = list_field(expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(expr, "tails");
   expect(tails.values.size() == 2, "continued postfix tail count");
   expect(tails.values[0]->kind == "AstTailDotMember", "continued member");
   expect(string_field(*tails.values[0], "name") == "each",
@@ -527,13 +527,13 @@ void test_indented_postfix_continuation() {
 }
 
 void test_indented_boolean_continuation() {
-  amber::parser::ParseModuleResult result =
+  sputnik::parser::ParseModuleResult result =
       parse_module_raw("valid = first\n"
                        "  and second\n"
                        "  or third\n"
                        "next = 1\n");
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -550,7 +550,7 @@ void test_indented_boolean_continuation() {
 }
 
 void test_module_stray_indent_progresses() {
-  amber::parser::ParseModuleResult result = parse_module_raw("value\n"
+  sputnik::parser::ParseModuleResult result = parse_module_raw("value\n"
                                                              "  stray\n");
   expect(!result.ok(), "stray top-level indent is rejected");
   expect(!result.diagnostics.empty(), "stray indent emits diagnostic");
@@ -566,7 +566,7 @@ void test_unicode_names() {
 
   std::unique_ptr<Expr> call = parse_ok("частица.скорость!()\n");
   expect(call->kind == "AstPostfixChain", "unicode method call parses");
-  const amber::ast::ListField &tails = list_field(*call, "tails");
+  const sputnik::ast::ListField &tails = list_field(*call, "tails");
   expect(tails.values.size() == 2, "unicode method tail count");
   expect(string_field(*tails.values[0], "name") == "скорость!",
          "unicode method name");
@@ -600,11 +600,11 @@ void test_v20_4_range_surface() {
   expect(string_field(node_field(*open, "right"), "token") == "KEYWORD_NULL",
          "open-ended range carries null finish");
 
-  amber::parser::ParseResult float_range = parse_raw("1.0..5.0\n");
+  sputnik::parser::ParseResult float_range = parse_raw("1.0..5.0\n");
   expect(has_diagnostic(float_range, "E_RANGE_FLOAT_STEP_REQUIRED"),
          "float range without step diagnostic");
 
-  amber::parser::ParseResult exclusive_open = parse_raw("1...:2\n");
+  sputnik::parser::ParseResult exclusive_open = parse_raw("1...:2\n");
   expect(has_diagnostic(exclusive_open, "E_RANGE_EXCLUSIVE_OPEN_ENDED"),
          "exclusive open-ended range diagnostic");
 }
@@ -640,7 +640,7 @@ void test_collection_literals() {
 
   std::unique_ptr<Expr> map = parse_ok("{id: 1, \"name\": :ok, :kind: 3}\n");
   expect(map->kind == "AstMapLiteral", "map literal parses");
-  const amber::ast::ListField &entries = list_field(*map, "entries");
+  const sputnik::ast::ListField &entries = list_field(*map, "entries");
   expect(entries.values.size() == 3, "map literal entry count");
   expect(string_field(*entries.values[0], "key_kind") == "symbol",
          "identifier key is symbol key");
@@ -654,7 +654,7 @@ void test_collection_literals() {
          "explicit symbol key text");
 
   std::unique_ptr<Expr> same_name_map = parse_ok("{a: 1, x:}\n");
-  const amber::ast::ListField &same_name_entries =
+  const sputnik::ast::ListField &same_name_entries =
       list_field(*same_name_map, "entries");
   expect(same_name_entries.values.size() == 2,
          "same-name map entry count");
@@ -670,7 +670,7 @@ void test_collection_literals() {
       parse_ok("{1: :int, (name): value, [1, 2]: :pair}\n");
   expect(expr_key_map->kind == "AstMapLiteral",
          "expression-key map literal parses");
-  const amber::ast::ListField &expr_entries =
+  const sputnik::ast::ListField &expr_entries =
       list_field(*expr_key_map, "entries");
   expect(expr_entries.values.size() == 3,
          "expression-key map entry count");
@@ -696,8 +696,8 @@ void test_v20_7_spread_surface() {
   std::unique_ptr<Expr> call =
       parse_ok("fn(1, *args, mode: :fast, **opts)\n");
   expect(call->kind == "AstPostfixChain", "spread call parses");
-  const amber::ast::ListField &call_tails = list_field(*call, "tails");
-  const amber::ast::ListField &args = list_field(*call_tails.values[0], "args");
+  const sputnik::ast::ListField &call_tails = list_field(*call, "tails");
+  const sputnik::ast::ListField &args = list_field(*call_tails.values[0], "args");
   expect(args.values.size() == 4, "spread call arg count");
   expect(args.values[1]->kind == "AstSpreadArg", "positional spread arg");
   expect(args.values[2]->kind == "AstKeywordArg", "ordinary keyword arg");
@@ -705,9 +705,9 @@ void test_v20_7_spread_surface() {
          "keyword spread arg");
 
   std::unique_ptr<Expr> same_name_call = parse_ok("fn(1, x:, y: 2)\n");
-  const amber::ast::ListField &same_name_call_tails =
+  const sputnik::ast::ListField &same_name_call_tails =
       list_field(*same_name_call, "tails");
-  const amber::ast::ListField &same_name_call_args =
+  const sputnik::ast::ListField &same_name_call_args =
       list_field(*same_name_call_tails.values[0], "args");
   expect(same_name_call_args.values.size() == 3,
          "same-name paren call arg count");
@@ -721,7 +721,7 @@ void test_v20_7_spread_surface() {
 
   std::unique_ptr<Expr> list =
       parse_ok("[1, *items if include_items?, 9]\n");
-  const amber::ast::ListField &list_elements = list_field(*list, "elements");
+  const sputnik::ast::ListField &list_elements = list_field(*list, "elements");
   expect(list_elements.values[1]->kind == "AstArraySpread",
          "array spread element");
   expect(node_field(*list_elements.values[1], "condition").kind ==
@@ -729,19 +729,19 @@ void test_v20_7_spread_surface() {
          "array spread condition");
 
   std::unique_ptr<Expr> set = parse_ok("{1, *items}\n");
-  const amber::ast::ListField &set_elements = list_field(*set, "elements");
+  const sputnik::ast::ListField &set_elements = list_field(*set, "elements");
   expect(set_elements.values[1]->kind == "AstSetSpread",
          "set spread element");
 
   std::unique_ptr<Expr> map = parse_ok("{a: 1, **other, b: 2}\n");
-  const amber::ast::ListField &entries = list_field(*map, "entries");
+  const sputnik::ast::ListField &entries = list_field(*map, "entries");
   expect(entries.values.size() == 3, "map spread entry count");
   expect(entries.values[1]->kind == "AstMapSpread", "map spread entry");
 
-  amber::parser::ParseResult stray_spread = parse_raw("*items\n");
+  sputnik::parser::ParseResult stray_spread = parse_raw("*items\n");
   expect(has_diagnostic(stray_spread, "E_SPREAD_POSITION"),
          "stray positional spread diagnostic");
-  amber::parser::ParseResult kw_after_spread =
+  sputnik::parser::ParseResult kw_after_spread =
       parse_raw("fn(**opts, mode: :fast)\n");
   expect(has_diagnostic(kw_after_spread, "E_ARGUMENT_ORDER"),
          "keyword after keyword spread order diagnostic");
@@ -771,7 +771,7 @@ void test_conditional_collection_elements() {
   std::unique_ptr<Expr> list =
       parse_ok("[1, 2 if include_two?, 3 unless skip_three?]\n");
   expect(list->kind == "AstListLiteral", "conditional list parses");
-  const amber::ast::ListField &list_elements = list_field(*list, "elements");
+  const sputnik::ast::ListField &list_elements = list_field(*list, "elements");
   expect(list_elements.values.size() == 3, "conditional list element count");
   expect(list_elements.values[1]->kind == "AstArrayElement",
          "conditional list element wraps value");
@@ -788,14 +788,14 @@ void test_conditional_collection_elements() {
 
   std::unique_ptr<Expr> set = parse_ok("{:read, :write if can_write?}\n");
   expect(set->kind == "AstSetLiteral", "conditional set parses");
-  const amber::ast::ListField &set_elements = list_field(*set, "elements");
+  const sputnik::ast::ListField &set_elements = list_field(*set, "elements");
   expect(set_elements.values[1]->kind == "AstSetElement",
          "conditional set element wraps value");
 
   std::unique_ptr<Expr> map =
       parse_ok("{a: 1, b: 2 if x == 3, c: 3 unless disabled?}\n");
   expect(map->kind == "AstMapLiteral", "conditional map parses");
-  const amber::ast::ListField &entries = list_field(*map, "entries");
+  const sputnik::ast::ListField &entries = list_field(*map, "entries");
   expect(entries.values.size() == 3, "conditional map entry count");
   expect(node_field(*entries.values[1], "condition").kind ==
              "AstCollectionCondition",
@@ -889,7 +889,7 @@ void test_string_literal_surface() {
   std::unique_ptr<Expr> plain = parse_ok("\"plain\"\n");
   expect(plain->kind == "AstStringLiteral", "plain double string AST kind");
   expect(!bool_field(*plain, "interpolation"), "plain string flag");
-  const amber::ast::ListField &plain_parts = list_field(*plain, "parts");
+  const sputnik::ast::ListField &plain_parts = list_field(*plain, "parts");
   expect(plain_parts.values.size() == 1, "plain string part count");
   expect(plain_parts.values[0]->kind == "AstStringText",
          "plain string text part");
@@ -900,7 +900,7 @@ void test_string_literal_surface() {
   expect(escaped->kind == "AstStringLiteral", "escaped interpolation AST kind");
   expect(!bool_field(*escaped, "interpolation"),
          "escaped interpolation marker stays literal");
-  const amber::ast::ListField &escaped_parts = list_field(*escaped, "parts");
+  const sputnik::ast::ListField &escaped_parts = list_field(*escaped, "parts");
   expect(escaped_parts.values.size() == 2, "escaped marker part count");
   expect(escaped_parts.values[0]->kind == "AstStringEscape",
          "escaped hash part kind");
@@ -911,7 +911,7 @@ void test_string_literal_surface() {
       parse_ok("\"hello #{name} #{if ok then \"yes\" else \"no\"}\"\n");
   expect(interp->kind == "AstStringLiteral", "interpolated string AST kind");
   expect(bool_field(*interp, "interpolation"), "interpolation flag");
-  const amber::ast::ListField &parts = list_field(*interp, "parts");
+  const sputnik::ast::ListField &parts = list_field(*interp, "parts");
   expect(parts.values.size() == 4, "interpolated string part count");
   expect(parts.values[1]->kind == "AstStringExpr", "first expr part");
   expect(node_field(*parts.values[1], "expr").kind == "AstName",
@@ -923,21 +923,21 @@ void test_string_literal_surface() {
   expect(node_field(*parts.values[3], "expr").kind == "AstInlineIfExpr",
          "inline conditional expression inside interpolation parses");
 
-  amber::parser::ParseResult empty = parse_raw("\"#{}\"\n");
+  sputnik::parser::ParseResult empty = parse_raw("\"#{}\"\n");
   expect(has_diagnostic(empty, "AMB_STRING_INTERP_EMPTY"),
          "empty interpolation diagnostic");
 }
 
 void test_inline_conditional_diagnostics() {
-  amber::parser::ParseResult ternary = parse_raw("cond ? a : b\n");
+  sputnik::parser::ParseResult ternary = parse_raw("cond ? a : b\n");
   expect(has_diagnostic(ternary, "AMB-SYN-INLINE-TERNARY-CSTYLE"),
          "C-style ternary diagnostic");
 
-  amber::parser::ParseResult missing_else = parse_raw("if cond then a\n");
+  sputnik::parser::ParseResult missing_else = parse_raw("if cond then a\n");
   expect(has_diagnostic(missing_else, "AMB-SYN-INLINE-IF-MISSING-ELSE"),
          "inline if missing else diagnostic");
 
-  amber::parser::ParseResult missing_value = parse_raw("[if cond,]\n");
+  sputnik::parser::ParseResult missing_value = parse_raw("[if cond,]\n");
   expect(has_diagnostic(missing_value,
                         "AMB-SYN-CONDITIONAL-ELEMENT-MISSING-VALUE"),
          "conditional element missing value diagnostic");
@@ -955,16 +955,16 @@ void test_clause_def_forms() {
                              "def fact(0): 1\n"
                              "def fact(n) if n > 0: n * fact(n - 1)\n";
 
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult result = parser.parse_module_unit();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -977,7 +977,7 @@ void test_clause_def_forms() {
   const Expr &area_signature = node_field(area, "base_signature");
   expect(list_field(area_signature, "params").values.size() == 1,
          "area base signature arity");
-  const amber::ast::ListField &area_clauses = list_field(area, "clauses");
+  const sputnik::ast::ListField &area_clauses = list_field(area, "clauses");
   expect(area_clauses.values.size() == 2, "area clause count");
   expect(string_field(*area_clauses.values[0], "pattern") == "Point(x, y)",
          "head pattern preserved");
@@ -992,7 +992,7 @@ void test_clause_def_forms() {
   expect(string_field(*list_field(fact_signature, "params").values[0],
                       "local_name") == "__arg0",
          "fact synthetic local name");
-  const amber::ast::ListField &fact_clauses = list_field(fact, "clauses");
+  const sputnik::ast::ListField &fact_clauses = list_field(fact, "clauses");
   expect(fact_clauses.values.size() == 2, "fact clauses merged");
   expect(string_field(*fact_clauses.values[0], "pattern") == "0",
          "literal pattern preserved");
@@ -1008,16 +1008,16 @@ void test_effect_row_signature() {
                              "def pure(id) !{}:\n"
                              "  id\n";
 
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult result = parser.parse_module_unit();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -1039,34 +1039,34 @@ void test_pattern_assignment_and_block_param_patterns() {
                              "  xs.map |[head, *tail], {scale: σ}|: head\n"
                              "  [α, *ω] = xs\n";
 
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult result = parser.parse_module_unit();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
   expect(result.items.size() == 1, "pattern module item count");
   const Expr &def = *result.items[0];
   expect(def.kind == "AstDefStmt", "pattern forms stay inside def body");
-  const amber::ast::ListField &body = list_field(def, "body");
+  const sputnik::ast::ListField &body = list_field(def, "body");
   expect(body.values.size() == 2, "pattern body item count");
 
   const Expr &map_stmt = *body.values[0];
   const Expr &map_expr = node_field(map_stmt, "expr");
   expect(map_expr.kind == "AstPostfixChain",
          "block pattern uses postfix chain");
-  const amber::ast::ListField &tails = list_field(map_expr, "tails");
+  const sputnik::ast::ListField &tails = list_field(map_expr, "tails");
   expect(tails.values.size() == 2, "block pattern chain tail count");
   expect(tails.values[1]->kind == "AstTailBlockSuffix", "block suffix tail");
   const Expr &block = node_field(*tails.values[1], "block");
-  const amber::ast::ListField &params = list_field(block, "params");
+  const sputnik::ast::ListField &params = list_field(block, "params");
   expect(params.values.size() == 2, "block pattern param count");
   expect(string_field(*params.values[0], "pattern") == "[head, *tail]",
          "first block param pattern text");
@@ -1097,16 +1097,16 @@ void test_module_forms() {
                              "    id\n"
                              "  def init(@масса, α = 1)\n";
 
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult result = parser.parse_module_unit();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -1123,7 +1123,7 @@ void test_module_forms() {
 }
 
 void test_property_forms() {
-  amber::parser::ParseModuleResult result = parse_module_raw(
+  sputnik::parser::ParseModuleResult result = parse_module_raw(
       "prop answer: 42\n"
       "\n"
       "class User:\n"
@@ -1136,7 +1136,7 @@ void test_property_forms() {
       "class Build:\n"
       "  class_prop version: \"20.3\"\n");
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -1144,7 +1144,7 @@ void test_property_forms() {
   expect(result.items[0]->kind == "AstPropDef", "top-level prop kind");
   expect(string_field(*result.items[0], "name") == "answer",
          "top-level prop name");
-  const amber::ast::ListField &user_body = list_field(*result.items[1], "body");
+  const sputnik::ast::ListField &user_body = list_field(*result.items[1], "body");
   expect(user_body.values.size() == 1 &&
              user_body.values[0]->kind == "AstPropDef",
          "class instance prop kind");
@@ -1161,24 +1161,24 @@ void test_property_forms() {
   expect(node_field(*user_body.values[0], "setter_signature").kind ==
              "AstSignature",
          "grouped property setter signature");
-  const amber::ast::ListField &build_body = list_field(*result.items[2], "body");
+  const sputnik::ast::ListField &build_body = list_field(*result.items[2], "body");
   expect(build_body.values.size() == 1 &&
              build_body.values[0]->kind == "AstClassPropDef",
          "class property kind");
 }
 
 void test_attribute_forms() {
-  amber::parser::ParseModuleResult result =
+  sputnik::parser::ParseModuleResult result =
       parse_module_raw("class User:\n"
                        "  attr email\n"
                        "  attr var name from @raw_name\n"
                        "  attr set password\n");
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
-  const amber::ast::ListField &body = list_field(*result.items[0], "body");
+  const sputnik::ast::ListField &body = list_field(*result.items[0], "body");
   expect(body.values.size() == 3, "attribute class body item count");
 
   const Expr &email = *body.values[0];
@@ -1218,7 +1218,7 @@ void test_attribute_forms() {
 }
 
 void test_attribute_diagnostics() {
-  amber::parser::ParseModuleResult missing_name =
+  sputnik::parser::ParseModuleResult missing_name =
       parse_module_raw("class User:\n"
                        "  attr from @email\n");
   expect(!missing_name.ok(), "attr missing name rejected");
@@ -1226,7 +1226,7 @@ void test_attribute_diagnostics() {
              missing_name.diagnostics[0].code == "E_ATTR_EXPECTED_NAME",
          "attr missing name diagnostic");
 
-  amber::parser::ParseModuleResult missing_storage =
+  sputnik::parser::ParseModuleResult missing_storage =
       parse_module_raw("class User:\n"
                        "  attr email from\n");
   expect(!missing_storage.ok(), "attr missing storage rejected");
@@ -1235,7 +1235,7 @@ void test_attribute_diagnostics() {
                  "E_ATTR_EXPECTED_STORAGE_FIELD",
          "attr missing storage diagnostic");
 
-  amber::parser::ParseModuleResult invalid_storage =
+  sputnik::parser::ParseModuleResult invalid_storage =
       parse_module_raw("class User:\n"
                        "  attr email from self.email\n");
   expect(!invalid_storage.ok(), "attr invalid storage rejected");
@@ -1243,7 +1243,7 @@ void test_attribute_diagnostics() {
              invalid_storage.diagnostics[0].code == "E_ATTR_INVALID_STORAGE",
          "attr invalid storage diagnostic");
 
-  amber::parser::ParseModuleResult invalid_call_storage =
+  sputnik::parser::ParseModuleResult invalid_call_storage =
       parse_module_raw("class User:\n"
                        "  attr email from foo()\n");
   expect(!invalid_call_storage.ok(), "attr call storage rejected");
@@ -1252,7 +1252,7 @@ void test_attribute_diagnostics() {
                  "E_ATTR_INVALID_STORAGE",
          "attr call storage diagnostic");
 
-  amber::parser::ParseModuleResult invalid_class_storage =
+  sputnik::parser::ParseModuleResult invalid_class_storage =
       parse_module_raw("class User:\n"
                        "  attr email from @@shared\n");
   expect(!invalid_class_storage.ok(), "attr class storage rejected");
@@ -1261,7 +1261,7 @@ void test_attribute_diagnostics() {
                  "E_ATTR_INVALID_STORAGE",
          "attr class storage diagnostic");
 
-  amber::parser::ParseModuleResult invalid_context =
+  sputnik::parser::ParseModuleResult invalid_context =
       parse_module_raw("attr email\n");
   expect(!invalid_context.ok(), "top-level attr rejected");
   expect(!invalid_context.diagnostics.empty() &&
@@ -1270,7 +1270,7 @@ void test_attribute_diagnostics() {
 }
 
 void test_property_parameter_diagnostic() {
-  amber::parser::ParseModuleResult result = parse_module_raw("prop f(x): x\n");
+  sputnik::parser::ParseModuleResult result = parse_module_raw("prop f(x): x\n");
   expect(!result.ok(), "property parameter list rejected");
   expect(!result.diagnostics.empty() &&
              result.diagnostics[0].code == "AMB_PROP_PARAM_LIST_FORBIDDEN",
@@ -1278,7 +1278,7 @@ void test_property_parameter_diagnostic() {
 }
 
 void test_property_grouped_diagnostics_and_context() {
-  amber::parser::ParseModuleResult local_result =
+  sputnik::parser::ParseModuleResult local_result =
       parse_module_raw("def f():\n"
                        "  prop local: 1\n");
   expect(!local_result.ok(), "local property rejected by parser");
@@ -1286,7 +1286,7 @@ void test_property_grouped_diagnostics_and_context() {
              local_result.diagnostics[0].code == "AMB_PROP_INVALID_CONTEXT",
          "local property diagnostic code");
 
-  amber::parser::ParseModuleResult setter_result =
+  sputnik::parser::ParseModuleResult setter_result =
       parse_module_raw("class Box:\n"
                        "  prop value:\n"
                        "    set(a, b):\n"
@@ -1298,14 +1298,14 @@ void test_property_grouped_diagnostics_and_context() {
 }
 
 void test_property_keywords_are_contextual_names() {
-  amber::parser::ParseModuleResult result =
+  sputnik::parser::ParseModuleResult result =
       parse_module_raw("prop = 1\n"
                        "class_prop = prop\n"
                        "attr = class_prop\n"
                        "box.prop\n"
                        "box.attr\n");
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -1356,23 +1356,23 @@ void test_control_flow_forms() {
                              "    x = x + 1\n"
                              "  while x < 5\n";
 
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult result = parser.parse_module_unit();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
   expect(result.items.size() == 1, "control module item count");
   const Expr &def = *result.items[0];
   expect(def.kind == "AstDefStmt", "control def");
-  const amber::ast::ListField &body = list_field(def, "body");
+  const sputnik::ast::ListField &body = list_field(def, "body");
   expect(body.values.size() == 6, "control body item count");
   expect(node_field(*body.values[0], "expr").kind == "AstIf", "if stmt");
   expect(node_field(*body.values[1], "expr").kind == "AstCase", "case stmt");
@@ -1384,7 +1384,7 @@ void test_control_flow_forms() {
 }
 
 void test_control_header_call_colon_boundary() {
-  amber::parser::ParseModuleResult result = parse_module_raw(
+  sputnik::parser::ParseModuleResult result = parse_module_raw(
       "if uuid.contains?(\"-\"):\n"
       "  1\n"
       "if uuid.length() == 36 and uuid.contains?(\"-\"):\n"
@@ -1392,7 +1392,7 @@ void test_control_header_call_colon_boundary() {
       "if sample >= 100 and sample <= 999:\n"
       "  3\n");
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -1434,7 +1434,7 @@ void test_one_line_control_tails_after_newline() {
       "elif true: 2\n"
       "else: 3\n");
   expect(split_elif->kind == "AstIf", "split one-line elif parses");
-  const amber::ast::ListField &outer_else =
+  const sputnik::ast::ListField &outer_else =
       list_field(*split_elif, "else_body");
   expect(outer_else.values.size() == 1 && outer_else.values[0]->kind == "AstIf",
          "split one-line elif nests as else-if");
@@ -1459,7 +1459,7 @@ void test_try_rescue_ensure_forms() {
                "  3\n");
   expect(expr->kind == "AstTry", "try expression parses");
   expect(list_field(*expr, "body").values.size() == 1, "try body item count");
-  const amber::ast::ListField &rescues = list_field(*expr, "rescues");
+  const sputnik::ast::ListField &rescues = list_field(*expr, "rescues");
   expect(rescues.values.size() == 1, "try rescue count");
   const Expr &rescue = *rescues.values[0];
   expect(string_field(rescue, "binding") == "e", "rescue binding parses");
@@ -1469,7 +1469,7 @@ void test_try_rescue_ensure_forms() {
   expect(list_field(*expr, "ensure_body").values.size() == 1,
          "ensure body parses");
 
-  amber::parser::ParseModuleResult function_handlers = parse_module_raw(
+  sputnik::parser::ParseModuleResult function_handlers = parse_module_raw(
       "def load():\n"
       "  1\n"
       "rescue |e|:\n"
@@ -1483,7 +1483,7 @@ void test_try_rescue_ensure_forms() {
          "def rescue suffix parses");
   expect(bool_field(def, "has_ensure"), "def ensure suffix parses");
 
-  amber::parser::ParseModuleResult rescue_after_ensure = parse_module_raw(
+  sputnik::parser::ParseModuleResult rescue_after_ensure = parse_module_raw(
       "try:\n"
       "  1\n"
       "ensure:\n"
@@ -1493,7 +1493,7 @@ void test_try_rescue_ensure_forms() {
   expect(has_diagnostic(rescue_after_ensure, "E_RESCUE_AFTER_ENSURE"),
          "rescue after ensure is diagnosed");
 
-  amber::parser::ParseModuleResult pipe_union = parse_module_raw(
+  sputnik::parser::ParseModuleResult pipe_union = parse_module_raw(
       "try:\n"
       "  1\n"
       "rescue TypeError | ArgumentError |e|:\n"
@@ -1538,16 +1538,16 @@ void test_typed_signature_surface() {
       "def load(path as Str?, headers as Map[Str, Str]:) -> Result[Str, Err]:\n"
       "  path\n";
 
-  amber::lexer::Lexer lexer(source, "<test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(source, "<test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult result = parser.parse_module_unit();
   if (!result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
     std::exit(1);
   }
 
@@ -1556,7 +1556,7 @@ void test_typed_signature_surface() {
   const Expr &signature = node_field(def, "signature");
   expect(string_field(signature, "return_type_expr") == "Result[Str, Err]",
          "return TypeTerm preserved");
-  const amber::ast::ListField &params = list_field(signature, "params");
+  const sputnik::ast::ListField &params = list_field(signature, "params");
   expect(params.values.size() == 2, "typed param count");
   expect(string_field(*params.values[0], "type_expr") == "Str?",
          "optional param TypeTerm preserved");
@@ -1565,7 +1565,7 @@ void test_typed_signature_surface() {
 }
 
 bool has_bool_field(const Expr &expr, const std::string &name) {
-  for (const amber::ast::BoolField &field : expr.bool_fields) {
+  for (const sputnik::ast::BoolField &field : expr.bool_fields) {
     if (field.name == name) {
       return true;
     }
@@ -1576,7 +1576,7 @@ bool has_bool_field(const Expr &expr, const std::string &name) {
 void test_native_packages() {
   // Accelerated free function: `native def ... from "..."` with a fallback body.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "native def hash(data: Bytes) -> Bytes from \"blake3.hash\":\n"
         "  data\n");
     expect(module.ok(), "native def parses");
@@ -1593,7 +1593,7 @@ void test_native_packages() {
 
   // Native class with required ownership marker + bodiless native-only methods.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "native class Hasher from \"blake3.Hasher\" owned:\n"
         "  def init() from \"blake3.hasher_new\"\n"
         "  def update!(data: Bytes) -> self from \"blake3.hasher_update\"\n"
@@ -1605,7 +1605,7 @@ void test_native_packages() {
     expect(string_field(cls, "ownership") == "owned", "ownership marker owned");
     expect(string_field(cls, "native_binding") == "blake3.Hasher",
            "native class binding");
-    const amber::ast::ListField &body = list_field(cls, "body");
+    const sputnik::ast::ListField &body = list_field(cls, "body");
     expect(body.values.size() == 3, "native class has three methods");
     const Expr &init = *body.values[0];
     expect(init.kind == "AstDefStmt", "method is AstDefStmt");
@@ -1622,12 +1622,12 @@ void test_native_packages() {
 
   // borrowed / collected markers parse.
   {
-    amber::parser::ParseModuleResult borrowed = parse_module_raw(
+    sputnik::parser::ParseModuleResult borrowed = parse_module_raw(
         "native class B from \"z.B\" borrowed\n");
     expect(borrowed.ok() &&
                string_field(*borrowed.items[0], "ownership") == "borrowed",
            "borrowed marker");
-    amber::parser::ParseModuleResult collected = parse_module_raw(
+    sputnik::parser::ParseModuleResult collected = parse_module_raw(
         "native class C from \"z.C\" collected:\n"
         "  def destroy!() from \"z.free\"\n");
     expect(collected.ok() &&
@@ -1637,7 +1637,7 @@ void test_native_packages() {
 
   // Missing ownership marker is rejected.
   {
-    amber::parser::ParseModuleResult module =
+    sputnik::parser::ParseModuleResult module =
         parse_module_raw("native class C from \"z.C\"\n");
     expect(has_diagnostic(module, "E_NATIVE_CLASS_OWNERSHIP_REQUIRED"),
            "native class without ownership marker is rejected");
@@ -1645,7 +1645,7 @@ void test_native_packages() {
 
   // A `from` binding outside `native def` / a native class is rejected.
   {
-    amber::parser::ParseModuleResult module =
+    sputnik::parser::ParseModuleResult module =
         parse_module_raw("def f() from \"x.y\"\n");
     expect(has_diagnostic(module, "E_NATIVE_BINDING_CONTEXT"),
            "plain def with a from-binding outside a native class is rejected");
@@ -1653,7 +1653,7 @@ void test_native_packages() {
 
   // `owned` without a destroy! reclaim is rejected.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "native class C from \"z.C\" owned:\n  def init() from \"z.new\"\n");
     expect(has_diagnostic(module, "E_NATIVE_OWNED_REQUIRES_DESTRUCTOR"),
            "owned native class without destroy! is rejected");
@@ -1661,7 +1661,7 @@ void test_native_packages() {
 
   // `borrowed` with a destroy! reclaim is rejected.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "native class B from \"z.B\" borrowed:\n"
         "  def destroy!() from \"z.free\"\n");
     expect(has_diagnostic(module, "E_NATIVE_BORROWED_FORBIDS_DESTRUCTOR"),
@@ -1670,13 +1670,13 @@ void test_native_packages() {
 
   // `native`, `owned`, `collected` remain ordinary identifiers off the slot.
   {
-    amber::parser::ParseModuleResult assign = parse_module_raw("native = 3\n");
+    sputnik::parser::ParseModuleResult assign = parse_module_raw("native = 3\n");
     expect(assign.ok() && assign.items[0]->kind != "AstDefStmt",
            "native is an ordinary identifier when assigned");
-    amber::parser::ParseModuleResult owned_assign =
+    sputnik::parser::ParseModuleResult owned_assign =
         parse_module_raw("owned = 1\n");
     expect(owned_assign.ok(), "owned is an ordinary identifier");
-    amber::parser::ParseModuleResult def_named_native =
+    sputnik::parser::ParseModuleResult def_named_native =
         parse_module_raw("def native():\n  1\n");
     expect(def_named_native.ok(), "def named native parses");
     const Expr &def = *def_named_native.items[0];
@@ -1687,7 +1687,7 @@ void test_native_packages() {
   }
 
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "class Error < NativeError\n"
         "class StepError < Error\n");
     expect(module.ok(), "bodyless error classes parse");
@@ -1702,11 +1702,11 @@ void test_native_packages() {
     expect(list_field(*module.items[0], "body").values.empty(),
            "bodyless class has an empty body");
 
-    amber::parser::ParseModuleResult error_assign =
+    sputnik::parser::ParseModuleResult error_assign =
         parse_module_raw("error = 1\n");
     expect(error_assign.ok(), "error is an ordinary identifier");
 
-    amber::parser::ParseModuleResult old_error =
+    sputnik::parser::ParseModuleResult old_error =
         parse_module_raw("error Sqlite3.Error < NativeError\n");
     expect(old_error.items.empty() || old_error.items[0]->kind != "AstClassDef",
            "legacy error spelling is not a declaration alias");
@@ -1717,7 +1717,7 @@ void test_macro_def_surface() {
   // `macro def` (M0): the compile-time authoring form. Mirrors the `native`
   // contextual modifier and tags the def node with is_macro.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "macro def assert(check):\n"
         "  check\n");
     expect(module.ok(), "macro def parses");
@@ -1732,7 +1732,7 @@ void test_macro_def_surface() {
   // A macro with a parameter list still routes through the standard signature
   // path (so the node is uniformly tagged), not the clause/many-def path.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "macro def swap(a, b):\n"
         "  a\n");
     expect(module.ok(), "macro def with params parses");
@@ -1744,9 +1744,9 @@ void test_macro_def_surface() {
   // `macro` stays an ordinary identifier everywhere except immediately before
   // `def` — no new hard keyword is introduced.
   {
-    amber::parser::ParseModuleResult assign = parse_module_raw("macro = 1\n");
+    sputnik::parser::ParseModuleResult assign = parse_module_raw("macro = 1\n");
     expect(assign.ok(), "macro is an ordinary identifier in assignment");
-    amber::parser::ParseModuleResult def_named_macro =
+    sputnik::parser::ParseModuleResult def_named_macro =
         parse_module_raw("def macro():\n  1\n");
     expect(def_named_macro.ok(), "def named macro parses");
     const Expr &def = *def_named_macro.items[0];
@@ -1761,7 +1761,7 @@ void test_string_tag_surface() {
   // `string_tag macro def` (§8.5): the declared-surface modifier for tag
   // macros. The def is tagged both is_macro and is_string_tag.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "string_tag macro def sql(t as Ast.StringTemplate):\n"
         "  return t\n");
     expect(module.ok(), "string_tag macro def parses");
@@ -1777,10 +1777,10 @@ void test_string_tag_surface() {
   // `string_tag` stays an ordinary identifier everywhere except immediately
   // before `macro def`.
   {
-    amber::parser::ParseModuleResult assign =
+    sputnik::parser::ParseModuleResult assign =
         parse_module_raw("string_tag = 1\n");
     expect(assign.ok(), "string_tag is an ordinary identifier in assignment");
-    amber::parser::ParseModuleResult plain =
+    sputnik::parser::ParseModuleResult plain =
         parse_module_raw("macro def sql(t):\n  return t\n");
     expect(plain.ok(), "plain macro def named sql parses");
     expect(!has_bool_field(*plain.items[0], "is_string_tag"),
@@ -1792,7 +1792,7 @@ void test_percent_control_lines() {
   // §6 `%`-control lines: inside a macro body a line-leading `%` marks a
   // compile-time statement (macro_control); mid-expression `%` stays modulo.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "macro def m(x):\n"
         "  %n = 7 % 4\n"
         "  #{x} + 1\n");
@@ -1810,7 +1810,7 @@ void test_percent_control_lines() {
   // (it is not a statement form; the pattern-assignment path rejects it at
   // pattern compile, not here).
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "def f():\n"
         "  y = 7 % 4\n"
         "  y\n");
@@ -1821,7 +1821,7 @@ void test_percent_control_lines() {
 void test_quote_surface() {
   // `quote:` (block form) yields an AstQuote whose body is unevaluated AST.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "q = quote:\n"
         "  x + 1\n");
     expect(module.ok(), "quote block parses");
@@ -1829,7 +1829,7 @@ void test_quote_surface() {
     expect(assign.kind == "AstAssign", "quote is assignment RHS");
     const Expr &quote = node_field(assign, "right");
     expect(quote.kind == "AstQuote", "quote node kind");
-    const amber::ast::ListField &body = list_field(quote, "body");
+    const sputnik::ast::ListField &body = list_field(quote, "body");
     expect(body.values.size() == 1, "quote body has one statement");
     expect(node_field(*body.values[0], "expr").kind == "AstBinary",
            "quoted body preserves ordinary AST");
@@ -1838,31 +1838,31 @@ void test_quote_surface() {
   // Quoted syntax is validated where it is spliced, not where the quote is
   // written. Class-injection macros can therefore quote class-only members.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "quote:\n"
         "  include Shared\n");
     expect(module.ok(), "quote can represent a class-only include member");
     const Expr &quote = node_field(*module.items[0], "expr");
-    const amber::ast::ListField &body = list_field(quote, "body");
+    const sputnik::ast::ListField &body = list_field(quote, "body");
     expect(body.values.size() == 1 &&
                body.values[0]->kind == "AstIncludeStmt",
            "quoted include preserves its member AST");
 
-    amber::parser::ParseModuleResult ordinary =
+    sputnik::parser::ParseModuleResult ordinary =
         parse_module_raw("include Shared\n");
     expect(!ordinary.ok(), "ordinary module-level include remains invalid");
   }
 
   // Inside a quote, unquote / unquote_splice are splice holes.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "quote:\n"
         "  unquote(a)\n"
         "  unquote_splice(b)\n");
     expect(module.ok(), "quote with splices parses");
     const Expr &quote = node_field(*module.items[0], "expr");
     expect(quote.kind == "AstQuote", "bare quote statement");
-    const amber::ast::ListField &body = list_field(quote, "body");
+    const sputnik::ast::ListField &body = list_field(quote, "body");
     expect(body.values.size() == 2, "two splice statements");
     const Expr &u = node_field(*body.values[0], "expr");
     expect(u.kind == "AstUnquote", "unquote hole");
@@ -1874,19 +1874,19 @@ void test_quote_surface() {
   // `unhygienic(name)` inside a quote is the hygiene escape hatch (§9); it parses
   // to an AstUnhygienic node (consumed by quote lowering into an unmarked name).
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "quote:\n"
         "  f(unhygienic(x))\n");
     expect(module.ok(), "unhygienic in a quote parses");
     const Expr &quote = node_field(*module.items[0], "expr");
-    const amber::ast::ListField &body = list_field(quote, "body");
+    const sputnik::ast::ListField &body = list_field(quote, "body");
     const Expr &chain = node_field(*body.values[0], "expr");
-    const amber::ast::ListField &tails = list_field(chain, "tails");
-    const amber::ast::ListField &args = list_field(*tails.values[0], "args");
+    const sputnik::ast::ListField &tails = list_field(chain, "tails");
+    const sputnik::ast::ListField &args = list_field(*tails.values[0], "args");
     expect(args.values[0]->kind == "AstUnhygienic",
            "unhygienic parses to AstUnhygienic in argument position");
     // Outside a quote, `unhygienic` stays an ordinary identifier/call.
-    amber::parser::ParseModuleResult call =
+    sputnik::parser::ParseModuleResult call =
         parse_module_raw("y = unhygienic(z)\n");
     expect(call.ok(), "unhygienic outside a quote is an ordinary call");
     const Expr &rhs = node_field(node_field(*call.items[0], "expr"), "right");
@@ -1898,15 +1898,15 @@ void test_quote_surface() {
   // call, `quote`/`unquote` remain usable identifiers, and inline `quote:` in a
   // map literal is a plain key (block form needs a trailing newline).
   {
-    amber::parser::ParseModuleResult call = parse_module_raw("y = unquote(z)\n");
+    sputnik::parser::ParseModuleResult call = parse_module_raw("y = unquote(z)\n");
     expect(call.ok(), "unquote outside quote parses");
     const Expr &rhs = node_field(node_field(*call.items[0], "expr"), "right");
     expect(rhs.kind == "AstPostfixChain",
            "unquote outside a quote stays an ordinary call");
-    amber::parser::ParseModuleResult ident =
+    sputnik::parser::ParseModuleResult ident =
         parse_module_raw("quote = 1\nunquote = 2\n");
     expect(ident.ok(), "quote/unquote are ordinary identifiers");
-    amber::parser::ParseModuleResult map = parse_module_raw("m = {quote: 1}\n");
+    sputnik::parser::ParseModuleResult map = parse_module_raw("m = {quote: 1}\n");
     expect(map.ok(), "inline quote: is a plain map key");
     const Expr &lit = node_field(node_field(*map.items[0], "expr"), "right");
     expect(lit.kind == "AstMapLiteral", "map literal with quote key parses");
@@ -1917,12 +1917,12 @@ void test_template_splice_surface() {
   // M4 template surface: inside a `macro def` body, `#{expr}` is a splice
   // hole (sugar for unquote), `#{*expr}` a sibling splice (unquote_splice).
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "macro def twice(x):\n"
         "  #{x} + #{x}\n");
     expect(module.ok(), "template splice parses");
     const Expr &def = *module.items[0];
-    const amber::ast::ListField &body = list_field(def, "body");
+    const sputnik::ast::ListField &body = list_field(def, "body");
     const Expr &sum = node_field(*body.values[0], "expr");
     expect(sum.kind == "AstBinary", "template body is ordinary AST");
     expect(node_field(sum, "left").kind == "AstUnquote",
@@ -1934,16 +1934,16 @@ void test_template_splice_surface() {
   // `#{*list}` in argument position parses to AstUnquoteSplice; a line
   // starting with a splice hole is code, not a comment.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "macro def call_all(*xs):\n"
         "  f(1, #{*xs})\n"
         "  #{xs}\n");
     expect(module.ok(), "sibling splice parses");
     const Expr &def = *module.items[0];
-    const amber::ast::ListField &body = list_field(def, "body");
+    const sputnik::ast::ListField &body = list_field(def, "body");
     const Expr &chain = node_field(*body.values[0], "expr");
-    const amber::ast::ListField &tails = list_field(chain, "tails");
-    const amber::ast::ListField &args = list_field(*tails.values[0], "args");
+    const sputnik::ast::ListField &tails = list_field(chain, "tails");
+    const sputnik::ast::ListField &args = list_field(*tails.values[0], "args");
     expect(args.values.size() == 2 &&
                args.values[1]->kind == "AstUnquoteSplice",
            "#{*xs} parses to AstUnquoteSplice");
@@ -1953,11 +1953,11 @@ void test_template_splice_surface() {
 
   // One-line macro bodies carry the template surface too.
   {
-    amber::parser::ParseModuleResult module =
+    sputnik::parser::ParseModuleResult module =
         parse_module_raw("macro def inc(x): #{x} + 1\n");
     expect(module.ok(), "one-line template body parses");
     const Expr &def = *module.items[0];
-    const amber::ast::ListField &body = list_field(def, "body");
+    const sputnik::ast::ListField &body = list_field(def, "body");
     const Expr &sum = node_field(*body.values[0], "expr");
     expect(sum.kind == "AstBinary" &&
                node_field(sum, "left").kind == "AstUnquote",
@@ -1967,12 +1967,12 @@ void test_template_splice_surface() {
   // The macro body parses at quote depth, so the kernel splice vocabulary
   // (`unquote` / `unhygienic`) is live in templates without an explicit quote.
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "macro def m(x):\n"
         "  unquote(x) + unhygienic(y)\n");
     expect(module.ok(), "kernel splices parse in template body");
     const Expr &def = *module.items[0];
-    const amber::ast::ListField &body = list_field(def, "body");
+    const sputnik::ast::ListField &body = list_field(def, "body");
     const Expr &sum = node_field(*body.values[0], "expr");
     expect(node_field(sum, "left").kind == "AstUnquote",
            "unquote is live in a macro body");
@@ -1984,13 +1984,13 @@ void test_template_splice_surface() {
   // comments out the rest of the line, and bare `#` comments inside macro
   // bodies stay comments.
   {
-    amber::parser::ParseModuleResult outside =
+    sputnik::parser::ParseModuleResult outside =
         parse_module_raw("y = 1 #{not_a_splice}\n");
     expect(outside.ok(), "#{ outside a macro body stays a comment");
     const Expr &rhs =
         node_field(node_field(*outside.items[0], "expr"), "right");
     expect(rhs.kind == "AstLiteral", "the commented tail is dropped");
-    amber::parser::ParseModuleResult inside = parse_module_raw(
+    sputnik::parser::ParseModuleResult inside = parse_module_raw(
         "macro def m(x):\n"
         "  # plain comment\n"
         "  #{x} + 1\n");
@@ -2005,10 +2005,10 @@ void test_export_macro_marker() {
   // `export macro name [as public]` marks a compile-time macro export (§11);
   // unmarked items and `macro` as an exported identifier are unaffected.
   {
-    amber::parser::ParseModuleResult module =
+    sputnik::parser::ParseModuleResult module =
         parse_module_raw("export macro sql as psql, helper\n");
     expect(module.ok(), "export macro parses");
-    const amber::ast::ListField &items = list_field(*module.items[0], "items");
+    const sputnik::ast::ListField &items = list_field(*module.items[0], "items");
     expect(items.values.size() == 2, "two export items");
     expect(bool_field(*items.values[0], "is_macro"),
            "macro-marked item carries is_macro");
@@ -2019,10 +2019,10 @@ void test_export_macro_marker() {
            "unmarked export item has no is_macro field");
   }
   {
-    amber::parser::ParseModuleResult module =
+    sputnik::parser::ParseModuleResult module =
         parse_module_raw("export macro as m\n");
     expect(module.ok(), "exporting an identifier named macro parses");
-    const amber::ast::ListField &items = list_field(*module.items[0], "items");
+    const sputnik::ast::ListField &items = list_field(*module.items[0], "items");
     expect(items.values.size() == 1 &&
                string_field(*items.values[0], "local_name") == "macro" &&
                string_field(*items.values[0], "public_name") == "m" &&
@@ -2035,7 +2035,7 @@ void test_bare_block_suffix_statement() {
   // M5 trigger surface: `name:` + INDENT at statement position parses to a
   // postfix chain whose only tail is a block suffix (the macro DSL entry).
   {
-    amber::parser::ParseModuleResult module = parse_module_raw(
+    sputnik::parser::ParseModuleResult module = parse_module_raw(
         "routes:\n"
         "  f(1)\n");
     expect(module.ok(), "paren-less block suffix statement parses");
@@ -2044,7 +2044,7 @@ void test_bare_block_suffix_statement() {
     expect(node_field(chain, "base").kind == "AstName" &&
                string_field(node_field(chain, "base"), "name") == "routes",
            "chain base is the macro name");
-    const amber::ast::ListField &tails = list_field(chain, "tails");
+    const sputnik::ast::ListField &tails = list_field(chain, "tails");
     expect(tails.values.size() == 1 &&
                tails.values[0]->kind == "AstTailBlockSuffix",
            "single block-suffix tail");
@@ -2057,15 +2057,15 @@ void test_bare_block_suffix_statement() {
   // The newline gate keeps every existing `name:` reading intact: control
   // headers, map keys, and `quote:` are unaffected.
   {
-    amber::parser::ParseModuleResult control = parse_module_raw(
+    sputnik::parser::ParseModuleResult control = parse_module_raw(
         "if ready:\n"
         "  1\n");
     expect(control.ok(), "if-header colon is not a block suffix");
     expect(node_field(*control.items[0], "expr").kind == "AstIf",
            "if statement still parses");
-    amber::parser::ParseModuleResult map = parse_module_raw("m = {routes: 1}\n");
+    sputnik::parser::ParseModuleResult map = parse_module_raw("m = {routes: 1}\n");
     expect(map.ok(), "map key colon is not a block suffix");
-    amber::parser::ParseModuleResult quoted = parse_module_raw(
+    sputnik::parser::ParseModuleResult quoted = parse_module_raw(
         "quote:\n"
         "  1\n");
     expect(quoted.ok(), "quote block still parses");
@@ -2075,12 +2075,12 @@ void test_bare_block_suffix_statement() {
 }
 
 void test_v20_9_named_multiblock_surface() {
-  amber::parser::ParseModuleResult signature = parse_module_raw(
+  sputnik::parser::ParseModuleResult signature = parse_module_raw(
       "def request(url, &success as Handler:, &error: null, &body):\n"
       "  null\n");
   expect(signature.ok(), "named callable signature parses");
   const Expr &def = *signature.items[0];
-  const amber::ast::ListField &params =
+  const sputnik::ast::ListField &params =
       list_field(node_field(def, "signature"), "params");
   expect(params.values.size() == 4, "named callable signature arity");
   expect(params.values[1]->kind == "AstNamedCallableParameter",
@@ -2097,7 +2097,7 @@ void test_v20_9_named_multiblock_surface() {
              string_field(*params.values[3], "param_kind") == "block",
          "final anonymous block parameter remains independent");
 
-  amber::parser::ParseModuleResult call = parse_module_raw(
+  sputnik::parser::ParseModuleResult call = parse_module_raw(
       "request(url, success: &handler) with:\n"
       "  result |value|:\n"
       "    value\n"
@@ -2105,14 +2105,14 @@ void test_v20_9_named_multiblock_surface() {
       "    _1\n");
   expect(call.ok(), "named multiblock call parses");
   const Expr &chain = node_field(*call.items[0], "expr");
-  const amber::ast::ListField &tails = list_field(chain, "tails");
+  const sputnik::ast::ListField &tails = list_field(chain, "tails");
   expect(tails.values.size() == 2 &&
              tails.values[1]->kind == "AstTailMultiblockSuffix",
          "multiblock is a distinct postfix tail");
   const Expr &suffix = node_field(*tails.values[1], "suffix");
   expect(suffix.kind == "AstMultiblockSuffix",
          "multiblock suffix preserves surface AST");
-  const amber::ast::ListField &entries = list_field(suffix, "entries");
+  const sputnik::ast::ListField &entries = list_field(suffix, "entries");
   expect(entries.values.size() == 2 &&
              entries.values[0]->kind == "AstNamedBlockEntry" &&
              string_field(*entries.values[0], "name") == "result" &&
@@ -2122,12 +2122,12 @@ void test_v20_9_named_multiblock_surface() {
              list_field(*entries.values[1], "params").values.empty(),
          "explicit and placeholder entry parameter forms stay distinct");
 
-  const amber::ast::ListField &args = list_field(*tails.values[0], "args");
+  const sputnik::ast::ListField &args = list_field(*tails.values[0], "args");
   expect(args.values[1]->kind == "AstKeywordArg" &&
              node_field(*args.values[1], "value").kind == "AstCallableRef",
          "callable reference keyword value is not a block-pass");
 
-  amber::parser::ParseModuleResult contextual =
+  sputnik::parser::ParseModuleResult contextual =
       parse_module_raw("with = 1\nwith\n");
   expect(contextual.ok(), "with remains a contextual identifier");
 }

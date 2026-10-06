@@ -15,16 +15,16 @@ stdout и stderr, управление временем жизни, строко
 Модуль называется `system`, как предложено в задаче. Lowercase соответствует
 соседним системным модулям `io`, `fs`, `net`, `task`.
 
-```amber
+```sputnik
 import system
 from system import cmd
 
 # Самый короткий путь от программы к строке stdout.
 version = system.output("git", "--version")
 
-amber_code = "p(1 + 2)"
+sputnik_code = "p(1 + 2)"
 command = cmd"""
-  bin/iamber --eval "#{amber_code}"
+  bin/isputnik --eval "#{sputnik_code}"
   """
 
 text = command.output()
@@ -56,10 +56,10 @@ result.status.code
 
 ### 2.1. Обычный конструктор
 
-```amber
-command = system.command("bin/iamber", "--eval", amber_code)
-command.argv                         # ["bin/iamber", "--eval", amber_code]
-command = command.with(cwd: project_dir, env: {"AMBER_ENV": "test"})
+```sputnik
+command = system.command("bin/isputnik", "--eval", sputnik_code)
+command.argv                         # ["bin/isputnik", "--eval", sputnik_code]
+command = command.with(cwd: project_dir, env: {"SPUTNIK_ENV": "test"})
 ```
 
 `system.command(program, *args, cwd: null, env: {}, clear_env: false)`
@@ -70,7 +70,7 @@ command = command.with(cwd: project_dir, env: {"AMBER_ENV": "test"})
 
 `program` — непустой `Str` или `fs.Path`. Аргументы — `Str`, `fs.Path`,
 `Int`, `Float`, `Bool`; числовые и логические значения используют обычное
-Amber `to_str()`, строки не перекодируются. `null`, `Bytes`, коллекции и
+Sputnik `to_str()`, строки не перекодируются. `null`, `Bytes`, коллекции и
 произвольные объекты требуют явного преобразования и иначе дают `TypeError`.
 Нулевой байт запрещён в program, аргументах, cwd и env. Пустой аргумент
 разрешён. Динамическая ошибка значения даёт `ArgumentError` до запуска.
@@ -80,18 +80,18 @@ Amber `to_str()`, строки не перекодируются. `null`, `Bytes
 
 ### 2.2. Интерполяция сохраняет границы аргументов
 
-```amber
+```sputnik
 quoted = cmd"""
-  bin/iamber --eval "#{amber_code}"
+  bin/isputnik --eval "#{sputnik_code}"
   """
 quoted.argv
-# ["bin/iamber", "--eval", amber_code]
+# ["bin/isputnik", "--eval", sputnik_code]
 
 unquoted = cmd"""
-  bin/iamber --eval #{amber_code}
+  bin/isputnik --eval #{sputnik_code}
   """
 unquoted.argv
-# Те же три аргумента, даже если amber_code содержит пробелы и переводы строк.
+# Те же три аргумента, даже если sputnik_code содержит пробелы и переводы строк.
 
 named = cmd"""
   tool --name=#{name} #{path}
@@ -111,7 +111,7 @@ listed.argv
 1. Макрос разбирает только статический текст. Каждая `#{expr}` остаётся
    отдельным value slot; её содержимое никогда не разбирается как командный
    синтаксис. Даже кавычки, `;`, `$()`, обратные кавычки и новые строки в
-   `amber_code` останутся байтами одного аргумента.
+   `sputnik_code` останутся байтами одного аргумента.
 2. Смежные части одного слова конкатенируются. Например, `pre#{x}post`
    образует один аргумент. Пустой самостоятельный scalar slot образует `""`,
    а не исчезает. Несколько интерполяций вычисляются слева направо, один раз.
@@ -124,8 +124,8 @@ listed.argv
    Новая строка — продолжение **одной** команды. Она не запускает следующую.
    Структурный dedent выполняется по общим правилам текстовых блоков.
 5. Статические одинарные и двойные кавычки группируют текст и удаляются.
-   `""` и `''` дают пустой аргумент. В обеих группах Amber-интерполяции
-   остаются активны: кавычки внутри `cmd` не меняют синтаксис Amber.
+   `""` и `''` дают пустой аргумент. В обеих группах Sputnik-интерполяции
+   остаются активны: кавычки внутри `cmd` не меняют синтаксис Sputnik.
 6. Неэкранированные `|`, `&`, `;`, `<`, `>`, `$`, обратная кавычка,
    `(`, `)`, `*`, `?`, `[`, `]`, `~` вне кавычек дают диагностику с
    предложением использовать явный shell или заключить литерал в кавычки.
@@ -138,7 +138,7 @@ listed.argv
    кавычка и пустая команда — compile-time ошибки. Последовательность `\n`
    в command-грамматике даёт букву `n`; для программного перевода строки
    нужен scalar slot со строкой, содержащей LF, либо буквальный LF в кавычках.
-8. `\#{` — предусмотренное Amber экранирование маркера интерполяции и
+8. `\#{` — предусмотренное Sputnik экранирование маркера интерполяции и
    даёт буквальные `#{`. Нельзя backslash-escape уже выделенный value slot.
    Интерполяция не может закрыть кавычку или создать разделитель аргументов.
 
@@ -151,11 +151,11 @@ listed.argv
 Канонический экспорт — `cmd`. Желаемое длинное написание получается
 обычным переименованием импорта, без второго поведения:
 
-```amber
+```sputnik
 from system import cmd as system
 
 command = system"""
-  bin/iamber --eval "#{amber_code}"
+  bin/isputnik --eval "#{sputnik_code}"
   """
 text = command.output()
 ```
@@ -167,10 +167,10 @@ text = command.output()
 **Однострочная форма.** Сейчас `cmd"""bin/run --help"""` не поддерживается:
 `Lexer::lex_text_block` требует перевод строки после opener и выдаёт
 `AMB_TEXTBLOCK_OPENER`. Это ограничение самого текстового литерала, до
-обработки тега. Проверено текущим `build/amberc parse`.
+обработки тега. Проверено текущим `build/sputnik parse`.
 
 Для коротких команд реализованы `cmd"bin/run --help"` и
-`cmd'bin/iamber --eval "#{amber_code}"'`. Обе формы поддерживают интерполяцию
+`cmd'bin/isputnik --eval "#{sputnik_code}"'`. Обе формы поддерживают интерполяцию
 и передают макросу `Ast.StringTemplate` с соответствующим `quote_kind`.
 Это общий механизм для всех string tags; обычная строка в одинарных кавычках
 без тега по-прежнему не интерполируется. Поддержка закреплена в lexer, VM,
@@ -183,7 +183,7 @@ corpus и full native проверках.
 
 ### 2.4. Shell — явная команда
 
-```amber
+```sputnik
 command = system.shell("sort | uniq -c", executable: "/bin/sh")
 result = command.capture(input: lines)
 
@@ -192,21 +192,21 @@ command = system.shell('printf "%s" "$1"', args: [text])
 ```
 
 `system.shell(script, executable: "/bin/sh", args: [])` строит обычный
-`Command` с argv `[executable, "-c", script, "amber-shell", *args]`:
+`Command` с argv `[executable, "-c", script, "sputnik-shell", *args]`:
 `$0` фиксирован, пользовательские args начинаются с `$1`. Shell работает без
 login/interactive flags и не выбирается через `$SHELL`. `script` — явный
 shell source; интерполяция в обычный `Str` здесь не получает защиту `cmd`.
 Capability проверяется для executable shell; выполняемые им команды не
-проходят через Amber повторно. Отдельный `sh` tag и pipeline DSL отложены.
+проходят через Sputnik повторно. Отдельный `sh` tag и pipeline DSL отложены.
 
 ## 3. Простой запуск и результат
 
 ### 3.1. `output`, `capture`, `run`
 
-```amber
+```sputnik
 text = system.output("git", "status", "--short")
 
-result = system.capture("bin/iamber", "--eval", amber_code, check: false)
+result = system.capture("bin/isputnik", "--eval", sputnik_code, check: false)
 if result.success?():
   p(result.stdout_text())
 else:
@@ -234,13 +234,13 @@ status, но не подавляет ошибки запуска, IO, callbacks,
 
 `input: Str | Bytes | null` в `output`/`capture` пишет UTF-8 или исходные
 байты и обязательно закрывает stdin. `null` означает немедленный EOF.
-Это не наследование stdin Amber. `run(stdin_from: :inherit)` явно подключает
+Это не наследование stdin Sputnik. `run(stdin_from: :inherit)` явно подключает
 терминальный ввод. `output` фиксирует оба выхода в capture; для изменения
 маршрутов используется `capture` или `run`.
 
 ### 3.2. Стабильные типы
 
-```amber
+```sputnik
 result.command              # Command
 result.status               # Status
 result.stdout               # Bytes?; null, если поток не сохраняли
@@ -272,17 +272,17 @@ exit code. Для неизвестного имени signal остаётся `n
 
 Метаданные результата и byte buffers неизменяемы. Callback values не
 замораживаются неявно: shareability всего `Result` зависит от них по общим
-правилам Amber. `Status` и `Command` shareable. Свойства показаны в getter
+правилам Sputnik. `Status` и `Command` shareable. Свойства показаны в getter
 нотации; предикаты и операции имеют обычную call-форму.
 
 ## 4. Удобный capture трёх потоков
 
-Для потокового обмена `capture` использует существующий Amber multiblock
+Для потокового обмена `capture` использует существующий Sputnik multiblock
 `with:` с именованными callable-параметрами `&stdin: null`, `&stdout: null`,
 `&stderr: null`. Каждый callback опционален и получает один endpoint.
 Библиотека управляет параллельным IO и временем жизни процесса.
 
-```amber
+```sputnik
 command = cmd"""
   worker --stdio
   """
@@ -303,7 +303,7 @@ result = command.capture(timeout: 30.0) with:
 По общей multiblock-семантике блоки становятся обычными callable keyword
 arguments. Готовые функции передаются через callable references:
 
-```amber
+```sputnik
 result = command.capture(
   timeout: 30.0,
   stdin: &write_request,
@@ -315,7 +315,7 @@ result = command.capture(
 Если переменная уже содержит callable, она передаётся без `&`.
 `stdin: null`, `stdout: null`, `stderr: null` эквивалентны отсутствующему
 callback. Anonymous block у `capture` не принимается. Правила аргументов
-соответствуют [named multiblock](amber_v20.9_named_multiblock_rfc.md).
+соответствуют [named multiblock](sputnik_v20.9_named_multiblock_rfc.md).
 
 Точная семантика:
 
@@ -334,7 +334,7 @@ callback. Anonymous block у `capture` не принимается. Правил
    только при стандартном значении `:capture` для этого потока. Иначе —
    `ArgumentError` до spawn. При `stderr_to: :stdout` stderr callback запрещён,
    а stdout callback, если передан, читает объединённый поток.
-3. Обработчики запускаются одновременно как управляемые библиотекой Amber
+3. Обработчики запускаются одновременно как управляемые библиотекой Sputnik
    tasks на общей strand вызова, используя семантику `task.async`. Они могут
    приостанавливаться на IO, каналах и других cancellation points. Это
    конкурентное IO, не обещание CPU-параллелизма callbacks.
@@ -362,7 +362,7 @@ callback. Anonymous block у `capture` не принимается. Правил
 
 Например, для streaming stdin с обычным накоплением stdout/stderr достаточно:
 
-```amber
+```sputnik
 result = system.capture("processor") with:
   stdin |input|:
     chunks.each |chunk|:
@@ -380,19 +380,19 @@ callbacks — контракт именно `system.capture`. Порядок ent
 
 ## 5. Async без второго набора методов
 
-```amber
+```sputnik
 import task
 from system import cmd
 
 first = task.async:
   command = cmd"""
-    bin/iamber --eval #{first_code}
+    bin/isputnik --eval #{first_code}
     """
   command.capture()
 
 second = task.async:
   command = cmd"""
-    bin/iamber --eval #{second_code}
+    bin/isputnik --eval #{second_code}
     """
   command.output()
 
@@ -413,7 +413,7 @@ second_text = second.wait()
 
 ## 6. Низкоуровневый `Process`
 
-```amber
+```sputnik
 process = command.spawn()
 try:
   result = process.communicate(input: payload)
@@ -431,7 +431,7 @@ record_input: false, drain_timeout: 1.0, kill_after: 1.0)` выполняет
 
 Для полного ручного контроля:
 
-```amber
+```sputnik
 command.spawn() |process|:
   out_task = task.async:
     process.stdout.read_all!(limit: 16777216)
@@ -501,7 +501,7 @@ wait, а передаёт потерянный handle supervisor на cleanup.
 - `env` — overlay поверх снимка окружения родителя; значение `null` удаляет
   ключ. `clear_env: true` начинает с пустого env. Ключи — непустые строки без
   `=` и NUL, значения — строки без NUL. Само наследование env входит в запуск;
-  чтение env в Amber-коде по-прежнему требует собственного `env.read`.
+  чтение env в Sputnik-коде по-прежнему требует собственного `env.read`.
 - Program с `/` разрешается относительно эффективного cwd ребёнка; без `/`
   ищется по эффективному child `PATH`. При отсутствии PATH используется
   фиксированный `/usr/bin:/bin`, пустой компонент PATH явно означает child cwd.
@@ -551,7 +551,7 @@ pipes, было бы ошибкой. Произвольные `io.Reader`/`Write
   раз только ради результата. `input_bytes` считается в любом случае.
 - IO остаётся бинарным. UTF-8 декодируется явно; incremental text reader
   должен сохранять неполную многобайтную последовательность между chunks.
-- Raw write в закрытый stdin поднимает `BrokenPipeError`, не завершает Amber
+- Raw write в закрытый stdin поднимает `BrokenPipeError`, не завершает Sputnik
   через SIGPIPE. Managed `input:` рассматривает ранний EPIPE как закрытие
   входа, продолжает drain и сохраняет `input_closed_early?()`. Если пользователь
   хочет проверить полную доставку в pipe, проверяет этот флаг. EPIPE внутри
@@ -647,13 +647,13 @@ Partial result может иметь `status == null`, если ОС ещё не
 `complete?()` тогда false. `Result.check()` для incomplete result даёт
 `ProcessStateError` вместо предположения об успешном выполнении.
 
-## 8. Интеграция с существующим Amber
+## 8. Интеграция с существующим Sputnik
 
 Эти пункты отделяют уже имеющиеся возможности от требуемых изменений.
 
 | Найденная основа | Что добавить для `system` |
 | --- | --- |
-| `corpus/run/macro_string_tag/source.am`: tag получает `Ast.StringTemplate` с parts | Stdlib macro export `cmd`, командный parser, hygienic lowering в Command |
+| `corpus/run/macro_string_tag/source.s`: tag получает `Ast.StringTemplate` с parts | Stdlib macro export `cmd`, командный parser, hygienic lowering в Command |
 | `frontend/parser/parser.cpp`: `AstStringText`, `AstStringExpr`, `AstStringEscape` с source/value | Зафиксировать единый source-view adapter после dedent, включая escapes/raw text; не терять происхождение символов до cmd lexer |
 | `runtime/io.h`, `runtime/io.cpp`: `RuntimeIoResource`, байты, ownership | OS pipe endpoints, доступные через общие Reader/Writer selectors |
 | `RuntimePipe::State` — mutex/CV и очередь байтов в памяти | Не передавать `io.Pipe` ребёнку как fd; это другой транспорт |
@@ -665,7 +665,7 @@ Partial result может иметь `status == null`, если ОС ещё не
 | `profile/capabilities.cpp`: уже есть `process.spawn`, `process.signal` | Проверки в process boundary, без новых capability aliases `system.*` |
 | `profile/effects.cpp`: canonical effect `process` пока отсутствует | Добавить `process`; отразить process IO/wait как `process` + `async`, сохранение результата как `alloc` |
 | `runtime/world.h`: provider для внешнего IO | Process provider boundary и отказ от реального spawn при replay |
-| `tools/amberc/main.cpp`: native stdlib codegen | Тот же runtime engine, native callbacks и parity с VM |
+| `tools/sputnik/main.cpp`: native stdlib codegen | Тот же runtime engine, native callbacks и parity с VM |
 
 ### 8.1. Макрос
 
@@ -677,7 +677,7 @@ Partial result может иметь `status == null`, если ОС ещё не
 
 Source view нужно проверить на реальных AST tests: текущий пример sqlish
 не обрабатывает все escape parts и не является готовым парсером `cmd`.
-Если ранняя проверка Amber escapes отбрасывает command escape до macro
+Если ранняя проверка Sputnik escapes отбрасывает command escape до macro
 expansion, этот путь для tags должен сохранять source и делегировать
 проверку provider. Это согласуется с source/cooked-разделением,
 предложенным в [дизайне Regexp](DESIGN-stdlib-regexp-api-2026-07-08.md).
@@ -700,7 +700,7 @@ Native stdlib macro provider должен поддержать те же exports
 `runtime/stdlib_system.cpp`; общие IO adapters остаются в IO layer.
 
 Backend предпочитает `posix_spawn` с file actions, явным env, cwd и signal
-attributes на поддерживаемых платформах. Запрещён callback Amber/C++
+attributes на поддерживаемых платформах. Запрещён callback Sputnik/C++
 пользователя между fork и exec. Если нужен fallback, post-fork часть должна
 состоять только из заранее подготовленных async-signal-safe операций и
 error-pipe handshake; capability/provider проверки выполняются до неё.
@@ -746,7 +746,7 @@ status. Нельзя включать SIG_IGN/SA_NOCLDWAIT для CHLD при у
 несовместимой disposition запуск отклоняется или использует согласованный
 host provider. Signal handlers не вызывают VM и не выполняют wait/drain.
 
-Дети получают пустую runtime signal mask; dispositions, изменённые Amber
+Дети получают пустую runtime signal mask; dispositions, изменённые Sputnik
 ради собственного runtime, восстанавливаются в default, включая SIGPIPE.
 Неизменённые host dispositions сохраняются согласно платформенному
 контракту; изменение signal state локально ребёнку. Нужно согласовать это с
@@ -757,9 +757,9 @@ host provider. Signal handlers не вызывают VM и не выполняю
 принадлежащего операции ребёнка входит в spawn lease и не требует отдельного
 granted signal, иначе отказ в capability делал бы cleanup невозможным.
 `cwd`, file redirects, наследование env описываются в spawn request для host
-policy. Открытие redirect file самим Amber остаётся обычным `fs` действием.
+policy. Открытие redirect file самим Sputnik остаётся обычным `fs` действием.
 
-Разрешение spawn не ограничивает действия исполняемой программы Amber
+Разрешение spawn не ограничивает действия исполняемой программы Sputnik
 capabilities: это host process с OS правами. Target check пути также не
 обещает идентичность executable при concurrent filesystem replacement;
 host sandbox или descriptor-based execution нужны для более сильной политики.
@@ -827,7 +827,7 @@ fork-and-hold-pipe, delayed-read/write. Проверки синхронизир�
 В v1 входят простое получение stdout, бинарный capture, три concurrent
 callbacks, ручной Process, stdin transcript по запросу, redirects, timeout,
 отмена, process group cleanup и tag с аргументами. Отложены PTY, управление
-терминалом/jobs, detached daemons, public fork/exec замена Amber процесса,
+терминалом/jobs, detached daemons, public fork/exec замена Sputnik процесса,
 сигналы произвольным PID, pipes между несколькими Command как DSL, Windows
 и полноценный process replay provider. Для shell pipelines уже есть явный
 `system.shell`, с exit semantics выбранного shell.
@@ -839,15 +839,15 @@ deadlock при чтении только одного выхода. Предл�
 Python `communicate` объединяет запись stdin, чтение обоих выходов и wait,
 но накопление вывода требует памяти. Отсюда в этом проекте отдельные
 streaming callbacks и явный общий предел хранения; это проектное решение
-Amber. [Python subprocess](https://docs.python.org/3/library/subprocess.html#subprocess.Popen.communicate).
+Sputnik. [Python subprocess](https://docs.python.org/3/library/subprocess.html#subprocess.Popen.communicate).
 
 Ключевой пользовательский путь остаётся коротким:
 
-```amber
+```sputnik
 from system import cmd
 
 command = cmd"""
-  bin/iamber --eval "#{amber_code}"
+  bin/isputnik --eval "#{sputnik_code}"
   """
 text = command.output()
 ```

@@ -4,9 +4,9 @@
 `Str`; keys, messages, and signatures are explicit `Bytes` (also accepting
 `ByteSlice`/`ByteBuffer` inputs). There is no implicit string encoding.
 
-```amber
+```sputnik
 keys = Signature.generate(:ed25519)
-message = Bytes.new("amber release metadata")
+message = Bytes.new("sputnik release metadata")
 signature = Signature.sign(:ed25519, keys["private_key"], message)
 Signature.verify(:ed25519, keys["public_key"], message, signature)
 ```
@@ -40,7 +40,7 @@ Signature.verify(:ed25519, keys["public_key"], message, signature)
 All GOST scalar, coordinate, and signature components above are fixed-width
 big-endian integers. They are **not** the X.509/PKCS#8 GOST encodings, which
 use different wrapping and byte-order conventions. Conversion to those formats
-is outside this initial API; do not feed Amber's raw GOST keys directly into
+is outside this initial API; do not feed Sputnik's raw GOST keys directly into
 certificate tools.
 
 EdDSA is pure mode (not Ed25519ph/Ed448ph); ML-DSA uses its pure mode without
@@ -61,7 +61,7 @@ those algorithms raises `ArgumentError`. The Nettle backend rejects digest
 values whose integer representation is zero modulo the curve order before
 signing; affected Nettle versions can otherwise expose the private key.
 
-`amberc build --target native` compiles every `Signature` operation through
+`sputnik build --target native` compiles every `Signature` operation through
 direct native code generation. The native smoke suite requires full coverage,
 VM independence, and absence of bytecode fallback across every available
 algorithm.

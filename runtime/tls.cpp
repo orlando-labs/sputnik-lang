@@ -14,7 +14,7 @@
 #include <sys/socket.h>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 namespace {
 RuntimeIoStatus ok(std::size_t count = 0) {
   RuntimeIoStatus status;
@@ -46,7 +46,7 @@ RuntimeIoStatus tls_error(const std::string &operation, SSL *ssl = nullptr) {
 BIO_METHOD *socket_bio_method() {
   static BIO_METHOD *method = [] {
     BIO_METHOD *result = BIO_meth_new(
-        BIO_TYPE_SOURCE_SINK | BIO_get_new_index(), "Amber TLS socket");
+        BIO_TYPE_SOURCE_SINK | BIO_get_new_index(), "Sputnik TLS socket");
     if (result == nullptr)
       return result;
     BIO_meth_set_create(result, [](BIO *bio) {
@@ -375,4 +375,4 @@ void RuntimeTlsSession::close() {
   }
   impl_->failed = true;
 }
-} // namespace amber::runtime
+} // namespace sputnik::runtime

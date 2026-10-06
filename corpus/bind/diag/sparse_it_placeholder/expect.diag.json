@@ -1,6 +1,6 @@
 {
-  "format": "amber.diag.v1",
+  "format": "sputnik.diag.v1",
   "diagnostics": [
-    {"code":"E1006","severity":"error","phase":"parser","message":"sparse placeholder numbering","primary_span":{"file":"corpus/bind/diag/sparse_it_placeholder/source.am","start":{"line":2,"col":9,"offset":19},"end":{"line":2,"col":15,"offset":25}},"related":[],"notes":[]}
+    {"code":"E1006","severity":"error","phase":"parser","message":"sparse placeholder numbering","primary_span":{"file":"corpus/bind/diag/sparse_it_placeholder/source.s","start":{"line":2,"col":9,"offset":19},"end":{"line":2,"col":15,"offset":25}},"related":[],"notes":[]}
   ]
 }

@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -601,4 +601,4 @@ void register_fs_runtime_module(RuntimeModuleRegistry &modules,
   register_runtime_type_descriptor(types, descriptor);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

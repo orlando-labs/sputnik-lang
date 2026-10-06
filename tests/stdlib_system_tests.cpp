@@ -9,7 +9,7 @@
 #include <iostream>
 
 int main() {
-  const std::string source = R"AMBER(
+  const std::string source = R"SPUTNIK(
 from system import cmd
 def probe(workers):
   channel = Channel.new(capacity: 0)
@@ -46,38 +46,38 @@ def probe(workers):
     42
   else:
     0
-)AMBER";
-  amber::lexer::Lexer lexer(source, "<system-test>");
+)SPUTNIK";
+  sputnik::lexer::Lexer lexer(source, "<system-test>");
   auto lex = lexer.lex();
   assert(lex.ok());
-  amber::parser::Parser parser(lex.tokens);
+  sputnik::parser::Parser parser(lex.tokens);
   auto parsed = parser.parse_module_unit();
   assert(parsed.ok());
-  const auto expansion = amber::macros::expand_macros(parsed.items, "", source);
+  const auto expansion = sputnik::macros::expand_macros(parsed.items, "", source);
   if (!expansion.ok) {
     std::cerr << expansion.error;
     return 1;
   }
-  amber::ast::expand_quotes(parsed.items);
-  auto bound = amber::binder::bind_module(parsed.items, "");
+  sputnik::ast::expand_quotes(parsed.items);
+  auto bound = sputnik::binder::bind_module(parsed.items, "");
   assert(bound.ok());
-  auto hir = amber::hir::lower_module(parsed.items, "", bound.graph);
-  auto emitted = amber::bytecode::emit_program(hir, "");
+  auto hir = sputnik::hir::lower_module(parsed.items, "", bound.graph);
+  auto emitted = sputnik::bytecode::emit_program(hir, "");
   assert(emitted.ok());
-  auto module = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emitted.module));
+  auto module = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emitted.module));
   assert(module.ok());
-  const auto before = amber::runtime::runtime_cooperative_task_park_count();
-  auto workers = std::make_shared<amber::runtime::RuntimeTaskModule>(1);
-  auto result = amber::runtime::execute_code(
+  const auto before = sputnik::runtime::runtime_cooperative_task_park_count();
+  auto workers = std::make_shared<sputnik::runtime::RuntimeTaskModule>(1);
+  auto result = sputnik::runtime::execute_code(
       module.module, module.module.methods[0].entry_code_id,
-      {amber::runtime::Value::task_module(workers)});
+      {sputnik::runtime::Value::task_module(workers)});
   if (result.fault) {
     std::cerr << result.fault->error_name << ": " << result.fault->message
               << '\n';
     return 1;
   }
   assert(result.value.is_integer() && result.value.as_integer() == 42);
-  assert(amber::runtime::runtime_cooperative_task_park_count() > before);
+  assert(sputnik::runtime::runtime_cooperative_task_park_count() > before);
   std::cout << "stdlib system tests passed (one worker)\n";
 }

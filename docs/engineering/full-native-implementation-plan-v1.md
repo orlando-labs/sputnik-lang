@@ -1,10 +1,10 @@
-# amber.full-native.implementation-plan.v1
+# sputnik.full-native.implementation-plan.v1
 
 Status: active implementation record for the host-native execution path.
 
 > 2026-06-12 amendments: the shipping backend is `cpp-bytecode-direct-v1`
-> (bytecode-input transpile in `tools/amberc/main.cpp`), not a MIR-input
-> generator; `amber.mir.v1` has been formally demoted to a
+> (bytecode-input transpile in `tools/sputnik/main.cpp`), not a MIR-input
+> generator; `sputnik.mir.v1` has been formally demoted to a
 > validation/diagnostic artifact (see `docs/engineering/mir-v1.md`), which
 > supersedes "Phase 5: MIR Normalization For Native" below. Function-level
 > VM fallback exists as the per-function scalar bridge (see
@@ -17,18 +17,18 @@ Status: active implementation record for the host-native execution path.
 > (including topology preservation and `init_copy`), presence predicates,
 > monotonic time, and focused collection mutation. The
 > `native_object_state` fixture is `--require-full-native`. On the four-module
-> amber-orm selftest graph this moved direct coverage from 324/916 to 598/916;
+> sputnik-orm selftest graph this moved direct coverage from 324/916 to 598/916;
 > the next first fallback is an exception handler table in
 > `Instrumentation#instrument`. Full ORM coverage therefore now depends on
 > the exception/unwind phase and, after it, native task/synchronization, IO,
 > and sqlite extension dispatch. Those effectful slices must not be admitted
 > to the current whole-program restart lane merely to raise the counter.
 
-> 2026-07-13 progress: the four-module amber-orm SQLite selftest is now fully
+> 2026-07-13 progress: the four-module sputnik-orm SQLite selftest is now fully
 > native: 916/916 code objects, comprising 881 generated C++ bodies and 35
-> direct `amber_ext.h` extension thunks, with 0 VM bridges and 0 fallback
+> direct `sputnik_ext.h` extension thunks, with 0 VM bridges and 0 fallback
 > objects. Native-bound leaves use `RuntimeWorld::invoke_native_extension`,
-> which supplies runtime host services without executing their Amber fallback
+> which supplies runtime host services without executing their Sputnik fallback
 > bodies. Full-coverage output omits the VM entry/restart path entirely; the
 > ORM selftest returns `29`. The standalone sqlite3 selftest is likewise
 > 477/477 native with no VM path and returns `35`.
@@ -48,9 +48,9 @@ Status: active implementation record for the host-native execution path.
 > those graphs.
 
 > 2026-07-30 request-path progress: generated dispatch no longer constructs a
-> nested `NativeCycleScope` for every Amber method/block call. HTTP, task, and
+> nested `NativeCycleScope` for every Sputnik method/block call. HTTP, task, and
 > runtime callback adapters establish one mutator/cycle scope at the external
-> boundary, and all nested Amber calls share it. Ordinary code objects without
+> boundary, and all nested Sputnik calls share it. Ordinary code objects without
 > handlers or captured local cells also use liveness-colored physical
 > `NativeValue` slots instead of allocating `BcCode::reg_count` distinct
 > values. Parameter slots stay pinned, and handler/capture layouts stay
@@ -60,12 +60,12 @@ Status: active implementation record for the host-native execution path.
 This plan assumes the current repository state:
 
 - the bytecode VM is the semantic oracle;
-- `amber.native.v1` already records native-readiness metadata, but its
+- `sputnik.native.v1` already records native-readiness metadata, but its
   `machine_code_blob` is a trampoline descriptor;
 - `runtime/native_bridge` validates frozen-world assumptions and then re-enters
   bytecode;
-- `amberc build <amber.build.json>` emits `.amberbc` artifacts;
-- `amberc build <file.am>` emits an executable shell wrapper with embedded
+- `sputnik build <sputnik.build.json>` emits `.sputnikbc` artifacts;
+- `sputnik build <file.s>` emits an executable shell wrapper with embedded
   bytecode.
 
 The implementation should be incremental and testable. Every phase below must
@@ -76,13 +76,13 @@ behind explicit build/runtime switches until the native path is proven.
 
 Full native means:
 
-- `amberc build` can produce a real host executable or native package artifact;
-- eligible Amber code executes through host machine code, not through
+- `sputnik build` can produce a real host executable or native package artifact;
+- eligible Sputnik code executes through host machine code, not through
   `RuntimeWorld::execute`;
 - unsupported or reflective operations have explicit runtime helper slowpaths;
 - heap values remain visible to GC through native root maps;
 - language errors, exceptions, stack traces, and cancellation semantics remain
-  Amber-level semantics, not host crashes;
+  Sputnik-level semantics, not host crashes;
 - bytecode artifacts remain available as the canonical verification and fallback
   format during the transition;
 - benchmarkable integer-heavy code, including `bench/polyglot`, no longer pays
@@ -97,7 +97,7 @@ can reuse the same MIR, eligibility, ABI, runtime helper, and metadata contracts
 
 - No direct machine-code emitter in the first milestone.
 - No speculative JIT patching before an AOT baseline is correct.
-- No removal of `.amberbc` build outputs.
+- No removal of `.sputnikbc` build outputs.
 - No semantic divergence from bytecode for dynamic dispatch, pattern protocol,
   object lifetime, tasks, or exceptions.
 - No silent native fallback. Every fallback must be represented in the native
@@ -109,7 +109,7 @@ can reuse the same MIR, eligibility, ABI, runtime helper, and metadata contracts
   equally complete.
 - Native code must never own runtime semantics that the VM cannot reproduce.
 - Every external native request/task/callback boundary establishes a GC
-  mutator scope. Nested Amber calls share that scope and use explicit
+  mutator scope. Nested Sputnik calls share that scope and use explicit
   checkpoints; they are not independent collector boundaries.
 - Every native frame must have enough metadata for roots, source spans, and
   exception unwinding.
@@ -128,7 +128,7 @@ can reuse the same MIR, eligibility, ABI, runtime helper, and metadata contracts
 - Runtime world, heap, values, dispatch, exceptions, scheduler, and GC:
   `runtime/vm.h`, `runtime/vm.cpp`.
 - Build manifest and cache discipline: `buildsys/build.h`, `buildsys/build.cpp`,
-  `tools/amberc/main.cpp`.
+  `tools/sputnik/main.cpp`.
 - Frozen image native metadata embedding: `frozen/image.cpp`,
   `runtime/frozen_image.cpp`.
 - Current native tests: `tests/native_tests.cpp`,
@@ -144,7 +144,7 @@ for at least one workload or focused fixture before the next slice starts.
 1. Guardrails: selector/type coverage matrix, `native-dump` coverage output,
    backend-equivalence fixtures, and build-time full-native assertions.
 2. Scalar and prelude core: `Null`, `Bool`, `Int`, `BigInt`, `Float`, `Symbol`,
-   scalar equality/comparison/conversion/display, and pure `Kernel`/`Amber`
+   scalar equality/comparison/conversion/display, and pure `Kernel`/`Sputnik`
    helpers.
 3. `Str` and bytes: full UTF-8 string API, indexing/slicing, case/trim/split/
    replace/prefix/suffix checks, `Bytes`, and byte-level conversion helpers.
@@ -175,7 +175,7 @@ Tasks:
   phase.
 - Record current polyglot benchmark numbers in `bench/polyglot/README.md` or a
   dedicated benchmark results file.
-- Add `amberc native-dump bench/polyglot/amber/src/main.am` as an expected
+- Add `sputnik native-dump bench/polyglot/sputnik/src/main.s` as an expected
   diagnostic reference or smoke test.
 - Ensure these commands pass before native work starts:
   - `make test`
@@ -196,13 +196,13 @@ behavior.
 Tasks:
 
 - Extend source build CLI:
-  - `amberc build <file.am> --target bytecode-wrapper` (default, existing)
-  - `amberc build <file.am> --target native`
-  - `amberc build <file.am> --target native-debug`
+  - `sputnik build <file.s> --target bytecode-wrapper` (default, existing)
+  - `sputnik build <file.s> --target native`
+  - `sputnik build <file.s> --target native-debug`
 - Extend manifest build CLI:
-  - `amberc build <amber.build.json> --target bytecode` (default, existing)
-  - `amberc build <amber.build.json> --target native`
-  - `amberc build <amber.build.json> --target both`
+  - `sputnik build <sputnik.build.json> --target bytecode` (default, existing)
+  - `sputnik build <sputnik.build.json> --target native`
+  - `sputnik build <sputnik.build.json> --target both`
 - Extend `BuildArtifactRecord` with:
   - `artifact_kind`
   - `native_output_path`
@@ -211,7 +211,7 @@ Tasks:
   - `native_backend`
   - `native_eligible`
   - `native_fallback_reason`
-- Keep `.amberbc` output even in native mode.
+- Keep `.sputnikbc` output even in native mode.
 - Add stable cache key material for native backend:
   - source hash
   - bytecode artifact hash
@@ -226,7 +226,7 @@ Files:
 
 - `buildsys/build.h`
 - `buildsys/build.cpp`
-- `tools/amberc/main.cpp`
+- `tools/sputnik/main.cpp`
 - `docs/engineering/build-v1.md`
 - `tests/build_tests.cpp`
 
@@ -244,8 +244,8 @@ bytecode verification available.
 
 Recommended artifact layout:
 
-- `.amberbc`: existing verified bytecode module.
-- `.amber.native.json`: deterministic native metadata and eligibility report.
+- `.sputnikbc`: existing verified bytecode module.
+- `.sputnik.native.json`: deterministic native metadata and eligibility report.
 - generated source directory under cache:
   - `<module>.native.cpp`
   - `<module>.native.h`
@@ -253,7 +253,7 @@ Recommended artifact layout:
 - executable or shared object:
   - source build: executable path requested by `-o` or default stem.
   - manifest build: `<out-dir>/<root-module>` for executable roots or
-    `<out-dir>/<module>.amber.so` for module libraries if library mode is
+    `<out-dir>/<module>.sputnik.so` for module libraries if library mode is
     introduced.
 
 Tasks:
@@ -278,7 +278,7 @@ Files:
 
 - `optimizer/native.h`
 - `optimizer/native.cpp`
-- `tools/amberc/main.cpp`
+- `tools/sputnik/main.cpp`
 - `docs/engineering/native-v1.md`
 - `tests/native_tests.cpp`
 
@@ -289,15 +289,15 @@ Exit criteria:
 
 ## Phase 3: Runtime Native ABI
 
-Goal: define the stable C ABI between generated host code and Amber runtime.
+Goal: define the stable C ABI between generated host code and Sputnik runtime.
 
 Core ABI:
 
 ```cpp
-extern "C" amber_native_result amber_native_entry(
-    amber_runtime_world *world,
-    amber_native_frame *frame,
-    const amber_runtime_value *args,
+extern "C" sputnik_native_result sputnik_native_entry(
+    sputnik_runtime_world *world,
+    sputnik_native_frame *frame,
+    const sputnik_runtime_value *args,
     uint32_t arg_count);
 ```
 
@@ -316,7 +316,7 @@ Required ABI concepts:
   - caller frame link;
 - result union:
   - ok value;
-  - Amber fault;
+  - Sputnik fault;
   - request bytecode fallback;
   - cancellation;
 - helper calls for:
@@ -356,7 +356,7 @@ Exit criteria:
 
 - A hand-written native test function can be called through the ABI.
 - GC sees native frame roots.
-- Amber faults raised from native helpers preserve trace information.
+- Sputnik faults raised from native helpers preserve trace information.
 
 ## Phase 4: Native Eligibility Analysis
 
@@ -394,7 +394,7 @@ Files:
 - `optimizer/native_eligibility.cpp`
 - `optimizer/native.h`
 - `optimizer/native.cpp`
-- `tools/amberc/main.cpp`
+- `tools/sputnik/main.cpp`
 - `tests/native_tests.cpp`
 
 Exit criteria:
@@ -471,28 +471,28 @@ Tasks:
   - `return`;
   - explicit safepoints.
 - Generate fallback calls for unsupported functions:
-  - `amber_native_fallback_to_bytecode(world, code_id, args...)`.
+  - `sputnik_native_fallback_to_bytecode(world, code_id, args...)`.
 - Add deterministic source formatting.
-- Add `amberc native-source <file>` for inspecting generated C++.
+- Add `sputnik native-source <file>` for inspecting generated C++.
 
 Files:
 
 - `optimizer/native_cpp_backend.h`
 - `optimizer/native_cpp_backend.cpp`
-- `tools/amberc/main.cpp`
+- `tools/sputnik/main.cpp`
 - `Makefile`
 - `tests/native_tests.cpp`
 
 Exit criteria:
 
-- A hand-written small Amber function compiles to generated C++.
+- A hand-written small Sputnik function compiles to generated C++.
 - Generated C++ compiles with the same `CXX` used by the repository.
 - The result matches bytecode for constants, integer ops, branches, and returns.
 
 ## Phase 7: Native Compilation Driver
 
 Goal: compile generated C++ into a host executable or shared object from
-`amberc build --target native`.
+`sputnik build --target native`.
 
 Tasks:
 
@@ -513,7 +513,7 @@ Tasks:
 
 Files:
 
-- `tools/amberc/main.cpp`
+- `tools/sputnik/main.cpp`
 - `buildsys/build.h`
 - `buildsys/build.cpp`
 - `Makefile`
@@ -521,7 +521,7 @@ Files:
 
 Exit criteria:
 
-- `amberc build bench/polyglot/amber/src/main.am --target native -o <path>`
+- `sputnik build bench/polyglot/sputnik/src/main.s --target native -o <path>`
   produces a native executable.
 - Running the executable returns the same checksum as bytecode.
 
@@ -568,7 +568,7 @@ Exit criteria:
 
 ## Phase 9: Slowpath Helper Coverage
 
-Goal: make native execution correct for dynamic Amber semantics by routing
+Goal: make native execution correct for dynamic Sputnik semantics by routing
 complex operations through VM-compatible helpers.
 
 Slowpaths to implement:
@@ -619,7 +619,7 @@ Exit criteria:
 
 ## Phase 10: Native Exception And Unwind Support
 
-Goal: support Amber exceptions across native and bytecode frames.
+Goal: support Sputnik exceptions across native and bytecode frames.
 
 Tasks:
 
@@ -687,7 +687,7 @@ Exit criteria:
 
 ## Phase 12: Classes, Mixins, Open World, And Invalidation
 
-Goal: support native dispatch in the presence of Amber's mutable world model.
+Goal: support native dispatch in the presence of Sputnik's mutable world model.
 
 Tasks:
 
@@ -776,8 +776,8 @@ Goal: make native correctness observable at the same level as bytecode.
 
 Tasks:
 
-- Add `ambertest run corpus --mode native`.
-- Add `ambertest run corpus --mode native-strict` for native-eligible corpus
+- Add `sputniktest run corpus --mode native`.
+- Add `sputniktest run corpus --mode native-strict` for native-eligible corpus
   items.
 - Add corpus metadata for expected native fallback where needed.
 - Add build matrix:
@@ -794,7 +794,7 @@ Tasks:
 
 Files:
 
-- `tools/ambertest`
+- `tools/sputniktest`
 - `corpus`
 - `bench`
 - `Makefile`
@@ -808,7 +808,7 @@ Exit criteria:
 
 ## Phase 15: Make Native The Default Build Target
 
-Goal: switch `amber build` to native output only after correctness and
+Goal: switch `sputnik build` to native output only after correctness and
 compatibility gates are satisfied.
 
 Prerequisites:
@@ -828,18 +828,18 @@ Tasks:
 - Keep explicit `--target bytecode-wrapper`.
 - Decide manifest default:
   - either `--target both` for compatibility;
-  - or native executable plus `.amberbc` sidecar.
+  - or native executable plus `.sputnikbc` sidecar.
 - Update docs:
   - `README.md`;
   - `docs/engineering/build-v1.md`;
   - `docs/engineering/native-v1.md`;
   - `docs/engineering/implementation-status-v1.md`;
   - changelog.
-- Add migration notes for scripts expecting `.amberbc` only.
+- Add migration notes for scripts expecting `.sputnikbc` only.
 
 Exit criteria:
 
-- `amberc build src/main.am` produces native output by default.
+- `sputnik build src/main.s` produces native output by default.
 - Existing bytecode workflows remain one flag away.
 
 ## Recommended First Implementation Slice
@@ -875,7 +875,7 @@ Every native phase should add tests in the narrowest existing suite first.
 | Build target/cache/output | `tests/build_tests.cpp`, W14 fixture |
 | Frozen image integration | `tests/frozen_image_tests.cpp` |
 | CLI smoke | `Makefile test` commands |
-| Corpus/native mode | `tools/ambertest`, `corpus` |
+| Corpus/native mode | `tools/sputniktest`, `corpus` |
 | Performance | `bench/polyglot/run_benchmark.py` |
 
 ## Risk Register
@@ -903,28 +903,28 @@ Every native phase should add tests in the narrowest existing suite first.
 
 ## Open Decisions
 
-- Whether generated C++ native artifacts should be embedded in `.amberimg` or
+- Whether generated C++ native artifacts should be embedded in `.sputnikimg` or
   stored beside it.
 - Whether manifest builds should produce one executable, one shared object per
   module, or both.
 - Whether native strictness is function-level, module-level, or package-level.
 - Whether direct bytecode fallback remains available in release native builds.
-- Whether a future direct object/JIT backend should preserve `amber.native.v1`
-  or introduce `amber.native.v2`.
+- Whether a future direct object/JIT backend should preserve `sputnik.native.v1`
+  or introduce `sputnik.native.v2`.
 - How much type inference is required before scalar native code is considered
   production-ready.
 
 ## Completion Checklist
 
-- `amberc build --target native <file.am>` emits a real native executable.
-- `amberc build --target native <amber.build.json>` emits native root output
+- `sputnik build --target native <file.s>` emits a real native executable.
+- `sputnik build --target native <sputnik.build.json>` emits native root output
   plus verified bytecode sidecars.
 - Native code can call runtime helpers and resume.
 - Native frame roots are visible to GC.
-- Native exceptions preserve Amber fault semantics and traces.
+- Native exceptions preserve Sputnik fault semantics and traces.
 - Frozen images can bind and execute non-trampoline native code.
 - Package reload and open-world invalidation cannot execute stale native code.
-- `ambertest run corpus --mode native` passes.
+- `sputniktest run corpus --mode native` passes.
 - `bench/polyglot` native result matches checksum and materially improves over
   bytecode VM execution.
 - Documentation and migration notes are updated.

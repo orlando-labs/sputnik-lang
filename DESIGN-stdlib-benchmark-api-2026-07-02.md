@@ -2,7 +2,7 @@
 
 Status: implemented v1 baseline plus proposed extensions
 Date: 2026-07-02
-Target: Amber standard library and runtime-facing API
+Target: Sputnik standard library and runtime-facing API
 Scope: user-instrumented timing, repeated micro-benchmark runs, named section
 profiling, result comparison, pretty terminal output, and importable report data
 Out of scope for v1: sampling CPU profiler, flamegraph generation, OS perf
@@ -11,7 +11,7 @@ memory-allocation accounting unless the runtime later exposes stable counters
 
 ## 1. Goals
 
-`Benchmark` gives Amber programs a small, predictable way to measure code:
+`Benchmark` gives Sputnik programs a small, predictable way to measure code:
 
 - one-off timing for a block;
 - repeated runs with warmup and summary statistics;
@@ -29,7 +29,7 @@ Map/List-shaped data for portable reports.
 
 ## 2. Overview
 
-```amber
+```sputnik
 measurement = Benchmark.measure("parse"):
   Json.parse(payload)
 
@@ -37,7 +37,7 @@ measurement["data"]["elapsed_ns"] # Int
 measurement["value"][:id]         # block result
 ```
 
-```amber
+```sputnik
 report = Benchmark.run("parse", iterations: 10_000, warmup: 500) |i|:
   Json.parse(payloads[i % payloads.count()])
 
@@ -46,7 +46,7 @@ report.map["data"]["p95_ns"]
 report.map["data"]["ops_per_second"]
 ```
 
-```amber
+```sputnik
 profile = Benchmark.profile("checkout") |p|:
   user = p.section("load_user"):
     load_user(user_id)
@@ -61,7 +61,7 @@ profile.map["data"]["total_ns"]
 profile.map["data"]["summary"][0]["label"]
 ```
 
-```amber
+```sputnik
 compact = Benchmark.run("compact", iterations: 5_000, samples: 5) |i|:
   Json.generate(value)
 
@@ -82,7 +82,7 @@ same = Benchmark.from_json(json)
 
 ### 3.1 `Benchmark.measure`
 
-```amber
+```sputnik
 Benchmark.measure(label = null, gc: false): ... -> Benchmark.Measurement
 ```
 
@@ -112,7 +112,7 @@ does not wrap user failures.
 
 ### 3.2 `Benchmark.time`
 
-```amber
+```sputnik
 Benchmark.time(label = null, gc: false): ... -> TimePeriod
 ```
 
@@ -121,7 +121,7 @@ semantics as `measure`, but discards the block result.
 
 ### 3.3 `Benchmark.run`
 
-```amber
+```sputnik
 Benchmark.run(
   label = null,
   iterations: 1,
@@ -147,14 +147,14 @@ handled by `Benchmark.compare`, which makes cross-case options explicit.
 
 ### 3.4 `Benchmark.compare`
 
-```amber
+```sputnik
 Benchmark.compare(report, ...) -> Benchmark.CompareReport
 Benchmark.compare([report, ...]) -> Benchmark.CompareReport
 ```
 
 `Benchmark.compare` compares reports already produced by `Benchmark.run`:
 
-```amber
+```sputnik
 compact = Benchmark.run("compact", iterations: 5_000, warmup: 500, samples: 5) |i|:
   Json.generate(value)
 
@@ -184,7 +184,7 @@ report = Benchmark.compare(compact, pretty)
 
 ### 4.1 `Benchmark.profile`
 
-```amber
+```sputnik
 Benchmark.profile(label = null, gc: false) |profiler|: ... -> Benchmark.Profile
 ```
 
@@ -197,14 +197,14 @@ profile block returns. Cross-task use raises `BenchmarkProfileError`.
 
 ### 4.2 `Profiler#section`
 
-```amber
+```sputnik
 profiler.section(label, data: null): ... -> value
 ```
 
 Runs the block, records a span, and returns the block value. Sections may be
 nested.
 
-```amber
+```sputnik
 profile = Benchmark.profile("render") |p|:
   p.section("load"):
     load_template()
@@ -280,7 +280,7 @@ No Benchmark API writes output implicitly.
 
 ### 6.1 Pretty printing
 
-```amber
+```sputnik
 text = report.pretty(layout: :summary, unit: :auto)
 table = compare_report.table(unit: :ms, style: :ansi, highlight: :best)
 profile_text = profile.pretty(unit: :us, sort: :self)
@@ -331,7 +331,7 @@ section | count | total | self | mean | max
 
 `format` returns `Str`. Programs that want output use ordinary IO:
 
-```amber
+```sputnik
 p report.pretty
 ```
 
@@ -339,13 +339,13 @@ p report.pretty
 
 Every result object supports:
 
-```amber
+```sputnik
 map = report.map
 same = report.to_map
 json = report.to_json(pretty: true)
 ```
 
-`to_map` returns only JSON-representable Amber values: `Map`, `List`, `Str`,
+`to_map` returns only JSON-representable Sputnik values: `Map`, `List`, `Str`,
 `Int`, `Float`, `Bool`, and `null`. Runtime duration objects are exported as
 integer nanosecond fields and optional display strings, never as `TimePeriod`
 values.
@@ -355,7 +355,7 @@ Canonical maps include:
 | Key | Value |
 | --- | --- |
 | `kind` | `"measurement"`, `"report"`, `"compare_report"`, or `"profile"` |
-| `schema` | `"amber.benchmark.v1"` |
+| `schema` | `"sputnik.benchmark.v1"` |
 | `label` | `Str` or `null` |
 | `created_by` | optional implementation string |
 | `data` | result-kind-specific Map |
@@ -364,13 +364,13 @@ Duration fields use the `_ns` suffix. Display-only fields use the `_text`
 suffix. Consumers should use `_ns` fields for computation.
 
 `to_json(pretty: true)` returns the canonical pretty JSON representation of the
-safe map. `to_json` returns the compact form. Amber code should prefer
+safe map. `to_json` returns the compact form. Sputnik code should prefer
 `result.to_json(...)` over spelling this as a separate `Json.generate(...)`
 pipeline, because Benchmark results are intended to chain left to right.
 
 `Benchmark.to_map(result)` and `Benchmark.to_json(result)` are compatibility
 forms for host interop and dynamic dispatch paths. They are deliberately not the
-preferred style for Amber code; write `result.map`, `result.to_map`, and
+preferred style for Sputnik code; write `result.map`, `result.to_map`, and
 `result.to_json` instead.
 
 The measured block value is excluded by default. `to_map(value: :raw)` may
@@ -381,7 +381,7 @@ JSON-safe and must not be accepted by `from_map` as portable benchmark data.
 
 Benchmark result data can be restored from canonical maps or JSON:
 
-```amber
+```sputnik
 report = Benchmark.from_map(data)
 same = Benchmark.from_json(json)
 ```
@@ -482,7 +482,7 @@ portable across the VM and native backends and can be implemented using the
 existing monotonic clock facade.
 
 The result objects expose `TimePeriod` first and raw nanoseconds second. That
-keeps the public API idiomatic for Amber code while still making report export
+keeps the public API idiomatic for Sputnik code while still making report export
 and numeric comparison straightforward.
 
 Human output is intentionally a formatter, not a side effect. This keeps

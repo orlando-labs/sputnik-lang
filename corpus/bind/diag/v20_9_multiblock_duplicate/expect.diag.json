@@ -1,6 +1,6 @@
 {
-  "format": "amber.diag.v1",
+  "format": "sputnik.diag.v1",
   "diagnostics": [
-    {"code":"AMB_MULTIBLOCK_DUPLICATE","severity":"error","phase":"binder","message":"duplicate named block entry `success`","primary_span":{"file":"corpus/bind/diag/v20_9_multiblock_duplicate/source.am","start":{"line":4,"col":3,"offset":35},"end":{"line":5,"col":6,"offset":49}},"related":[],"notes":[]}
+    {"code":"AMB_MULTIBLOCK_DUPLICATE","severity":"error","phase":"binder","message":"duplicate named block entry `success`","primary_span":{"file":"corpus/bind/diag/v20_9_multiblock_duplicate/source.s","start":{"line":4,"col":3,"offset":35},"end":{"line":5,"col":6,"offset":49}},"related":[],"notes":[]}
   ]
 }

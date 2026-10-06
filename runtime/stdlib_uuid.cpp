@@ -13,7 +13,7 @@
 #include <optional>
 #include <string>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -225,4 +225,4 @@ void register_uuid_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -2,11 +2,11 @@
 
 Date: 2026-06-16
 Status: design / API-shape proposal — no code change in this doc
-Scope: the Amber-facing surface of `Json`, the first library on the Layer 0
+Scope: the Sputnik-facing surface of `Json`, the first library on the Layer 0
 stdlib substrate (`DESIGN-stdlib-next-libs-order-2026-06-15.md` §4.1). Defines
 the module methods, value method (`.to_json`), streaming-parse hook, JSONL file
 I/O, error surface, and the `StdlibHost` facade growth that `Json` forces.
-Follows: `amber_unified_final_spec.md` §8 (JSON & external data integration) and
+Follows: `sputnik_unified_final_spec.md` §8 (JSON & external data integration) and
 the §4.1 DoD (round-trip corpus, RFC 8259 conformance, pattern-matchable result).
 
 This doc is the *API contract* step. It deliberately stops short of the parser
@@ -20,7 +20,7 @@ implementation, gated on the contract here being agreed.
 `Json` is a native runtime type, identical in shape to `Math`: one
 `RuntimeNativeTypeKind::Json`, one path registration (`"Json"`), one
 `register_json(registry)` adding a `json_dispatch(NativeStdlibCall&)` handler in
-`runtime/stdlib_json.cpp`. No `.am` source ships; the surface below is all
+`runtime/stdlib_json.cpp`. No `.s` source ships; the surface below is all
 selector dispatch on the `Json` native type, plus one value method (`.to_json`).
 
 Unlike `Math`, `Json` is *not* a pure-scalar library. It constructs and walks
@@ -34,7 +34,7 @@ is additive and each capability maps to one facade method.
 
 ## 2. Core API (spec §8, doc §4.1)
 
-```amber
+```sputnik
 Json.parse(text)                       # -> Map | List | Str | Int | Float | Bool | null
 Json.parse(text, map: StrictMap)       # exact-key preservation opt-in
 Json.generate(value)                   # -> Str (compact, no insignificant whitespace)
@@ -101,7 +101,7 @@ record plus the enclosing-frame skeleton.
 
 ### 3.1 Surface
 
-```amber
+```sputnik
 # Count records without holding them all:
 n = Json.stream_parse(text, depth: 1) do |record|
   index(record)
@@ -186,7 +186,7 @@ it pulls scheduler access into the Json handler.
 
 ## 4. File I/O with JSONL (the requested feature)
 
-```amber
+```sputnik
 Json.load_from_file(path)                 # -> parsed value (whole document)
 Json.load_from_file(path, jsonl: true)    # -> List of per-line values
 Json.save_to_file(path, value)            # whole-document generate + trailing "\n"
@@ -227,7 +227,7 @@ preferred.)
 
 ## 5. Full surface summary
 
-```amber
+```sputnik
 # --- parse ---
 Json.parse(text)                              -> value
 Json.parse(text, map: StrictMap)              -> value

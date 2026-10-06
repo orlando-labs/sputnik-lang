@@ -35,23 +35,23 @@ def process_rss(pid: int) -> int | None:
 
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
-    amberc = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/amberc"
+    sputnik = Path(sys.argv[1]) if len(sys.argv) > 1 else root / "build/sputnik"
     work = (
         Path(sys.argv[2])
         if len(sys.argv) > 2
         else root / "build/native-cycle-lifetime"
     )
-    if not amberc.is_absolute():
-        amberc = (root / amberc).resolve()
+    if not sputnik.is_absolute():
+        sputnik = (root / sputnik).resolve()
     if not work.is_absolute():
         work = (root / work).resolve()
     work.mkdir(parents=True, exist_ok=True)
 
-    source = root / "tests/fixtures/native_cycle_lifetime_core/main.am"
+    source = root / "tests/fixtures/native_cycle_lifetime_core/main.s"
     executable = work / "native-cycle-lifetime"
     build = subprocess.run(
         [
-            str(amberc),
+            str(sputnik),
             "build",
             str(source),
             "--target",

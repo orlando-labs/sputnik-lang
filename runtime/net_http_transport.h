@@ -13,7 +13,7 @@
 #include <memory>
 #include <string>
 
-namespace amber::runtime::http {
+namespace sputnik::runtime::http {
 
 // HttpTransport backed by a connected RuntimeTcpStream. Reads use a reusable
 // internal ByteBuffer; the per-operation timeout applies to each read/write.
@@ -53,4 +53,4 @@ std::unique_ptr<HttpTransport> http_connect(const HttpRequest &request,
                                             HttpErrorKind *kind,
                                             std::string *error);
 
-} // namespace amber::runtime::http
+} // namespace sputnik::runtime::http

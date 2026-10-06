@@ -25,7 +25,7 @@
 #include <functional>
 #include <optional>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 enum class ReactorInterest { Read, Write };
 
@@ -111,4 +111,4 @@ private:
   Impl *impl_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

@@ -1,11 +1,11 @@
-# amber.image.v1
+# sputnik.image.v1
 
 Status: implemented for the `W10.5` frozen image baseline.
 
-`amber.image.v1` is the reproducible frozen artifact layer above W9.4 packages
+`sputnik.image.v1` is the reproducible frozen artifact layer above W9.4 packages
 and W10.4 native metadata. The current reference profile keeps the verified
 bytecode VM as the execution engine, but packages the frozen execution contract
-into a deterministic `.amberimg` file that can be inspected, verified, and
+into a deterministic `.sputnikimg` file that can be inspected, verified, and
 loaded behind a runtime freeze barrier.
 
 Implemented surface:
@@ -16,16 +16,16 @@ Implemented surface:
 - runtime loader in
   [runtime/frozen_image.h](../../runtime/frozen_image.h:1)
   and [runtime/frozen_image.cpp](../../runtime/frozen_image.cpp:1)
-- CLI commands in [tools/amberc/main.cpp](../../tools/amberc/main.cpp:1):
-  - `amberc image-build <amber.toml> <out.amberimg>`
-  - `amberc image-inspect <file.amberimg>`
-  - `amberc image-verify <file.amberimg>`
+- CLI commands in [tools/sputnik/main.cpp](../../tools/sputnik/main.cpp:1):
+  - `sputnik image-build <sputnik.toml> <out.sputnikimg>`
+  - `sputnik image-inspect <file.sputnikimg>`
+  - `sputnik image-verify <file.sputnikimg>`
 
 ## Artifact Layout
 
-The serialized `.amberimg` starts with `amber.image.v1` and stores:
+The serialized `.sputnikimg` starts with `sputnik.image.v1` and stores:
 
-- the complete serialized `.amberpkg` payload as bytes;
+- the complete serialized `.sputnikpkg` payload as bytes;
 - a package SHA-256 digest;
 - a non-zero frozen world epoch seed;
 - one native metadata summary per package module;
@@ -33,10 +33,10 @@ The serialized `.amberimg` starts with `amber.image.v1` and stores:
   presence, bytecode verification, native verification, native frozen
   assumptions, world freeze, and reload rejection.
 
-Native metadata is embedded as deterministic `amber.native.v1` JSON bytes with
+Native metadata is embedded as deterministic `sputnik.native.v1` JSON bytes with
 its own digest. The verifier treats that metadata as an immutable native
 readiness payload: every package module must have matching native metadata,
-the metadata must declare `amber.native.v1`, require a frozen runtime world,
+the metadata must declare `sputnik.native.v1`, require a frozen runtime world,
 include slowpath/root/exception/safepoint map fields, and advertise
 invalidation fallback to bytecode.
 
@@ -55,7 +55,7 @@ invalidation fallback to bytecode.
 
 The build path also validates native modules against decoded bytecode before
 serializing the image, so malformed root maps, safepoints, stubs, patchpoints,
-or source code ids fail before `.amberimg` output is written.
+or source code ids fail before `.sputnikimg` output is written.
 
 ## Runtime Load
 
@@ -72,6 +72,6 @@ After image load:
 - `RuntimeWorld::reload_package_artifact(...)` is rejected with
   `WorldFrozenError`.
 
-This keeps `.amberimg` loading compatible with the specification rule that
+This keeps `.sputnikimg` loading compatible with the specification rule that
 native/frozen artifacts are immutable deployment artifacts rather than
 open-world development packages.

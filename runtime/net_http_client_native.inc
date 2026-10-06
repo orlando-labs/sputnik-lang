@@ -1,14 +1,14 @@
 // Included by generated native C++ after the common HTTP adapters. This path
 // shares client leases and the wire codec with the VM without creating a world.
-#if AMBER_NATIVE_HTTP_CLIENT_DIRECT
+#if SPUTNIK_NATIVE_HTTP_CLIENT_DIRECT
 static void native_http_client_error(const std::string &name,
                                      const std::string &message) {
   throw NativeRaised{native_named_error(name, message)};
 }
 
-static void native_http_client_error(amber::runtime::http::HttpErrorKind kind,
+static void native_http_client_error(sputnik::runtime::http::HttpErrorKind kind,
                                      const std::string &message) {
-  native_http_client_error(amber::runtime::http::http_error_class_name(kind),
+  native_http_client_error(sputnik::runtime::http::http_error_class_name(kind),
                            message);
 }
 
@@ -21,14 +21,14 @@ static std::string native_http_client_text(const NativeValue &value) {
   return {};
 }
 
-static amber::runtime::http::HttpHeaders
+static sputnik::runtime::http::HttpHeaders
 native_http_client_headers(const NativeValue &value) {
   std::vector<std::pair<std::string, std::string>> pairs;
   if (!native_http_header_pairs_from_value(value, &pairs)) {
     native_http_client_error("TypeError",
                              "headers must be Headers, Map or pairs");
   }
-  amber::runtime::http::HttpHeaders headers;
+  sputnik::runtime::http::HttpHeaders headers;
   for (const auto &[name, text] : pairs) {
     std::string error;
     if (!headers.add(name, text, &error))
@@ -38,21 +38,21 @@ native_http_client_headers(const NativeValue &value) {
 }
 
 static NativeValue native_http_client_headers_value(
-    const amber::runtime::http::HttpHeaders &values) {
-  auto headers = std::make_shared<amber::runtime::RuntimeHttpHeaders>();
+    const sputnik::runtime::http::HttpHeaders &values) {
+  auto headers = std::make_shared<sputnik::runtime::RuntimeHttpHeaders>();
   headers->headers = values;
   headers->read_only = true;
   return native_http_runtime_handle_with_header_pairs(
-      amber::runtime::Value::io_value(headers), values.pairs());
+      sputnik::runtime::Value::io_value(headers), values.pairs());
 }
 
 static NativeValue native_http_client_response_once(
-    const std::shared_ptr<amber::runtime::RuntimeHttpClient> &client,
+    const std::shared_ptr<sputnik::runtime::RuntimeHttpClient> &client,
     const std::string &method, const std::string &url,
-    const amber::runtime::http::HttpHeaders &headers, const std::string &body,
+    const sputnik::runtime::http::HttpHeaders &headers, const std::string &body,
     bool has_body, std::chrono::milliseconds timeout,
     std::chrono::milliseconds pool_timeout) {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   http::HttpRequest request;
   http::HttpErrorKind kind = http::HttpErrorKind::None;
   std::string error;
@@ -61,7 +61,7 @@ static NativeValue native_http_client_response_once(
     native_http_client_error(kind, error);
   const std::string endpoint =
       request.host + ":" + std::to_string(request.port);
-  if (!amber::capability::capability_set_allows(embedded_capability_grants(),
+  if (!sputnik::capability::capability_set_allows(embedded_capability_grants(),
                                                 "net.connect", endpoint)) {
     native_http_client_error("CapabilityError",
                              "capability is not granted: net.connect=" +
@@ -124,7 +124,7 @@ static bool native_http_try_client_send(const NativeValue &receiver,
                                         const NativeKeywordArgsView &kwargs,
                                         const NativeValue &block,
                                         NativeValue *out) {
-  using namespace amber::runtime;
+  using namespace sputnik::runtime;
   if (receiver.tag != NativeValue::Tag::RuntimeHandle || out == nullptr)
     return false;
   const Value &value = as_native_runtime_handle(receiver)->value;
@@ -308,7 +308,7 @@ static bool native_http_try_client_send(const NativeValue &receiver,
           *out = result;
         else {
           try {
-            *out = amber_native_call_closure(block, {result});
+            *out = sputnik_native_call_closure(block, {result});
           } catch (...) {
             (void)response->body->close();
             throw;
@@ -548,7 +548,7 @@ static bool native_http_try_client_send(const NativeValue &receiver,
           native_http_client_error(kind, error);
         if (payload.empty())
           break;
-        (void)amber_native_call_closure(block, {NativeValue::bytes(payload)});
+        (void)sputnik_native_call_closure(block, {NativeValue::bytes(payload)});
       }
     } catch (...) {
       (void)body->close();

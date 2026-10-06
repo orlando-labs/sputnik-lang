@@ -6,7 +6,7 @@
         examples: "Примеры",
         technology: "Технологии",
         guide: "Гид",
-        modules: "Модули VM",
+        modules: "Библиотека",
         spec: "Спека",
         docs: "Документация"
       },
@@ -19,7 +19,7 @@
       hero: {
         eyebrow: "No-GIL VM · native threads · compact syntax",
         title: "Лаконичный язык для <em>no-GIL</em> runtime.",
-        lead: "Amber берёт читаемость Python, пластичность Ruby, pattern matching и современный data-flow syntax — и ведёт их в VM без глобального lock: worker threads, strands, cooperative tasks, verified bytecode и full-native build pipeline живут в одной модели.",
+        lead: "Sputnik берёт читаемость Python, пластичность Ruby, pattern matching и современный data-flow syntax — и ведёт их в VM без глобального lock: worker threads, strands, cooperative tasks, verified bytecode и full-native build pipeline живут в одной модели.",
         ctaPrimary: "Попробовать синтаксис",
         ctaSecondary: "Открыть спеку",
         codeCaption: "Block suffix, safe navigation и real strands — без синтаксического шума"
@@ -27,7 +27,7 @@
       features: {
         kicker: "Синтаксис без лишней позы",
         title: "Сахар есть, но он компилируется в понятные формы.",
-        lead: "Amber не пытается быть «ещё одним Python» или «ещё одним Ruby». Он собирает удачные идеи из разных миров и задаёт им строгую lowering-модель: удобно писать, не стыдно компилировать.",
+        lead: "Sputnik не пытается быть «ещё одним Python» или «ещё одним Ruby». Он собирает удачные идеи из разных миров и задаёт им строгую lowering-модель: удобно писать, не стыдно компилировать.",
         pattern: {
           tag: "blocks",
           title: "Block suffix вместо callback-лесов",
@@ -56,9 +56,9 @@
       },
       examples: {
         kicker: "Меньше ритуала, больше смысла",
-        title: "Amber оставляет в коде действие, а не церемонию вокруг него.",
-        lead: "Те же идеи, которые в других языках часто распухают в служебные конструкции, в Amber остаются рядом с доменной мыслью: поля, цепочки, matching, условные элементы и безопасный доступ.",
-        carouselLabel: "Сравнения Amber-кода с другими языками",
+        title: "Sputnik оставляет в коде действие, а не церемонию вокруг него.",
+        lead: "Те же идеи, которые в других языках часто распухают в служебные конструкции, в Sputnik остаются рядом с доменной мыслью: поля, цепочки, matching, условные элементы и безопасный доступ.",
+        carouselLabel: "Сравнения Sputnik-кода с другими языками",
         dotsLabel: "Слайды с примерами",
         controls: {
           label: "Управление каруселью примеров",
@@ -69,42 +69,42 @@
           tag: "constructor",
           title: "Поля конструктора без ручного перекладывания аргументов",
           text: "`@attr` в сигнатуре сразу задаёт поле экземпляра, а class object вызывается как конструктор.",
-          amberLines: "3 строки",
+          sputnikLines: "3 строки",
           otherLines: "6 строк"
         },
         pipeline: {
           tag: "collections",
           title: "Цепочка данных без callback-обвязки",
           text: "Block suffix оставляет фильтрацию, проекцию и дедупликацию в одной читаемой линии потока.",
-          amberLines: "4 строки",
+          sputnikLines: "4 строки",
           otherLines: "13 строк"
         },
         matching: {
           tag: "matching",
           title: "Варианты формы как клаузулы, а не лестница проверок",
           text: "Multi-clause `def` показывает dispatch прямо в объявлении функции и не прячет его в условных ветках.",
-          amberLines: "3 строки",
+          sputnikLines: "3 строки",
           otherLines: "10 строк"
         },
         collections: {
           tag: "literals",
           title: "Условия и spread внутри литералов",
           text: "Коллекция собирается там, где она объявлена: без временных переменных, `push` и мутаций ради формы.",
-          amberLines: "2 строки",
+          sputnikLines: "2 строки",
           otherLines: "6 строк"
         },
         safe: {
           tag: "safe nav",
           title: "Безопасный доступ без защитной пирамиды",
           text: "`.?.` проходит через поля, методы и вызовы, а fallback остаётся обычным выражением.",
-          amberLines: "1 строка",
+          sputnikLines: "1 строка",
           otherLines: "9 строк"
         }
       },
       inside: {
         kicker: "Runtime без глобального замка",
         title: "No-GIL VM: параллельность — часть модели исполнения.",
-        lead: "Amber строит concurrency вокруг Worker → Strand → Task. `task.async` даёт кооперативные задачи внутри strand, `task.spawn` выносит работу в новый strand на worker thread, а verifier/root maps держат runtime безопасным для байткода и native backend.",
+        lead: "Sputnik строит concurrency вокруг Worker → Strand → Task. `task.async` даёт кооперативные задачи внутри strand, `task.spawn` выносит работу в новый strand на worker thread, а verifier/root maps держат runtime безопасным для байткода и native backend.",
         source: "syntax sugar",
         ir: "explicit lowering",
         bytecode: "verify first",
@@ -120,7 +120,7 @@
           },
           effects: {
             title: "Verifier, root maps, safepoints",
-            text: "`.amberbc` — data, not trusted code: loader проверяет структуру, dataflow, handler ranges и GC roots до исполнения."
+            text: "`.sputnikbc` — data, not trusted code: loader проверяет структуру, dataflow, handler ranges и GC roots до исполнения."
           },
           frozen: {
             title: "Full native build",
@@ -131,7 +131,7 @@
       modules: {
         kicker: "Prelude, а не случайный набор пакетов",
         title: "VM-модули документированы как часть runtime-контракта.",
-        lead: "JSON, URL, UUID, crypto-grade randomness, digest, codecs, time, math и CLI parsing доступны как native prelude-типы; каждый метод имеет отдельную страницу и пример Amber-кода.",
+        lead: "JSON, URL, UUID, crypto-grade randomness, digest, codecs, time, math и CLI parsing доступны как native prelude-типы; каждый метод имеет отдельную страницу и пример Sputnik-кода.",
         cta: "Все модули, методы и примеры"
       },
       closing: {
@@ -144,8 +144,8 @@
       docs: {
         back: "На главную",
         eyebrow: "Native standard library · VM prelude",
-        title: "Встроенные модули Amber VM",
-        lead: "Каждый модуль вынесен на отдельную страницу. Для каждого метода есть сигнатура, описание и короткий пример Amber-кода.",
+        title: "Встроенные модули Sputnik VM",
+        lead: "Каждый модуль вынесен на отдельную страницу. Для каждого метода есть сигнатура, описание и короткий пример Sputnik-кода.",
         stats: { modules: "native типов", methods: "методов", imports: "обязательных imports" },
         search: "Модуль или метод",
         sidebarNote: "Все элементы ниже регистрируются через NativeRegistry и доступны как prelude-константы.",
@@ -160,8 +160,8 @@
       },
       spec: {
         eyebrow: "Markdown → HTML · unified spec",
-        title: "Единая спецификация Amber",
-        lead: "Копия `amber_unified_final_spec.md`, отрендеренная в HTML: язык, runtime-facing API, VM contracts, build pipeline и implementation blueprint в одном документе.",
+        title: "Единая спецификация Sputnik",
+        lead: "Копия `sputnik_unified_final_spec.md`, отрендеренная в HTML: язык, runtime-facing API, VM contracts, build pipeline и implementation blueprint в одном документе.",
         read: "Читать HTML",
         source: "Открыть Markdown-копию",
         toc: "Оглавление",
@@ -177,7 +177,7 @@
         examples: "Examples",
         technology: "Technology",
         guide: "Guide",
-        modules: "VM modules",
+        modules: "Library",
         spec: "Spec",
         docs: "Documentation"
       },
@@ -190,7 +190,7 @@
       hero: {
         eyebrow: "No-GIL VM · native threads · compact syntax",
         title: "A compact language for a <em>no-GIL</em> runtime.",
-        lead: "Amber takes Python readability, Ruby plasticity, pattern matching and modern data-flow syntax, then lowers them into a VM without a global lock: worker threads, strands, cooperative tasks, verified bytecode and a full-native build pipeline share one model.",
+        lead: "Sputnik takes Python readability, Ruby plasticity, pattern matching and modern data-flow syntax, then lowers them into a VM without a global lock: worker threads, strands, cooperative tasks, verified bytecode and a full-native build pipeline share one model.",
         ctaPrimary: "Taste the syntax",
         ctaSecondary: "Open the spec",
         codeCaption: "Block suffix, safe navigation and real strands without syntax noise"
@@ -198,7 +198,7 @@
       features: {
         kicker: "Syntax without theatre",
         title: "The sugar is pleasant, but it lowers into explicit forms.",
-        lead: "Amber is not trying to be “another Python” or “another Ruby”. It takes strong ideas from several worlds and gives them a strict lowering model: nice to write, sane to compile.",
+        lead: "Sputnik is not trying to be “another Python” or “another Ruby”. It takes strong ideas from several worlds and gives them a strict lowering model: nice to write, sane to compile.",
         pattern: {
           tag: "blocks",
           title: "Block suffix instead of callback forests",
@@ -227,9 +227,9 @@
       },
       examples: {
         kicker: "Less ritual, more meaning",
-        title: "Amber keeps the action in code, not the ceremony around it.",
-        lead: "The same ideas that often swell into boilerplate elsewhere stay close to the domain thought in Amber: fields, pipelines, matching, conditional entries and safe access.",
-        carouselLabel: "Amber code comparisons with other languages",
+        title: "Sputnik keeps the action in code, not the ceremony around it.",
+        lead: "The same ideas that often swell into boilerplate elsewhere stay close to the domain thought in Sputnik: fields, pipelines, matching, conditional entries and safe access.",
+        carouselLabel: "Sputnik code comparisons with other languages",
         dotsLabel: "Example slides",
         controls: {
           label: "Example carousel controls",
@@ -240,42 +240,42 @@
           tag: "constructor",
           title: "Constructor fields without manual argument shuffling",
           text: "`@attr` in a signature assigns an instance field immediately, and a class object can be called as a constructor.",
-          amberLines: "3 lines",
+          sputnikLines: "3 lines",
           otherLines: "6 lines"
         },
         pipeline: {
           tag: "collections",
           title: "Data pipelines without callback wrapping",
           text: "Block suffix keeps filtering, projection and deduplication in one readable flow.",
-          amberLines: "4 lines",
+          sputnikLines: "4 lines",
           otherLines: "13 lines"
         },
         matching: {
           tag: "matching",
           title: "Shape variants as clauses, not a ladder of checks",
           text: "Multi-clause `def` shows dispatch in the function declaration instead of hiding it in conditional branches.",
-          amberLines: "3 lines",
+          sputnikLines: "3 lines",
           otherLines: "10 lines"
         },
         collections: {
           tag: "literals",
           title: "Conditions and spread inside literals",
           text: "The collection is assembled where it is declared, without temporary variables, `push` calls or mutation for ceremony.",
-          amberLines: "2 lines",
+          sputnikLines: "2 lines",
           otherLines: "6 lines"
         },
         safe: {
           tag: "safe nav",
           title: "Safe access without a defensive pyramid",
           text: "`.?.` moves through fields, methods and calls, while the fallback remains an ordinary expression.",
-          amberLines: "1 line",
+          sputnikLines: "1 line",
           otherLines: "9 lines"
         }
       },
       inside: {
         kicker: "Runtime without a global lock",
         title: "No-GIL VM: parallelism belongs to the execution model.",
-        lead: "Amber builds concurrency around Worker → Strand → Task. `task.async` creates cooperative work inside a strand, `task.spawn` moves work to a new strand on a worker thread, and verifier/root-map machinery keeps bytecode and native execution honest.",
+        lead: "Sputnik builds concurrency around Worker → Strand → Task. `task.async` creates cooperative work inside a strand, `task.spawn` moves work to a new strand on a worker thread, and verifier/root-map machinery keeps bytecode and native execution honest.",
         source: "syntax sugar",
         ir: "explicit lowering",
         bytecode: "verify first",
@@ -291,7 +291,7 @@
           },
           effects: {
             title: "Verifier, root maps, safepoints",
-            text: "`.amberbc` is data, not trusted code: the loader checks structure, dataflow, handler ranges and GC roots before execution."
+            text: "`.sputnikbc` is data, not trusted code: the loader checks structure, dataflow, handler ranges and GC roots before execution."
           },
           frozen: {
             title: "Full native build",
@@ -302,7 +302,7 @@
       modules: {
         kicker: "Prelude, not a random package pile",
         title: "VM modules are documented as part of the runtime contract.",
-        lead: "JSON, URL, UUID, crypto-grade randomness, digests, codecs, time, math and CLI parsing ship as native prelude types; every method has its own page and Amber example.",
+        lead: "JSON, URL, UUID, crypto-grade randomness, digests, codecs, time, math and CLI parsing ship as native prelude types; every method has its own page and Sputnik example.",
         cta: "All modules, methods and examples"
       },
       closing: {
@@ -315,8 +315,8 @@
       docs: {
         back: "Back home",
         eyebrow: "Native standard library · VM prelude",
-        title: "Built-in Amber VM modules",
-        lead: "Every module has its own page. Every method includes a signature, description and a concise Amber example.",
+        title: "Built-in Sputnik VM modules",
+        lead: "Every module has its own page. Every method includes a signature, description and a concise Sputnik example.",
         stats: { modules: "native types", methods: "methods", imports: "required imports" },
         search: "Module or method",
         sidebarNote: "Every item below is registered through NativeRegistry and exposed as a prelude constant.",
@@ -331,8 +331,8 @@
       },
       spec: {
         eyebrow: "Markdown → HTML · unified spec",
-        title: "Unified Amber specification",
-        lead: "A copied `amber_unified_final_spec.md` rendered as HTML: language semantics, runtime-facing API, VM contracts, build pipeline and implementation blueprint in one document.",
+        title: "Unified Sputnik specification",
+        lead: "A copied `sputnik_unified_final_spec.md` rendered as HTML: language semantics, runtime-facing API, VM contracts, build pipeline and implementation blueprint in one document.",
         read: "Read HTML",
         source: "Open Markdown copy",
         toc: "Contents",
@@ -345,7 +345,7 @@
   };
 
   const state = {
-    lang: localStorage.getItem("amber-lang") || (navigator.language.startsWith("ru") ? "ru" : "en"),
+    lang: localStorage.getItem("sputnik-lang") || (navigator.language.startsWith("ru") ? "ru" : "en"),
     allExpanded: false,
     openModules: new Set()
   };
@@ -355,6 +355,7 @@
 
   const applyTranslations = () => {
     document.documentElement.lang = state.lang;
+    document.querySelectorAll("[data-ru][data-en]").forEach(node => { node.textContent = node.dataset[state.lang]; });
     document.querySelectorAll("[data-i18n]").forEach((node) => {
       const value = getTranslation(node.dataset.i18n);
       if (value == null) return;
@@ -373,19 +374,19 @@
       button.setAttribute("aria-pressed", String(button.dataset.lang === state.lang));
     });
     if (document.body.classList.contains("module-page")) {
-      window.renderAmberModulePage?.(state.lang);
+      window.renderSputnikModulePage?.(state.lang);
     } else if (document.body.classList.contains("guide-page")) {
-      window.renderAmberGuidePage?.(state.lang);
+      window.renderSputnikGuidePage?.(state.lang);
     } else {
       document.title = document.body.classList.contains("spec-page")
-        ? (state.lang === "ru" ? "Amber — спецификация" : "Amber — specification")
+        ? (state.lang === "ru" ? "Sputnik — спецификация" : "Sputnik — specification")
         : document.body.classList.contains("docs-page")
-        ? (state.lang === "ru" ? "Amber — модули VM" : "Amber — VM modules")
-        : (state.lang === "ru" ? "Amber — выразительный язык для no-GIL VM" : "Amber — expressive language for a no-GIL VM");
+        ? (state.lang === "ru" ? "Sputnik — модули VM" : "Sputnik — VM modules")
+        : (state.lang === "ru" ? "Sputnik — Technical Preview" : "Sputnik — Technical Preview");
     }
   };
 
-  const highlightAmber = (source) => {
+  const highlightSputnik = (source) => {
     const escaped = source
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
@@ -410,9 +411,9 @@
 
   const renderModules = () => {
     const list = document.querySelector("#module-list");
-    if (!list || !window.AMBER_MODULES) return;
+    if (!list || !window.SPUTNIK_MODULES) return;
     const query = (document.querySelector("#module-search")?.value || "").trim().toLocaleLowerCase();
-    const modules = window.AMBER_MODULES.filter((module) => {
+    const modules = window.SPUTNIK_MODULES.filter((module) => {
       const haystack = [
         module.title,
         module.description.ru,
@@ -445,9 +446,9 @@
   document.querySelectorAll("[data-lang]").forEach((button) => {
     button.addEventListener("click", () => {
       state.lang = button.dataset.lang;
-      localStorage.setItem("amber-lang", state.lang);
+      localStorage.setItem("sputnik-lang", state.lang);
       applyTranslations();
-      window.updateAmberExampleCarouselLabels?.();
+      window.updateSputnikExampleCarouselLabels?.();
       renderModules();
     });
   });
@@ -514,7 +515,7 @@
       setSlide(index + (delta < 0 ? 1 : -1));
     });
 
-    window.updateAmberExampleCarouselLabels = () => setSlide(index);
+    window.updateSputnikExampleCarouselLabels = () => setSlide(index);
     setSlide(0);
   };
 

@@ -1,139 +1,5 @@
-BUILD_DIR ?= build
 .DEFAULT_GOAL := all
-
-ifeq ($(origin CXX),default)
-CXX := clang++
-endif
-
-CPPFLAGS ?=
-CPPFLAGS += -I.
-
-CXXFLAGS ?= -std=c++17 -Wall -Wextra -Wpedantic -O2 -g
-LDFLAGS ?=
-
-# TLS is shared by the VM and native runtime. On macOS OpenSSL is keg-only;
-# pkg-config (or OPENSSL_PREFIX) locates its headers and libraries.
-OPENSSL_PREFIX ?=
-OPENSSL_INCLUDE_DIR ?= $(if $(strip $(OPENSSL_PREFIX)),$(OPENSSL_PREFIX)/include,$(shell pkg-config --variable=includedir openssl 2>/dev/null))
-OPENSSL_LIB_DIR ?= $(if $(strip $(OPENSSL_PREFIX)),$(OPENSSL_PREFIX)/lib,$(shell pkg-config --variable=libdir openssl 2>/dev/null))
-ifneq ($(strip $(OPENSSL_INCLUDE_DIR)),)
-CPPFLAGS += -I$(OPENSSL_INCLUDE_DIR) '-DAMBER_OPENSSL_INCLUDE_DIR="$(OPENSSL_INCLUDE_DIR)"'
-endif
-ifneq ($(strip $(OPENSSL_LIB_DIR)),)
-LDFLAGS += -L$(OPENSSL_LIB_DIR)
-CPPFLAGS += '-DAMBER_OPENSSL_LIB_DIR="$(OPENSSL_LIB_DIR)"'
-endif
-LDFLAGS += -lssl -lcrypto
-
-# GOST R 34.10-2012 needs Nettle's supported TC26 curves. Other signature
-# algorithms remain available when this optional backend is not installed.
-NETTLE_GOST_LIBS := $(shell pkg-config --libs hogweed nettle gmp 2>/dev/null)
-ifneq ($(strip $(NETTLE_GOST_LIBS)),)
-CPPFLAGS += $(shell pkg-config --cflags hogweed nettle gmp 2>/dev/null) -DAMBER_HAVE_NETTLE_GOST
-CPPFLAGS += '-DAMBER_NETTLE_INCLUDE_DIR="$(shell pkg-config --variable=includedir hogweed)"'
-CPPFLAGS += '-DAMBER_NETTLE_LIB_DIR="$(shell pkg-config --variable=libdir hogweed)"'
-CPPFLAGS += '-DAMBER_GMP_INCLUDE_DIR="$(shell pkg-config --variable=includedir gmp)"'
-CPPFLAGS += '-DAMBER_GMP_LIB_DIR="$(shell pkg-config --variable=libdir gmp)"'
-LDFLAGS += $(NETTLE_GOST_LIBS)
-endif
-
-# --- Allocator selection -----------------------------------------------------
-# MALLOC selects the C/C++ allocator the binaries link against (RESEARCH heap
-# fragmentation, §10 step 1). Flavors:
-#   system   (default) -- platform malloc, no extra dependency
-#   mimalloc            -- recommended; best macOS story, aggressive page return
-#   jemalloc           -- Linux deploys + diagnosis (stats_print, heap profiling)
-# Install via `brew install mimalloc` / `brew install jemalloc`, or point
-# MIMALLOC_PREFIX / JEMALLOC_PREFIX at an existing install.
-#
-# Page return is a *runtime* knob, not a build flag -- set it when you run:
-#   mimalloc: MIMALLOC_PURGE_DELAY=0            (decommit dirty pages immediately)
-#   jemalloc: MALLOC_CONF=background_thread:true,dirty_decay_ms:0,muzzy_decay_ms:0
-# Use AMBER_HEAP_STATS=1 on a run to print the §9 RSS / live-bytes line.
-MALLOC ?= system
-UNAME_S := $(shell uname -s)
-
-# `amberc run <manifest> --grant ffi` loads package thunks into the interpreter
-# with dlopen. Export the stable amber_ext.h ABI from the main executable so a
-# package .dylib/.so can resolve it without linking a second runtime copy.
-ifeq ($(UNAME_S),Darwin)
-AMBERC_DYNAMIC_EXPORT_FLAGS := -Wl,-export_dynamic
-AMBERC_DYNAMIC_LOADER_LIBS :=
-else ifeq ($(UNAME_S),Linux)
-AMBERC_DYNAMIC_EXPORT_FLAGS := -Wl,--export-dynamic
-AMBERC_DYNAMIC_LOADER_LIBS := -ldl
-else
-AMBERC_DYNAMIC_EXPORT_FLAGS :=
-AMBERC_DYNAMIC_LOADER_LIBS := -ldl
-endif
-
-ifeq ($(MALLOC),system)
-CPPFLAGS += -DAMBER_ALLOCATOR=\"system\"
-else ifeq ($(MALLOC),mimalloc)
-CPPFLAGS += -DAMBER_ALLOCATOR=\"mimalloc\"
-MIMALLOC_PREFIX ?= $(shell brew --prefix mimalloc 2>/dev/null)
-ifeq ($(strip $(MIMALLOC_PREFIX)),)
-$(error MALLOC=mimalloc but mimalloc was not found; run `brew install mimalloc` or set MIMALLOC_PREFIX)
-endif
-CPPFLAGS += -I$(MIMALLOC_PREFIX)/include
-MIMALLOC_STATIC := $(firstword $(wildcard $(MIMALLOC_PREFIX)/lib/libmimalloc.a))
-ifeq ($(UNAME_S),Darwin)
-# Force-load the static archive so mimalloc's malloc-zone override wins over the
-# system allocator; fall back to dynamic linking if no static archive is present.
-ifeq ($(strip $(MIMALLOC_STATIC)),)
-LDFLAGS += -L$(MIMALLOC_PREFIX)/lib -lmimalloc
-else
-LDFLAGS += -Wl,-force_load,$(MIMALLOC_STATIC)
-endif
-else
-LDFLAGS += -L$(MIMALLOC_PREFIX)/lib -Wl,-rpath,$(MIMALLOC_PREFIX)/lib -lmimalloc
-endif
-else ifeq ($(MALLOC),jemalloc)
-CPPFLAGS += -DAMBER_ALLOCATOR=\"jemalloc\"
-JEMALLOC_PREFIX ?= $(shell brew --prefix jemalloc 2>/dev/null)
-ifeq ($(strip $(JEMALLOC_PREFIX)),)
-$(error MALLOC=jemalloc but jemalloc was not found; run `brew install jemalloc` or set JEMALLOC_PREFIX)
-endif
-CPPFLAGS += -I$(JEMALLOC_PREFIX)/include
-JEMALLOC_STATIC := $(firstword $(wildcard $(JEMALLOC_PREFIX)/lib/libjemalloc.a))
-ifeq ($(UNAME_S),Darwin)
-# jemalloc registers its malloc zone from a static-archive constructor; force-load
-# it so the override takes effect (macOS jemalloc is second-tier -- see RESEARCH §4).
-ifeq ($(strip $(JEMALLOC_STATIC)),)
-LDFLAGS += -L$(JEMALLOC_PREFIX)/lib -ljemalloc
-else
-LDFLAGS += -Wl,-force_load,$(JEMALLOC_STATIC)
-endif
-else
-LDFLAGS += -L$(JEMALLOC_PREFIX)/lib -Wl,-rpath,$(JEMALLOC_PREFIX)/lib -ljemalloc
-endif
-else
-$(error Unknown MALLOC='$(MALLOC)'; use system, mimalloc, or jemalloc)
-endif
-# -----------------------------------------------------------------------------
-
-# --- Value representation selection ------------------------------------------
-# VALUE_REPR selects the runtime `Value` storage. Flavors:
-#   tagged  (default)  -- 16-byte tagged-union Value. Immediates and
-#                         the six ObjHeader heap kinds are stored inline; the
-#                         ~15 cold tail types (BigInt/error/task/io/...) are
-#                         boxed behind a refcounted TailBox (+1 alloc per tail
-#                         value, all cold paths). Defines AMBER_VALUE_REPR_TAGGED.
-#   variant            -- legacy 24-byte std::variant Value, retained for
-#                         compatibility A/Bs during the tagged migration.
-# A/B the legacy representation against the default with:
-#   make BUILD_DIR=build-variant build-variant/iamber VALUE_REPR=variant
-# (do not mix object files across reps -- rebuild from clean or use a fresh
-# BUILD_DIR, since the flag changes sizeof(Value) ABI-wide).
-VALUE_REPR ?= tagged
-ifeq ($(VALUE_REPR),variant)
-# default storage; no macro needed
-else ifeq ($(VALUE_REPR),tagged)
-CPPFLAGS += -DAMBER_VALUE_REPR_TAGGED
-else
-$(error Unknown VALUE_REPR='$(VALUE_REPR)'; use variant or tagged)
-endif
-# -----------------------------------------------------------------------------
+include mk/config.mk
 
 LEXER_SRCS := frontend/lexer/lexer.cpp frontend/lexer/token.cpp
 AST_SRCS := frontend/ast/expr.cpp
@@ -152,98 +18,24 @@ IO_SRCS := runtime/io.cpp runtime/reactor.cpp runtime/tls.cpp
 DIGEST_SRCS := runtime/digest.cpp
 HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_server.cpp runtime/net_http_transport.cpp
 STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_bool.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_signature.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
-RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/system.cpp runtime/vm.cpp $(STDLIB_SRCS) runtime/amber_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
+RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/system.cpp runtime/vm.cpp $(STDLIB_SRCS) runtime/sputnik_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
 FROZEN_RUNTIME_SRCS := runtime/frozen_image.cpp
 PACKAGE_SRCS := package/package.cpp
 FRONTEND_SRCS := $(LEXER_SRCS) $(AST_SRCS) $(PARSER_SRCS) $(PATTERN_SRCS) $(BINDER_SRCS) $(CHECKER_SRCS) $(HIR_SRCS)
-NOTEBOOK_GRAPH_SRCS := notebook/model.cpp notebook/analysis.cpp notebook/dependency_graph.cpp notebook/scheduler.cpp
-NOTEBOOK_SRCS := $(NOTEBOOK_GRAPH_SRCS) notebook/slot_table.cpp notebook/kernel.cpp notebook/vm_cell_executor.cpp notebook/compiler.cpp notebook/renderers.cpp
-NOTEBOOK_PROJECT_SRCS := notebook/project.cpp notebook/project_json.cpp
-NOTEBOOK_PROJECT_TEST_SRCS := tests/notebook_project_tests.cpp notebook/model.cpp $(NOTEBOOK_PROJECT_SRCS)
 CORE_SRCS := $(PROFILE_SRCS) $(BUILD_SRCS) $(FRONTEND_SRCS) $(MIR_SRCS) $(NATIVE_SRCS) $(BYTECODE_SRCS)
-NOTEBOOK_SLOT_TEST_SRCS := tests/notebook_slot_tests.cpp notebook/slot_table.cpp notebook/model.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
-AMBERC_SRCS := tools/amberc/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS)
-AMBERTEST_SRCS := tools/ambertest/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
-IAMBER_ENVIRONMENT_SRCS := tools/iamber/environment.cpp tools/iamber/dependencies.cpp
-IAMBER_SRCS := tools/iamber/main.cpp tools/iamber/session.cpp tools/iamber/project_session.cpp tools/iamber/tabs.cpp $(IAMBER_ENVIRONMENT_SRCS) tools/iamber/activity.cpp tools/iamber/dispatch.cpp tools/iamber/terminal_wait.cpp $(NOTEBOOK_PROJECT_SRCS) $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
-IAMBER_LDLIBS ?= -lncurses
-IAMBER_TEST_SRCS := tests/iamber_tests.cpp tools/iamber/session.cpp tools/iamber/project_session.cpp $(IAMBER_ENVIRONMENT_SRCS) tools/iamber/activity.cpp $(NOTEBOOK_PROJECT_SRCS) $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
-IAMBER_PROJECT_TEST_SRCS := tests/iamber_project_tests.cpp $(filter-out tests/iamber_tests.cpp,$(IAMBER_TEST_SRCS))
-IAMBER_TABS_TEST_SRCS := tests/iamber_tabs_tests.cpp tools/iamber/tabs.cpp tools/iamber/dispatch.cpp $(filter-out tests/iamber_tests.cpp,$(IAMBER_TEST_SRCS))
-NOTEBOOK_DEPENDENCY_TEST_SRCS := tests/notebook_dependency_tests.cpp $(filter-out tests/iamber_tabs_tests.cpp,$(IAMBER_TABS_TEST_SRCS))
-IAMBER_ACTIVITY_TEST_SRCS := tests/iamber_activity_tests.cpp tools/iamber/activity.cpp
-IAMBER_POLL_TEST_SRCS := tests/iamber_poll_tests.cpp tools/iamber/activity.cpp
-IAMBER_DISPATCH_TEST_SRCS := tests/iamber_dispatch_tests.cpp tools/iamber/dispatch.cpp
-IAMBER_TERMINAL_WAIT_TEST_SRCS := tests/iamber_terminal_wait_tests.cpp tools/iamber/terminal_wait.cpp
-MAC_NOTEBOOK_SRCS := tools/notebook-macos/NotebookBridge.cpp tools/notebook-macos/NotebookExecution.cpp tools/notebook-worker/protocol.cpp tools/notebook-worker/process.cpp tools/notebook-worker/presentation.cpp $(filter-out tools/iamber/main.cpp tools/iamber/terminal_wait.cpp,$(IAMBER_SRCS))
-MAC_NOTEBOOK_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/notebook-macos/obj/%.o,$(MAC_NOTEBOOK_SRCS))
-AMBER_PLOT_DIR ?= ../amber-plot
-ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
-MAC_NOTEBOOK_OBJS += $(BUILD_DIR)/notebook-macos/plot_png.o
-$(BUILD_DIR)/notebook-macos/obj/notebook/renderers.o: CPPFLAGS += -DAMBER_NOTEBOOK_PLOT
-endif
-MAC_NOTEBOOK_SWIFT := $(wildcard tools/notebook-macos/*.swift)
-MAC_NOTEBOOK_TARGET ?= $(shell uname -m)-apple-macosx14.0
-NOTEBOOK_WORKER_TRANSPORT := tools/notebook-worker/protocol.cpp tools/notebook-worker/process.cpp tools/notebook-worker/presentation.cpp
-NOTEBOOK_WORKER_HEADERS := tools/notebook-worker/protocol.h tools/notebook-worker/process.h tools/notebook-worker/presentation.h runtime/context.h tools/iamber/session.h tools/iamber/project_session.h
-ifeq ($(UNAME_S),Darwin)
-NOTEBOOK_WORKER_BACKEND := $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
-ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
-NOTEBOOK_WORKER_PLOT_TEST := "$(abspath $(AMBER_PLOT_DIR)/src/plot.am)"
-endif
-else
-NOTEBOOK_WORKER_BACKEND := $(filter-out tools/iamber/main.cpp tools/iamber/terminal_wait.cpp,$(IAMBER_SRCS))
-endif
+SPUTNIK_SRCS := tools/sputnik/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS)
+SPUTNIKTEST_SRCS := tools/sputniktest/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
 
-$(BUILD_DIR)/amber-notebook-worker: tools/notebook-worker/main.cpp tools/notebook-worker/protocol.cpp tools/notebook-worker/presentation.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
+LIB_SRCS := $(sort $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS) $(FROZEN_RUNTIME_SRCS))
+LIB_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/obj/%.o,$(LIB_SRCS))
+LIBRARY := $(BUILD_DIR)/libsputnik.a
+runtime: $(LIBRARY)
+$(BUILD_DIR)/obj/%.o: %.cpp
 	@mkdir -p "$(@D)"
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) $(AMBERC_DYNAMIC_EXPORT_FLAGS) $(AMBERC_DYNAMIC_LOADER_LIBS) -o $@
-
-$(BUILD_DIR)/notebook_worker_tests: tests/notebook_worker_tests.cpp $(NOTEBOOK_WORKER_TRANSPORT) $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS) | $(BUILD_DIR)/amber-notebook-worker
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook-mnist: tools/notebook-mnist/main.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook_progress_tests: tests/notebook_progress_tests.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook_live_tests: tests/notebook_live_tests.cpp runtime/notebook_live.h runtime/notebook_display.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(LDFLAGS) -o $@
-
-.PHONY: test-notebook-progress
-test-notebook-progress: $(BUILD_DIR)/notebook_progress_tests $(BUILD_DIR)/notebook_live_tests
-	$(BUILD_DIR)/notebook_progress_tests
-	$(BUILD_DIR)/notebook_live_tests
-
-$(BUILD_DIR)/notebook_cancellation_tests: tests/notebook_cancellation_tests.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook_run_tasks_tests: tests/notebook_run_tasks_tests.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS) runtime/system_native_task.inc
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
-
-.PHONY: test-notebook-worker
-test-notebook-worker: $(BUILD_DIR)/notebook_worker_tests $(BUILD_DIR)/notebook_cancellation_tests $(BUILD_DIR)/notebook_run_tasks_tests
-	$(BUILD_DIR)/notebook_worker_tests "$(abspath $(BUILD_DIR)/amber-notebook-worker)" $(NOTEBOOK_WORKER_PLOT_TEST)
-	$(BUILD_DIR)/notebook_cancellation_tests
-	$(BUILD_DIR)/notebook_run_tasks_tests
-ifeq ($(UNAME_S),Darwin)
-test-notebook-worker: test-notebook-worker-host
-.PHONY: test-notebook-worker-host
-test-notebook-worker-host: $(BUILD_DIR)/notebook-macos/notebook_worker_host_tests $(BUILD_DIR)/amber-notebook-worker
-	$(BUILD_DIR)/notebook-macos/notebook_worker_host_tests "$(abspath $(BUILD_DIR)/amber-notebook-worker)"
-.PHONY: test-notebook-worker-ui
-test-notebook-worker-ui: notebook-macos $(BUILD_DIR)/notebook_macos_model_tests
-	$(BUILD_DIR)/notebook_macos_model_tests "$(abspath $(BUILD_DIR)/amber-notebook-worker)"
-	python3 tests/notebook_macos_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook" --isolated-worker
-ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
-	python3 tests/notebook_macos_plot_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook" "$(AMBER_PLOT_DIR)/src/plot.am" --isolated-worker
-endif
-endif
-NOTEBOOK_CORE_TEST_SRCS := tests/notebook_core_tests.cpp $(NOTEBOOK_GRAPH_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
-NOTEBOOK_COMPILER_TEST_SRCS := tests/notebook_compiler_tests.cpp $(NOTEBOOK_GRAPH_SRCS) notebook/compiler.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
-NOTEBOOK_KERNEL_TEST_SRCS := tests/notebook_kernel_tests.cpp $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
-NOTEBOOK_VM_INTEGRATION_TEST_SRCS := tests/notebook_vm_integration_tests.cpp $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
+$(LIBRARY): $(LIB_OBJS)
+	$(AR) rcs $@ $^
+-include $(LIB_OBJS:.o=.d) $(wildcard $(BUILD_DIR)/obj/tools/*/*.d) $(wildcard $(BUILD_DIR)/obj/tests/*.d)
 LEXER_TEST_SRCS := tests/lexer_tests.cpp $(LEXER_SRCS)
 PARSER_TEST_SRCS := tests/parser_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS)
 BINDER_TEST_SRCS := tests/binder_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS)
@@ -275,7 +67,7 @@ STDLIB_UUID_TEST_SRCS := tests/stdlib_uuid_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS
 STDLIB_TIME_TEST_SRCS := tests/stdlib_time_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_URL_TEST_SRCS := tests/stdlib_url_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_YAML_TEST_SRCS := tests/stdlib_yaml_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
-AMBER_EXT_TEST_SRCS := tests/amber_ext_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
+SPUTNIK_EXT_TEST_SRCS := tests/sputnik_ext_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 IO_TEST_SRCS := tests/io_tests.cpp runtime/context.cpp runtime/text.cpp $(IO_SRCS)
 HTTP_CODEC_TEST_SRCS := tests/http_codec_tests.cpp runtime/http_codec.cpp
 NET_HTTP_TEST_SRCS := tests/net_http_tests.cpp runtime/net_http.cpp runtime/http_codec.cpp
@@ -394,43 +186,13 @@ FORMAT_FILES := \
 	runtime/stdlib_url.h \
 	runtime/stdlib_url.cpp \
 	runtime/stdlib_yaml.cpp \
-	runtime/amber_ext.h \
-	runtime/amber_ext_runtime.h \
-	runtime/amber_ext.cpp \
+	runtime/sputnik_ext.h \
+	runtime/sputnik_ext_runtime.h \
+	runtime/sputnik_ext.cpp \
 	package/package.cpp \
 	package/package.h \
-	notebook/model.cpp \
-	notebook/model.h \
-	notebook/analysis.cpp \
-	notebook/dependency_graph.cpp \
-	notebook/dependency_graph.h \
-	notebook/kernel.cpp \
-	notebook/kernel.h \
-	notebook/scheduler.cpp \
-	notebook/scheduler.h \
-	notebook/notebook.h \
-	notebook/project.h \
-	notebook/project.cpp \
-	notebook/project_json.cpp \
-	notebook/slot_table.cpp \
-	notebook/slot_table.h \
-	notebook/compiler.cpp \
-	notebook/compiler.h \
-	tools/amberc/main.cpp \
-	tools/iamber/main.cpp \
-	tools/iamber/session.cpp \
-	tools/iamber/session.h \
-	tools/iamber/project_session.h \
-	tools/iamber/project_session.cpp \
-	tools/iamber/tabs.cpp \
-	tools/iamber/tabs.h \
-	tools/iamber/activity.cpp \
-	tools/iamber/activity.h \
-	tools/iamber/dispatch.cpp \
-	tools/iamber/dispatch.h \
-	tools/iamber/terminal_wait.cpp \
-	tools/iamber/terminal_wait.h \
-	tools/ambertest/main.cpp \
+	tools/sputnik/main.cpp \
+	tools/sputniktest/main.cpp \
 	tests/lexer_tests.cpp \
 	tests/parser_tests.cpp \
 	tests/binder_tests.cpp \
@@ -446,19 +208,6 @@ FORMAT_FILES := \
 	tests/emitter_tests.cpp \
 	tests/module_loader_tests.cpp \
 	tests/package_tests.cpp \
-	tests/notebook_core_tests.cpp \
-	tests/notebook_compiler_tests.cpp \
-	tests/notebook_kernel_tests.cpp \
-	tests/notebook_slot_tests.cpp \
-	tests/notebook_vm_integration_tests.cpp \
-	tests/iamber_tests.cpp \
-	tests/notebook_project_tests.cpp \
-	tests/iamber_project_tests.cpp \
-	tests/iamber_tabs_tests.cpp \
-	tests/iamber_activity_tests.cpp \
-	tests/iamber_poll_tests.cpp \
-	tests/iamber_dispatch_tests.cpp \
-	tests/iamber_terminal_wait_tests.cpp \
 	tests/vm_tests.cpp \
 	tests/stdlib_collections_tests.cpp \
 	tests/stdlib_task_tests.cpp \
@@ -480,299 +229,164 @@ FORMAT_FILES := \
 	tests/net_http_tests.cpp \
 	tests/net_http_tcp_tests.cpp
 
-.PHONY: all build test test-iamber-tui conformance backend-equivalence spec-sync-check fmt clean
+.PHONY: all build test conformance backend-equivalence spec-sync-check fmt clean
 
-# The native UI is opt-in and never adds Swift/AppKit dependencies to CLI or
-# Linux builds. Its C++ backend shares exactly the iamber Sessions, no curses.
-.PHONY: notebook-macos test-notebook-macos
-ifeq ($(UNAME_S),Darwin)
-ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
-.PHONY: test-notebook-plots
-test-notebook-macos: test-notebook-plots
-test-notebook-plots: notebook-macos $(BUILD_DIR)/notebook_plot_tests $(BUILD_DIR)/notebook_macos_plot_tests
-	$(BUILD_DIR)/notebook_plot_tests "$(AMBER_PLOT_DIR)/src/plot.am" "$(BUILD_DIR)/notebook-plot-view-snapshot.json"
-	$(BUILD_DIR)/notebook_macos_plot_tests "$(BUILD_DIR)/notebook-plot-view-snapshot.json"
-	python3 tests/notebook_macos_plot_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook" "$(AMBER_PLOT_DIR)/src/plot.am"
-endif
-$(BUILD_DIR)/notebook-macos/obj/%.o: %.cpp
-	@mkdir -p "$(@D)"
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -mmacosx-version-min=14.0 -MMD -MP -c $< -o $@
-
--include $(MAC_NOTEBOOK_OBJS:.o=.d)
-
-$(BUILD_DIR)/notebook-macos/plot_png.o: $(AMBER_PLOT_DIR)/native/plot_png.c runtime/amber_ext.h
-	@mkdir -p "$(@D)"
-	$(CC) -I. -std=c11 -O2 -mmacosx-version-min=14.0 -c $< -o $@
-
-$(BUILD_DIR)/notebook-macos/libNotebookBackend.a: $(MAC_NOTEBOOK_OBJS)
-	xcrun libtool -static -o $@ $^
-
-$(BUILD_DIR)/notebook-macos/AmberNotebook: $(MAC_NOTEBOOK_SWIFT) tools/notebook-macos/NotebookBridge.h $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
-	xcrun swiftc -swift-version 5 -O -g -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache -import-objc-header tools/notebook-macos/NotebookBridge.h $(MAC_NOTEBOOK_SWIFT) $(BUILD_DIR)/notebook-macos/libNotebookBackend.a -framework AppKit -framework SwiftUI -lc++ $(LDFLAGS) -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o $@
-
-notebook-macos: $(BUILD_DIR)/notebook-macos/AmberNotebook $(BUILD_DIR)/amber-notebook-worker tools/notebook-macos/Info.plist tools/notebook-macos/package-app.sh
-	bash tools/notebook-macos/package-app.sh "$(BUILD_DIR)/notebook-macos/AmberNotebook" "$(BUILD_DIR)/Amber Notebook.app" "$(OPENSSL_LIB_DIR)" "$(BUILD_DIR)/amber-notebook-worker"
-
-$(BUILD_DIR)/notebook_macos_bridge_tests: tests/notebook_macos_bridge_tests.cpp $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(BUILD_DIR)/notebook-macos/libNotebookBackend.a $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook_plot_tests: tests/notebook_plot_tests.cpp $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(BUILD_DIR)/notebook-macos/libNotebookBackend.a $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook_macos_model_tests: tests/notebook_macos_model_tests.swift tools/notebook-macos/NotebookModel.swift tools/notebook-macos/NotebookBoard.swift tools/notebook-macos/NotebookTextVariable.swift tools/notebook-macos/NotebookFigure.swift tools/notebook-macos/NotebookBridge.h $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
-	xcrun swiftc -swift-version 5 -O -g -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache -import-objc-header tools/notebook-macos/NotebookBridge.h tests/notebook_macos_model_tests.swift tools/notebook-macos/NotebookModel.swift tools/notebook-macos/NotebookBoard.swift tools/notebook-macos/NotebookTextVariable.swift tools/notebook-macos/NotebookFigure.swift $(BUILD_DIR)/notebook-macos/libNotebookBackend.a -framework AppKit -lc++ $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/notebook_macos_syntax_tests: tests/notebook_macos_syntax_tests.swift tools/notebook-macos/AmberSyntax.swift tools/notebook-macos/CodeEditor.swift
-	xcrun swiftc -swift-version 5 -O -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
-
-$(BUILD_DIR)/notebook_macos_result_tests: tests/notebook_macos_result_tests.swift tools/notebook-macos/NotebookResultView.swift tools/notebook-macos/NotebookObjectMenu.swift
-	xcrun swiftc -swift-version 5 -O -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
-
-$(BUILD_DIR)/notebook_macos_plot_tests: tests/notebook_macos_plot_tests.swift tools/notebook-macos/NotebookPlotScene.swift tools/notebook-macos/NotebookPlotView.swift tools/notebook-macos/NotebookFigure.swift tools/notebook-macos/NotebookFigureView.swift tools/notebook-macos/NotebookObjectMenu.swift
-	xcrun swiftc -swift-version 5 -O -g -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
-
-test-notebook-results: $(BUILD_DIR)/notebook_macos_result_tests $(BUILD_DIR)/notebook-macos/notebook_result_tests
-	$(BUILD_DIR)/notebook_macos_result_tests
-	$(BUILD_DIR)/notebook-macos/notebook_result_tests
-
-$(BUILD_DIR)/notebook_macos_richtext_tests: tests/notebook_macos_richtext_tests.swift tools/notebook-macos/RichTextEditor.swift tools/notebook-macos/RichTextStructure.swift tools/notebook-macos/RichTextEditing.swift tools/notebook-macos/RichTextInterpolation.swift tools/notebook-macos/NotebookTextVariable.swift
-	xcrun swiftc -swift-version 5 -O -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
-
-# Reuse the same backend archive for cross-host regressions instead of
-# recompiling the VM separately for each Session/project test executable.
-$(BUILD_DIR)/notebook-macos/%_tests: tests/%_tests.cpp $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(BUILD_DIR)/notebook-macos/libNotebookBackend.a $(LDFLAGS) -o $@
-
-test-notebook-macos: notebook-macos $(BUILD_DIR)/notebook_macos_bridge_tests $(BUILD_DIR)/notebook_macos_model_tests $(BUILD_DIR)/notebook_macos_syntax_tests $(BUILD_DIR)/notebook_macos_richtext_tests $(BUILD_DIR)/notebook-macos/iamber_tests $(BUILD_DIR)/notebook-macos/iamber_project_tests $(BUILD_DIR)/notebook-macos/iamber_tabs_tests $(BUILD_DIR)/notebook_project_tests
-	$(BUILD_DIR)/notebook_macos_bridge_tests
-	$(BUILD_DIR)/notebook_macos_model_tests
-	$(BUILD_DIR)/notebook_macos_syntax_tests
-	$(BUILD_DIR)/notebook_macos_richtext_tests
-	$(BUILD_DIR)/notebook_project_tests
-	$(BUILD_DIR)/notebook-macos/iamber_tests
-	$(BUILD_DIR)/notebook-macos/iamber_project_tests
-	$(BUILD_DIR)/notebook-macos/iamber_tabs_tests
-	$(BUILD_DIR)/notebook-macos/notebook_board_tests
-	$(BUILD_DIR)/notebook-macos/notebook_dependency_tests
-	python3 tests/notebook_macos_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook"
-test-notebook-macos: $(BUILD_DIR)/notebook-macos/notebook_board_tests
-test-notebook-macos: $(BUILD_DIR)/notebook-macos/notebook_dependency_tests
-test-notebook-macos: test-notebook-results
-else
-notebook-macos test-notebook-macos:
-	@echo "The native notebook requires macOS 14+ and Xcode Command Line Tools."
-	@exit 1
-endif
 
 all: build
 
-build: $(BUILD_DIR)/system_tests $(BUILD_DIR)/stdlib_system_tests
+build: $(BUILD_DIR)/sputnik
 
-$(BUILD_DIR)/system_tests: tests/system_tests.cpp runtime/system.cpp runtime/system.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/system_tests.cpp runtime/system.cpp $(LDFLAGS) -o $@
+.PHONY: build-tests runtime
+build-tests: build $(BUILD_DIR)/sputniktest $(BUILD_DIR)/system_tests $(BUILD_DIR)/stdlib_system_tests $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_signature_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/sputnik_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/graph_linker_tests
 
-$(BUILD_DIR)/stdlib_system_tests: tests/stdlib_system_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) runtime/system_vm.inc | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/stdlib_system_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(LDFLAGS) -o $@
 
-build: $(BUILD_DIR)/amberc $(BUILD_DIR)/ambertest $(BUILD_DIR)/iamber $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_signature_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/amber_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/notebook_core_tests $(BUILD_DIR)/notebook_slot_tests $(BUILD_DIR)/notebook_kernel_tests $(BUILD_DIR)/notebook_vm_integration_tests $(BUILD_DIR)/notebook_compiler_tests $(BUILD_DIR)/iamber_tests
+$(BUILD_DIR)/system_tests: $(BUILD_DIR)/obj/tests/system_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-build: $(BUILD_DIR)/iamber_activity_tests $(BUILD_DIR)/iamber_poll_tests $(BUILD_DIR)/iamber_dispatch_tests $(BUILD_DIR)/iamber_terminal_wait_tests
-build: $(BUILD_DIR)/notebook_project_tests $(BUILD_DIR)/iamber_project_tests $(BUILD_DIR)/iamber_tabs_tests
-build: $(BUILD_DIR)/notebook_dependency_tests
-build: $(BUILD_DIR)/graph_linker_tests
+$(BUILD_DIR)/stdlib_system_tests: $(BUILD_DIR)/obj/tests/stdlib_system_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
+
+
 
 # These adapters are included from the VM rather than compiled separately.
 # Keep all runtime consumers current when their implementation changes.
-$(addprefix $(BUILD_DIR)/,amberc ambertest iamber vm_tests native_tests frozen_image_tests stdlib_system_tests stdlib_collections_tests stdlib_task_tests stdlib_registry_tests stdlib_json_tests stdlib_codecs_tests stdlib_digest_tests stdlib_signature_tests stdlib_benchmark_tests stdlib_secure_random_tests stdlib_bool_tests stdlib_argparser_tests stdlib_regexp_tests stdlib_uuid_tests stdlib_time_tests stdlib_url_tests stdlib_yaml_tests amber_ext_tests module_loader_tests notebook_core_tests notebook_compiler_tests notebook_slot_tests notebook_kernel_tests notebook_vm_integration_tests iamber_tests iamber_project_tests iamber_tabs_tests): runtime/system_vm.inc runtime/system.h runtime/vm_notebook.inc runtime/notebook_display.h runtime/notebook_inputs.h runtime/stdlib_bool.h
 
 $(BUILD_DIR)/.dir:
 	mkdir -p $(BUILD_DIR)
 	touch $(BUILD_DIR)/.dir
 
-$(BUILD_DIR)/amberc $(BUILD_DIR)/iamber $(BUILD_DIR)/iamber_tests $(BUILD_DIR)/iamber_project_tests $(BUILD_DIR)/iamber_tabs_tests: bytecode/graph_linker.h
 
-$(BUILD_DIR)/amberc: $(AMBERC_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERC_SRCS) $(LDFLAGS) $(AMBERC_DYNAMIC_EXPORT_FLAGS) $(AMBERC_DYNAMIC_LOADER_LIBS) -o $@
+$(BUILD_DIR)/sputnik: $(BUILD_DIR)/obj/tools/sputnik/main.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/ambertest: $(AMBERTEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBERTEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/sputniktest: $(BUILD_DIR)/obj/tools/sputniktest/main.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber: $(IAMBER_SRCS) tools/iamber/session.h tools/iamber/project_session.h tools/iamber/tabs.h notebook/project.h notebook/model.h tools/iamber/activity.h tools/iamber/dispatch.h tools/iamber/terminal_wait.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_SRCS) $(LDFLAGS) $(IAMBER_LDLIBS) -o $@
+$(BUILD_DIR)/lexer_tests: $(BUILD_DIR)/obj/tests/lexer_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_tests: $(IAMBER_TEST_SRCS) tools/iamber/session.h tools/iamber/project_session.h notebook/project.h notebook/model.h tools/iamber/activity.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/parser_tests: $(BUILD_DIR)/obj/tests/parser_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_project_tests: $(NOTEBOOK_PROJECT_TEST_SRCS) notebook/project.h notebook/model.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_PROJECT_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/binder_tests: $(BUILD_DIR)/obj/tests/binder_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_project_tests: $(IAMBER_PROJECT_TEST_SRCS) tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h tools/iamber/activity.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_PROJECT_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/checker_tests: $(BUILD_DIR)/obj/tests/checker_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_tabs_tests: $(IAMBER_TABS_TEST_SRCS) tools/iamber/tabs.h tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h tools/iamber/activity.h tools/iamber/dispatch.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TABS_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/wasm_accel_tests: $(BUILD_DIR)/obj/tests/wasm_accel_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_dependency_tests: $(NOTEBOOK_DEPENDENCY_TEST_SRCS) tools/iamber/dependencies.h tools/iamber/tabs.h tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h runtime/vm_notebook.inc runtime/notebook_display.h runtime/notebook_inputs.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_DEPENDENCY_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/modern_profile_tests: $(BUILD_DIR)/obj/tests/modern_profile_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_activity_tests: $(IAMBER_ACTIVITY_TEST_SRCS) tools/iamber/activity.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_ACTIVITY_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/build_tests: $(BUILD_DIR)/obj/tests/build_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_poll_tests: $(IAMBER_POLL_TEST_SRCS) tools/iamber/activity.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_POLL_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/hir_tests: $(BUILD_DIR)/obj/tests/hir_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_dispatch_tests: $(IAMBER_DISPATCH_TEST_SRCS) tools/iamber/dispatch.h tools/iamber/session.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_DISPATCH_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/mir_tests: $(BUILD_DIR)/obj/tests/mir_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/iamber_terminal_wait_tests: $(IAMBER_TERMINAL_WAIT_TEST_SRCS) tools/iamber/terminal_wait.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TERMINAL_WAIT_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/native_tests: $(BUILD_DIR)/obj/tests/native_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-# Separate from the headless test suite: requires POSIX PTY allocation.
-test-iamber-tui: $(BUILD_DIR)/iamber
-	python3 tests/iamber_tui_smoke.py $(BUILD_DIR)/iamber
-	python3 tests/iamber_project_tui_smoke.py $(BUILD_DIR)/iamber
-	python3 tests/iamber_tabs_tui_smoke.py $(BUILD_DIR)/iamber
-	python3 tests/iamber_project_commands_tui_smoke.py $(BUILD_DIR)/iamber
+$(BUILD_DIR)/frozen_image_tests: $(BUILD_DIR)/obj/tests/frozen_image_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_core_tests: $(NOTEBOOK_CORE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_CORE_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/bytecode_tests: $(BUILD_DIR)/obj/tests/bytecode_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_compiler_tests: $(NOTEBOOK_COMPILER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_COMPILER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/graph_linker_tests: $(BUILD_DIR)/obj/tests/graph_linker_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_slot_tests: $(NOTEBOOK_SLOT_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_SLOT_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/emitter_tests: $(BUILD_DIR)/obj/tests/emitter_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_kernel_tests: $(NOTEBOOK_KERNEL_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_KERNEL_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/vm_tests: $(BUILD_DIR)/obj/tests/vm_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/notebook_vm_integration_tests: $(NOTEBOOK_VM_INTEGRATION_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_VM_INTEGRATION_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_collections_tests: $(BUILD_DIR)/obj/tests/stdlib_collections_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/lexer_tests: $(LEXER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(LEXER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_task_tests: $(BUILD_DIR)/obj/tests/stdlib_task_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/parser_tests: $(PARSER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PARSER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_registry_tests: $(BUILD_DIR)/obj/tests/stdlib_registry_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/binder_tests: $(BINDER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(BINDER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_json_tests: $(BUILD_DIR)/obj/tests/stdlib_json_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/checker_tests: $(CHECKER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(CHECKER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_codecs_tests: $(BUILD_DIR)/obj/tests/stdlib_codecs_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/wasm_accel_tests: $(WASM_ACCEL_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(WASM_ACCEL_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_digest_tests: $(BUILD_DIR)/obj/tests/stdlib_digest_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/modern_profile_tests: $(MODERN_PROFILE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(MODERN_PROFILE_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_signature_tests: $(BUILD_DIR)/obj/tests/stdlib_signature_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/build_tests: $(BUILD_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(BUILD_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_benchmark_tests: $(BUILD_DIR)/obj/tests/stdlib_benchmark_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/hir_tests: $(HIR_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(HIR_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_secure_random_tests: $(BUILD_DIR)/obj/tests/stdlib_secure_random_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/mir_tests: $(MIR_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(MIR_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_bool_tests: $(BUILD_DIR)/obj/tests/stdlib_bool_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/native_tests: $(NATIVE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NATIVE_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_argparser_tests: $(BUILD_DIR)/obj/tests/stdlib_argparser_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/frozen_image_tests: $(FROZEN_IMAGE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(FROZEN_IMAGE_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_regexp_tests: $(BUILD_DIR)/obj/tests/stdlib_regexp_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/bytecode_tests: $(BYTECODE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(BYTECODE_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_uuid_tests: $(BUILD_DIR)/obj/tests/stdlib_uuid_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/graph_linker_tests: $(GRAPH_LINKER_TEST_SRCS) bytecode/graph_linker.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(GRAPH_LINKER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_time_tests: $(BUILD_DIR)/obj/tests/stdlib_time_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/emitter_tests: $(EMITTER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(EMITTER_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_url_tests: $(BUILD_DIR)/obj/tests/stdlib_url_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/vm_tests: $(VM_TEST_SRCS) spec/registries/runtime_errors.def | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(VM_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/stdlib_yaml_tests: $(BUILD_DIR)/obj/tests/stdlib_yaml_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_collections_tests: $(STDLIB_COLLECTIONS_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_COLLECTIONS_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/sputnik_ext_tests: $(BUILD_DIR)/obj/tests/sputnik_ext_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_task_tests: $(STDLIB_TASK_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_TASK_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/sputnik $(BUILD_DIR)/sputnik_ext_tests: runtime/native_call_buffer.h
 
-$(BUILD_DIR)/stdlib_registry_tests: $(STDLIB_REGISTRY_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_REGISTRY_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/io_tests: $(BUILD_DIR)/obj/tests/io_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_json_tests: $(STDLIB_JSON_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_JSON_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/http_codec_tests: $(BUILD_DIR)/obj/tests/http_codec_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_codecs_tests: $(STDLIB_CODECS_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_CODECS_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/net_http_tests: $(BUILD_DIR)/obj/tests/net_http_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_digest_tests: $(STDLIB_DIGEST_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_DIGEST_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/net_http_tcp_tests: $(BUILD_DIR)/obj/tests/net_http_tcp_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_signature_tests: $(STDLIB_SIGNATURE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_SIGNATURE_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/vm_net_http_tests: $(BUILD_DIR)/obj/tests/vm_net_http_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_benchmark_tests: $(STDLIB_BENCHMARK_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_BENCHMARK_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/module_loader_tests: $(BUILD_DIR)/obj/tests/module_loader_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_secure_random_tests: $(STDLIB_SECURE_RANDOM_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_SECURE_RANDOM_TEST_SRCS) $(LDFLAGS) -o $@
+$(BUILD_DIR)/package_tests: $(BUILD_DIR)/obj/tests/package_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
 
-$(BUILD_DIR)/stdlib_bool_tests: $(STDLIB_BOOL_TEST_SRCS) runtime/stdlib_bool.h | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_BOOL_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/stdlib_argparser_tests: $(STDLIB_ARGPARSER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_ARGPARSER_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/stdlib_regexp_tests: $(STDLIB_REGEXP_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_REGEXP_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/stdlib_uuid_tests: $(STDLIB_UUID_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_UUID_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/stdlib_time_tests: $(STDLIB_TIME_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_TIME_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/stdlib_url_tests: $(STDLIB_URL_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_URL_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/stdlib_yaml_tests: $(STDLIB_YAML_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_YAML_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/amber_ext_tests: $(AMBER_EXT_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBER_EXT_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/amberc $(BUILD_DIR)/amber_ext_tests: runtime/native_call_buffer.h
-
-$(BUILD_DIR)/io_tests: $(IO_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IO_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/http_codec_tests: $(HTTP_CODEC_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(HTTP_CODEC_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/net_http_tests: $(NET_HTTP_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NET_HTTP_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/net_http_tcp_tests: $(NET_HTTP_TCP_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NET_HTTP_TCP_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/vm_net_http_tests: $(VM_NET_HTTP_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(VM_NET_HTTP_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/module_loader_tests: $(MODULE_LOADER_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(MODULE_LOADER_TEST_SRCS) $(LDFLAGS) -o $@
-
-$(BUILD_DIR)/package_tests: $(PACKAGE_TEST_SRCS) | $(BUILD_DIR)/.dir
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(PACKAGE_TEST_SRCS) $(LDFLAGS) -o $@
-
-test: build
+test: build-tests
+	python3 tests/source_extensions_test.py $(BUILD_DIR)/sputnik
 	$(BUILD_DIR)/system_tests
 	$(BUILD_DIR)/stdlib_system_tests
-	python3 tests/system_backend_test.py $(BUILD_DIR)/amberc
-	python3 tests/threaded_backend_test.py $(BUILD_DIR)/amberc
+	python3 tests/system_backend_test.py $(BUILD_DIR)/sputnik
+	python3 tests/threaded_backend_test.py $(BUILD_DIR)/sputnik
 	$(BUILD_DIR)/lexer_tests
 	$(BUILD_DIR)/parser_tests
 	$(BUILD_DIR)/binder_tests
@@ -786,7 +400,7 @@ test: build
 	$(BUILD_DIR)/frozen_image_tests
 	$(BUILD_DIR)/bytecode_tests
 	$(BUILD_DIR)/graph_linker_tests
-	python3 tests/graph_linker_cli_smoke.py $(BUILD_DIR)/amberc
+	python3 tests/graph_linker_cli_smoke.py $(BUILD_DIR)/sputnik
 	$(BUILD_DIR)/emitter_tests
 	$(BUILD_DIR)/vm_tests
 	$(BUILD_DIR)/stdlib_collections_tests
@@ -805,157 +419,142 @@ test: build
 	$(BUILD_DIR)/stdlib_time_tests
 	$(BUILD_DIR)/stdlib_url_tests
 	$(BUILD_DIR)/stdlib_yaml_tests
-	$(BUILD_DIR)/amber_ext_tests
+	$(BUILD_DIR)/sputnik_ext_tests
 	$(BUILD_DIR)/io_tests
 	$(BUILD_DIR)/http_codec_tests
 	$(BUILD_DIR)/net_http_tests
 	$(BUILD_DIR)/net_http_tcp_tests
 	$(BUILD_DIR)/module_loader_tests
 	$(BUILD_DIR)/package_tests
-	$(BUILD_DIR)/notebook_core_tests
-	$(BUILD_DIR)/notebook_compiler_tests
-	$(BUILD_DIR)/notebook_slot_tests
-	$(BUILD_DIR)/notebook_kernel_tests
-	$(BUILD_DIR)/notebook_vm_integration_tests
-	$(BUILD_DIR)/iamber_tests
-	python3 tests/iamber_system_test.py $(BUILD_DIR)/iamber
-	$(BUILD_DIR)/notebook_project_tests
-	$(BUILD_DIR)/iamber_project_tests
-	$(BUILD_DIR)/notebook_dependency_tests
-	$(BUILD_DIR)/iamber_tabs_tests
-	$(BUILD_DIR)/iamber_activity_tests
-	$(BUILD_DIR)/iamber_poll_tests
-	$(BUILD_DIR)/iamber_dispatch_tests
-	$(BUILD_DIR)/iamber_terminal_wait_tests
-	$(BUILD_DIR)/amberc lex corpus/parse/lexer/basic/source.am > $(BUILD_DIR)/lexer-basic.tokens.json
-	$(BUILD_DIR)/amberc build tests/fixtures/w14_build/amber.build.json --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-first.json
-	$(BUILD_DIR)/amberc build tests/fixtures/w14_build/amber.build.json --target bytecode --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-second.json
-	$(BUILD_DIR)/amberc amberbc-verify $(BUILD_DIR)/w14_build/out/demo.main.amberbc > $(BUILD_DIR)/w14-main.verify.json
-	$(BUILD_DIR)/amberc metadata $(BUILD_DIR)/w14_build/out/demo.main.amberbc --json > $(BUILD_DIR)/w14-main.metadata.json
-	$(BUILD_DIR)/amberc verify $(BUILD_DIR)/w14_build/out/demo.main.amberbc --json > $(BUILD_DIR)/w14-main.public-verify.json
-	! $(BUILD_DIR)/amberc verify tests/fixtures/bad.amberbc --json > $(BUILD_DIR)/bad.public-verify.json
-	grep -q '"schema": "amber.bc.v1"' $(BUILD_DIR)/w14-main.metadata.json
-	grep -q '"schema": "amber.bc.verify.v1"' $(BUILD_DIR)/w14-main.public-verify.json
+	$(BUILD_DIR)/sputnik lex corpus/parse/lexer/basic/source.s > $(BUILD_DIR)/lexer-basic.tokens.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/w14_build/sputnik.build.json --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-first.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/w14_build/sputnik.build.json --target bytecode --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-second.json
+	$(BUILD_DIR)/sputnik sputnikbc-verify $(BUILD_DIR)/w14_build/out/demo.main.sputnikbc > $(BUILD_DIR)/w14-main.verify.json
+	$(BUILD_DIR)/sputnik metadata $(BUILD_DIR)/w14_build/out/demo.main.sputnikbc --json > $(BUILD_DIR)/w14-main.metadata.json
+	$(BUILD_DIR)/sputnik verify $(BUILD_DIR)/w14_build/out/demo.main.sputnikbc --json > $(BUILD_DIR)/w14-main.public-verify.json
+	! $(BUILD_DIR)/sputnik verify tests/fixtures/bad.sputnikbc --json > $(BUILD_DIR)/bad.public-verify.json
+	grep -q '"schema": "sputnik.bc.v1"' $(BUILD_DIR)/w14-main.metadata.json
+	grep -q '"schema": "sputnik.bc.verify.v1"' $(BUILD_DIR)/w14-main.public-verify.json
 	grep -q '"code":"BC1002"' $(BUILD_DIR)/bad.public-verify.json
-	$(BUILD_DIR)/amberc amberbc-disasm $(BUILD_DIR)/w14_build/out/demo.main.amberbc > $(BUILD_DIR)/w14-main.disasm.txt
+	$(BUILD_DIR)/sputnik sputnikbc-disasm $(BUILD_DIR)/w14_build/out/demo.main.sputnikbc > $(BUILD_DIR)/w14-main.disasm.txt
 	grep -q '"native_output": "$(BUILD_DIR)/w14_build/out/demo.main"' $(BUILD_DIR)/w14-build-first.json
 	$(BUILD_DIR)/w14_build/out/demo.main > $(BUILD_DIR)/w14-main-native-manifest.out
 	grep -q '^42$$' $(BUILD_DIR)/w14-main-native-manifest.out
-	$(BUILD_DIR)/amberc tests/fixtures/run_script/main.am > $(BUILD_DIR)/run-script.out
+	$(BUILD_DIR)/sputnik tests/fixtures/run_script/main.s > $(BUILD_DIR)/run-script.out
 	grep -q '^42$$' $(BUILD_DIR)/run-script.out
-	$(BUILD_DIR)/amberc build tests/fixtures/w14_build/src/main.am -o $(BUILD_DIR)/w14-main-exe > $(BUILD_DIR)/w14-main-exe-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/w14_build/src/main.s -o $(BUILD_DIR)/w14-main-exe > $(BUILD_DIR)/w14-main-exe-build.json
 	grep -q '"entry": "main"' $(BUILD_DIR)/w14-main-exe-build.json
 	grep -q '"native_entry": true' $(BUILD_DIR)/w14-main-exe-build.json
 	$(BUILD_DIR)/w14-main-exe > $(BUILD_DIR)/w14-main-exe.out
 	grep -q '^42$$' $(BUILD_DIR)/w14-main-exe.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_scalar_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_scalar_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-scalar-core-build.json
 	awk '/compact native frame:/ { if ($$5 > $$8) reduced = 1 } END { exit reduced ? 0 : 1 }' $(BUILD_DIR)/native-scalar-core.native.cpp
 	! grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-scalar-core.native.cpp
 	! grep -q '^  } catch (NativeNonlocalReturn &signal)' $(BUILD_DIR)/native-scalar-core.native.cpp
-	grep -q 'static AMBER_NATIVE_COLD void native_bailout' $(BUILD_DIR)/native-scalar-core.native.cpp
+	grep -q 'static SPUTNIK_NATIVE_COLD void native_bailout' $(BUILD_DIR)/native-scalar-core.native.cpp
 	$(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core.out
 	grep -q '^12$$' $(BUILD_DIR)/native-scalar-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_scalar_core/main.am > $(BUILD_DIR)/native-scalar-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_scalar_core/main.s > $(BUILD_DIR)/native-scalar-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-scalar-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-scalar-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_str_bytes_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_str_bytes_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-str-bytes-core-build.json
 	$(BUILD_DIR)/native-str-bytes-core > $(BUILD_DIR)/native-str-bytes-core.out
 	grep -q '^23$$' $(BUILD_DIR)/native-str-bytes-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_str_bytes_core/main.am > $(BUILD_DIR)/native-str-bytes-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_str_bytes_core/main.s > $(BUILD_DIR)/native-str-bytes-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-str-bytes-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-str-bytes-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_regexp_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-regexp-core > $(BUILD_DIR)/native-regexp-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_regexp_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-regexp-core > $(BUILD_DIR)/native-regexp-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-regexp-core-build.json
 	$(BUILD_DIR)/native-regexp-core > $(BUILD_DIR)/native-regexp-core.out
 	grep -q '^42$$' $(BUILD_DIR)/native-regexp-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_regexp_core/main.am > $(BUILD_DIR)/native-regexp-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_regexp_core/main.s > $(BUILD_DIR)/native-regexp-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-regexp-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-regexp-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_sequence_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_sequence_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q 'NativeClosure \*invocation = as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
 	! grep -q 'NativeClosure invocation = \*as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
 	test "$$(grep -c 'native_append_trace_frame(raised' $(BUILD_DIR)/native-sequence-core.native.cpp)" -eq 2
 	$(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core.out
 	grep -q '^26$$' $(BUILD_DIR)/native-sequence-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_sequence_core/main.am > $(BUILD_DIR)/native-sequence-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_sequence_core/main.s > $(BUILD_DIR)/native-sequence-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-sequence-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-sequence-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_higher_order_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-higher-order-core > $(BUILD_DIR)/native-higher-order-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_higher_order_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-higher-order-core > $(BUILD_DIR)/native-higher-order-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-higher-order-core-build.json
 	$(BUILD_DIR)/native-higher-order-core > $(BUILD_DIR)/native-higher-order-core.out
 	grep -q '^25$$' $(BUILD_DIR)/native-higher-order-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_higher_order_core/main.am > $(BUILD_DIR)/native-higher-order-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_higher_order_core/main.s > $(BUILD_DIR)/native-higher-order-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-higher-order-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-higher-order-core.dump
-	$(BUILD_DIR)/amberc build corpus/run/collection_counts/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-collection-counts > $(BUILD_DIR)/native-collection-counts-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/collection_counts/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-collection-counts > $(BUILD_DIR)/native-collection-counts-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-collection-counts-build.json
 	$(BUILD_DIR)/native-collection-counts > $(BUILD_DIR)/native-collection-counts.out
 	grep -q '^42$$' $(BUILD_DIR)/native-collection-counts.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_keyed_collections_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_keyed_collections_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-keyed-collections-core-build.json
 	$(BUILD_DIR)/native-keyed-collections-core > $(BUILD_DIR)/native-keyed-collections-core.out
 	grep -q '^26$$' $(BUILD_DIR)/native-keyed-collections-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_keyed_collections_core/main.am > $(BUILD_DIR)/native-keyed-collections-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_keyed_collections_core/main.s > $(BUILD_DIR)/native-keyed-collections-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-keyed-collections-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-keyed-collections-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_open_protocol_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-open-protocol-core > $(BUILD_DIR)/native-open-protocol-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_open_protocol_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-open-protocol-core > $(BUILD_DIR)/native-open-protocol-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-open-protocol-core-build.json
 	$(BUILD_DIR)/native-open-protocol-core > $(BUILD_DIR)/native-open-protocol-core.out
 	grep -q '^"native-open-protocol-ok"$$' $(BUILD_DIR)/native-open-protocol-core.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_set_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-set-core > $(BUILD_DIR)/native-set-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_set_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-set-core > $(BUILD_DIR)/native-set-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-set-core-build.json
 	$(BUILD_DIR)/native-set-core > $(BUILD_DIR)/native-set-core.out
 	grep -q '^12$$' $(BUILD_DIR)/native-set-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_set_core/main.am > $(BUILD_DIR)/native-set-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_set_core/main.s > $(BUILD_DIR)/native-set-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-set-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-set-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_math_numeric_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-math-numeric-core > $(BUILD_DIR)/native-math-numeric-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_math_numeric_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-math-numeric-core > $(BUILD_DIR)/native-math-numeric-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-math-numeric-core-build.json
 	$(BUILD_DIR)/native-math-numeric-core > $(BUILD_DIR)/native-math-numeric-core.out
 	grep -q '^12$$' $(BUILD_DIR)/native-math-numeric-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_math_numeric_core/main.am > $(BUILD_DIR)/native-math-numeric-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_math_numeric_core/main.s > $(BUILD_DIR)/native-math-numeric-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-math-numeric-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-math-numeric-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_numeric_saturating_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-numeric-saturating-core > $(BUILD_DIR)/native-numeric-saturating-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_numeric_saturating_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-numeric-saturating-core > $(BUILD_DIR)/native-numeric-saturating-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-numeric-saturating-core-build.json
 	$(BUILD_DIR)/native-numeric-saturating-core > $(BUILD_DIR)/native-numeric-saturating-core.out
 	grep -q '^9$$' $(BUILD_DIR)/native-numeric-saturating-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_numeric_saturating_core/main.am > $(BUILD_DIR)/native-numeric-saturating-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_numeric_saturating_core/main.s > $(BUILD_DIR)/native-numeric-saturating-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-numeric-saturating-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-numeric-saturating-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_numeric_wrapping_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-numeric-wrapping-core > $(BUILD_DIR)/native-numeric-wrapping-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_numeric_wrapping_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-numeric-wrapping-core > $(BUILD_DIR)/native-numeric-wrapping-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-numeric-wrapping-core-build.json
 	$(BUILD_DIR)/native-numeric-wrapping-core > $(BUILD_DIR)/native-numeric-wrapping-core.out
 	grep -q '^7$$' $(BUILD_DIR)/native-numeric-wrapping-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_numeric_wrapping_core/main.am > $(BUILD_DIR)/native-numeric-wrapping-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_numeric_wrapping_core/main.s > $(BUILD_DIR)/native-numeric-wrapping-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-numeric-wrapping-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-numeric-wrapping-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_text_value_stdlib_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-text-value-stdlib-core > $(BUILD_DIR)/native-text-value-stdlib-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_text_value_stdlib_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-text-value-stdlib-core > $(BUILD_DIR)/native-text-value-stdlib-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-text-value-stdlib-core-build.json
 	$(BUILD_DIR)/native-text-value-stdlib-core > $(BUILD_DIR)/native-text-value-stdlib-core.out
 	grep -q '^25$$' $(BUILD_DIR)/native-text-value-stdlib-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_text_value_stdlib_core/main.am > $(BUILD_DIR)/native-text-value-stdlib-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_text_value_stdlib_core/main.s > $(BUILD_DIR)/native-text-value-stdlib-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-text-value-stdlib-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-text-value-stdlib-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_structured_modules_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-structured-modules-core > $(BUILD_DIR)/native-structured-modules-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_structured_modules_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-structured-modules-core > $(BUILD_DIR)/native-structured-modules-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-structured-modules-core-build.json
 	$(BUILD_DIR)/native-structured-modules-core > $(BUILD_DIR)/native-structured-modules-core.out
 	grep -q '^9$$' $(BUILD_DIR)/native-structured-modules-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_structured_modules_core/main.am > $(BUILD_DIR)/native-structured-modules-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_structured_modules_core/main.s > $(BUILD_DIR)/native-structured-modules-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-structured-modules-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-structured-modules-core.dump
-	$(BUILD_DIR)/amberc build tests/fixtures/native_capability_modules_core/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/native-capability-modules-core > $(BUILD_DIR)/native-capability-modules-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_capability_modules_core/main.s --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/native-capability-modules-core > $(BUILD_DIR)/native-capability-modules-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-capability-modules-core-build.json
 	$(BUILD_DIR)/native-capability-modules-core > $(BUILD_DIR)/native-capability-modules-core.out
 	grep -q '^11$$' $(BUILD_DIR)/native-capability-modules-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_capability_modules_core/main.am > $(BUILD_DIR)/native-capability-modules-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_capability_modules_core/main.s > $(BUILD_DIR)/native-capability-modules-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-capability-modules-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-capability-modules-core.dump
-	python3 tests/native_http_query_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/native-http-query
-	$(BUILD_DIR)/amberc build tests/fixtures/native_http_server_core/amber.build.yaml --target native --out-dir $(BUILD_DIR)/native-http-server-core --cache-dir $(BUILD_DIR)/native-http-server-core/cache --grant net.listen --require-full-native > $(BUILD_DIR)/native-http-server-core-build.json
+	python3 tests/native_http_query_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-http-query
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_http_server_core/sputnik.build.yaml --target native --out-dir $(BUILD_DIR)/native-http-server-core --cache-dir $(BUILD_DIR)/native-http-server-core/cache --grant net.listen --require-full-native > $(BUILD_DIR)/native-http-server-core-build.json
 	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native-http-server-core-build.json
 	grep -q '"native_graph_vm_independent": true' $(BUILD_DIR)/native-http-server-core-build.json
 	! grep -q 'invoke_native_stdlib_send' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
@@ -963,179 +562,179 @@ test: build
 	grep -q 'runtime_http_server_read_body_chunk' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
 	$(BUILD_DIR)/native-http-server-core/native.http_server_core > $(BUILD_DIR)/native-http-server-core.out
 	grep -q '^7$$' $(BUILD_DIR)/native-http-server-core.out
-	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/native-cycle-lifetime
-	python3 tests/conditional_chain_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/conditional-chain
-	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_path_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core-build.json
+	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-lifetime
+	python3 tests/conditional_chain_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/conditional-chain
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_fs_path_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-fs-path-core-build.json
 	$(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core.out
 	grep -q '^8$$' $(BUILD_DIR)/native-fs-path-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_fs_path_core/main.am > $(BUILD_DIR)/native-fs-path-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_fs_path_core/main.s > $(BUILD_DIR)/native-fs-path-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-fs-path-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-fs-path-core.dump
-	$(BUILD_DIR)/amberc build corpus/run/native_object_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-object-state > $(BUILD_DIR)/native-object-state-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_object_state/source.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-object-state > $(BUILD_DIR)/native-object-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-object-state-build.json
 	$(BUILD_DIR)/native-object-state > $(BUILD_DIR)/native-object-state.out
 	grep -q '^87$$' $(BUILD_DIR)/native-object-state.out
-	$(BUILD_DIR)/amberc build corpus/run/native_exception_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_exception_state/source.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	grep -q 'static constexpr NativeTraceLocationRecord kNativeTraceLocations' $(BUILD_DIR)/native-exception-state.native.cpp
-	grep -q 'static AMBER_NATIVE_COLD NativeTraceFrame native_trace_frame' $(BUILD_DIR)/native-exception-state.native.cpp
+	grep -q 'static SPUTNIK_NATIVE_COLD NativeTraceFrame native_trace_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	test "$$(grep -c 'native_append_trace_frame(raised' $(BUILD_DIR)/native-exception-state.native.cpp)" -eq 1
 	$(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state.out
 	grep -q '^74$$' $(BUILD_DIR)/native-exception-state.out
-	$(BUILD_DIR)/amberc build corpus/run/native_io_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_io_state/source.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-io-state-build.json
 	$(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state.out
 	grep -q '^5$$' $(BUILD_DIR)/native-io-state.out
-	$(BUILD_DIR)/amberc build corpus/run/native_task_state/source.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-task-state > $(BUILD_DIR)/native-task-state-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_task_state/source.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-task-state > $(BUILD_DIR)/native-task-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-task-state-build.json
 	$(BUILD_DIR)/native-task-state > $(BUILD_DIR)/native-task-state.out
 	grep -q '^4$$' $(BUILD_DIR)/native-task-state.out
-	$(BUILD_DIR)/amberc build corpus/run/native_map_get_or_set/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-map-get-or-set > $(BUILD_DIR)/native-map-get-or-set-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_map_get_or_set/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-map-get-or-set > $(BUILD_DIR)/native-map-get-or-set-build.json
 	$(BUILD_DIR)/native-map-get-or-set > $(BUILD_DIR)/native-map-get-or-set.out
 	grep -q '^64$$' $(BUILD_DIR)/native-map-get-or-set.out
-	$(BUILD_DIR)/amberc build corpus/run/native_pattern_triple_eq/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-pattern-triple-eq > $(BUILD_DIR)/native-pattern-triple-eq-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_pattern_triple_eq/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-pattern-triple-eq > $(BUILD_DIR)/native-pattern-triple-eq-build.json
 	$(BUILD_DIR)/native-pattern-triple-eq > $(BUILD_DIR)/native-pattern-triple-eq.out
 	grep -q '^21$$' $(BUILD_DIR)/native-pattern-triple-eq.out
-	$(BUILD_DIR)/amberc build corpus/run/native_user_exception_state/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-user-exception-state > $(BUILD_DIR)/native-user-exception-state-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_user_exception_state/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-user-exception-state > $(BUILD_DIR)/native-user-exception-state-build.json
 	$(BUILD_DIR)/native-user-exception-state > $(BUILD_DIR)/native-user-exception-state.out
 	grep -q '^21$$' $(BUILD_DIR)/native-user-exception-state.out
-	$(BUILD_DIR)/amberc build corpus/run/native_collection_type_matchers/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-collection-type-matchers > $(BUILD_DIR)/native-collection-type-matchers-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_collection_type_matchers/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-collection-type-matchers > $(BUILD_DIR)/native-collection-type-matchers-build.json
 	$(BUILD_DIR)/native-collection-type-matchers > $(BUILD_DIR)/native-collection-type-matchers.out
 	grep -q '^95$$' $(BUILD_DIR)/native-collection-type-matchers.out
-	$(BUILD_DIR)/amberc build corpus/run/native_call_shape/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-call-shape > $(BUILD_DIR)/native-call-shape-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_call_shape/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-call-shape > $(BUILD_DIR)/native-call-shape-build.json
 	$(BUILD_DIR)/native-call-shape > $(BUILD_DIR)/native-call-shape.out
 	grep -q '^115$$' $(BUILD_DIR)/native-call-shape.out
-	$(BUILD_DIR)/amberc build corpus/run/task_mutex_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/task_mutex_parallel/source.s --entry main --require-full-native -o $(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel-build.json
 	$(BUILD_DIR)/task-mutex-parallel > $(BUILD_DIR)/task-mutex-parallel.out
 	grep -q '^0$$' $(BUILD_DIR)/task-mutex-parallel.out
-	$(BUILD_DIR)/amberc build corpus/run/native_channel_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-channel-parallel > $(BUILD_DIR)/native-channel-parallel-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_channel_parallel/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-channel-parallel > $(BUILD_DIR)/native-channel-parallel-build.json
 	$(BUILD_DIR)/native-channel-parallel > $(BUILD_DIR)/native-channel-parallel.out
 	grep -q '^42$$' $(BUILD_DIR)/native-channel-parallel.out
-	$(BUILD_DIR)/amberc build corpus/run/native_no_gil_parallel/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_no_gil_parallel/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel-build.json
 	$(BUILD_DIR)/native-no-gil-parallel > $(BUILD_DIR)/native-no-gil-parallel.out
 	grep -q '^2$$' $(BUILD_DIR)/native-no-gil-parallel.out
-	$(BUILD_DIR)/amberc build corpus/run/native_clause_method/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-clause-method > $(BUILD_DIR)/native-clause-method-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_clause_method/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-clause-method > $(BUILD_DIR)/native-clause-method-build.json
 	$(BUILD_DIR)/native-clause-method > $(BUILD_DIR)/native-clause-method.out
 	grep -q '^3$$' $(BUILD_DIR)/native-clause-method.out
-	$(BUILD_DIR)/amberc build corpus/run/native_sequence_zip_to_map/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-sequence-zip-to-map > $(BUILD_DIR)/native-sequence-zip-to-map-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_sequence_zip_to_map/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-sequence-zip-to-map > $(BUILD_DIR)/native-sequence-zip-to-map-build.json
 	$(BUILD_DIR)/native-sequence-zip-to-map > $(BUILD_DIR)/native-sequence-zip-to-map.out
 	grep -q '^35$$' $(BUILD_DIR)/native-sequence-zip-to-map.out
-	$(BUILD_DIR)/amberc build corpus/run/native_class_variables/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-class-variables > $(BUILD_DIR)/native-class-variables-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_class_variables/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-class-variables > $(BUILD_DIR)/native-class-variables-build.json
 	$(BUILD_DIR)/native-class-variables > $(BUILD_DIR)/native-class-variables.out
 	grep -q '^5$$' $(BUILD_DIR)/native-class-variables.out
-	$(BUILD_DIR)/amberc build corpus/run/native_callable_instance/source.am --entry main --require-full-native -o $(BUILD_DIR)/native-callable-instance > $(BUILD_DIR)/native-callable-instance-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_callable_instance/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-callable-instance > $(BUILD_DIR)/native-callable-instance-build.json
 	$(BUILD_DIR)/native-callable-instance > $(BUILD_DIR)/native-callable-instance.out
 	grep -q '^18$$' $(BUILD_DIR)/native-callable-instance.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_benchmark_core/main.am --entry main-only --require-full-native -o $(BUILD_DIR)/native-benchmark-core > $(BUILD_DIR)/native-benchmark-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_benchmark_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-benchmark-core > $(BUILD_DIR)/native-benchmark-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-benchmark-core-build.json
 	$(BUILD_DIR)/native-benchmark-core > $(BUILD_DIR)/native-benchmark-core.out
 	grep -q '^4$$' $(BUILD_DIR)/native-benchmark-core.out
-	$(BUILD_DIR)/amberc native-dump tests/fixtures/native_benchmark_core/main.am > $(BUILD_DIR)/native-benchmark-core.dump
+	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_benchmark_core/main.s > $(BUILD_DIR)/native-benchmark-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-benchmark-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-benchmark-core.dump
-	$(BUILD_DIR)/amberc build bench/polyglot/amber/src/calls_collections.am --entry init -o $(BUILD_DIR)/calls-collections-native > $(BUILD_DIR)/calls-collections-native-build.json
+	$(BUILD_DIR)/sputnik build bench/polyglot/sputnik/src/calls_collections.s --entry init -o $(BUILD_DIR)/calls-collections-native > $(BUILD_DIR)/calls-collections-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/calls-collections-native-build.json
 	$(BUILD_DIR)/calls-collections-native > $(BUILD_DIR)/calls-collections-native.out
 	grep -q '^2047795430$$' $(BUILD_DIR)/calls-collections-native.out
-	$(BUILD_DIR)/amberc build bench/polyglot/amber/src/sha_digest.am --entry init -o $(BUILD_DIR)/sha-digest-native > $(BUILD_DIR)/sha-digest-native-build.json
+	$(BUILD_DIR)/sputnik build bench/polyglot/sputnik/src/sha_digest.s --entry init -o $(BUILD_DIR)/sha-digest-native > $(BUILD_DIR)/sha-digest-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/sha-digest-native-build.json
 	$(BUILD_DIR)/sha-digest-native > $(BUILD_DIR)/sha-digest-native.out
-	grep -q '^5616000$$' $(BUILD_DIR)/sha-digest-native.out
-	$(BUILD_DIR)/amberc build tests/fixtures/secure_random_native/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/secure-random-native > $(BUILD_DIR)/secure-random-native-build.json
+	grep -q '^5512000$$' $(BUILD_DIR)/sha-digest-native.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/secure_random_native/main.s --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/secure-random-native > $(BUILD_DIR)/secure-random-native-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/secure-random-native-build.json
 	$(BUILD_DIR)/secure-random-native > $(BUILD_DIR)/secure-random-native.out
 	grep -q '^42$$' $(BUILD_DIR)/secure-random-native.out
-	$(BUILD_DIR)/amberc build tests/fixtures/secure_random_native/int.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/secure-random-native-int > $(BUILD_DIR)/secure-random-native-int-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/secure_random_native/int.s --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/secure-random-native-int > $(BUILD_DIR)/secure-random-native-int-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/secure-random-native-int-build.json
 	$(BUILD_DIR)/secure-random-native-int > $(BUILD_DIR)/secure-random-native-int.out
 	grep -q '^42$$' $(BUILD_DIR)/secure-random-native-int.out
-	$(BUILD_DIR)/amberc build tests/fixtures/uuid_native/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/uuid-native > $(BUILD_DIR)/uuid-native-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/uuid_native/main.s --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/uuid-native > $(BUILD_DIR)/uuid-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/uuid-native-build.json
 	$(BUILD_DIR)/uuid-native > $(BUILD_DIR)/uuid-native.out
 	grep -q '^42$$' $(BUILD_DIR)/uuid-native.out
-	$(BUILD_DIR)/amberc build tests/fixtures/digest_native/main.am --entry main-only -o $(BUILD_DIR)/digest-native > $(BUILD_DIR)/digest-native-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/digest_native/main.s --entry main-only -o $(BUILD_DIR)/digest-native > $(BUILD_DIR)/digest-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/digest-native-build.json
 	$(BUILD_DIR)/digest-native > $(BUILD_DIR)/digest-native.out
 	grep -q '^42$$' $(BUILD_DIR)/digest-native.out
-	$(BUILD_DIR)/amberc build tests/fixtures/signature_native/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/signature-native > $(BUILD_DIR)/signature-native-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/signature_native/main.s --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/signature-native > $(BUILD_DIR)/signature-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_full_coverage"] and result["native_body_coverage_full"] and result["native_vm_independent"] and not result["native_runtime_bridge"] and result["vm_fallback_code_count"] == 0 and result["native_fallback_code_count"] == 0 and not result["bytecode_fallback"], result' $(BUILD_DIR)/signature-native-build.json
 	$(BUILD_DIR)/signature-native > $(BUILD_DIR)/signature-native.out
 	grep -q '^42$$' $(BUILD_DIR)/signature-native.out
-	$(BUILD_DIR)/amberc build tests/fixtures/url_native/source.am -o $(BUILD_DIR)/url-native > $(BUILD_DIR)/url-native-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/url_native/source.s -o $(BUILD_DIR)/url-native > $(BUILD_DIR)/url-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/url-native-build.json
 	$(BUILD_DIR)/url-native > $(BUILD_DIR)/url-native.out
 	grep -q '^42$$' $(BUILD_DIR)/url-native.out
-	$(BUILD_DIR)/amberc build bench/polyglot/amber/src/time_flow.am --entry main-only -o $(BUILD_DIR)/time-flow-native > $(BUILD_DIR)/time-flow-native-build.json
+	$(BUILD_DIR)/sputnik build bench/polyglot/sputnik/src/time_flow.s --entry main-only -o $(BUILD_DIR)/time-flow-native > $(BUILD_DIR)/time-flow-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/time-flow-native-build.json
 	$(BUILD_DIR)/time-flow-native > $(BUILD_DIR)/time-flow-native.out
 	grep -q '^110397732$$' $(BUILD_DIR)/time-flow-native.out
 	rm -rf $(BUILD_DIR)/native_ext_demo
-	$(BUILD_DIR)/amberc build tests/fixtures/native_ext_demo/amber.build.json --target native --out-dir $(BUILD_DIR)/native_ext_demo/out --cache-dir $(BUILD_DIR)/native_ext_demo/cache > $(BUILD_DIR)/native-ext-demo-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_ext_demo/sputnik.build.json --target native --out-dir $(BUILD_DIR)/native_ext_demo/out --cache-dir $(BUILD_DIR)/native_ext_demo/cache > $(BUILD_DIR)/native-ext-demo-build.json
 	grep -q '"status": "ok"' $(BUILD_DIR)/native-ext-demo-build.json
 	$(BUILD_DIR)/native_ext_demo/out/nat.demo > $(BUILD_DIR)/native-ext-demo-native.out
 	grep -q '^42$$' $(BUILD_DIR)/native-ext-demo-native.out
-	$(BUILD_DIR)/amberc tests/fixtures/native_ext_demo/src/main.am > $(BUILD_DIR)/native-ext-demo-bytecode.out
+	$(BUILD_DIR)/sputnik tests/fixtures/native_ext_demo/src/main.s > $(BUILD_DIR)/native-ext-demo-bytecode.out
 	grep -q '^210$$' $(BUILD_DIR)/native-ext-demo-bytecode.out
-	$(BUILD_DIR)/amberc run tests/fixtures/native_ext_demo/amber.build.json > $(BUILD_DIR)/native-ext-demo-run-fallback.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_ext_demo/sputnik.build.json > $(BUILD_DIR)/native-ext-demo-run-fallback.out
 	grep -q '^210$$' $(BUILD_DIR)/native-ext-demo-run-fallback.out
-	$(BUILD_DIR)/amberc run tests/fixtures/native_ext_demo/amber.build.json --grant ffi > $(BUILD_DIR)/native-ext-demo-run-dylib.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_ext_demo/sputnik.build.json --grant ffi > $(BUILD_DIR)/native-ext-demo-run-dylib.out
 	grep -q '^42$$' $(BUILD_DIR)/native-ext-demo-run-dylib.out
-	! $(BUILD_DIR)/amberc run tests/fixtures/native_ext_demo/amber.build.json --grant ffi.load > $(BUILD_DIR)/native-ext-demo-run-incomplete.out 2>&1
+	! $(BUILD_DIR)/sputnik run tests/fixtures/native_ext_demo/sputnik.build.json --grant ffi.load > $(BUILD_DIR)/native-ext-demo-run-incomplete.out 2>&1
 	grep -q 'requires --grant ffi.call=demo.doubled' $(BUILD_DIR)/native-ext-demo-run-incomplete.out
 	rm -rf $(BUILD_DIR)/native_graph_pure
-	$(BUILD_DIR)/amberc build tests/fixtures/native_graph_pure/amber.build.json --target native --out-dir $(BUILD_DIR)/native_graph_pure/out --cache-dir $(BUILD_DIR)/native_graph_pure/cache > $(BUILD_DIR)/native-graph-pure-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_graph_pure/sputnik.build.json --target native --out-dir $(BUILD_DIR)/native_graph_pure/out --cache-dir $(BUILD_DIR)/native_graph_pure/cache > $(BUILD_DIR)/native-graph-pure-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_vm_fallback_code_count"] == 0, result' $(BUILD_DIR)/native-graph-pure-build.json
 	$(BUILD_DIR)/native_graph_pure/out/nat.graph.main > $(BUILD_DIR)/native-graph-pure.out
 	grep -q '^42$$' $(BUILD_DIR)/native-graph-pure.out
 	$(MAKE) test-object-lifecycle
 	rm -rf $(BUILD_DIR)/native_implicit_self_cli
-	$(BUILD_DIR)/amberc build tests/fixtures/native_implicit_self_cli/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_implicit_self_cli/out --cache-dir $(BUILD_DIR)/native_implicit_self_cli/cache > $(BUILD_DIR)/native-implicit-self-cli-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_implicit_self_cli/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_implicit_self_cli/out --cache-dir $(BUILD_DIR)/native_implicit_self_cli/cache > $(BUILD_DIR)/native-implicit-self-cli-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_native_code_count"] == result["native_graph_code_count"] and result["native_graph_vm_fallback_code_count"] == 0 and not result["native_bytecode_fallback"], result' $(BUILD_DIR)/native-implicit-self-cli-build.json
 	$(BUILD_DIR)/native_implicit_self_cli/out/native.implicit_self_cli.main --count 42 > $(BUILD_DIR)/native-implicit-self-cli.out
 	grep -q '^84$$' $(BUILD_DIR)/native-implicit-self-cli.out
 	rm -rf $(BUILD_DIR)/native_ext_dep
-	$(BUILD_DIR)/amberc build tests/fixtures/native_ext_dep/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_ext_dep/out --cache-dir $(BUILD_DIR)/native_ext_dep/cache > $(BUILD_DIR)/native-ext-dep-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_ext_dep/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_ext_dep/out --cache-dir $(BUILD_DIR)/native_ext_dep/cache > $(BUILD_DIR)/native-ext-dep-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_native_code_count"] == result["native_graph_code_count"] and result["native_graph_vm_fallback_code_count"] == 0 and not result["native_bytecode_fallback"] and result["native_extensions"] and result["native_extensions"][0]["native_source_sha256"].startswith("sha256:"), result' $(BUILD_DIR)/native-ext-dep-build.json
-	! grep -Eq 'run_vm_entry|amber_vm_fallback|\.execute\(' $(BUILD_DIR)/native_ext_dep/out/nat.dep.main.native.cpp
+	! grep -Eq 'run_vm_entry|sputnik_vm_fallback|\.execute\(' $(BUILD_DIR)/native_ext_dep/out/nat.dep.main.native.cpp
 	$(BUILD_DIR)/native_ext_dep/out/nat.dep.main > $(BUILD_DIR)/native-ext-dep-native.out
 	grep -q '^42$$' $(BUILD_DIR)/native-ext-dep-native.out
 	rm -rf $(BUILD_DIR)/native_class_demo
-	$(BUILD_DIR)/amberc build tests/fixtures/native_class_demo/amber.build.json --target native --out-dir $(BUILD_DIR)/native_class_demo/out --cache-dir $(BUILD_DIR)/native_class_demo/cache > $(BUILD_DIR)/native-class-demo-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_class_demo/sputnik.build.json --target native --out-dir $(BUILD_DIR)/native_class_demo/out --cache-dir $(BUILD_DIR)/native_class_demo/cache > $(BUILD_DIR)/native-class-demo-build.json
 	grep -q '"status": "ok"' $(BUILD_DIR)/native-class-demo-build.json
 	$(BUILD_DIR)/native_class_demo/out/nat.box > $(BUILD_DIR)/native-class-demo-native.out
 	grep -q '^24$$' $(BUILD_DIR)/native-class-demo-native.out
-	! $(BUILD_DIR)/amberc tests/fixtures/native_class_demo/src/main.am > $(BUILD_DIR)/native-class-demo-bytecode.out 2>&1
+	! $(BUILD_DIR)/sputnik tests/fixtures/native_class_demo/src/main.s > $(BUILD_DIR)/native-class-demo-bytecode.out 2>&1
 	grep -q 'NativeRequiredError' $(BUILD_DIR)/native-class-demo-bytecode.out
-	$(BUILD_DIR)/amberc build tests/fixtures/not_implemented_error/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/not_implemented_error/out --cache-dir $(BUILD_DIR)/not_implemented_error/cache > $(BUILD_DIR)/not-implemented-error-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/not_implemented_error/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/not_implemented_error/out --cache-dir $(BUILD_DIR)/not_implemented_error/cache > $(BUILD_DIR)/not-implemented-error-build.json
 	grep -q '"status": "ok"' $(BUILD_DIR)/not-implemented-error-build.json
 	$(BUILD_DIR)/not_implemented_error/out/errors.not_implemented > $(BUILD_DIR)/not-implemented-error-native.out
 	grep -q '^2$$' $(BUILD_DIR)/not-implemented-error-native.out
-	$(BUILD_DIR)/amberc run tests/fixtures/not_implemented_error/amber.build.json --grant ffi > $(BUILD_DIR)/not-implemented-error-vm.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/not_implemented_error/sputnik.build.json --grant ffi > $(BUILD_DIR)/not-implemented-error-vm.out
 	grep -q '^2$$' $(BUILD_DIR)/not-implemented-error-vm.out
-	$(BUILD_DIR)/ambertest run corpus
+	$(BUILD_DIR)/sputniktest run corpus
 
 .PHONY: test-object-lifecycle
-test-object-lifecycle: $(BUILD_DIR)/amberc
-	$(BUILD_DIR)/amberc run tests/fixtures/instance_fields_after_init/amber.build.json > $(BUILD_DIR)/object-lifecycle-vm.out
+test-object-lifecycle: $(BUILD_DIR)/sputnik
+	$(BUILD_DIR)/sputnik run tests/fixtures/instance_fields_after_init/sputnik.build.json > $(BUILD_DIR)/object-lifecycle-vm.out
 	grep -q '^PASS after_init! + instance_fields$$' $(BUILD_DIR)/object-lifecycle-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/instance_fields_after_init/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/object-lifecycle > $(BUILD_DIR)/object-lifecycle-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/instance_fields_after_init/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/object-lifecycle > $(BUILD_DIR)/object-lifecycle-build.json
 	PATH=/nonexistent $(BUILD_DIR)/object-lifecycle/conformance.run > $(BUILD_DIR)/object-lifecycle-native.out
 	grep -q '^PASS after_init! + instance_fields$$' $(BUILD_DIR)/object-lifecycle-native.out
 
 .PHONY: test-bool-parse
 test: test-bool-parse
-test-bool-parse: $(BUILD_DIR)/amberc $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests
+test-bool-parse: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests
 	$(BUILD_DIR)/stdlib_bool_tests
 	$(BUILD_DIR)/stdlib_argparser_tests
-	$(BUILD_DIR)/amberc tests/fixtures/bool_parse_native/main.am > $(BUILD_DIR)/bool-parse-vm.out
+	$(BUILD_DIR)/sputnik tests/fixtures/bool_parse_native/main.s > $(BUILD_DIR)/bool-parse-vm.out
 	grep -q '^PASS Bool.parse$$' $(BUILD_DIR)/bool-parse-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/bool_parse_native/main.am --entry main --require-full-native -o $(BUILD_DIR)/bool-parse-native > $(BUILD_DIR)/bool-parse-native-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/bool_parse_native/main.s --entry main --require-full-native -o $(BUILD_DIR)/bool-parse-native > $(BUILD_DIR)/bool-parse-native-build.json
 	python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); assert r["native_full_coverage"] and r["native_vm_independent"] and not r["native_runtime_bridge"] and r["vm_fallback_code_count"] == 0, r' $(BUILD_DIR)/bool-parse-native-build.json
 	$(BUILD_DIR)/bool-parse-native > $(BUILD_DIR)/bool-parse-native.out
 	grep -q '^PASS Bool.parse$$' $(BUILD_DIR)/bool-parse-native.out
-	$(BUILD_DIR)/amberc build tests/fixtures/bool_parse_native/invalid_flag.am --entry main --require-full-native -o $(BUILD_DIR)/bool-parse-invalid-flag > $(BUILD_DIR)/bool-parse-invalid-flag-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/bool_parse_native/invalid_flag.s --entry main --require-full-native -o $(BUILD_DIR)/bool-parse-invalid-flag > $(BUILD_DIR)/bool-parse-invalid-flag-build.json
 	! $(BUILD_DIR)/bool-parse-invalid-flag > $(BUILD_DIR)/bool-parse-invalid-flag.out 2>&1
 	grep -q 'ArgParser.InvalidValue' $(BUILD_DIR)/bool-parse-invalid-flag.out
 
@@ -1143,54 +742,54 @@ test-bool-parse: $(BUILD_DIR)/amberc $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)
 test: test-native-language-idioms test-native-call-buffers
 
 .PHONY: test-native-call-buffers
-test-native-call-buffers: $(BUILD_DIR)/amberc
+test-native-call-buffers: $(BUILD_DIR)/sputnik
 	mkdir -p $(BUILD_DIR)/native_call_buffers
-	$(BUILD_DIR)/amberc run tests/fixtures/native_call_buffers/amber.build.json --grant ffi > $(BUILD_DIR)/native_call_buffers/vm.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_call_buffers/sputnik.build.json --grant ffi > $(BUILD_DIR)/native_call_buffers/vm.out
 	grep -q '^PASS native call buffers$$' $(BUILD_DIR)/native_call_buffers/vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_call_buffers/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_call_buffers/native > $(BUILD_DIR)/native_call_buffers/build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_call_buffers/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_call_buffers/native > $(BUILD_DIR)/native_call_buffers/build.json
 	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native_call_buffers/build.json
 	$(BUILD_DIR)/native_call_buffers/native/test.call_buffers > $(BUILD_DIR)/native_call_buffers/native.out
 	grep -q '^PASS native call buffers$$' $(BUILD_DIR)/native_call_buffers/native.out
 
-test-native-language-idioms: $(BUILD_DIR)/amberc
+test-native-language-idioms: $(BUILD_DIR)/sputnik
 	mkdir -p $(BUILD_DIR)/native_language_idioms
-	$(BUILD_DIR)/amberc run tests/fixtures/native_class_demo/amber.build.json --grant ffi > $(BUILD_DIR)/native_language_idioms/lifecycle-vm.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_class_demo/sputnik.build.json --grant ffi > $(BUILD_DIR)/native_language_idioms/lifecycle-vm.out
 	grep -q '^24$$' $(BUILD_DIR)/native_language_idioms/lifecycle-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_class_demo/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_language_idioms/lifecycle > $(BUILD_DIR)/native_language_idioms/lifecycle-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_class_demo/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_language_idioms/lifecycle > $(BUILD_DIR)/native_language_idioms/lifecycle-build.json
 	$(BUILD_DIR)/native_language_idioms/lifecycle/nat.box > $(BUILD_DIR)/native_language_idioms/lifecycle-native.out
 	grep -q '^24$$' $(BUILD_DIR)/native_language_idioms/lifecycle-native.out
-	$(BUILD_DIR)/amberc tests/fixtures/native_conversion_properties/main.am > $(BUILD_DIR)/native_language_idioms/conversions-vm.out
+	$(BUILD_DIR)/sputnik tests/fixtures/native_conversion_properties/main.s > $(BUILD_DIR)/native_language_idioms/conversions-vm.out
 	grep -q '^PASS native conversion properties$$' $(BUILD_DIR)/native_language_idioms/conversions-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_conversion_properties/main.am --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/conversions > $(BUILD_DIR)/native_language_idioms/conversions-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_conversion_properties/main.s --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/conversions > $(BUILD_DIR)/native_language_idioms/conversions-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native_language_idioms/conversions-build.json
 	$(BUILD_DIR)/native_language_idioms/conversions > $(BUILD_DIR)/native_language_idioms/conversions-native.out
 	grep -q '^PASS native conversion properties$$' $(BUILD_DIR)/native_language_idioms/conversions-native.out
-	! $(BUILD_DIR)/amberc tests/fixtures/native_conversion_properties/invalid_set_spread.am > $(BUILD_DIR)/native_language_idioms/spread-vm.out 2>&1
+	! $(BUILD_DIR)/sputnik tests/fixtures/native_conversion_properties/invalid_set_spread.s > $(BUILD_DIR)/native_language_idioms/spread-vm.out 2>&1
 	grep -q 'TypeError' $(BUILD_DIR)/native_language_idioms/spread-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_conversion_properties/invalid_set_spread.am --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/invalid-spread > $(BUILD_DIR)/native_language_idioms/spread-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_conversion_properties/invalid_set_spread.s --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/invalid-spread > $(BUILD_DIR)/native_language_idioms/spread-build.json
 	! $(BUILD_DIR)/native_language_idioms/invalid-spread > $(BUILD_DIR)/native_language_idioms/spread-native.out 2>&1
 	grep -q 'TypeError' $(BUILD_DIR)/native_language_idioms/spread-native.out
-	$(BUILD_DIR)/amberc run tests/fixtures/native_private_classes/amber.build.json > $(BUILD_DIR)/native_language_idioms/classes-vm.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_private_classes/sputnik.build.json > $(BUILD_DIR)/native_language_idioms/classes-vm.out
 	grep -q '^PASS native private classes$$' $(BUILD_DIR)/native_language_idioms/classes-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_private_classes/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_language_idioms/private > $(BUILD_DIR)/native_language_idioms/classes-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_private_classes/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_language_idioms/private > $(BUILD_DIR)/native_language_idioms/classes-build.json
 	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native_language_idioms/classes-build.json
 	$(BUILD_DIR)/native_language_idioms/private/native_private_classes > $(BUILD_DIR)/native_language_idioms/classes-native.out
 	grep -q '^PASS native private classes$$' $(BUILD_DIR)/native_language_idioms/classes-native.out
-	$(BUILD_DIR)/amberc run tests/fixtures/native_fs_read_bytes/main.am --grant fs.read=./tests/fixtures/native_fs_read_bytes > $(BUILD_DIR)/native_language_idioms/fs-vm.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_fs_read_bytes/main.s --grant fs.read=./tests/fixtures/native_fs_read_bytes > $(BUILD_DIR)/native_language_idioms/fs-vm.out
 	grep -q '^PASS native binary file read$$' $(BUILD_DIR)/native_language_idioms/fs-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_read_bytes/main.am --entry main --grant fs.read=./tests/fixtures/native_fs_read_bytes --require-full-native -o $(BUILD_DIR)/native_language_idioms/fs > $(BUILD_DIR)/native_language_idioms/fs-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_fs_read_bytes/main.s --entry main --grant fs.read=./tests/fixtures/native_fs_read_bytes --require-full-native -o $(BUILD_DIR)/native_language_idioms/fs > $(BUILD_DIR)/native_language_idioms/fs-build.json
 	$(BUILD_DIR)/native_language_idioms/fs > $(BUILD_DIR)/native_language_idioms/fs-native.out
 	grep -q '^PASS native binary file read$$' $(BUILD_DIR)/native_language_idioms/fs-native.out
-	! $(BUILD_DIR)/amberc run tests/fixtures/native_fs_read_bytes/denied.am > $(BUILD_DIR)/native_language_idioms/fs-denied-vm.out 2>&1
+	! $(BUILD_DIR)/sputnik run tests/fixtures/native_fs_read_bytes/denied.s > $(BUILD_DIR)/native_language_idioms/fs-denied-vm.out 2>&1
 	grep -q 'CapabilityError' $(BUILD_DIR)/native_language_idioms/fs-denied-vm.out
-	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_read_bytes/denied.am --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/fs-denied > $(BUILD_DIR)/native_language_idioms/fs-denied-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_fs_read_bytes/denied.s --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/fs-denied > $(BUILD_DIR)/native_language_idioms/fs-denied-build.json
 	! $(BUILD_DIR)/native_language_idioms/fs-denied > $(BUILD_DIR)/native_language_idioms/fs-denied-native.out 2>&1
 	grep -q 'CapabilityError' $(BUILD_DIR)/native_language_idioms/fs-denied-native.out
 
-conformance: $(BUILD_DIR)/ambertest
-	$(BUILD_DIR)/ambertest run corpus --bundle M11
+conformance: $(BUILD_DIR)/sputniktest
+	$(BUILD_DIR)/sputniktest run corpus --bundle M11
 
-backend-equivalence: $(BUILD_DIR)/amberc
+backend-equivalence: $(BUILD_DIR)/sputnik
 	python3 tools/backend_equivalence.py
 
 spec-sync-check:
@@ -1207,11 +806,11 @@ clean:
 	rm -rf $(BUILD_DIR)
 
 .PHONY: test-http-tls
-test-http-tls: $(BUILD_DIR)/amberc $(BUILD_DIR)/vm_net_http_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests
+test-http-tls: $(BUILD_DIR)/sputnik $(BUILD_DIR)/vm_net_http_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests
 	$(BUILD_DIR)/net_http_tests
 	$(BUILD_DIR)/net_http_tcp_tests
 	$(BUILD_DIR)/vm_net_http_tests
-	python3 tests/http_tls_test.py $(BUILD_DIR)/amberc $(BUILD_DIR)/http-tls
+	python3 tests/http_tls_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/http-tls
 
 # The TLS resource state and canonical error list affect runtime ABI/dispatch.
-$(BUILD_DIR)/amberc $(BUILD_DIR)/vm_net_http_tests: runtime/tls.h runtime/net_http_client.h spec/registries/runtime_errors.def
+$(BUILD_DIR)/sputnik $(BUILD_DIR)/vm_net_http_tests: runtime/tls.h runtime/net_http_client.h spec/registries/runtime_errors.def

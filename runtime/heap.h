@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 enum class RuntimeGcCycle { Young, Full, Shared };
 
@@ -252,4 +252,4 @@ Value make_set_value(std::vector<Value> items, bool frozen = false);
 Value make_symbol_map_value(std::vector<MapEntry> entries, bool frozen = false,
                             bool strict = false);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

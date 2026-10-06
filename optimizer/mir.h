@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::mir {
+namespace sputnik::mir {
 
 struct Operand {
   std::string kind;
@@ -136,4 +136,4 @@ std::string module_to_dump(const Module &module,
 std::string
 validation_errors_to_json(const std::vector<ValidationError> &errors);
 
-} // namespace amber::mir
+} // namespace sputnik::mir

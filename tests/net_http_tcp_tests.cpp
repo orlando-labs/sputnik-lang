@@ -14,12 +14,12 @@
 namespace {
 
 using namespace std::chrono_literals;
-using amber::runtime::RuntimeByteBuffer;
-using amber::runtime::RuntimeTcpListener;
-using amber::runtime::http::HttpErrorKind;
-using amber::runtime::http::HttpExchangeResult;
-using amber::runtime::http::HttpHeaders;
-using amber::runtime::http::HttpRequest;
+using sputnik::runtime::RuntimeByteBuffer;
+using sputnik::runtime::RuntimeTcpListener;
+using sputnik::runtime::http::HttpErrorKind;
+using sputnik::runtime::http::HttpExchangeResult;
+using sputnik::runtime::http::HttpHeaders;
+using sputnik::runtime::http::HttpRequest;
 
 int g_checks = 0;
 
@@ -73,18 +73,18 @@ void test_tcp_get_loopback() {
 
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  auto transport = amber::runtime::http::http_tcp_connect("127.0.0.1", port, 2s,
+  auto transport = sputnik::runtime::http::http_tcp_connect("127.0.0.1", port, 2s,
                                                           &kind, &error);
   expect(transport != nullptr, "connect failed: " + error);
 
   const std::string url = "http://127.0.0.1:" + std::to_string(port) + "/";
   HttpRequest req;
   HttpHeaders headers;
-  const bool built = amber::runtime::http::http_build_request(
+  const bool built = sputnik::runtime::http::http_build_request(
       "GET", url, headers, "", false, true, &req, &kind, &error);
   expect(built, "build failed: " + error);
 
-  HttpExchangeResult res = amber::runtime::http::http_perform(*transport, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(*transport, req);
   transport->close();
   server.join();
 
@@ -106,7 +106,7 @@ void test_tcp_connect_refused() {
 
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  auto transport = amber::runtime::http::http_tcp_connect("127.0.0.1", port, 1s,
+  auto transport = sputnik::runtime::http::http_tcp_connect("127.0.0.1", port, 1s,
                                                           &kind, &error);
   expect(transport == nullptr, "connect to closed port should fail");
   expect(kind == HttpErrorKind::Connection,

@@ -6,7 +6,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace amber::lexer {
+namespace sputnik::lexer {
 namespace {
 
 constexpr std::string_view kLexErrorCode = "L0001";
@@ -316,13 +316,13 @@ LexResult Lexer::lex() {
         }
       } else {
         error(start,
-              "unexpected '$'; expected '$_', '$it', or '$itN' in Amber");
+              "unexpected '$'; expected '$_', '$it', or '$itN' in Sputnik");
       }
       break;
     case ';':
       // `;` is an explicit statement separator, lexed as a same-line newline so
       // every existing newline-terminated statement rule applies unchanged. It
-      // exists for ad-hoc one-liners (e.g. `iamber --eval 'a = 1; print(a)'`);
+      // exists for ad-hoc one-liners (e.g. `isputnik --eval 'a = 1; print(a)'`);
       // it is highly discouraged in normal code, where line breaks are the
       // idiomatic separator. It carries no indentation effect (Indent/Dedent
       // are computed only at physical line starts).
@@ -1245,4 +1245,4 @@ bool Lexer::is_placeholder_text(const std::string &text) {
   return true;
 }
 
-} // namespace amber::lexer
+} // namespace sputnik::lexer

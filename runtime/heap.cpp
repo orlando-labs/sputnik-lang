@@ -14,7 +14,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -1766,4 +1766,4 @@ Value make_symbol_map_value(std::vector<MapEntry> entries, bool frozen,
                                                       frozen, strict);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

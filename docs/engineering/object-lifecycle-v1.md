@@ -1,6 +1,6 @@
 # Object construction and instance field snapshots
 
-Ordinary Amber object construction invokes the most-derived `init` selected by
+Ordinary Sputnik object construction invokes the most-derived `init` selected by
 normal inherited method lookup. After that invocation returns successfully,
 the constructor invokes `after_init!` with no arguments or block, if such an
 instance method exists. The hook uses normal inherited method lookup and its
@@ -34,9 +34,9 @@ dispatch, sorted snapshot and exception semantics. A user-defined
 `instance_fields` member takes precedence over the builtin fallback.
 
 The shared regression source is
-`corpus/run/instance_fields_after_init/source.am`. The VM suite executes its
+`corpus/run/instance_fields_after_init/source.s`. The VM suite executes its
 `probe`; the native build manifest is
-`tests/fixtures/instance_fields_after_init/amber.build.json`. Run both execution
+`tests/fixtures/instance_fields_after_init/sputnik.build.json`. Run both execution
 lanes with `make test-object-lifecycle`; the normal `make test` includes it.
 The VM suite also verifies cooperative suspension in both the initializer and
 the hook before construction returns.

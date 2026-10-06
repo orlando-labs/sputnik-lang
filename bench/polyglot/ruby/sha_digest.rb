@@ -3,12 +3,12 @@ require "openssl"
 require "zlib"
 
 PAYLOADS = [
-  "Amber digest polyglot benchmark payload zero".b,
-  "Amber digest polyglot benchmark payload one 1234567890".b,
+  "Sputnik digest polyglot benchmark payload zero".b,
+  "Sputnik digest polyglot benchmark payload one 1234567890".b,
   "The quick brown fox jumps over the lazy dog".b,
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".b,
 ].freeze
-KEY = "amber-digest-benchmark-key".b
+KEY = "sputnik-digest-benchmark-key".b
 
 def fold_digest(checksum, digest)
   checksum + digest.bytesize + digest.getbyte(0) + digest.getbyte(-1)

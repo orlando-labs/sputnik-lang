@@ -1,10 +1,10 @@
-# DESIGN — `io` foundation and `net.http` HTTP/1.1 semantics for Amber
+# DESIGN — `io` foundation and `net.http` HTTP/1.1 semantics for Sputnik
 
-**Status:** proposed normative design  
-**Date:** 2026-06-20  
-**Target:** Amber standard library and runtime-facing API  
+**Status:** proposed normative design
+**Date:** 2026-06-20
+**Target:** Sputnik standard library and runtime-facing API
 **Scope:** `io`, `net`, `net.http` HTTP/1.1 client plus the Phase 7 basic
-server hook over plaintext TCP  
+server hook over plaintext TCP
 **Out of scope for v1:** TLS/HTTPS, HTTP/2, HTTP/3, proxy/CONNECT, web
 framework/routing layer, cookie jar, cache, automatic compression decoding,
 multipart helpers, WebSocket/Upgrade, `Expect: 100-continue`, request trailers
@@ -13,7 +13,7 @@ multipart helpers, WebSocket/Upgrade, `Expect: 100-continue`, request trailers
 basic server slice: `net.http.Server`, `net.http.ServerRequest`, and
 `net.http.ServerResponse` are exported native stdlib types backed by
 `runtime/vm.cpp` and `runtime/stdlib_net_http.cpp`. The focused
-`build/vm_net_http_tests` loopback suite covers Amber-source `Server#serve`
+`build/vm_net_http_tests` loopback suite covers Sputnik-source `Server#serve`
 hooks and cooperative request concurrency. This is a low-level hook server, not
 the future web-framework/routing layer.
 
@@ -25,16 +25,16 @@ The original minimal `net.http` sketch is too weak as a language/stdlib specific
 
 This document replaces that sketch with a layered design:
 
-1. **`io` owns generic streaming primitives.**  
+1. **`io` owns generic streaming primitives.**
    `Reader`, `Writer`, `Closeable`, `Flushable`, `HalfCloseable`, `Duplex`, and resource/lifecycle rules belong here. Generic concepts such as pipe/channel/exchange coordination are not `net.http` concepts.
 
-2. **`task` owns async composition.**  
+2. **`task` owns async composition.**
    HTTP must not invent its own async pipeline abstraction. Existing `task.async`, futures, cancellation, and scheduling compose with ordinary `io` handles.
 
-3. **`net` owns TCP/DNS.**  
+3. **`net` owns TCP/DNS.**
    TCP streams implement the `io` protocols. DNS/connect/read/write operations are cancellation-aware and timeout-aware.
 
-4. **`net.http` owns HTTP semantics.**  
+4. **`net.http` owns HTTP semantics.**
    `Client`, `Request`, `Response`, `Headers`, `RequestBody`, `ResponseBody`,
    redirects, pooling, protocol parsing, HTTP errors, the Phase 7
    `Server`/`ServerRequest`/`ServerResponse` hook surface, and
@@ -42,7 +42,7 @@ This document replaces that sketch with a layered design:
 
 The crucial API decision is:
 
-```amber
+```sputnik
 # Scoped response form.
 client.send(req) |res|:
  use(res)
@@ -59,7 +59,7 @@ All response-producing operations must have both forms.
 
 For imperative streaming uploads, `net.http` does **not** define a generic `Pipe` or generic `Exchange`. Instead it exposes a protocol-specific request-in-progress handle:
 
-```amber
+```sputnik
 h = client.begin(method: :post, url: url, length: null)
 
 producer.write_intro(h)
@@ -84,7 +84,7 @@ ensure:
 ### 1.1. Primary goals
 
 - Provide a serious HTTP/1.1 client suitable for real programs, not only examples.
-- Preserve Amber style: constructor-call `Client(...)`, block suffix convenience, explicit resource ownership where needed, `?`/`!` naming conventions, and method-chain friendliness.
+- Preserve Sputnik style: constructor-call `Client(...)`, block suffix convenience, explicit resource ownership where needed, `?`/`!` naming conventions, and method-chain friendliness.
 - Make streaming v1, not a future afterthought.
 - Separate generic IO semantics from HTTP protocol semantics.
 - Make response lifetime explicit and testable.
@@ -154,7 +154,7 @@ But the generic contracts live in `io`.
 
 `net.http` operations are blocking from the perspective of the current strand, but all blocking operations are cancellation points. Users compose independent reads/writes with `task.async`.
 
-```amber
+```sputnik
 task.async:
  h.write_all!(chunk)
  h.finish!()
@@ -172,7 +172,7 @@ HTTP does not introduce its own future/task type.
 
 ### 3.1. `io.Reader`
 
-```amber
+```sputnik
 interface io.Reader:
  def read(max_bytes:) -> Bytes
  def each_chunk(size:) |bytes|: ...
@@ -190,7 +190,7 @@ Normative rules:
 
 ### 3.2. `io.Writer`
 
-```amber
+```sputnik
 interface io.Writer:
  def write(bytes) -> Int
  def write_all!(bytes)
@@ -209,7 +209,7 @@ Normative rules:
 
 ### 3.3. `io.Closeable`
 
-```amber
+```sputnik
 interface io.Closeable:
  def close!()
  def closed?() -> Bool
@@ -223,7 +223,7 @@ Normative rules:
 
 ### 3.4. `io.HalfCloseable`
 
-```amber
+```sputnik
 interface io.HalfCloseable:
  def close_read!()
  def close_write!()
@@ -237,7 +237,7 @@ Normative rules:
 
 ### 3.5. `io.Duplex`
 
-```amber
+```sputnik
 interface io.Duplex < io.Reader, io.Writer, io.HalfCloseable:
  pass
 ```
@@ -248,14 +248,14 @@ interface io.Duplex < io.Reader, io.Writer, io.HalfCloseable:
 
 The standard library may define scoped helpers, but they are always sugar over explicit ownership.
 
-```amber
+```sputnik
 resource.open(...) |r|:
  use(r)
 ```
 
 must be equivalent to:
 
-```amber
+```sputnik
 r = resource.open(...)
 try:
  use(r)
@@ -271,7 +271,7 @@ This rule is also used by `net.http.Client#send` and convenience methods.
 
 ### 4.1. TCP
 
-```amber
+```sputnik
 from net import TcpStream, TcpListener
 
 stream = TcpStream.connect("example.com", 80, timeout: 5.0)
@@ -286,12 +286,12 @@ Rules:
 
 - DNS, connect, read, write, accept, and close waits are cancellation points.
 - Timeout errors are normalized.
-- OS-specific errors map into Amber error classes.
+- OS-specific errors map into Sputnik error classes.
 - No raw socket handle is exposed by safe stdlib.
 
 ### 4.2. DNS
 
-```amber
+```sputnik
 from net import dns
 
 addresses = dns.resolve("example.com")
@@ -336,7 +336,7 @@ TLS support belongs to a future `net.https` or transport injection layer.
 
 ## 6. Public API overview
 
-```amber
+```sputnik
 from net.http import Client, Request, RequestBody, Response, ResponseBody, Headers, Url
 from net.http import Server, ServerRequest, ServerResponse
 
@@ -360,7 +360,7 @@ client = Client(
  redirects: :off,
  max_redirects: 5,
 
- user_agent: "Amber/#{Amber.version}",
+ user_agent: "Sputnik/#{Sputnik.version}",
  auto_host: true,
  auto_content_length: true
 )
@@ -368,7 +368,7 @@ client = Client(
 
 ### 6.1. Scoped response
 
-```amber
+```sputnik
 client.get("http://example.com/items") |res|:
  if res.ok?():
   res.body_text(limit: 1_000_000)
@@ -378,7 +378,7 @@ client.get("http://example.com/items") |res|:
 
 ### 6.2. Explicit response ownership
 
-```amber
+```sputnik
 res = client.get("http://example.com/items")
 try:
  res.body_text(limit: 1_000_000)
@@ -388,7 +388,7 @@ ensure:
 
 ### 6.3. Manual streaming upload
 
-```amber
+```sputnik
 h = client.begin(
  method: :post,
  url: "http://example.com/upload",
@@ -415,7 +415,7 @@ ensure:
 
 ### 7.1. Constructor
 
-```amber
+```sputnik
 client = Client(
  timeout: null,
  pool_timeout: 5.0,
@@ -432,11 +432,11 @@ client = Client(
 )
 ```
 
-`Client(...)` is the preferred constructor form. `Client.new(...)` remains equivalent by Amber constructor-call semantics.
+`Client(...)` is the preferred constructor form. `Client.new(...)` remains equivalent by Sputnik constructor-call semantics.
 
 ### 7.2. Request execution methods
 
-```amber
+```sputnik
 client.send(request) -> Response
 client.send(request) |response|: ...
 
@@ -464,7 +464,7 @@ Every response-producing method has two forms:
 
 ### 7.3. Manual body streaming
 
-```amber
+```sputnik
 h = client.begin(
  method: :post,
  url: url,
@@ -481,7 +481,7 @@ Returns `RequestHandle`.
 
 ### 7.4. Client lifecycle
 
-```amber
+```sputnik
 client.close_idle!()
 client.close!()
 client.closed?()
@@ -501,18 +501,18 @@ Rules:
 
 ### 8.1. Construction
 
-```amber
+```sputnik
 req = Request(
  method: :post,
  url: "http://example.com/items",
  headers: {"content-type": "application/json"},
- body: Json.generate({name: "Amber"})
+ body: Json.generate({name: "Sputnik"})
 )
 ```
 
 ### 8.2. Properties
 
-```amber
+```sputnik
 req.method
 req.url
 req.headers
@@ -555,7 +555,7 @@ HTTP headers must not be represented as ordinary `Map`. Field names are case-ins
 
 ### 9.2. API
 
-```amber
+```sputnik
 headers = Headers()
 headers.add!("accept", "application/json")
 headers.add!("x-tag", "one")
@@ -573,7 +573,7 @@ headers.to_map()           # StrictMap[Str, Array[Str]]
 
 ### 9.3. Combined field helpers
 
-```amber
+```sputnik
 headers.combined("accept")
 headers.combined?("set-cookie") # false
 ```
@@ -613,7 +613,7 @@ RequestBody
 
 ### 10.2. Static body
 
-```amber
+```sputnik
 body = RequestBody.bytes(bytes)
 body = RequestBody.text(str, encoding: :utf8)
 ```
@@ -622,7 +622,7 @@ Static bodies are replayable.
 
 ### 10.3. Producer body
 
-```amber
+```sputnik
 body = RequestBody.stream(length: null) |writer|:
  source.each_chunk(size: 65536) |chunk|:
   writer.write_all!(chunk)
@@ -641,7 +641,7 @@ Rules:
 
 ### 10.4. Reader-backed body
 
-```amber
+```sputnik
 body = RequestBody.from_reader(reader, length: null)
 ```
 
@@ -668,7 +668,7 @@ It replaces the earlier idea of a generic `HttpExchange`.
 
 ### 11.2. Construction
 
-```amber
+```sputnik
 h = client.begin(
  method: :post,
  url: "http://example.com/upload",
@@ -679,7 +679,7 @@ h = client.begin(
 
 ### 11.3. API
 
-```amber
+```sputnik
 class RequestHandle < io.Writer:
  def write(bytes) -> Int
  def write_all!(bytes)
@@ -754,7 +754,7 @@ Rules:
 
 ### 11.8. Async composition
 
-```amber
+```sputnik
 h = client.begin(method: :post, url: url, length: null)
 
 writer_task = task.async:
@@ -781,7 +781,7 @@ This uses existing `task.async`; `net.http` does not define a protocol-specific 
 
 ### 12.1. Properties
 
-```amber
+```sputnik
 res.status          # Int
 res.reason          # Str
 res.version         # :http_1_0 or :http_1_1
@@ -795,7 +795,7 @@ res.closed?()
 
 ### 12.2. Status helpers
 
-```amber
+```sputnik
 res.informational?()
 res.success?()
 res.redirect?()
@@ -806,7 +806,7 @@ res.ok?()
 
 ### 12.3. Body convenience
 
-```amber
+```sputnik
 res.body_bytes(limit: null)
 res.body_text(encoding: :utf8, limit: null)
 res.close!()
@@ -831,7 +831,7 @@ Rules:
 
 ### 13.1. API
 
-```amber
+```sputnik
 res.body.read(max_bytes: 8192)
 res.body.each_chunk(size: 8192) |bytes|:
  consume(bytes)
@@ -899,7 +899,7 @@ If `timeout` is non-null, it creates an absolute deadline attached to the respon
 
 This means:
 
-```amber
+```sputnik
 res = client.get(url, timeout: 10.0)
 # waiting here still consumes the same total deadline
 res.body_text()
@@ -953,7 +953,7 @@ Rules:
 
 ### 16.1. Modes
 
-```amber
+```sputnik
 Client(redirects: :off)
 Client(redirects: :manual)
 Client(redirects: :safe)
@@ -989,7 +989,7 @@ Rules:
 
 ### 16.5. `RedirectRecord`
 
-```amber
+```sputnik
 record.status
 record.from_url
 record.to_url
@@ -1025,7 +1025,7 @@ Host canonicalization must be deterministic. `http://example.com` and `http://ex
 
 ### 17.3. Limits
 
-```amber
+```sputnik
 Client(
  max_idle_connections: 64,
  max_idle_per_origin: 4,
@@ -1078,7 +1078,7 @@ Rules:
 
 Optional bounded chunk-aware API:
 
-```amber
+```sputnik
 res.body.each_chunk_with_ext(size: 8192) |part|:
  consume(part.bytes)
  if part.first?():
@@ -1087,7 +1087,7 @@ res.body.each_chunk_with_ext(size: 8192) |part|:
 
 `BodyChunk` exposes:
 
-```amber
+```sputnik
 part.bytes
 part.extensions
 part.first?()
@@ -1102,8 +1102,8 @@ Large HTTP chunks may be delivered as multiple bounded `BodyChunk` parts while p
 
 ### 19.1. `Url`
 
-```amber
-url = Url.parse("http://example.com:8080/path?q=amber")
+```sputnik
+url = Url.parse("http://example.com:8080/path?q=sputnik")
 
 url.scheme
 url.host
@@ -1125,7 +1125,7 @@ Rules:
 
 ### 19.2. `Origin`
 
-```amber
+```sputnik
 origin.scheme
 origin.host
 origin.port
@@ -1166,7 +1166,7 @@ Rules:
 
 Suggested effect annotation style:
 
-```amber
+```sputnik
 def fetch_json(url as Str) -> Map !{net.connect, time}:
  Client().get(url) |res|:
   Json.parse(res.body_text())
@@ -1233,7 +1233,7 @@ CapabilityError
 
 HTTP errors should expose:
 
-```amber
+```sputnik
 err.phase
 err.request
 err.url
@@ -1249,7 +1249,7 @@ where applicable.
 
 ### 22.1. Trace configuration
 
-```amber
+```sputnik
 client = Client(
  trace: http.trace |event|:
   log(event.name, event.duration, event.origin)
@@ -1293,14 +1293,14 @@ request.end
 
 Core `net.http` remains strict and low-level. Higher-level helpers may live in separate modules:
 
-```amber
+```sputnik
 from net.http.json import get_json, post_json
 from net.http.form import FormBody
 ```
 
 Example:
 
-```amber
+```sputnik
 post_json("http://api.local/users", {name: "Ada"}) |res|:
  res.expect_status!(201)
  res.json()
@@ -1318,7 +1318,7 @@ Rules:
 
 ### 24.1. Simple GET with block scope
 
-```amber
+```sputnik
 client = Client()
 
 client.get("http://example.com/items") |res|:
@@ -1330,7 +1330,7 @@ client.get("http://example.com/items") |res|:
 
 ### 24.2. Simple GET with explicit ownership
 
-```amber
+```sputnik
 res = client.get("http://example.com/items")
 try:
  text = res.body_text(limit: 1_000_000)
@@ -1341,7 +1341,7 @@ ensure:
 
 ### 24.3. POST JSON
 
-```amber
+```sputnik
 req = Request(
  method: :post,
  url: "http://example.com/items",
@@ -1349,7 +1349,7 @@ req = Request(
   "content-type": "application/json",
   "accept": "application/json"
  },
- body: Json.generate({name: "Amber"})
+ body: Json.generate({name: "Sputnik"})
 )
 
 client.send(req) |res|:
@@ -1358,7 +1358,7 @@ client.send(req) |res|:
 
 ### 24.4. Producer streaming body
 
-```amber
+```sputnik
 body = RequestBody.stream(length: null) |w|:
  file.each_chunk(size: 65536) |chunk|:
   w.write_all!(chunk)
@@ -1375,7 +1375,7 @@ client.send(req) |res|:
 
 ### 24.5. Manual streaming body across functions
 
-```amber
+```sputnik
 def write_prefix(w):
  w.write_all!(encode_prefix())
 
@@ -1389,7 +1389,7 @@ def write_suffix(w):
 h = client.begin(
  method: :post,
  url: "http://example.com/report",
- headers: {"content-type": "application/x-amber-report"},
+ headers: {"content-type": "application/x-sputnik-report"},
  length: null
 )
 
@@ -1408,7 +1408,7 @@ ensure:
 
 ### 24.6. Manual streaming with async read/write
 
-```amber
+```sputnik
 h = client.begin(method: :post, url: url, length: null)
 
 writer_task = task.async:
@@ -1429,7 +1429,7 @@ reader_task.await()
 
 ### 24.7. Reader-backed body using generic IO
 
-```amber
+```sputnik
 reader = File.open("payload.bin")
 body = RequestBody.from_reader(reader, length: reader.size)
 
@@ -1582,7 +1582,7 @@ client.send(req) |res|:
 - VM/native parity.
 - The cpp-bytecode-direct lane supports scalar and scoped-block
   `Client#query` through the runtime-owned native stdlib send bridge; the
-  request/response path does not execute Amber bytecode or retain a
+  request/response path does not execute Sputnik bytecode or retain a
   whole-program fallback.
 - Deterministic fake transport tests.
 - Loopback integration tests.
@@ -1620,19 +1620,19 @@ The implementation should allow response parsing while request body writing is s
 ## 27. Suggested file split
 
 ```text
-stdlib/io/protocols.amber
-stdlib/io/buffer.amber
-stdlib/net/tcp.amber
-stdlib/net/dns.amber
-stdlib/net/http/client.amber
-stdlib/net/http/request.amber
-stdlib/net/http/response.amber
-stdlib/net/http/headers.amber
-stdlib/net/http/body.amber
-stdlib/net/http/parser.amber
-stdlib/net/http/pool.amber
-stdlib/net/http/errors.amber
-stdlib/net/http/redirect.amber
+stdlib/io/protocols.sputnik
+stdlib/io/buffer.sputnik
+stdlib/net/tcp.sputnik
+stdlib/net/dns.sputnik
+stdlib/net/http/client.sputnik
+stdlib/net/http/request.sputnik
+stdlib/net/http/response.sputnik
+stdlib/net/http/headers.sputnik
+stdlib/net/http/body.sputnik
+stdlib/net/http/parser.sputnik
+stdlib/net/http/pool.sputnik
+stdlib/net/http/errors.sputnik
+stdlib/net/http/redirect.sputnik
 ```
 
 ---
@@ -1641,7 +1641,7 @@ stdlib/net/http/redirect.amber
 
 - RFC 9110 — HTTP Semantics: https://www.rfc-editor.org/rfc/rfc9110.html
 - RFC 9112 — HTTP/1.1: https://www.rfc-editor.org/rfc/rfc9112.html
-- Amber unified language/runtime design, current uploaded draft.
+- Sputnik unified language/runtime design, current uploaded draft.
 - Prior loose `S6. HTTP client` sketch, superseded by this document.
 
 ---
@@ -1694,7 +1694,7 @@ and web-framework routing/templating.
   blocked on a socket read!/write! yields its worker and resumes on readiness
   -- the "task owns async" assumption this document relies on (section 2.3).
 - net.tcp connect / listen / accept, io.ByteBuffer, Str#bytes -> io.Bytes,
-  all reachable from Amber source.
+  all reachable from Sputnik source.
 - Strand confinement with an explicit `adopt!` handoff verb: accept on one
   strand, hand the stream to a worker task (the connection-handling pattern),
   on a sound single-namespace owner-id model.
@@ -1718,7 +1718,7 @@ Substrate gaps to close before they are needed:
 D1. io protocol. Adopt the runtime's buffer-based contract (mixin io.Reader:
     read!(buf) -> Int, 0 = EOF; mixin io.Writer: write!/write_all!;
     io.Closer/io.Duplex), NOT the `interface ... < ...` surface sketched in
-    section 3 (Amber has no `interface` keyword; protocols are mixins).
+    section 3 (Sputnik has no `interface` keyword; protocols are mixins).
     ResponseBody / RequestHandle / TcpStream `include` those mixins. Retires the
     section-3 fork and the read()->Bytes / EOF-representation ambiguity.
 

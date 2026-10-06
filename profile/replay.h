@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::replay {
+namespace sputnik::replay {
 
 inline constexpr std::uint32_t kObservabilitySiteFlagRequired = 0x1U;
 inline constexpr std::uint32_t kReplayMetadataFlagDeterministic = 0x1U;
@@ -59,7 +59,7 @@ struct TraceEvent {
 };
 
 struct ReplayTrace {
-  std::string schema = "amber.replay.v1";
+  std::string schema = "sputnik.replay.v1";
   std::string package_lock_digest;
   std::vector<std::string> artifact_digests;
   std::vector<capability::CapabilityRequest> capability_grants;
@@ -115,4 +115,4 @@ ReplayTraceParseResult parse_trace(const std::string &serialized);
 std::string trace_to_json(const ReplayTrace &trace);
 std::string validation_to_json(const ReplayValidationResult &result);
 
-} // namespace amber::replay
+} // namespace sputnik::replay

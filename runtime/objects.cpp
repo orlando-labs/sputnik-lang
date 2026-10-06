@@ -9,7 +9,7 @@
 #include <unordered_set>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -791,4 +791,4 @@ normalize_map_entries(std::vector<MapEntry> entries, bool strict,
   return normalized;
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

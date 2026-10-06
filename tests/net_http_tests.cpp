@@ -16,12 +16,12 @@
 
 namespace {
 
-using amber::runtime::http::HttpErrorKind;
-using amber::runtime::http::HttpExchangeResult;
-using amber::runtime::http::HttpHeaders;
-using amber::runtime::http::HttpRequest;
-using amber::runtime::http::HttpTransport;
-using amber::runtime::http::HttpUrl;
+using sputnik::runtime::http::HttpErrorKind;
+using sputnik::runtime::http::HttpExchangeResult;
+using sputnik::runtime::http::HttpHeaders;
+using sputnik::runtime::http::HttpRequest;
+using sputnik::runtime::http::HttpTransport;
+using sputnik::runtime::http::HttpUrl;
 
 int g_checks = 0;
 
@@ -84,7 +84,7 @@ HttpRequest build_or_die(const std::string &method, const std::string &url,
   HttpRequest req;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  const bool ok = amber::runtime::http::http_build_request(
+  const bool ok = sputnik::runtime::http::http_build_request(
       method, url, headers, body, has_body, /*auto_host=*/true, &req, &kind,
       &error);
   expect(ok, what + " should build: " + error);
@@ -98,7 +98,7 @@ void expect_build_error(const std::string &method, const std::string &url,
   HttpRequest req;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  const bool ok = amber::runtime::http::http_build_request(
+  const bool ok = sputnik::runtime::http::http_build_request(
       method, url, headers, body, has_body, true, &req, &kind, &error);
   expect(!ok, what + " should fail");
   expect(kind == expected, what + " should fail with the expected kind");
@@ -112,7 +112,7 @@ void test_url_parse_basic() {
   HttpUrl url;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_parse_url("http://example.com/items?q=1",
+  expect(sputnik::runtime::http::http_parse_url("http://example.com/items?q=1",
                                               &url, &kind, &error),
          "basic url parses");
   expect(url.scheme == "http", "scheme http");
@@ -125,7 +125,7 @@ void test_url_parse_port_and_default_path() {
   HttpUrl url;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_parse_url("http://example.com:8080", &url,
+  expect(sputnik::runtime::http::http_parse_url("http://example.com:8080", &url,
                                               &kind, &error),
          "url with port parses");
   expect(url.port == 8080, "explicit port");
@@ -133,7 +133,7 @@ void test_url_parse_port_and_default_path() {
 
   HttpUrl q;
   expect(
-      amber::runtime::http::http_parse_url("http://h?a=b", &q, &kind, &error),
+      sputnik::runtime::http::http_parse_url("http://h?a=b", &q, &kind, &error),
       "url with bare query parses");
   expect(q.target == "/?a=b", "query without path gets default path");
 }
@@ -142,7 +142,7 @@ void test_url_parse_strips_fragment() {
   HttpUrl url;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_parse_url("http://example.com/p?q=1#frag",
+  expect(sputnik::runtime::http::http_parse_url("http://example.com/p?q=1#frag",
                                               &url, &kind, &error),
          "url with fragment parses");
   expect(url.target == "/p?q=1", "fragment stripped from wire target");
@@ -152,37 +152,37 @@ void test_https_url_and_request() {
   HttpUrl url;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_parse_url("HTTPS://Example.COM:443/p?q=1#fragment", &url, &kind, &error), "https parses");
+  expect(sputnik::runtime::http::http_parse_url("HTTPS://Example.COM:443/p?q=1#fragment", &url, &kind, &error), "https parses");
   expect(url.scheme == "https" && url.host == "example.com" && url.port == 443 && url.target == "/p?q=1", "https origin and target");
-  expect(amber::runtime::http::http_url_to_string(url) == "https://example.com/p?q=1", "canonical https omits port 443");
+  expect(sputnik::runtime::http::http_url_to_string(url) == "https://example.com/p?q=1", "canonical https omits port 443");
   HttpHeaders headers;
   HttpRequest request = build_or_die("GET", "https://example.com/", headers, "", false, "HTTPS GET");
   expect(request.scheme == "https" && request.port == 443 && request.headers.first("host") == "example.com", "HTTPS request chooses TLS and default Host");
   request = build_or_die("GET", "https://[::1]:80/", headers, "", false, "HTTPS IPv6 GET");
   expect(request.headers.first("host") == "[::1]:80", "HTTPS nondefault port survives in Host");
   std::string resolved;
-  expect(amber::runtime::http::http_resolve_location("https://example.com/a/b", "//other.example/p", &resolved, &kind, &error) && resolved == "https://other.example/p", "scheme-relative redirect preserves TLS");
-  expect(amber::runtime::http::http_resolve_location("http://example.com/a", "https://example.com:443/secure", &resolved, &kind, &error) && resolved == "https://example.com/secure", "HTTP redirects can upgrade to HTTPS");
+  expect(sputnik::runtime::http::http_resolve_location("https://example.com/a/b", "//other.example/p", &resolved, &kind, &error) && resolved == "https://other.example/p", "scheme-relative redirect preserves TLS");
+  expect(sputnik::runtime::http::http_resolve_location("http://example.com/a", "https://example.com:443/secure", &resolved, &kind, &error) && resolved == "https://example.com/secure", "HTTP redirects can upgrade to HTTPS");
 }
 
 void test_url_parse_rejections() {
   HttpUrl url;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(!amber::runtime::http::http_parse_url("ftp://example.com/", &url,
+  expect(!sputnik::runtime::http::http_parse_url("ftp://example.com/", &url,
                                                &kind, &error) &&
              kind == HttpErrorKind::UnsupportedScheme,
          "ftp rejected as unsupported scheme");
-  expect(!amber::runtime::http::http_parse_url("http://user@example.com/", &url,
+  expect(!sputnik::runtime::http::http_parse_url("http://user@example.com/", &url,
                                                &kind, &error) &&
              kind == HttpErrorKind::InvalidUrl,
          "userinfo rejected");
-  expect(!amber::runtime::http::http_parse_url("http:///path", &url, &kind,
+  expect(!sputnik::runtime::http::http_parse_url("http:///path", &url, &kind,
                                                &error) &&
              kind == HttpErrorKind::InvalidUrl,
          "missing host rejected");
   expect(
-      !amber::runtime::http::http_parse_url("notaurl", &url, &kind, &error) &&
+      !sputnik::runtime::http::http_parse_url("notaurl", &url, &kind, &error) &&
           kind == HttpErrorKind::InvalidUrl,
       "scheme-less rejected");
 }
@@ -191,7 +191,7 @@ void test_resolve_location_relative() {
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
   std::string resolved;
-  expect(amber::runtime::http::http_resolve_location(
+  expect(sputnik::runtime::http::http_resolve_location(
              "http://example.com:80/a/b/page?q=old", "../next?x=1#frag",
              &resolved, &kind, &error),
          "relative Location resolves");
@@ -203,13 +203,13 @@ void test_resolve_location_scheme_relative_and_unsupported() {
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
   std::string resolved;
-  expect(amber::runtime::http::http_resolve_location(
+  expect(sputnik::runtime::http::http_resolve_location(
              "http://example.com/a", "//other.example/path", &resolved, &kind,
              &error),
          "scheme-relative Location resolves");
   expect(resolved == "http://other.example/path",
          "scheme-relative redirect keeps base scheme");
-  expect(!amber::runtime::http::http_resolve_location(
+  expect(!sputnik::runtime::http::http_resolve_location(
              "http://example.com/a", "ftp://example.com/secure", &resolved,
              &kind, &error) &&
              kind == HttpErrorKind::UnsupportedScheme,
@@ -233,7 +233,7 @@ void test_build_get_synthesizes_host_no_body() {
 
   FakeTransport t;
   t.to_read = "HTTP/1.1 204 No Content\r\n\r\n";
-  HttpExchangeResult res = amber::runtime::http::http_perform(t, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(t, req);
   expect(res.ok, "GET exchange ok");
   expect(t.written == "GET /items?q=1 HTTP/1.1\r\n"
                       "host: example.com\r\n\r\n",
@@ -252,7 +252,7 @@ void test_build_post_synthesizes_content_length() {
 
   FakeTransport t;
   t.to_read = "HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nyes";
-  HttpExchangeResult res = amber::runtime::http::http_perform(t, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(t, req);
   expect(res.ok, "POST exchange ok");
   expect(t.written == "POST /submit HTTP/1.1\r\n"
                       "content-type: application/json\r\n"
@@ -316,7 +316,7 @@ void test_exchange_chunked_response() {
   FakeTransport t;
   t.to_read = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
               "4\r\nWiki\r\n5\r\npedia\r\n0\r\n\r\n";
-  HttpExchangeResult res = amber::runtime::http::http_perform(t, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(t, req);
   expect(res.ok, "chunked exchange ok");
   expect(res.body == "Wikipedia", "chunked body reassembled");
 }
@@ -327,7 +327,7 @@ void test_exchange_incremental_reads() {
   FakeTransport t;
   t.to_read = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
   t.read_chunk = 1U; // one byte per read
-  HttpExchangeResult res = amber::runtime::http::http_perform(t, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(t, req);
   expect(res.ok, "byte-paced exchange ok");
   expect(res.body == "hello", "body assembled from one-byte reads");
 }
@@ -339,7 +339,7 @@ void test_exchange_head_suppresses_body() {
   FakeTransport t;
   t.to_read = "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\n";
   HttpExchangeResult res =
-      amber::runtime::http::http_perform(t, req, /*head_request=*/true);
+      sputnik::runtime::http::http_perform(t, req, /*head_request=*/true);
   expect(res.ok, "HEAD exchange ok without reading 100 body bytes");
   expect(res.body.empty(), "HEAD body suppressed");
 }
@@ -349,7 +349,7 @@ void test_exchange_close_delimited_body() {
   HttpRequest req = build_or_die("GET", "http://h/", headers, "", false, "GET");
   FakeTransport t;
   t.to_read = "HTTP/1.1 200 OK\r\n\r\nstreamed payload"; // no CL, no chunked
-  HttpExchangeResult res = amber::runtime::http::http_perform(t, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(t, req);
   expect(res.ok, "close-delimited exchange ok");
   expect(res.body == "streamed payload", "close-delimited body via EOF");
 }
@@ -360,13 +360,13 @@ void test_exchange_transport_errors() {
 
   FakeTransport wfail;
   wfail.fail_write = true;
-  HttpExchangeResult wr = amber::runtime::http::http_perform(wfail, req);
+  HttpExchangeResult wr = sputnik::runtime::http::http_perform(wfail, req);
   expect(!wr.ok && wr.error_kind == HttpErrorKind::Connection,
          "write failure -> ConnectionError");
 
   FakeTransport rfail;
   rfail.fail_read = true;
-  HttpExchangeResult rr = amber::runtime::http::http_perform(rfail, req);
+  HttpExchangeResult rr = sputnik::runtime::http::http_perform(rfail, req);
   expect(!rr.ok && rr.error_kind == HttpErrorKind::Connection,
          "read failure -> ConnectionError");
 }
@@ -376,7 +376,7 @@ void test_exchange_truncated_body() {
   HttpRequest req = build_or_die("GET", "http://h/", headers, "", false, "GET");
   FakeTransport t;
   t.to_read = "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort"; // 5 < 10
-  HttpExchangeResult res = amber::runtime::http::http_perform(t, req);
+  HttpExchangeResult res = sputnik::runtime::http::http_perform(t, req);
   expect(!res.ok && res.error_kind == HttpErrorKind::UnexpectedEof,
          "truncated body -> UnexpectedEof");
 }
@@ -390,21 +390,21 @@ void test_streaming_fixed_length_request() {
   HttpRequest req;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_build_streaming_request(
+  expect(sputnik::runtime::http::http_build_streaming_request(
              "POST", "http://h/upload", headers, 5U, true, &req, &kind,
              &error),
          "fixed streaming request builds");
   FakeTransport t;
   std::uint64_t written = 0;
-  expect(amber::runtime::http::http_write_request_head(t, req, &kind, &error),
+  expect(sputnik::runtime::http::http_write_request_head(t, req, &kind, &error),
          "fixed streaming head writes");
-  expect(amber::runtime::http::http_write_request_body_chunk(
+  expect(sputnik::runtime::http::http_write_request_body_chunk(
              t, req, "he", &written, &kind, &error),
          "fixed streaming first chunk writes");
-  expect(amber::runtime::http::http_write_request_body_chunk(
+  expect(sputnik::runtime::http::http_write_request_body_chunk(
              t, req, "llo", &written, &kind, &error),
          "fixed streaming second chunk writes");
-  expect(amber::runtime::http::http_finish_request_body(t, req, written, &kind,
+  expect(sputnik::runtime::http::http_finish_request_body(t, req, written, &kind,
                                                         &error),
          "fixed streaming finish validates length");
   expect(t.written == "POST /upload HTTP/1.1\r\n"
@@ -419,18 +419,18 @@ void test_streaming_chunked_request() {
   HttpRequest req;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_build_streaming_request(
+  expect(sputnik::runtime::http::http_build_streaming_request(
              "POST", "http://h/upload", headers, std::nullopt, true, &req,
              &kind, &error),
          "chunked streaming request builds");
   FakeTransport t;
   std::uint64_t written = 0;
-  expect(amber::runtime::http::http_write_request_head(t, req, &kind, &error),
+  expect(sputnik::runtime::http::http_write_request_head(t, req, &kind, &error),
          "chunked streaming head writes");
-  expect(amber::runtime::http::http_write_request_body_chunk(
+  expect(sputnik::runtime::http::http_write_request_body_chunk(
              t, req, "abc", &written, &kind, &error),
          "chunked streaming chunk writes");
-  expect(amber::runtime::http::http_finish_request_body(t, req, written, &kind,
+  expect(sputnik::runtime::http::http_finish_request_body(t, req, written, &kind,
                                                         &error),
          "chunked streaming finish writes terminator");
   expect(t.written == "POST /upload HTTP/1.1\r\n"
@@ -445,19 +445,19 @@ void test_streaming_fixed_length_mismatch() {
   HttpRequest req;
   HttpErrorKind kind = HttpErrorKind::None;
   std::string error;
-  expect(amber::runtime::http::http_build_streaming_request(
+  expect(sputnik::runtime::http::http_build_streaming_request(
              "POST", "http://h/upload", headers, 4U, true, &req, &kind,
              &error),
          "fixed streaming mismatch request builds");
   FakeTransport t;
   std::uint64_t written = 0;
-  expect(amber::runtime::http::http_write_request_head(t, req, &kind, &error),
+  expect(sputnik::runtime::http::http_write_request_head(t, req, &kind, &error),
          "fixed mismatch head writes");
-  expect(!amber::runtime::http::http_write_request_body_chunk(
+  expect(!sputnik::runtime::http::http_write_request_body_chunk(
              t, req, "abcde", &written, &kind, &error) &&
              kind == HttpErrorKind::BodyLength,
          "fixed streaming overwrite -> BodyLength");
-  expect(!amber::runtime::http::http_finish_request_body(t, req, written, &kind,
+  expect(!sputnik::runtime::http::http_finish_request_body(t, req, written, &kind,
                                                          &error) &&
              kind == HttpErrorKind::BodyLength,
          "fixed streaming underwrite -> BodyLength");
@@ -470,8 +470,8 @@ void test_response_start_streams_body() {
   transport->to_read =
       "HTTP/1.1 200 OK\r\nContent-Length: 11\r\n\r\nhello world";
   transport->read_chunk = 9;
-  amber::runtime::http::HttpResponseStartResult started =
-      amber::runtime::http::http_read_response_start(std::move(transport));
+  sputnik::runtime::http::HttpResponseStartResult started =
+      sputnik::runtime::http::http_read_response_start(std::move(transport));
   expect(started.ok, "response start ok: " + started.error_message);
   expect(started.status == 200, "streaming response status");
   std::string first;
@@ -493,13 +493,13 @@ void test_response_body_release_callback_reusable_on_drain() {
   std::shared_ptr<bool> closed = std::make_shared<bool>(false);
   transport->closed_flag = closed;
 
-  amber::runtime::http::HttpResponseParser parser;
+  sputnik::runtime::http::HttpResponseParser parser;
   expect(parser.feed("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"),
          "parser accepts complete response");
 
   int releases = 0;
   bool reusable = false;
-  amber::runtime::http::HttpResponseBodyStream body(
+  sputnik::runtime::http::HttpResponseBodyStream body(
       std::move(transport), std::move(parser),
       [&](std::unique_ptr<HttpTransport> released, bool can_reuse) {
         ++releases;
@@ -523,13 +523,13 @@ void test_response_body_release_callback_non_reusable_on_close() {
   std::shared_ptr<bool> closed = std::make_shared<bool>(false);
   transport->closed_flag = closed;
 
-  amber::runtime::http::HttpResponseParser parser;
+  sputnik::runtime::http::HttpResponseParser parser;
   expect(parser.feed("HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nte"),
          "parser accepts partial response body");
 
   int releases = 0;
   bool reusable = true;
-  amber::runtime::http::HttpResponseBodyStream body(
+  sputnik::runtime::http::HttpResponseBodyStream body(
       std::move(transport), std::move(parser),
       [&](std::unique_ptr<HttpTransport> released, bool can_reuse) {
         ++releases;

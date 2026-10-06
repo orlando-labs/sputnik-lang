@@ -1,6 +1,6 @@
 #include "runtime/stdlib_registry.h"
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -203,9 +203,9 @@ void RuntimeDispatchRegistry::import_native_package_bindings(
 
 RuntimeNativePackageDescriptor runtime_native_package_descriptor_from_module(
     const bytecode::BcModule &module) {
-  static const std::string kBindPrefix = "amber.native.bind:";
-  static const std::string kMethodPrefix = "amber.native.method:";
-  static const std::string kErrorPrefix = "amber.native.error:";
+  static const std::string kBindPrefix = "sputnik.native.bind:";
+  static const std::string kMethodPrefix = "sputnik.native.method:";
+  static const std::string kErrorPrefix = "sputnik.native.error:";
   RuntimeNativePackageDescriptor descriptor;
   for (const bytecode::AttrEntry &attr : module.attrs) {
     const std::string key = registry_string_or_empty(module, attr.key_str_id);
@@ -282,12 +282,12 @@ RuntimeErrorRegistry::RuntimeErrorRegistry(Seed seed) {
   if (seed == Seed::Empty) {
     return;
   }
-#define AMBER_RUNTIME_ERROR(name, parent, default_message, default_exit_code,  \
+#define SPUTNIK_RUNTIME_ERROR(name, parent, default_message, default_exit_code,  \
                             field_mask)                                        \
   append_error({name, parent, default_message, default_exit_code, field_mask}, \
                error_ids_.find(name) == error_ids_.end());
 #include "spec/registries/runtime_errors.def"
-#undef AMBER_RUNTIME_ERROR
+#undef SPUTNIK_RUNTIME_ERROR
 }
 
 std::uint16_t RuntimeErrorRegistry::append_error(ErrorRecord record,
@@ -599,7 +599,7 @@ void register_core_prelude_bindings(RuntimeModuleRegistry &registry) {
 
 void register_legacy_native_type_paths(RuntimeModuleRegistry &registry) {
   registry.register_native_type_path("Kernel", RuntimeNativeTypeKind::Kernel);
-  registry.register_native_type_path("Amber", RuntimeNativeTypeKind::Amber);
+  registry.register_native_type_path("Sputnik", RuntimeNativeTypeKind::Sputnik);
   // Macro `Ast` builder module (macro.v1). `Ast.node(...)` constructs Ast
   // values; quote lowering targets it.
   registry.register_native_type_path("Ast", RuntimeNativeTypeKind::Ast);
@@ -622,4 +622,4 @@ void register_legacy_native_type_paths(RuntimeModuleRegistry &registry) {
   registry.register_native_type_path("Object", RuntimeNativeTypeKind::Object);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

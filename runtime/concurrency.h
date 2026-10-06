@@ -13,7 +13,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 class RuntimeHeap;
 struct RuntimePinToken;
@@ -1020,4 +1020,4 @@ bool runtime_task_is_parked();
 void runtime_mark_task_parked();
 std::uint64_t runtime_cooperative_task_park_count();
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

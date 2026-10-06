@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::wasm_accel {
+namespace sputnik::wasm_accel {
 
 inline constexpr std::uint32_t kWasmComponentFlagFrozenWorld = 0x1U;
 inline constexpr std::uint32_t kWasmComponentFlagRawFfiDenied = 0x2U;
@@ -110,4 +110,4 @@ wasm_component_validation_to_json(const WasmComponentValidationResult &result);
 std::string
 accelerator_validation_to_json(const AcceleratorValidationResult &result);
 
-} // namespace amber::wasm_accel
+} // namespace sputnik::wasm_accel

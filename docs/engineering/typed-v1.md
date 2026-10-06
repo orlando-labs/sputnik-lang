@@ -1,10 +1,10 @@
-# amber.typed.v1
+# sputnik.typed.v1
 
-Status: `W9.1` optional Amber/Typed checker lane is implemented.
+Status: `W9.1` optional Sputnik/Typed checker lane is implemented.
 
 The typed profile is intentionally separate from the dynamic M5 gate. Dynamic
-Amber still compiles/runs through the existing lexer, parser, binder, HIR,
-bytecode, VM, and loader path; `amberc typed` adds a static profile pass that
+Sputnik still compiles/runs through the existing lexer, parser, binder, HIR,
+bytecode, VM, and loader path; `sputnik typed` adds a static profile pass that
 can fail without changing dynamic semantics.
 
 Implemented surface:
@@ -24,8 +24,8 @@ Implemented surface:
 Tooling:
 
 ```sh
-amberc typed <file>
-ambertest run corpus --bundle M6
+sputnik typed <file>
+sputniktest run corpus --bundle M6
 ```
 
 Diagnostic codes:
@@ -39,7 +39,7 @@ Diagnostic codes:
 
 Current limits:
 
-- package-level typed mode is represented by invoking `amberc typed`; W9.4
+- package-level typed mode is represented by invoking `sputnik typed`; W9.4
   provides package manifests, but profile selection is not wired into typed
   checking yet;
 - reflective `Any` boundaries are modeled conservatively as `Any` inference;

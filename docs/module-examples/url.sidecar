@@ -13,7 +13,7 @@ method: Url.parse(text)
 ru: Разбирает URL в Map частей.
 en: Parses a URL into a parts Map.
 example:
-url = Url.parse("https://example.com:8443/api?q=amber")
+url = Url.parse("https://example.com:8443/api?q=sputnik")
 url[:host]
 # => "example.com"
 .end
@@ -56,5 +56,5 @@ method: Url.build_query(map)
 ru: Строит query string из nested Map/List.
 en: Builds a query string from nested Map/List values.
 example:
-query = Url.build_query({q: "amber", tag: ["vm", "lang"]})
+query = Url.build_query({q: "sputnik", tag: ["vm", "lang"]})
 .end

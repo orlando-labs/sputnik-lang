@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 struct RuntimeRegexpCaptureRange {
   bool matched = false;
@@ -40,4 +40,4 @@ SendStatus regexp_string_replace(NativeStdlibCall &call,
 SendStatus regexp_string_match_operator(NativeStdlibCall &call,
                                         const std::string &self);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

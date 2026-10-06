@@ -1,5 +1,5 @@
 {
-  "schema": "amber.run.v1",
+  "schema": "sputnik.run.v1",
   "entry": "probe",
   "status": "ok",
   "value": "[10, 20, 30, 20, 30, 40]"

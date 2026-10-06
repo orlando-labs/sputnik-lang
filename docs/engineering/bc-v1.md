@@ -1,4 +1,4 @@
-# amber.bc.v1
+# sputnik.bc.v1
 
 Status: implemented for `W4.1`-`W4.4` emission boundary. `W5.1` VM call/return
 baseline is already consuming this container; dispatch caches, general unwind,
@@ -8,15 +8,15 @@ Implemented surface:
 
 - typed schema in [bytecode/format.h](../../bytecode/format.h:1)
 - canonical serializer/deserializer + verifier skeleton in [bytecode/format.cpp](../../bytecode/format.cpp:1)
-- CLI inspection in [tools/amberc/main.cpp](../../tools/amberc/main.cpp:1):
-  - `amberc bc <file>`
-  - `amberc bc-disasm <file>`
-  - `amberc metadata <file.amberbc> --json`
-  - `amberc verify <file.amberbc> --json`
-- `amberc amberbc-dump <file>`
-- `amberc amberbc-verify <file>`
-- `amberc amberbc-disasm <file>`
-- `amberc build <amber.build.json>`
+- CLI inspection in [tools/sputnik/main.cpp](../../tools/sputnik/main.cpp:1):
+  - `sputnik bc <file>`
+  - `sputnik bc-disasm <file>`
+  - `sputnik metadata <file.sputnikbc> --json`
+  - `sputnik verify <file.sputnikbc> --json`
+- `sputnik sputnikbc-dump <file>`
+- `sputnik sputnikbc-verify <file>`
+- `sputnik sputnikbc-disasm <file>`
+- `sputnik build <sputnik.build.json>`
 - HIR-to-bytecode emission in [bytecode/emitter.cpp](../../bytecode/emitter.cpp:1)
 
 ## Container
@@ -88,12 +88,12 @@ exact match between manifest directions and `LOAD_NOTEBOOK_SLOT` /
 - `binding_count`
 - `flags` where bit `0x1` means `requires_commit`
 
-`module_to_json(...)` dumps the fully decoded module as `amber.bc.v1`.
-`amberc metadata <file.amberbc> --json` exposes the same JSON for serialized
-artifacts. `amberc verify <file.amberbc> --json` emits the
-`amber.bc.verify.v1` verifier schema and returns a non-zero exit code when
+`module_to_json(...)` dumps the fully decoded module as `sputnik.bc.v1`.
+`sputnik metadata <file.sputnikbc> --json` exposes the same JSON for serialized
+artifacts. `sputnik verify <file.sputnikbc> --json` emits the
+`sputnik.bc.verify.v1` verifier schema and returns a non-zero exit code when
 decode/verification fails; corrupted bytecode still produces structured JSON on
-stdout. The older `amberbc-*` commands remain supported aliases for existing
+stdout. The older `sputnikbc-*` commands remain supported aliases for existing
 scripts.
 
 `PROF` stores W14 build/profile feature metadata:

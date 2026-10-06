@@ -19,54 +19,54 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<stdlib-time-source-test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::BcModule compile_source_or_die(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<stdlib-time-source-test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   if (!emit_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(emit_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(emit_result.diagnostics);
     std::exit(1);
   }
 
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emit_result.module));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emit_result.module));
   if (!decoded.ok()) {
-    std::cerr << amber::bytecode::verify_errors_to_json(decoded.errors);
+    std::cerr << sputnik::bytecode::verify_errors_to_json(decoded.errors);
     std::exit(1);
   }
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult execute_source_or_die(
+sputnik::runtime::ExecutionResult execute_source_or_die(
     const std::string &source) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "source module should have init code");
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
-void expect_ok_integer(const amber::runtime::ExecutionResult &result,
+void expect_ok_integer(const sputnik::runtime::ExecutionResult &result,
                        std::int64_t expected, const std::string &message) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << message << ": " << result.fault->error_name
@@ -79,10 +79,10 @@ void expect_ok_integer(const amber::runtime::ExecutionResult &result,
 
 void expect_fault(const std::string &source, const std::string &error_name,
                   const std::string &message) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "fault module should have init");
-  amber::runtime::ExecutionResult result =
-      amber::runtime::execute_code(module, module.init.entry_code_id);
+  sputnik::runtime::ExecutionResult result =
+      sputnik::runtime::execute_code(module, module.init.entry_code_id);
   expect(!result.ok() && result.fault.has_value(),
          message + " should fault");
   expect(result.fault->error_name == error_name,
@@ -91,7 +91,7 @@ void expect_fault(const std::string &source, const std::string &error_name,
 }
 
 void test_period_literals_and_time_addition() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "p = 5.seconds + 1.day\n"
       "t = p + Time.utc(2026, 6, 17)\n"
       "if TimePeriod === p and Time === t and p.days == 1 and "
@@ -105,7 +105,7 @@ void test_period_literals_and_time_addition() {
 }
 
 void test_parse_epoch_fields_and_json() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "epoch = Time.from_unix(0)\n"
       "parsed = Time.parse(\"2026-06-17T03:04:05.123456789+03:00\")\n"
       "negative = Time.from_unix_ns(-1)\n"
@@ -124,7 +124,7 @@ void test_parse_epoch_fields_and_json() {
 }
 
 void test_calendar_arithmetic_and_difference() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "leap = Time.utc(2024, 1, 31) + 1.month\n"
       "plain = Time.utc(2023, 1, 31) + 1.month\n"
       "year = Time.utc(2024, 2, 29) + 1.year\n"
@@ -143,7 +143,7 @@ void test_calendar_arithmetic_and_difference() {
 }
 
 void test_time_zone_conversion_and_type() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "t = Time.parse(\"2026-07-02T12:00:00Z\")\n"
       "moscow = TimeZone[\"Europe/Moscow\"]\n"
       "fixed = Time.time_zone(\"+03:00\")\n"
@@ -165,7 +165,7 @@ void test_time_zone_conversion_and_type() {
 }
 
 void test_iana_dst_offsets_and_local_zone() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "ny = TimeZone[\"America/New_York\"]\n"
       "winter = Time.parse(\"2026-01-15T12:00:00Z\").in_tz(ny)\n"
       "summer = Time.parse(\"2026-07-15T12:00:00Z\").in_tz(ny)\n"
@@ -185,7 +185,7 @@ void test_iana_dst_offsets_and_local_zone() {
 }
 
 void test_dst_gap_fold_and_calendar_arithmetic() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "gap_forward = Time.parse(\"2026-03-08 02:30\", "
       "format: :datetime, zone: \"America/New_York\", on_gap: :forward)\n"
       "gap_backward = Time.parse(\"2026-03-08 02:30\", "
@@ -211,7 +211,7 @@ void test_dst_gap_fold_and_calendar_arithmetic() {
 }
 
 void test_parse_formats_and_to_str() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "date = Time.parse(\"2026-06-17\")\n"
       "ru = Time.parse(\"02.07.2026 15:30\", "
       "format: :ru_datetime, zone: \"Europe/Moscow\")\n"
@@ -234,7 +234,7 @@ void test_parse_formats_and_to_str() {
 }
 
 void test_local_boundary_helpers() {
-  const amber::runtime::ExecutionResult result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult result = execute_source_or_die(
       "t = Time.parse(\"2026-07-02T15:45:10Z\").in_tz(\"Europe/Moscow\")\n"
       "if t.start_of_day.iso8601 == \"2026-07-02T00:00:00+03:00\" and "
       "t.end_of_day.iso8601 == \"2026-07-02T23:59:59.999999999+03:00\" and "
@@ -250,18 +250,18 @@ void test_local_boundary_helpers() {
 }
 
 void test_live_clock_shapes_and_replay_fault() {
-  const amber::runtime::ExecutionResult shape_result = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult shape_result = execute_source_or_die(
       "if Time === Time.now and TimePeriod === Time.monotonic:\n"
       "  42\n"
       "else:\n"
       "  0\n");
   expect_ok_integer(shape_result, 42, "live clock value shapes");
 
-  amber::bytecode::BcModule module = compile_source_or_die("Time.now\n");
-  amber::runtime::RuntimeWorldOptions options;
+  sputnik::bytecode::BcModule module = compile_source_or_die("Time.now\n");
+  sputnik::runtime::RuntimeWorldOptions options;
   options.enforce_replay = true;
-  amber::runtime::RuntimeWorld world(module, options);
-  amber::runtime::ExecutionResult replay =
+  sputnik::runtime::RuntimeWorld world(module, options);
+  sputnik::runtime::ExecutionResult replay =
       world.execute(module.init.entry_code_id);
   expect(!replay.ok() && replay.fault.has_value() &&
              replay.fault->error_name == "DeterminismError",

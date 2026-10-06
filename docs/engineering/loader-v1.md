@@ -1,10 +1,10 @@
-# amber.loader.v1
+# sputnik.loader.v1
 
 Status: `W8.1` dependency linking/module-init and `W8.2` export/import
 diagnostics are implemented, with `W8.4` load conformance coverage through
-`ambertest` and focused post-W15 export-cell cycle regression tests.
+`sputniktest` and focused post-W15 export-cell cycle regression tests.
 
-The loader consumes serialized `.amberbc` bytes, routes every load through the
+The loader consumes serialized `.sputnikbc` bytes, routes every load through the
 bytecode verifier, links the `DEPS` graph by logical module id supplied by the
 host/tooling caller, materializes runtime exports/import aliases, and runs
 module init code through the current VM.
@@ -38,7 +38,7 @@ Implemented surface:
 - VM init failure propagation into failed module snapshots;
 - sticky failed-init and cyclic-init state across repeated load/init attempts,
   with failed export cells retaining the original loader error;
-- conformance `load` fixtures compile source, serialize to `.amberbc`, map the
+- conformance `load` fixtures compile source, serialize to `.sputnikbc`, map the
   bytes through `RuntimeModuleLoader`, and assert deterministic init/module
   snapshots.
 
@@ -47,7 +47,7 @@ Current limits:
 - module identity is still supplied to `RuntimeModuleLoader` by the caller;
   W9.4 package tooling now owns manifest/build graph identity before bytes are
   mapped into the loader;
-- the decoded `.amberbc` v1 format still stores dependency module ids in
+- the decoded `.sputnikbc` v1 format still stores dependency module ids in
   `DEPS`; the exact source import-name table is supplied to the runtime loader
   by host/tooling as import aliases;
 - cyclic dependency graphs can link, but cyclic init access fails when the

@@ -1,5 +1,5 @@
 (() => {
-  const sourcePath = "./spec/amber_unified_final_spec.md";
+  const sourcePath = "./spec/sputnik_unified_final_spec.md";
   const content = document.querySelector("#spec-content");
   const toc = document.querySelector("#spec-toc");
   const search = document.querySelector("#spec-search");
@@ -7,7 +7,7 @@
 
   if (!content || !toc) return;
 
-  const escapeHtml = window.AmberMarkdown.escapeHtml;
+  const escapeHtml = window.SputnikMarkdown.escapeHtml;
 
   // Spec links use plain relative paths into ./spec/; absolute/anchor links pass
   // through untouched.
@@ -69,7 +69,7 @@
       const response = await fetch(sourcePath);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const markdown = await response.text();
-      const rendered = window.AmberMarkdown.render(markdown, { resolveHref });
+      const rendered = window.SputnikMarkdown.render(markdown, { resolveHref });
       content.innerHTML = rendered.html;
       renderToc(rendered.headings);
       wireTocSearch();

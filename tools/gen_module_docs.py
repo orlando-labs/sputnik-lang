@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the VM module reference data for the Amber website.
+"""Generate the VM module reference data for the Sputnik website.
 
 Sources, in order of trust:
 
@@ -22,7 +22,7 @@ Modes::
     python3 tools/gen_module_docs.py --check      # drift guard only, non-zero on drift
 
 ``--verify`` runs each machine-checkable inline example (one that ends in a
-``# => <output>`` line) through ``build/amberc`` and records whether the printed
+``# => <output>`` line) through ``build/sputnik`` and records whether the printed
 value matches. Verification is best-effort: examples that need capabilities,
 I/O, randomness or time simply stay ``unverified`` and never fail the run.
 """
@@ -42,7 +42,7 @@ SIDECAR_DIR = ROOT / "docs" / "module-examples"
 CORPUS_DIR = ROOT / "corpus" / "run"
 OUTPUT_JS = ROOT / "site" / "modules-data.js"
 COVERAGE_JSON = ROOT / "site" / "modules-coverage.json"
-AMBERC = ROOT / "build" / "amberc"
+SPUTNIK = ROOT / "build" / "sputnik"
 
 IDENT_RE = re.compile(r"^[A-Za-z_Ѐ-ӿ][\wЀ-ӿ]*$")
 # Method selector = the dotted method name of a `Recv.method(...)` / `recv.field`
@@ -134,7 +134,7 @@ def infer_selector(method: dict) -> str | None:
 def corpus_example(name: str) -> tuple[str, str]:
     """Return (example_text, verified_output) for a corpus/run/<name> program."""
     base = CORPUS_DIR / name
-    source = (base / "source.am").read_text(encoding="utf-8")
+    source = (base / "source.s").read_text(encoding="utf-8")
     meta = json.loads((base / "meta.json").read_text(encoding="utf-8"))
     expect = json.loads((base / "expect.run.json").read_text(encoding="utf-8"))
     entry = meta.get("entry", "probe")
@@ -148,7 +148,7 @@ def corpus_example(name: str) -> tuple[str, str]:
 
 
 # --------------------------------------------------------------------------- #
-# Best-effort verification of inline examples through amberc
+# Best-effort verification of inline examples through sputnik
 # --------------------------------------------------------------------------- #
 EXPECT_RE = re.compile(r"^\s*#\s*=>\s*(.*\S)\s*$")
 
@@ -170,17 +170,17 @@ def runnable_program(example: str) -> str:
     return "\n".join(code) + "\n"
 
 
-def run_amberc(program: str) -> str | None:
-    if not AMBERC.exists():
+def run_sputnik(program: str) -> str | None:
+    if not SPUTNIK.exists():
         return None
     with tempfile.NamedTemporaryFile(
-        "w", suffix=".am", delete=False, encoding="utf-8"
+        "w", suffix=".s", delete=False, encoding="utf-8"
     ) as handle:
         handle.write(program)
         temp = handle.name
     try:
         result = subprocess.run(
-            [str(AMBERC), temp],
+            [str(SPUTNIK), temp],
             capture_output=True,
             text=True,
             timeout=20,
@@ -199,7 +199,7 @@ def verify_example(example: str) -> str:
     expected = expected_output(example)
     if expected is None:
         return "unverified"
-    actual = run_amberc(runnable_program(example))
+    actual = run_sputnik(runnable_program(example))
     if actual is None:
         return "unverified"
     return "verified" if actual == expected else "failed"
@@ -254,7 +254,7 @@ def emit_js(modules: list[dict]) -> str:
     out.append("// Do not edit by hand; edit the sidecars and regenerate.")
     out.append("const method = (sig, ru, en, example) => ({ sig, ru, en, example });")
     out.append("")
-    out.append("window.AMBER_MODULES = [")
+    out.append("window.SPUTNIK_MODULES = [")
     for module in modules:
         out.append("  {")
         out.append(f"    id: {js_string(module['id'])},")
@@ -344,7 +344,7 @@ def main() -> int:
     OUTPUT_JS.write_text(emit_js(modules), encoding="utf-8")
 
     report = {
-        "schema": "amber.modules.coverage.v1",
+        "schema": "sputnik.modules.coverage.v1",
         "totals": {
             "modules": len(modules),
             "methods": sum(len(m["methods"]) for m in modules),

@@ -1,12 +1,12 @@
 # Polyglot VM repros
 
-`direct_method_capture_failure.am` is a small reproducer for direct execution
+`direct_method_capture_failure.s` is a small reproducer for direct execution
 of a compiled top-level method whose body captures a sibling top-level helper.
 
 Expected good path:
 
 ```sh
-build/iamber --eval-file bench/polyglot/repro/direct_method_capture_failure.am
+build/isputnik --eval-file bench/polyglot/repro/direct_method_capture_failure.s
 ```
 
 Expected output:
@@ -22,11 +22,11 @@ python3 bench/polyglot/run_benchmark.py \
   --workload arithmetic \
   --repeats 1 \
   --build-dir /private/tmp/direct_method_capture_repro_runner
-build/amberc build bench/polyglot/repro/amber.build.json \
+build/sputnik build bench/polyglot/repro/sputnik.build.json \
   --out-dir /private/tmp/direct_method_capture_repro/out \
   --cache-dir /private/tmp/direct_method_capture_repro/cache
-/private/tmp/direct_method_capture_repro_runner/amberbc_run \
-  /private/tmp/direct_method_capture_repro/out/bench.polyglot.repro.direct_method_capture_failure.amberbc \
+/private/tmp/direct_method_capture_repro_runner/sputnikbc_run \
+  /private/tmp/direct_method_capture_repro/out/bench.polyglot.repro.direct_method_capture_failure.sputnikbc \
   __init__
 ```
 
@@ -39,8 +39,8 @@ Expected output:
 Direct method entry path (now fixed):
 
 ```sh
-/private/tmp/direct_method_capture_repro_runner/amberbc_run \
-  /private/tmp/direct_method_capture_repro/out/bench.polyglot.repro.direct_method_capture_failure.amberbc \
+/private/tmp/direct_method_capture_repro_runner/sputnikbc_run \
+  /private/tmp/direct_method_capture_repro/out/bench.polyglot.repro.direct_method_capture_failure.sputnikbc \
   main
 ```
 

@@ -22,52 +22,52 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<stdlib-argparser-source-test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::BcModule compile_source_or_die(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<stdlib-argparser-source-test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   if (!emit_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(emit_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(emit_result.diagnostics);
     std::exit(1);
   }
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emit_result.module));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emit_result.module));
   if (!decoded.ok()) {
-    std::cerr << amber::bytecode::verify_errors_to_json(decoded.errors);
+    std::cerr << sputnik::bytecode::verify_errors_to_json(decoded.errors);
     std::exit(1);
   }
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult execute_source(const std::string &source) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+sputnik::runtime::ExecutionResult execute_source(const std::string &source) {
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "source module should have init code");
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
-void expect_ok_integer(const amber::runtime::ExecutionResult &result,
+void expect_ok_integer(const sputnik::runtime::ExecutionResult &result,
                        std::int64_t expected, const std::string &message) {
   if (!result.ok() && result.fault.has_value()) {
     std::cerr << "[fault] " << message << ": " << result.fault->error_name
@@ -80,7 +80,7 @@ void expect_ok_integer(const amber::runtime::ExecutionResult &result,
 
 void expect_fault(const std::string &source, const std::string &error_name,
                   const std::string &message) {
-  const amber::runtime::ExecutionResult result = execute_source(source);
+  const sputnik::runtime::ExecutionResult result = execute_source(source);
   expect(!result.ok() && result.fault.has_value(), message + " should fault");
   expect(result.fault->error_name == error_name,
          message + " should fault with " + error_name + ", got " +
@@ -88,7 +88,7 @@ void expect_fault(const std::string &source, const std::string &error_name,
 }
 
 void test_options_positionals_and_rest() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "parser = ArgParser(cmdline: [\"--port\", \"8080\", "
       "\"--host=0.0.0.0\", \"-v\", \"src\", \"dst\", \"--\", "
       "\"--literal\"])\n"
@@ -111,7 +111,7 @@ void test_options_positionals_and_rest() {
 }
 
 void test_option_name_normalization_and_explicit_override() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "parser = ArgParser(cmdline: [\"--pool-size\", \"4\", "
       "\"--cache-dir\", \"tmp\"])\n"
       "parser.arg(\"--pool-size\", type: Int)\n"
@@ -128,7 +128,7 @@ void test_option_name_normalization_and_explicit_override() {
 }
 
 void test_result_mode_choices_and_help() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "bad_parser = ArgParser(cmdline: [\"--mode\", \"staging\"])\n"
       "bad_parser.arg(\"--mode\", choices: [\"dev\", \"prod\"])\n"
       "bad = bad_parser.try_parse()\n"
@@ -150,7 +150,7 @@ void test_result_mode_choices_and_help() {
 }
 
 void test_env_multiple_negatable_and_defaults() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "env = {\"API_TOKEN\": \"sekret\"}\n"
       "parser = ArgParser(cmdline: [\"--include\", \"src\", \"-I\", "
       "\"lib\", \"--no-color\"], env: env)\n"
@@ -170,7 +170,7 @@ void test_env_multiple_negatable_and_defaults() {
 }
 
 void test_cmdline_override_and_local_converter() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "parser = ArgParser(cmdline: [\"--port\", \"1\"])\n"
       "parser.arg(\"--port\", type: Int) |value|:\n"
       "  value + 1\n"
@@ -201,7 +201,7 @@ void test_parse_or_raise_faults() {
 }
 
 void test_first_class_errors_and_strict_equivalence() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "parser = ArgParser(cmdline: [\"--count\", \"bad\"])\n"
       "parser.arg(\"--count\", type: Int)\n"
       "result = parser.try_parse()\n"
@@ -233,7 +233,7 @@ void test_first_class_errors_and_strict_equivalence() {
 }
 
 void test_dotted_error_construction_and_matching() {
-  const amber::runtime::ExecutionResult result = execute_source(
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "one = ArgParser.InvalidValue.new(\"bad\", option: \"--port\", "
       "value: \"nope\")\n"
       "two = ArgParser.InvalidValue(\"worse\", option: \"--count\", "
@@ -276,7 +276,7 @@ void test_parse_error_rescue_hierarchy() {
       "candidate.arg(\"--mode\", choices: [\"dev\"])",
   };
   for (const std::string &parser_source : cases) {
-    const amber::runtime::ExecutionResult result =
+    const sputnik::runtime::ExecutionResult result =
         execute_source(parser_source + "\n"
                                        "try:\n"
                                        "  candidate.try_parse().or_raise\n"
@@ -286,7 +286,7 @@ void test_parse_error_rescue_hierarchy() {
                       "ArgParser.ParseError catches parse subclass");
   }
 
-  const amber::runtime::ExecutionResult help = execute_source(
+  const sputnik::runtime::ExecutionResult help = execute_source(
       "try:\n"
       "  try:\n"
       "    ArgParser(cmdline: [\"--help\"]).try_parse().or_raise\n"
@@ -296,7 +296,7 @@ void test_parse_error_rescue_hierarchy() {
       "  42\n");
   expect_ok_integer(help, 42, "ArgParser.ParseError excludes HelpRequested");
 
-  const amber::runtime::ExecutionResult sibling = execute_source(
+  const sputnik::runtime::ExecutionResult sibling = execute_source(
       "try:\n"
       "  try:\n"
       "    ArgParser(cmdline: [\"--wat\"]).try_parse().or_raise\n"
@@ -309,7 +309,7 @@ void test_parse_error_rescue_hierarchy() {
 }
 
 void test_converter_exception_boundaries() {
-  const amber::runtime::ExecutionResult parse_error = execute_source(
+  const sputnik::runtime::ExecutionResult parse_error = execute_source(
       "parser = ArgParser(cmdline: [\"--port\", \"9\"])\n"
       "parser.arg(\"--port\", type: Int) |value|:\n"
       "  raise ArgParser.InvalidValue(\"out of range\", option: \"--port\", "
@@ -325,7 +325,7 @@ void test_converter_exception_boundaries() {
   expect_ok_integer(parse_error, 42,
                     "ArgParser captures explicit converter parse errors");
 
-  const amber::runtime::ExecutionResult arbitrary =
+  const sputnik::runtime::ExecutionResult arbitrary =
       execute_source("parser = ArgParser(cmdline: [\"--port\", \"9\"])\n"
                      "parser.arg(\"--port\", type: Int) |value|:\n"
                      "  raise ValueError(\"converter exploded\")\n"
@@ -341,7 +341,7 @@ void test_converter_exception_boundaries() {
 }
 
 void test_unhandled_error_name_and_trace() {
-  const amber::runtime::ExecutionResult result =
+  const sputnik::runtime::ExecutionResult result =
       execute_source("parser = ArgParser(cmdline: [\"--count\", \"bad\"])\n"
                      "parser.arg(\"--count\", type: Int)\n"
                      "parser.try_parse().or_raise\n");
@@ -357,11 +357,11 @@ void test_unhandled_error_name_and_trace() {
 }
 
 void test_parse_cli_behavior() {
-  const std::shared_ptr<amber::runtime::RuntimeTextWriter> stderr_buffer =
-      amber::runtime::RuntimeTextWriter::buffer();
-  amber::runtime::ExecutionResult parse_error;
+  const std::shared_ptr<sputnik::runtime::RuntimeTextWriter> stderr_buffer =
+      sputnik::runtime::RuntimeTextWriter::buffer();
+  sputnik::runtime::ExecutionResult parse_error;
   {
-    amber::runtime::RuntimeOutputScope scope({}, stderr_buffer);
+    sputnik::runtime::RuntimeOutputScope scope({}, stderr_buffer);
     parse_error = execute_source(
         "parser = ArgParser(cmdline: [\"--wat\"], name: \"tool\")\n"
         "parser.parse()\n");
@@ -374,11 +374,11 @@ void test_parse_cli_behavior() {
                  "tool: error: unknown option --wat") != std::string::npos,
          "ArgParser.parse renders parse diagnostics to stderr");
 
-  const std::shared_ptr<amber::runtime::RuntimeTextWriter> stdout_buffer =
-      amber::runtime::RuntimeTextWriter::buffer();
-  amber::runtime::ExecutionResult help;
+  const std::shared_ptr<sputnik::runtime::RuntimeTextWriter> stdout_buffer =
+      sputnik::runtime::RuntimeTextWriter::buffer();
+  sputnik::runtime::ExecutionResult help;
   {
-    amber::runtime::RuntimeOutputScope scope(stdout_buffer, {});
+    sputnik::runtime::RuntimeOutputScope scope(stdout_buffer, {});
     help = execute_source(
         "parser = ArgParser(cmdline: [\"--help\"], name: \"tool\", "
         "about: \"A useful tool\")\n"
@@ -405,12 +405,12 @@ void test_declaration_validation() {
 }
 
 void test_default_cmdline_uses_process_arguments() {
-  amber::runtime::set_runtime_process_arguments({"--count", "42"});
-  const amber::runtime::ExecutionResult result = execute_source(
+  sputnik::runtime::set_runtime_process_arguments({"--count", "42"});
+  const sputnik::runtime::ExecutionResult result = execute_source(
       "parser = ArgParser()\n"
       "parser.arg(\"--count\", type: Int)\n"
       "parser.parse_or_raise()[\"count\"]\n");
-  amber::runtime::set_runtime_process_arguments({});
+  sputnik::runtime::set_runtime_process_arguments({});
   expect_ok_integer(result, 42,
                     "ArgParser default cmdline uses process arguments");
 }

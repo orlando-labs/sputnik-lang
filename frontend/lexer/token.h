@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::lexer {
+namespace sputnik::lexer {
 
 struct Position {
   std::size_t line = 1;
@@ -138,4 +138,4 @@ std::string tokens_to_json(const std::vector<Token> &tokens,
 std::string diagnostics_to_json(const std::vector<Diagnostic> &diagnostics);
 std::string sha256_hex(const std::string &source);
 
-} // namespace amber::lexer
+} // namespace sputnik::lexer

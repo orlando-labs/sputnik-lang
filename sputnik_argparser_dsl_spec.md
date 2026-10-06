@@ -1,0 +1,937 @@
+# Sputnik ArgParser DSL — draft specification
+
+**Status:** draft / library-facing language design note
+**Scope:** standard-library `ArgParser` DSL for Sputnik command-line interfaces
+**Primary goal:** concise Ruby-like / Sputnik-like CLI parser syntax with local validation blocks, structured parse errors, and canonical Unix-style terminal diagnostics.
+
+---
+
+## 1. Design goals
+
+`ArgParser` provides a standard Sputnik DSL for describing command-line interfaces.
+
+The design goals are:
+
+- keep CLI declarations readable in method-chaining style;
+- use Sputnik block suffix syntax for local per-argument transformation and validation;
+- distinguish programmer errors from user CLI errors;
+- produce canonical Unix-style `usage:` and `program: error:` diagnostics;
+- avoid stack traces for ordinary user input failures;
+- preserve a strict mode for tests, libraries, and embedded use;
+- support options with values, boolean flags, positional arguments, and rest positional arguments;
+- keep the default simple enough for one-file scripts.
+
+---
+
+## 2. Canonical surface syntax
+
+The canonical form is a chained `ArgParser()` construction followed by argument declarations and `.parse()`.
+
+```sputnik
+args = ArgParser()
+ .name("copy")
+ .about("Copy files")
+ .arg("-f", "--from",
+   name: :from,
+   desc: "Source path",
+   type: Path,
+   required: true
+ )
+ .arg("-t", "--to",
+   name: :to,
+   desc: "Destination path",
+   type: Path,
+   required: true
+ )
+ .flag("-v", "--verbose",
+   desc: "Print detailed progress"
+ )
+ .parse()
+```
+
+The parsed result is accessed by canonical key lookup:
+
+```sputnik
+args[:from]
+args[:to]
+args[:verbose]
+```
+
+Property-style access may be supported as convenience for non-conflicting names, but `args[:name]` is the normative access form.
+
+---
+
+## 3. Constructor
+
+```sputnik
+def init(cmdline: Process.cmdline, name: null, env: Process.env): ...
+```
+
+### 3.1. Default command line
+
+`ArgParser()` defaults to the command line given to the current process.
+
+```sputnik
+args = ArgParser()
+ .arg("-o", "--output", type: Path)
+ .parse()
+```
+
+### 3.2. Explicit command line
+
+An explicit `cmdline:` is used for tests and embedding.
+
+```sputnik
+args = ArgParser(cmdline: ["--output", "out.txt"])
+ .arg("-o", "--output", type: Path)
+ .parse_or_raise()
+```
+
+---
+
+## 4. Option spelling
+
+Option spellings are strings.
+
+```sputnik
+.arg("-f", "--from", ...)
+.flag("-v", "--verbose", ...)
+```
+
+Symbols such as `:f` and `:from` are not the canonical spelling for options.
+
+Rationale:
+
+- strings preserve the actual CLI surface form;
+- dashed names such as `--dry-run` and `--input-file` are natural strings;
+- diagnostics can quote the exact user-facing option;
+- no hidden rule is needed to synthesize leading dashes.
+
+### 4.1. Validation of spelling
+
+A short option must match:
+
+```text
+-x
+```
+
+A long option must match:
+
+```text
+--name
+--name-with-dashes
+```
+
+Invalid option spellings are programmer errors and should raise ordinary API exceptions during parser construction, not `ArgParser.ParseError`.
+
+---
+
+## 5. Name inference
+
+If `name:` is omitted, the name is inferred from the long option when available.
+
+```sputnik
+.arg("-o", "--output-file")
+# name => :output_file
+```
+
+Inference rules:
+
+```text
+--output       => :output
+--output-file  => :output_file
+-v             => :v, only if no long form exists
+```
+
+If the inferred name would conflict with a reserved word, be ambiguous, or be undesirable, the user writes `name:` explicitly.
+
+```sputnik
+.arg("-f", "--from", name: :source, type: Path)
+```
+
+The canonical result lookup remains:
+
+```sputnik
+args[:source]
+```
+
+---
+
+## 6. `.arg` — option with value
+
+`.arg` declares an option that consumes a value.
+
+```sputnik
+def arg(short_or_long, long = null,
+  name: null,
+  desc: "",
+  type: Str,
+  default: null,
+  required: false,
+  choices: null,
+  multiple: false,
+  metavar: null,
+  env: null
+): ...
+```
+
+Examples:
+
+```sputnik
+.arg("-n", "--count",
+  desc: "Repeat count",
+  type: Int,
+  default: 1
+)
+```
+
+```sputnik
+.arg("--config",
+  desc: "Config file",
+  type: Path,
+  required: true
+)
+```
+
+---
+
+## 7. Local `.arg` block
+
+A local block may be attached directly to `.arg`.
+
+This block is the canonical place for per-argument transformation and validation.
+
+```sputnik
+args = ArgParser()
+ .arg("-p", "--port",
+   desc: "Port number",
+   type: Int,
+   default: 8080,
+   metavar: "PORT"
+ ) |port, arg|:
+   if port < 1 or port > 65535:
+    arg.invalid("must be between 1 and 65535")
+   port
+ .parse()
+```
+
+The block belongs to the nearest `.arg(...)` call.
+
+### 7.1. Block parameters
+
+The canonical block arities are:
+
+```sputnik
+|value|:
+```
+
+and:
+
+```sputnik
+|value, arg|:
+```
+
+`value` is the current parsed value after built-in type conversion.
+
+`arg` is an `ArgParser.ArgContext` object for the currently declared argument.
+
+### 7.2. Transformation pipeline
+
+For explicit command-line input, the pipeline is:
+
+```text
+raw CLI token -> type conversion -> local arg block -> validation -> stored value
+```
+
+For default values, the same value-shaping pipeline is applied unless the implementation explicitly marks a default as already-final.
+
+The recommended default behavior is to apply the same type and block path to defaults so that stored values are consistent.
+
+### 7.3. Returning from the block
+
+The block result becomes the stored argument value.
+
+```sputnik
+.arg("-s", "--size", type: Str, default: "1mb") |text|:
+ Size.parse(text)
+```
+
+If the block only validates and does not transform, it should return the original value.
+
+```sputnik
+.arg("-p", "--port", type: Int) |port, arg|:
+ if port < 1 or port > 65535:
+  arg.invalid("must be between 1 and 65535")
+ port
+```
+
+---
+
+## 8. `ArgContext`
+
+`ArgParser.ArgContext` is passed to local `.arg` blocks when the block accepts a second parameter.
+
+It exposes user-facing diagnostics helpers.
+
+```sputnik
+class ArgParser:
+ class ArgContext:
+  def invalid(message, value: null): ...
+  def missing(message = null): ...
+  def reject(message, value: null): ...
+```
+
+These helpers raise `ArgParser.ParseError` subclasses.
+
+Example:
+
+```sputnik
+.arg("-p", "--port", type: Int) |port, arg|:
+ if port < 1 or port > 65535:
+  arg.invalid("must be between 1 and 65535")
+ port
+```
+
+Equivalent explicit form:
+
+```sputnik
+.arg("-p", "--port", type: Int) |port|:
+ if port < 1 or port > 65535:
+  raise ArgParser.InvalidValue(
+    "must be between 1 and 65535",
+    option: "--port",
+    value: port
+  )
+ port
+```
+
+The helper form is preferred because it keeps option metadata local and avoids duplicate spelling.
+
+---
+
+## 9. Boolean flags
+
+`.flag` declares a boolean option.
+
+Boolean text uses the same strict parser as `Bool.parse`: `true`, `t`, `1`,
+`yes`, `on` become `true`; `false`, `f`, `0`, `no`, `off`, `null` become
+`false`. ASCII letter case and surrounding ASCII whitespace are ignored.
+All other strings, including explicit empty flag values (`--flag=`), are
+invalid and raise `ArgParser.InvalidValue` in `parse_or_raise` mode.
+The same rules apply to `type: Bool` values and environment fallbacks.
+
+```sputnik
+def flag(short_or_long, long = null,
+  name: null,
+  desc: "",
+  default: false,
+  negatable: false
+): ...
+```
+
+Example:
+
+```sputnik
+.flag("-v", "--verbose",
+  desc: "Enable verbose output"
+)
+```
+
+The result is:
+
+```sputnik
+args[:verbose] # Bool
+```
+
+### 9.1. Negatable flags
+
+```sputnik
+.flag(null, "--color",
+  desc: "Colorize output",
+  default: true,
+  negatable: true
+)
+```
+
+Accepted forms:
+
+```text
+--color     => true
+--no-color  => false
+```
+
+A negatable flag should not be declared with a short-only spelling.
+
+---
+
+## 10. Positional arguments
+
+`.pos` declares a positional argument.
+
+```sputnik
+def pos(name,
+  desc: "",
+  type: Str,
+  default: null,
+  required: true,
+  multiple: false,
+  metavar: null
+): ...
+```
+
+Example:
+
+```sputnik
+args = ArgParser()
+ .pos("source", type: Path, desc: "Source file")
+ .pos("target", type: Path, desc: "Target file")
+ .parse()
+```
+
+Result:
+
+```sputnik
+args[:source]
+args[:target]
+```
+
+---
+
+## 11. Rest positional arguments
+
+`.rest` declares a rest positional argument consuming all remaining positional values.
+
+```sputnik
+def rest(name,
+  desc: "",
+  type: Str,
+  metavar: null
+): ...
+```
+
+Example:
+
+```sputnik
+args = ArgParser()
+ .rest("files", type: Path, desc: "Files to process")
+ .parse()
+```
+
+Result:
+
+```sputnik
+args[:files] # Array[Path]
+```
+
+At most one `.rest` argument may be declared.
+
+---
+
+## 12. Multiple values
+
+`.arg(..., multiple: true)` allows the same option to appear multiple times.
+
+```sputnik
+args = ArgParser()
+ .arg("-I", "--include",
+   name: :includes,
+   type: Path,
+   multiple: true,
+   default: []
+ )
+ .parse()
+```
+
+CLI:
+
+```text
+mytool -I src -I lib --include vendor
+```
+
+Result:
+
+```sputnik
+args[:includes] # [Path("src"), Path("lib"), Path("vendor")]
+```
+
+For `multiple: true`, the local `.arg` block receives each converted occurrence before aggregation unless the argument declaration explicitly opts into aggregate validation.
+
+The default rule is per-occurrence transformation.
+
+---
+
+## 13. Choices
+
+`choices:` restricts accepted values.
+
+```sputnik
+args = ArgParser()
+ .arg("-m", "--mode",
+   type: Symbol,
+   choices: [:dev, :test, :prod],
+   default: :dev
+ )
+ .parse()
+```
+
+CLI:
+
+```text
+--mode prod
+```
+
+Result:
+
+```sputnik
+args[:mode] # :prod
+```
+
+If the value is not in `choices`, parsing raises `ArgParser.InvalidChoice` internally and `.parse()` renders a CLI diagnostic.
+
+---
+
+## 14. Parse result object
+
+`.parse()` returns an `ArgParser.Args` object.
+
+The normative access form is:
+
+```sputnik
+args[:name]
+```
+
+Recommended API:
+
+```sputnik
+args.has?(:name)
+args.fetch(:name)
+args.fetch(:name, default)
+args.to_map()
+```
+
+The result object should be immutable after parse completion.
+
+---
+
+## 15. Parse error hierarchy
+
+`ArgParser` defines a recoverable CLI parse error family.
+
+```sputnik
+class ArgParser:
+ class ParseError < Exception:
+  def init(@message, @option: null, @value: null, @exit_code: 2,
+           @usage: null, @help: null):
+   pass
+
+ class UnknownOption < ParseError:
+   pass
+
+ class MissingValue < ParseError:
+  pass
+
+ class MissingRequired < ParseError:
+  pass
+
+ class UnexpectedArgument < ParseError:
+  pass
+
+ class InvalidValue < ParseError:
+  pass
+
+ class InvalidChoice < ParseError:
+  pass
+
+ class HelpRequested < Exception:
+  def init(@message = "help requested", @exit_code: 0,
+           @usage: null, @help: null):
+   pass
+```
+
+Only `ArgParser.ParseError` and its subclasses are considered ordinary user CLI errors.
+`ArgParser.HelpRequested` is a non-error control value for `-h` / `--help`.
+
+Other exceptions are programmer errors, runtime errors, or application errors and must not be swallowed by default.
+
+---
+
+## 16. `.parse`, `.try_parse`, and `.parse_or_raise`
+
+The parser exposes two primitive parse entrypoints and one shorthand:
+`.parse()`, `.try_parse()`, and `.parse_or_raise()`.
+
+There is intentionally no `.parse!()` method. In Sputnik, a `!` suffix denotes a
+method that mutates its receiver; strict parsing is an error-handling mode, not
+a parser mutation. The canonical strict forms are therefore:
+
+```sputnik
+args = parser.try_parse(cmdline: ["--port", "99999"]).or_raise
+args = parser.parse_or_raise(cmdline: ["--port", "99999"])
+```
+
+The first form uses the standard `Result.or_raise` bridge directly: an
+`Ok(args)` returns `args`, and an `Err(error)` raises `error` exactly as
+`raise error` would. `.parse_or_raise(...)` is a standard-library shorthand for
+that chain.
+
+### 16.1. `.parse()`
+
+`.parse()` is the default CLI-entrypoint mode.
+
+```sputnik
+args = parser.parse()
+```
+
+Behavior:
+
+- parses the command line;
+- handles `ArgParser.ParseError` and `ArgParser.HelpRequested` only;
+- on parse errors, prints usage and error diagnostics to `stderr`;
+- on help requests, prints help to `stdout`;
+- exits with `error.exit_code`, default `2` for parse errors and `0` for help;
+- does not print a stack trace for parse errors.
+
+Equivalent conceptual lowering:
+
+```sputnik
+def parse(cmdline: null):
+ result = try_parse(cmdline: cmdline)
+ if result.ok?:
+  result.value
+ else:
+  error = result.error
+  if ArgParser.HelpRequested === error:
+   render_help(stdout)
+   Process.exit(0)
+  render_error(error, stderr)
+  Process.exit(error.exit_code)
+```
+
+### 16.2. `.try_parse()`
+
+`.try_parse()` is result mode.
+
+```sputnik
+result = parser.try_parse(cmdline: ["--port", "99999"])
+```
+
+It returns either:
+
+```sputnik
+Ok(args)
+```
+
+or:
+
+```sputnik
+Err(error)
+```
+
+The return type is the standard prelude `Result[ArgParser.Args,
+ArgParser.ParseError | ArgParser.HelpRequested]`.
+
+Behavior:
+
+- parses the command line;
+- returns `Ok(args)` on success;
+- returns `Err(error)` for ordinary CLI parse errors;
+- returns `Err(help)` for help requests, where `help` is an
+  `ArgParser.HelpRequested` control value;
+- never catches arbitrary application exceptions.
+
+### 16.3. `.parse_or_raise()`
+
+`.parse_or_raise()` is the strict shorthand.
+
+```sputnik
+args = parser.parse_or_raise(cmdline: ["--port", "99999"])
+```
+
+It is exactly equivalent to:
+
+```sputnik
+args = parser.try_parse(cmdline: ["--port", "99999"]).or_raise
+```
+
+Behavior:
+
+- delegates to `.try_parse()` with the same command-line override rules;
+- returns `ArgParser.Args` on success;
+- raises the `Err` payload on parse errors or help requests;
+- never renders diagnostics or exits internally.
+
+This is useful for tests, libraries, embedding, and custom error handling.
+
+Example:
+
+```sputnik
+try:
+ parser.parse_or_raise(cmdline: ["--port", "99999"])
+rescue ArgParser.InvalidValue |e|:
+ assert e.option == "--port"
+```
+
+Because this shorthand lowers through the standard `Result.or_raise` method, it
+preserves ordinary Sputnik exception semantics:
+`Err(ArgParser.InvalidValue(...)).or_raise` is equivalent to
+`raise ArgParser.InvalidValue(...)`.
+
+---
+
+## 17. Error handling contract
+
+The central rule is:
+
+```text
+ArgParser.try_parse() captures only ArgParser.ParseError and
+ArgParser.HelpRequested.
+```
+
+It must not catch arbitrary `Exception`. `.parse()` is layered on top of
+`.try_parse()` for CLI entrypoints: it renders `ParseError` diagnostics to
+`stderr`, renders help requests to `stdout`, and exits with the appropriate
+code.
+
+Valid parse error from a local `.arg` block:
+
+```sputnik
+.arg("-p", "--port", type: Int) |port, arg|:
+ if port < 1 or port > 65535:
+  arg.invalid("must be between 1 and 65535")
+ port
+```
+
+Application error that must not be swallowed:
+
+```sputnik
+.arg("--config", type: Path) |path|:
+ db.connect(path) # DBError must propagate normally
+ path
+```
+
+This preserves the distinction between user input errors and real program failures.
+
+---
+
+## 18. Canonical Unix-style diagnostics
+
+On parse failure, `.parse()` writes diagnostics to `stderr`.
+
+The canonical form is:
+
+```text
+usage: PROGRAM [OPTIONS] [ARGS]
+
+PROGRAM: error: MESSAGE
+```
+
+For option-specific errors:
+
+```text
+usage: server [-h] [-p PORT]
+
+server: error: --port: must be between 1 and 65535
+```
+
+For missing required options:
+
+```text
+usage: copy [-h] -f FROM -t TO [-v]
+
+copy: error: missing required option --from
+```
+
+For unknown options:
+
+```text
+usage: copy [-h] -f FROM -t TO [-v]
+
+copy: error: unknown option --fro
+```
+
+For invalid choices:
+
+```text
+usage: tool [-h] [-m MODE]
+
+tool: error: --mode: expected one of dev, test, prod; got staging
+```
+
+Default exit code for parse errors is `2`.
+
+---
+
+## 19. Help behavior
+
+By default, `ArgParser` provides `-h` / `--help` unless disabled.
+
+```text
+usage: copy [-h] -f FROM -t TO [-v]
+
+Copy files
+
+options:
+  -h, --help         show this help message and exit
+  -f, --from FROM    Source path
+  -t, --to TO        Destination path
+  -v, --verbose      Print detailed progress
+```
+
+Help is not an error.
+
+Recommended behavior:
+
+- print help to `stdout`;
+- exit with code `0`;
+- do not return an `Args` object.
+
+In result mode, help returns `Err(ArgParser.HelpRequested(...))`. Chaining
+`.or_raise` raises that control value so embedded callers can handle it with
+ordinary `rescue` logic.
+
+---
+
+## 20. Type conversion
+
+`type:` accepts a type object or callable converter.
+
+Examples:
+
+```sputnik
+.arg("-n", "--count", type: Int)
+.arg("--path", type: Path)
+.arg("--mode", type: Symbol)
+```
+
+Type conversion failure raises `ArgParser.InvalidValue` internally.
+
+Example diagnostic:
+
+```text
+server: error: --port: expected Int; got "abc"
+```
+
+If `type:` is a callable, it receives the raw string token and returns the converted value.
+
+```sputnik
+.arg("--size", type: &Size.parse)
+```
+
+A local `.arg` block may still be attached after callable conversion.
+
+---
+
+## 21. Required arguments
+
+An option with `required: true` must be provided unless a value is available from an accepted alternate source such as `env:`.
+
+```sputnik
+.arg("-f", "--from", type: Path, required: true)
+```
+
+If missing, parsing raises `ArgParser.MissingRequired` internally.
+
+---
+
+## 22. Environment fallback
+
+`env:` declares an environment-variable fallback.
+
+```sputnik
+.arg("--token",
+  desc: "API token",
+  type: Str,
+  env: "API_TOKEN",
+  required: true
+)
+```
+
+Precedence:
+
+```text
+explicit CLI value > environment fallback > default value > missing
+```
+
+Environment values pass through the same type conversion and local `.arg` block pipeline.
+
+---
+
+## 23. End-of-options marker
+
+The token `--` ends option parsing.
+
+Example:
+
+```text
+tool --verbose -- --not-an-option
+```
+
+After `--`, remaining tokens are positional values even if they start with `-`.
+
+---
+
+## 24. Recommended complete example
+
+```sputnik
+args = ArgParser()
+ .name("server")
+ .about("Run development server")
+ .arg("-p", "--port",
+   desc: "Port number",
+   type: Int,
+   default: 8080,
+   metavar: "PORT"
+ ) |port, arg|:
+   if port < 1 or port > 65535:
+    arg.invalid("must be between 1 and 65535")
+   port
+ .arg("-H", "--host",
+   desc: "Host address",
+   type: Str,
+   default: "127.0.0.1"
+ )
+ .flag("-v", "--verbose",
+   desc: "Enable verbose logging"
+ )
+ .parse()
+
+Server.run(
+ host: args[:host],
+ port: args[:port],
+ verbose: args[:verbose]
+)
+```
+
+Invalid invocation:
+
+```text
+server --port 99999
+```
+
+Diagnostic:
+
+```text
+usage: server [-h] [-p PORT] [-H HOST] [-v]
+
+server: error: --port: must be between 1 and 65535
+```
+
+---
+
+## 25. Normative summary
+
+- `ArgParser()` defaults to the current process command line.
+- Option spellings are strings: `"-v"`, `"--verbose"`.
+- `.arg` is for options with values.
+- `.flag` is for boolean options.
+- `.pos` is for positional arguments.
+- `.rest` is for rest positional arguments.
+- A local block attached to `.arg` is the canonical validation/transformation site.
+- The local `.arg` block receives `|value|` or `|value, arg|`.
+- `arg.invalid(...)` and related helpers raise `ArgParser.ParseError` subclasses.
+- `.try_parse()` captures only `ArgParser.ParseError` and `ArgParser.HelpRequested`.
+- `.parse()` renders Unix-style usage/error diagnostics and exits with code `2` by default.
+- `.parse()` renders help to `stdout` and exits with code `0`.
+- `.try_parse()` returns the standard `Result` type and is required for embedding.
+- Strict parsing is spelled `.try_parse(...).or_raise` or the shorthand `.parse_or_raise(...)`; `.parse!()` is not part of the API.
+- Ordinary runtime exceptions are not swallowed by the parser.

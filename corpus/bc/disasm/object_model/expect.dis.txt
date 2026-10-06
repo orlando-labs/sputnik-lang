@@ -1,4 +1,4 @@
-; amber.bc.v1 sha256=d6c296e4bbccebb0ec6988edc073c8311a2dee2610576c44e386b3724db0d890
+; sputnik.bc.v1 sha256=3875956e6c86fa279ae6cd98a830ef2c9056e3e0fe2de326f19a1f2575dc16f8
 .header format=1.0 language=1.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
 .sections
   STRS offset=344 size=72 align=1 flags=0
@@ -10,9 +10,9 @@
   DEPS offset=1243 size=4 align=1 flags=0
   EXPT offset=1247 size=46 align=1 flags=0
   INIT offset=1293 size=9 align=1 flags=0
-  SPAN offset=1302 size=1110 align=1 flags=0
-  LINE offset=2412 size=172 align=1 flags=0
-  LOCS offset=2584 size=104 align=1 flags=0
+  SPAN offset=1302 size=1096 align=1 flags=0
+  LINE offset=2398 size=172 align=1 flags=0
+  LOCS offset=2570 size=104 align=1 flags=0
 .strs
   s0 "id"
   s1 "param"
@@ -46,40 +46,40 @@ code c1 kind=module regs=1 flags=0
   0000 CLOSE_UPVALUES 0
   0001 LOADNULL 0
   0002 RETURN 0
-  span 0..1 corpus/bc/disasm/object_model/source.am:1:1-13:26
-  span 1..2 corpus/bc/disasm/object_model/source.am:1:1-13:26
-  span 2..3 corpus/bc/disasm/object_model/source.am:1:1-13:26
+  span 0..1 corpus/bc/disasm/object_model/source.s:1:1-13:26
+  span 1..2 corpus/bc/disasm/object_model/source.s:1:1-13:26
+  span 2..3 corpus/bc/disasm/object_model/source.s:1:1-13:26
 code c2 kind=method regs=1 flags=0
   0000 CLOSE_UPVALUES 0
   0001 LOADNULL 0
   0002 RETURN 0
-  span 0..1 corpus/bc/disasm/object_model/source.am:6:3-6:15
-  span 1..2 corpus/bc/disasm/object_model/source.am:6:3-6:15
-  span 2..3 corpus/bc/disasm/object_model/source.am:6:3-6:15
+  span 0..1 corpus/bc/disasm/object_model/source.s:6:3-6:15
+  span 1..2 corpus/bc/disasm/object_model/source.s:6:3-6:15
+  span 2..3 corpus/bc/disasm/object_model/source.s:6:3-6:15
 code c3 kind=method regs=1 flags=0
   local l0 name=s0(id) role=s1(param) binding=s2(local)
   0000 CLOSE_UPVALUES 0
   0001 RETURN 0
-  span 0..1 corpus/bc/disasm/object_model/source.am:11:3-12:7
-  span 1..2 corpus/bc/disasm/object_model/source.am:11:3-12:7
+  span 0..1 corpus/bc/disasm/object_model/source.s:11:3-12:7
+  span 1..2 corpus/bc/disasm/object_model/source.s:11:3-12:7
 code c4 kind=method regs=3 flags=0
   local l0 name=s3(масса) role=s1(param) binding=s2(local)
   local l1 name=s4(α) role=s1(param) binding=s2(local)
   0000 CLOSE_UPVALUES 0
   0001 LOADNULL 2
   0002 RETURN 2
-  span 0..1 corpus/bc/disasm/object_model/source.am:13:3-13:26
-  span 1..2 corpus/bc/disasm/object_model/source.am:13:3-13:26
-  span 2..3 corpus/bc/disasm/object_model/source.am:13:3-13:26
+  span 0..1 corpus/bc/disasm/object_model/source.s:13:3-13:26
+  span 1..2 corpus/bc/disasm/object_model/source.s:13:3-13:26
+  span 2..3 corpus/bc/disasm/object_model/source.s:13:3-13:26
 code c5 kind=default_thunk regs=3 flags=0
   local l0 name=s3(масса) role=s1(param) binding=s2(local)
   local l1 name=s4(α) role=s1(param) binding=s2(local)
   0000 LOADK 2 7
   0001 CLOSE_UPVALUES 0
   0002 RETURN 2
-  span 0..1 corpus/bc/disasm/object_model/source.am:13:24-13:25
-  span 1..2 corpus/bc/disasm/object_model/source.am:13:3-13:26
-  span 2..3 corpus/bc/disasm/object_model/source.am:13:3-13:26
+  span 0..1 corpus/bc/disasm/object_model/source.s:13:24-13:25
+  span 1..2 corpus/bc/disasm/object_model/source.s:13:3-13:26
+  span 2..3 corpus/bc/disasm/object_model/source.s:13:3-13:26
 .methods
   m0 selector=y1(touch!) owner=0 signature=k1 entry=c2 flags=1
   m1 selector=y5(find) owner=1 signature=k5 entry=c3 flags=2

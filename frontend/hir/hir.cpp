@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-namespace amber::hir {
+namespace sputnik::hir {
 namespace {
 
 using Node = ast::Expr;
@@ -21,8 +21,10 @@ struct RefKey {
   std::string name;
   std::string context;
   std::string ref_kind;
+  std::string file;
 
   bool operator<(const RefKey &other) const {
+    if (file != other.file) return file < other.file;
     if (scope_index != other.scope_index) {
       return scope_index < other.scope_index;
     }
@@ -388,11 +390,11 @@ public:
     for (const binder::Reference &ref : graph_.references) {
       refs_by_key_.emplace(RefKey{ref.scope_index, ref.span.start.offset,
                                   ref.span.end.offset, ref.name, ref.context,
-                                  ref.ref_kind},
+                                  ref.ref_kind, ref.span.file},
                            &ref);
       refs_by_key_.emplace(RefKey{-1, ref.span.start.offset,
                                   ref.span.end.offset, ref.name, ref.context,
-                                  ref.ref_kind},
+                                  ref.ref_kind, ref.span.file},
                            &ref);
       refs_by_scope_[ref.scope_index].push_back(&ref);
     }
@@ -1275,7 +1277,7 @@ private:
     }
     // Carry the `native def`/`native class` binding through to the emitter so
     // it can record a code-object -> logical-symbol mapping for native dispatch
-    // (native-packages 5c-ii). The Amber fallback body is lowered exactly as a
+    // (native-packages 5c-ii). The Sputnik fallback body is lowered exactly as a
     // normal method; the binding only adds metadata.
     if (bool_value(item, "is_native") ||
         !string_value(item, "native_binding").empty()) {
@@ -3319,13 +3321,13 @@ private:
     if (current_proc_ != nullptr) {
       const auto found = refs_by_key_.find(
           RefKey{current_proc_->scope_index, span.start.offset, span.end.offset,
-                 name, context, ref_kind});
+                 name, context, ref_kind, span.file});
       if (found != refs_by_key_.end()) {
         return found->second;
       }
     }
     const auto found = refs_by_key_.find(RefKey{
-        -1, span.start.offset, span.end.offset, name, context, ref_kind});
+        -1, span.start.offset, span.end.offset, name, context, ref_kind, span.file});
     return found == refs_by_key_.end() ? nullptr : found->second;
   }
 
@@ -3598,7 +3600,7 @@ std::string program_to_json(const Program &program,
                             const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.hir.v1\",\n";
+  out << "  \"format\": \"sputnik.hir.v1\",\n";
   if (module_name.empty()) {
     out << "  \"module\": null,\n";
   } else {
@@ -3669,4 +3671,4 @@ std::string program_to_json(const Program &program,
   return out.str();
 }
 
-} // namespace amber::hir
+} // namespace sputnik::hir

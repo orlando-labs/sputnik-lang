@@ -19,11 +19,11 @@
 #include <unordered_set>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
-using amber::bytecode::BcModule;
+using sputnik::bytecode::BcModule;
 
 struct RuntimeStringifyContext {
   const BcModule *module = nullptr;
@@ -1148,4 +1148,4 @@ value_to_debug_string(const Value &value, const bytecode::BcModule *module,
   return "<unknown>";
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

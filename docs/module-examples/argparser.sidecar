@@ -14,8 +14,8 @@ ru: Создаёт parser.
 en: Creates a parser.
 example:
 cli = ArgParser.new(
-  name: "amberfmt",
-  about: "Format Amber source"
+  name: "sputnikfmt",
+  about: "Format Sputnik source"
 )
 .end
 
@@ -23,7 +23,7 @@ method: parser.name(text)
 ru: Устанавливает имя программы и возвращает parser.
 en: Sets the program name and returns the parser.
 example:
-cli = ArgParser.new().name("amberfmt")
+cli = ArgParser.new().name("sputnikfmt")
 .end
 
 method: parser.about(text)
@@ -37,7 +37,7 @@ method: parser.arg(*spellings, ...)
 ru: Добавляет option со значением.
 en: Adds a value option.
 example:
-cli.arg("-o", "--output", default: "out.am")
+cli.arg("-o", "--output", default: "out.s")
 .end
 
 method: parser.flag(*spellings, ...)
@@ -74,7 +74,7 @@ ru: Возвращает Map или бросает ArgParser error.
 en: Returns a Map or raises an ArgParser error.
 example:
 args = cli.parse_or_raise(
-  cmdline: ["--output", "x.am", "main.am"]
+  cmdline: ["--output", "x.s", "main.s"]
 )
 .end
 

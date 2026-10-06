@@ -1,4 +1,4 @@
-; amber.bc.v1 sha256=4622d1c17bcd58dff59816cdf27a31c086e4b9a92c68cd789a00e6c021dbfbae
+; sputnik.bc.v1 sha256=607bdfc8aa68a4e5d3b3a17d69c8c70228755410127fd6e51c1ba10bf1b7bc65
 .header format=1.0 language=1.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
 .sections
   STRS offset=344 size=102 align=1 flags=0
@@ -10,9 +10,9 @@
   DEPS offset=1095 size=4 align=1 flags=0
   EXPT offset=1099 size=4 align=1 flags=0
   INIT offset=1103 size=9 align=1 flags=0
-  SPAN offset=1112 size=1516 align=1 flags=0
-  LINE offset=2628 size=256 align=1 flags=0
-  LOCS offset=2884 size=84 align=1 flags=0
+  SPAN offset=1112 size=1495 align=1 flags=0
+  LINE offset=2607 size=256 align=1 flags=0
+  LOCS offset=2863 size=84 align=1 flags=0
 .strs
   s0 "scan"
   s1 "function"
@@ -42,11 +42,11 @@ code c1 kind=module regs=3 flags=0
   0002 LOADNULL 2
   0003 CLOSE_UPVALUES 0
   0004 RETURN 2
-  span 0..1 corpus/bc/disasm/basic/source.am:1:1-4:21
-  span 1..2 corpus/bc/disasm/basic/source.am:1:1-4:21
-  span 2..3 corpus/bc/disasm/basic/source.am:1:1-4:21
-  span 3..4 corpus/bc/disasm/basic/source.am:1:1-4:21
-  span 4..5 corpus/bc/disasm/basic/source.am:1:1-4:21
+  span 0..1 corpus/bc/disasm/basic/source.s:1:1-4:21
+  span 1..2 corpus/bc/disasm/basic/source.s:1:1-4:21
+  span 2..3 corpus/bc/disasm/basic/source.s:1:1-4:21
+  span 3..4 corpus/bc/disasm/basic/source.s:1:1-4:21
+  span 4..5 corpus/bc/disasm/basic/source.s:1:1-4:21
 code c2 kind=method regs=8 flags=0
   local l0 name=s3(xs) role=s4(param) binding=s2(local)
   local l1 name=s5(limit) role=s4(param) binding=s2(local)
@@ -66,18 +66,18 @@ code c2 kind=method regs=8 flags=0
   callsite pc=5 slot=1 sym=y1 flags=0
   callsite pc=9 slot=2 sym=y2 flags=0
   safepoint pc=0 flags=0
-  span 0..1 corpus/bc/disasm/basic/source.am:2:3-3:22
-  span 1..2 corpus/bc/disasm/basic/source.am:2:17-2:18
-  span 2..3 corpus/bc/disasm/basic/source.am:2:9-2:18
-  span 3..4 corpus/bc/disasm/basic/source.am:2:9-2:18
-  span 4..5 corpus/bc/disasm/basic/source.am:3:21-3:22
-  span 5..6 corpus/bc/disasm/basic/source.am:3:13-3:22
-  span 6..7 corpus/bc/disasm/basic/source.am:3:5-3:22
-  span 7..8 corpus/bc/disasm/basic/source.am:2:3-3:22
-  span 8..9 corpus/bc/disasm/basic/source.am:4:9-4:21
-  span 9..10 corpus/bc/disasm/basic/source.am:4:3-4:9
-  span 10..11 corpus/bc/disasm/basic/source.am:1:1-4:21
-  span 11..12 corpus/bc/disasm/basic/source.am:1:1-4:21
+  span 0..1 corpus/bc/disasm/basic/source.s:2:3-3:22
+  span 1..2 corpus/bc/disasm/basic/source.s:2:17-2:18
+  span 2..3 corpus/bc/disasm/basic/source.s:2:9-2:18
+  span 3..4 corpus/bc/disasm/basic/source.s:2:9-2:18
+  span 4..5 corpus/bc/disasm/basic/source.s:3:21-3:22
+  span 5..6 corpus/bc/disasm/basic/source.s:3:13-3:22
+  span 6..7 corpus/bc/disasm/basic/source.s:3:5-3:22
+  span 7..8 corpus/bc/disasm/basic/source.s:2:3-3:22
+  span 8..9 corpus/bc/disasm/basic/source.s:4:9-4:21
+  span 9..10 corpus/bc/disasm/basic/source.s:4:3-4:9
+  span 10..11 corpus/bc/disasm/basic/source.s:1:1-4:21
+  span 11..12 corpus/bc/disasm/basic/source.s:1:1-4:21
 code c3 kind=block regs=3 flags=0
   local l0 name=s6(_1) role=s7(implicit_block_param) binding=s8(placeholder)
   capture u0 name=s5(limit) source_kind=s2(local) source_name=s5(limit)
@@ -86,10 +86,10 @@ code c3 kind=block regs=3 flags=0
   0002 CLOSE_UPVALUES 0
   0003 RETURN 1
   callsite pc=1 slot=0 sym=y1 flags=0
-  span 0..1 corpus/bc/disasm/basic/source.am:4:16-4:21
-  span 1..2 corpus/bc/disasm/basic/source.am:4:11-4:21
-  span 2..3 corpus/bc/disasm/basic/source.am:4:9-4:21
-  span 3..4 corpus/bc/disasm/basic/source.am:4:9-4:21
+  span 0..1 corpus/bc/disasm/basic/source.s:4:16-4:21
+  span 1..2 corpus/bc/disasm/basic/source.s:4:11-4:21
+  span 2..3 corpus/bc/disasm/basic/source.s:4:9-4:21
+  span 3..4 corpus/bc/disasm/basic/source.s:4:9-4:21
 .methods
   m0 selector=y3(scan) owner=0 signature=k2 entry=c2 flags=0
     param external=y4(xs) local=s3(xs) flags=0

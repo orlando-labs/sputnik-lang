@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 enum class MethodTableSide { Instance, Class };
 enum class RuntimeWorldState { Open, Frozen };
@@ -600,4 +600,4 @@ private:
   std::shared_ptr<Impl> impl_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

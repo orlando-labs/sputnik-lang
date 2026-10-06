@@ -2,8 +2,8 @@
 
 This benchmark compares identical workloads across:
 
-- Amber interpreted: `build/iamber --eval-file`
-- Amber built native executable: `amberc build <file.am>` first, then the
+- Sputnik interpreted: `build/isputnik --eval-file`
+- Sputnik built native executable: `sputnik build <file.s>` first, then the
   generated host binary
 - Python
 - Ruby
@@ -14,15 +14,15 @@ This benchmark compares identical workloads across:
 The Rust implementations use only the standard library. Workloads that need
 primitives Rust std does not ship (digests, base64/hex codecs, civil-calendar
 time math) hand-roll them in the workload source, mirroring how the C++ rows
-link the Amber runtime's own `runtime/digest.cpp` or carry their own helpers.
+link the Sputnik runtime's own `runtime/digest.cpp` or carry their own helpers.
 OS entropy for `secure-random` and `uuid` comes from a single `/dev/urandom`
 handle opened once per process.
 
-The Amber built path intentionally runs an already generated executable, so
+The Sputnik built path intentionally runs an already generated executable, so
 compile time is not included in the measured run. The runner still builds fresh
-`.amberbc` artifacts as a bytecode sanity check. For workloads that report
-`amber-built`, that row is the native executable from `amberc build`, not
-`amberbc_run`.
+`.sputnikbc` artifacts as a bytecode sanity check. For workloads that report
+`sputnik-built`, that row is the native executable from `sputnik build`, not
+`sputnikbc_run`.
 
 Run (the defaults are five measured repeats, one unmeasured warmup, and a
 deterministic balanced rotation of implementation order):
@@ -44,14 +44,14 @@ Each run writes a timestamped JSON provenance envelope and a Markdown report
 to `bench/polyglot/results/`. The envelope contains every raw sample, measured
 order, mean/median/standard deviation/CV/95% confidence interval, paired
 throughput ratios, host and tool versions, Git commit and tracked-dirty state,
-source-tree hash, and hashes of the exact executables. `AMBER_BENCH_RUBY` can
+source-tree hash, and hashes of the exact executables. `SPUTNIK_BENCH_RUBY` can
 pin Ruby explicitly; otherwise the newest discoverable RVM Ruby is preferred
 over the system Ruby.
 
 The HTTP RPS benchmark is a separate server-side comparison. It uses one
-explicitly pinned Amber client from the sibling Ember checkout, built with
+explicitly pinned Sputnik client from the sibling Ember checkout, built with
 complete generated native-body coverage, with the soak workload's default four
-clients against raw Amber `net.http`, Go, Rust, and Python servers. The runner
+clients against raw Sputnik `net.http`, Go, Rust, and Python servers. The runner
 never rebuilds this client implicitly: use `--refresh-client-pin` once when the
 client/runtime is intentionally changed, then reuse the reported path and
 SHA-256 for every comparison. This is deliberately not called full native
@@ -64,7 +64,7 @@ for 60 seconds:
 
 ```sh
 python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4 \
-  --repeats 5 --order-seed 0 --languages amber --refresh-client-pin
+  --repeats 5 --order-seed 0 --languages sputnik --refresh-client-pin
 python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4 \
   --repeats 5 --order-seed 0
 ```
@@ -86,12 +86,12 @@ lifecycle, SQL generation, pooling, and SQLite execution without an external
 database. They serialize SQLite-backed actions to keep lock-retry policy from
 changing the common HTTP contract. Rails request whitelisting uses Rails 8
 Strong Parameters (`expect` for replacement payloads and `permit` for PATCH),
-with the same strict unknown-field contract as Ember. Set `AMBER_BENCH_RUBY`
+with the same strict unknown-field contract as Ember. Set `SPUTNIK_BENCH_RUBY`
 when Rails and Puma are installed under a Ruby that is not discoverable through
 RVM or `PATH`.
 The HTTP runner writes machine-readable JSON and a Markdown comparison table
-to `bench/polyglot/results/`. Amber server builds require VM-independent full
-native coverage; the Amber load-generator client remains a separately reported
+to `bench/polyglot/results/`. Sputnik server builds require VM-independent full
+native coverage; the Sputnik load-generator client remains a separately reported
 native-body-covered HTTP-client bridge.
 
 The micro runner prints median/mean wall-clock time, dispersion, and peak RSS
@@ -102,7 +102,7 @@ workload:
 
 - `arithmetic`: `715609516598740`
 - `calls-collections`: `2047795430`
-- `sha-digest`: `5616000`
+- `sha-digest`: `5512000`
 - `json`: `1531352227`
 - `codecs`: `2056190`
 - `secure-random`: `296000`
@@ -115,7 +115,7 @@ The `json` workload exercises compact JSON generation, parse round-trips,
 small pretty-generation round-trips, and streaming JSONL reads. The runner
 prepares `bench/polyglot/build/json/events.jsonl` with 20,000 deterministic
 records before measurement so peak RSS reflects streaming consumption instead
-of input generation. The Amber built executable is compiled with
+of input generation. The Sputnik built executable is compiled with
 `--grant fs.read=bench/polyglot/build/json/events.jsonl` so its VM fallback can
 profile the same file-I/O path under the capability-aware runtime world. The
 runner requires full direct-native coverage for this workload; the generated
@@ -136,7 +136,7 @@ and Go do not ship them in their standard libraries.
 The `secure-random` workload exercises `SecureRandom.bytes`, `.hex`,
 `.base64`, `.base64url`, `.uuid`, and `.int(range)` using real OS entropy.
 The checksum validates lengths, codec round-trips, UUID shape, and integer
-range membership rather than random contents. The Amber built executable is
+range membership rather than random contents. The Sputnik built executable is
 compiled with `--grant random.secure`. The runner requires full direct-native
 coverage for this workload, including `Range.new`, `SecureRandom.int(range)`,
 and String shape checks.
@@ -153,7 +153,7 @@ The `uuid` workload exercises UUID v4 and v7 generation, canonical parse and
 format round-trips, `inspect`, JSON formatting, version extraction, byte-value
 equality, type matching, the `UUID` alias, and `SecureRandom.uuid`. It uses real
 OS entropy and wall time, while its checksum depends only on UUID invariants.
-The Amber executable is compiled with `--grant random.secure`, and the runner
+The Sputnik executable is compiled with `--grant random.secure`, and the runner
 requires every bytecode code object to have direct native coverage.
 
 The `string-ops` workload (added 2026-07-02) exercises string building and
@@ -161,7 +161,7 @@ transformation: `+` concatenation, `upcase`/`downcase`, `split`, `replace`,
 `trim`, `contains?`, `starts_with?`/`ends_with?`, and `length` over ~4000
 generated record lines. Every language uses its standard string type and the
 same algorithm; all strings are ASCII so codepoint- and byte-length semantics
-agree. On Amber this additionally stresses the runtime string intern table
+agree. On Sputnik this additionally stresses the runtime string intern table
 (every distinct runtime string becomes a permanent interned slot). The runner
 requires full direct-native coverage for this workload.
 
@@ -169,13 +169,13 @@ The `map-words` workload (added 2026-07-02) exercises hash-map traffic: 30,000
 insert-or-update rounds over 2,000 distinct string keys (a skewed quadratic key
 stream), a full `each` iteration folding `value * key-length` (order
 independent by construction, so hash-ordered languages agree), then 10,000
-membership probes with a 2/3 hit rate. On Amber this measures the
+membership probes with a 2/3 hit rate. On Sputnik this measures the
 name-indifferent `Map` (Symbol/Str canonicalization on every key operation).
 The runner requires full direct-native coverage for this workload as well.
 
 ## Native value-lifetime rerun (2026-07-05)
 
-Darwin arm64, same toolchains as the 2026-07-04 run. The Amber rows include
+Darwin arm64, same toolchains as the 2026-07-04 run. The Sputnik rows include
 the native value-lifetime work from
 `PLAN-native-value-lifetime-2026-07-05.md`: intrusive refcounts replace the
 never-freeing `NativeArena` for data values, dynamic strings are refcounted
@@ -187,12 +187,12 @@ delegates `inspect`/`to_str` on non-Benchmark receivers instead of bailing
 out (the Benchmark selector routing had silently pushed the whole uuid run
 onto the VM re-run path, best 0.0547s, before this fix).
 
-Fresh build pass into `/private/tmp/amber_polyglot_m4_20260705_01`, then the
+Fresh build pass into `/private/tmp/sputnik_polyglot_m4_20260705_01`, then the
 stable rerun below, one workload per runner invocation:
 
 ```sh
 python3 bench/polyglot/run_benchmark.py --workload <workload> --repeats 10 \
-  --no-build --build-dir /private/tmp/amber_polyglot_m4_20260705_01
+  --no-build --build-dir /private/tmp/sputnik_polyglot_m4_20260705_01
 ```
 
 All rows validated their workload checksum; every workload reports full
@@ -202,7 +202,7 @@ direct-native coverage. Conformance corpus 173/0 and backend-equivalence
 `best_s` (best of 10):
 
 ```text
-workload          amber-interpreted amber-built      python        ruby         cpp          go        rust
+workload          sputnik-interpreted sputnik-built      python        ruby         cpp          go        rust
 -----------------------------------------------------------------------------------------------------------
 arithmetic              0.1551      0.0055      0.1852      0.0681      0.0037      0.0054      0.0036
 calls-collections       0.0146      0.0045      0.0201      0.0093      0.0019      0.0024      0.0020
@@ -219,7 +219,7 @@ map-words               0.1024      0.0073      0.0197      0.0139      0.0032  
 `peak_rss_mb`:
 
 ```text
-workload          amber-interpreted amber-built      python        ruby         cpp          go        rust
+workload          sputnik-interpreted sputnik-built      python        ruby         cpp          go        rust
 -----------------------------------------------------------------------------------------------------------
 arithmetic                 4.4         1.4         8.4        11.9         1.3         3.9         1.5
 calls-collections          5.7         1.5         8.7        12.0         1.3         4.0         1.5
@@ -235,57 +235,57 @@ map-words                  6.5         2.1         8.5        12.2         1.4  
 
 Reading notes:
 
-- Every amber-built row improved against the 2026-07-04 table; the largest
+- Every sputnik-built row improved against the 2026-07-04 table; the largest
   moves are time-flow (0.0216 to 0.0064, now 2.6x the C++ best and 1.4x the
   Go best instead of 7.7x/4.4x), string-ops (0.0110 to 0.0053), codecs
   (0.0110 to 0.0068), and calls-collections (0.0078 to 0.0045). json keeps
   beating Go, uuid matches Go and beats Rust, and secure-random beats Rust
   (same `arc4random_buf` reason as before).
-- The amber-built peak-RSS column is now flat at 1.4-2.1 MB — the same band
+- The sputnik-built peak-RSS column is now flat at 1.4-2.1 MB — the same band
   as C++ and Rust — instead of scaling with workload allocation volume
   (previously up to 13.9 MB). Memory is proportional to the live set: a
   100x-iteration time-flow variant peaks at 4.1 MB where the pre-change
   binary peaked at 1.32 GB, and the ~38% of wall time that binary spent
   freeing the arena inside `exit()` is gone.
 - Remaining gaps vs the C++ row are concentrated in the ~2 ms fixed process
-  floor (an empty Amber executable runs ~2.7 ms vs ~2.1 ms for an empty C++
+  floor (an empty Sputnik executable runs ~2.7 ms vs ~2.1 ms for an empty C++
   binary under this measurement, and the zero-iteration workload floors are
   ~3.0-3.4 ms) plus per-value boxing on the time-flow/json hot paths. Net of
-  each language's floor, amber-built compute is within ~2x of C++ on eight
+  each language's floor, sputnik-built compute is within ~2x of C++ on eight
   of ten workloads.
 
 ## Optimized full-suite rerun with Rust and the new workloads (2026-07-04)
 
 Darwin arm64, `go version go1.26.4 darwin/arm64`, `rustc 1.96.0` (Homebrew),
 system Python 3.9.6, Ruby 4.0.5 from RVM. Fresh build pass into
-`/private/tmp/amber_polyglot_suite_optimized_20260704_01`, then stable reruns
+`/private/tmp/sputnik_polyglot_suite_optimized_20260704_01`, then stable reruns
 below, one workload per runner invocation:
 
 ```sh
 python3 bench/polyglot/run_benchmark.py --workload <workload> --repeats 10 \
-  --no-build --build-dir /private/tmp/amber_polyglot_suite_optimized_20260704_01
+  --no-build --build-dir /private/tmp/sputnik_polyglot_suite_optimized_20260704_01
 ```
 
 All rows validated their workload checksum. Both new workloads (`string-ops`,
-`map-words`) report full direct-native coverage. The Amber rows include the
+`map-words`) report full direct-native coverage. The Sputnik rows include the
 2026-07-04 map/string hot-path optimizations documented in
 `PLAN-polyglot-performance-optimizations-2026-07-04.md`. The arithmetic row was
 refreshed after native int/float numeric fast-lane codegen, using a fresh build
-in `/private/tmp/amber_polyglot_arithmetic_nativefast_20260704_01` and 10
+in `/private/tmp/sputnik_polyglot_arithmetic_nativefast_20260704_01` and 10
 repeats with Ruby 4.0.5 from RVM. The JSON row was refreshed after inline
 small-map name indexes, native JSON integer parsing, and direct native JSON
 object-entry construction, using a fresh build in
-`/private/tmp/amber_polyglot_json_inlineidx_intparse_directobj_20260704_02` and
+`/private/tmp/sputnik_polyglot_json_inlineidx_intparse_directobj_20260704_02` and
 10 repeats with Ruby 4.0.5 from RVM.
 The `time-flow` row was refreshed after generated native Time selector enums
 and a native UTC field cache, using a fresh build in
-`/private/tmp/amber_polyglot_timeflow_selector_enum_20260705_02` followed by a
+`/private/tmp/sputnik_polyglot_timeflow_selector_enum_20260705_02` followed by a
 warm `--no-build` 10-repeat timing run with Ruby 4.0.5 from RVM.
 
 `best_s` (best of 10):
 
 ```text
-workload          amber-interpreted amber-built      python        ruby         cpp          go        rust
+workload          sputnik-interpreted sputnik-built      python        ruby         cpp          go        rust
 -----------------------------------------------------------------------------------------------------------
 arithmetic              0.1709      0.0064      0.2030      0.0818      0.0046      0.0070      0.0041
 calls-collections       0.0157      0.0078      0.0226      0.0138      0.0023      0.0029      0.0025
@@ -302,7 +302,7 @@ map-words               0.1027      0.0074      0.0205      0.0171      0.0033  
 `peak_rss_mb`:
 
 ```text
-workload          amber-interpreted amber-built      python        ruby         cpp          go        rust
+workload          sputnik-interpreted sputnik-built      python        ruby         cpp          go        rust
 -----------------------------------------------------------------------------------------------------------
 arithmetic                 4.5         1.4         8.3        11.9         1.3         4.0         1.5
 calls-collections          5.7         1.5         8.7        12.0         1.3         4.0         1.5
@@ -321,12 +321,12 @@ Reading notes:
 - Rust sits on the C++ frontier as expected (each wins some workloads).
   Rust's `secure-random`/`uuid` rows are slower than C++ because the Rust
   implementation reads `/dev/urandom` through a file handle (one syscall per
-  request) while C++ and the Amber runtime use `arc4random_buf`, a
-  kernel-seeded userspace CSPRNG. Amber-built actually beats Rust on those two
+  request) while C++ and the Sputnik runtime use `arc4random_buf`, a
+  kernel-seeded userspace CSPRNG. Sputnik-built actually beats Rust on those two
   workloads for the same reason.
 - `map-words` is no longer the outlier. The VM/runtime and generated-native
-  map index work moves `amber-interpreted` from 0.9344s to 0.1027s and
-  `amber-built` from 0.2920s to 0.0074s compared with the previous 2026-07-04
+  map index work moves `sputnik-interpreted` from 0.9344s to 0.1027s and
+  `sputnik-built` from 0.2920s to 0.0074s compared with the previous 2026-07-04
   table. The built row is now in the Go/Rust band for this workload, about
   2.2x the C++ best instead of about 88x.
 - `string-ops` still shows the string-table lifecycle issue, but the hash-bucket
@@ -343,7 +343,7 @@ Reading notes:
   preserved.
 - Native numeric fast lanes moved `arithmetic` built from 0.0239s to 0.0064s,
   close to the C++/Rust 0.004s band. Cold-start cost is still visible in the raw
-  samples (`amber-built` mean 0.0393s, first sample 0.3286s), so a structural
+  samples (`sputnik-built` mean 0.0393s, first sample 0.3286s), so a structural
   no-fallback native launcher or split generated helper/runtime surface remains
   the next credible startup-size/startup-time optimization.
 
@@ -352,14 +352,14 @@ Latest local `sha-digest` API warm rerun on 2026-06-18 (Darwin arm64,
 
 ```sh
 python3 bench/polyglot/run_benchmark.py --workload sha-digest --repeats 10 \
-  --no-build --build-dir /tmp/amber-digest-bench-20260618-final
+  --no-build --build-dir /tmp/sputnik-digest-bench-20260618-final
 ```
 
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0429     0.0423          4.6            5616000
-amber-built           10     0.0139     0.0137          3.2            5616000
+sputnik-interpreted     10     0.0429     0.0423          4.6            5616000
+sputnik-built           10     0.0139     0.0137          3.2            5616000
 python                10     0.0245     0.0239          9.9            5616000
 ruby                  10     0.0427     0.0411         21.7            5616000
 cpp                   10     0.0119     0.0116          1.6            5616000
@@ -371,14 +371,14 @@ Latest local `uuid` warm rerun on 2026-06-18 (Darwin arm64,
 
 ```sh
 python3 bench/polyglot/run_benchmark.py --workload uuid --repeats 3 --no-build \
-  --build-dir /tmp/amber-polyglot-uuid-final
+  --build-dir /tmp/sputnik-polyglot-uuid-final
 ```
 
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      3     0.0508     0.0473          8.8            1040000
-amber-built            3     0.0123     0.0114          5.8            1040000
+sputnik-interpreted      3     0.0508     0.0473          8.8            1040000
+sputnik-built            3     0.0123     0.0114          5.8            1040000
 python                 3     0.0985     0.0924         13.1            1040000
 ruby                   3     0.2222     0.2130         24.0            1040000
 cpp                    3     0.0080     0.0076          1.4            1040000
@@ -389,14 +389,14 @@ Latest local `time-flow` warm rerun on 2026-07-05 (Darwin arm64,
 `go version go1.26.4 darwin/arm64`, Ruby 4.0.5 from RVM):
 
 ```sh
-env PATH=/Users/slowpilot/.rvm/wrappers/ruby-4.0.5:/Users/slowpilot/.rvm/gems/ruby-4.0.5/bin:/Users/slowpilot/.rvm/rubies/ruby-4.0.5/bin:$PATH python3 bench/polyglot/run_benchmark.py --workload time-flow --repeats 10 --build-dir /private/tmp/amber_polyglot_timeflow_selector_enum_20260705_02 --no-build
+env PATH=/Users/slowpilot/.rvm/wrappers/ruby-4.0.5:/Users/slowpilot/.rvm/gems/ruby-4.0.5/bin:/Users/slowpilot/.rvm/rubies/ruby-4.0.5/bin:$PATH python3 bench/polyglot/run_benchmark.py --workload time-flow --repeats 10 --build-dir /private/tmp/sputnik_polyglot_timeflow_selector_enum_20260705_02 --no-build
 ```
 
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.1220     0.1196          5.5          110397732
-amber-built           10     0.0111     0.0106         13.9          110397732
+sputnik-interpreted     10     0.1220     0.1196          5.5          110397732
+sputnik-built           10     0.0111     0.0106         13.9          110397732
 python                10     0.2407     0.2381         12.7          110397732
 ruby                  10     0.0651     0.0643         13.2          110397732
 cpp                   10     0.0030     0.0030          1.4          110397732
@@ -412,7 +412,7 @@ compression workload; use the 2026-06-18 table above for the current Digest API
 workload.
 
 Each workload was first built once into a fresh
-`/private/tmp/amber_polyglot_suite_20260617_*` directory. The tables below are
+`/private/tmp/sputnik_polyglot_suite_20260617_*` directory. The tables below are
 the immediate stable reruns against those fresh artifacts:
 
 ```sh
@@ -424,8 +424,8 @@ Arithmetic:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.1602     0.1572          3.9    715609516598740
-amber-built           10     0.0159     0.0154          1.4    715609516598740
+sputnik-interpreted     10     0.1602     0.1572          3.9    715609516598740
+sputnik-built           10     0.0159     0.0154          1.4    715609516598740
 python                10     0.2013     0.1917          8.3    715609516598740
 ruby                  10     0.0768     0.0750         11.9    715609516598740
 cpp                   10     0.0048     0.0044          1.3    715609516598740
@@ -437,8 +437,8 @@ Calls and collections:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0131     0.0129          5.3         2047795430
-amber-built           10     0.0051     0.0046          1.4         2047795430
+sputnik-interpreted     10     0.0131     0.0129          5.3         2047795430
+sputnik-built           10     0.0051     0.0046          1.4         2047795430
 python                10     0.0246     0.0238          8.7         2047795430
 ruby                  10     0.0119     0.0116         12.0         2047795430
 cpp                   10     0.0038     0.0025          1.3         2047795430
@@ -450,8 +450,8 @@ SHA digest:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0770     0.0751          6.4         2242493101
-amber-built           10     0.0067     0.0063          2.1         2242493101
+sputnik-interpreted     10     0.0770     0.0751          6.4         2242493101
+sputnik-built           10     0.0067     0.0063          2.1         2242493101
 python                10     0.0991     0.0982          8.9         2242493101
 ruby                  10     0.0365     0.0360         12.7         2242493101
 cpp                   10     0.0027     0.0024          1.3         2242493101
@@ -463,8 +463,8 @@ JSON:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0268     0.0261          9.5         1531352227
-amber-built           10     0.0118     0.0112          7.1         1531352227
+sputnik-interpreted     10     0.0268     0.0261          9.5         1531352227
+sputnik-built           10     0.0118     0.0112          7.1         1531352227
 python                10     0.0433     0.0428          9.8         1531352227
 ruby                  10     0.0193     0.0189         13.5         1531352227
 cpp                   10     0.0043     0.0041          1.4         1531352227
@@ -476,8 +476,8 @@ Codecs:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0450     0.0440         11.5            2056190
-amber-built           10     0.0109     0.0105          8.0            2056190
+sputnik-interpreted     10     0.0450     0.0440         11.5            2056190
+sputnik-built           10     0.0109     0.0105          8.0            2056190
 python                10     0.0288     0.0283         11.2            2056190
 ruby                  10     0.0169     0.0164         12.7            2056190
 cpp                   10     0.0055     0.0053          1.4            2056190
@@ -489,8 +489,8 @@ Secure random:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0272     0.0260          7.1             296000
-amber-built           10     0.0108     0.0105          4.3             296000
+sputnik-interpreted     10     0.0272     0.0260          7.1             296000
+sputnik-built           10     0.0108     0.0105          4.3             296000
 python                10     0.0571     0.0553         12.9             296000
 ruby                  10     0.0241     0.0238         13.1             296000
 cpp                   10     0.0062     0.0059          1.4             296000
@@ -509,8 +509,8 @@ process/cache outliers for the short native workloads.
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     15     0.0433     0.0426         11.4            2056190
-amber-built           15     0.0111     0.0105          8.0            2056190
+sputnik-interpreted     15     0.0433     0.0426         11.4            2056190
+sputnik-built           15     0.0111     0.0105          8.0            2056190
 python                15     0.0275     0.0267         11.3            2056190
 ruby                  15     0.0165     0.0160         12.7            2056190
 cpp                   15     0.0054     0.0051          1.4            2056190
@@ -527,8 +527,8 @@ python3 bench/polyglot/run_benchmark.py --workload json --repeats 10
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0263     0.0260          9.5         1531352227
-amber-built           10     0.0607     0.0111          7.0         1531352227
+sputnik-interpreted     10     0.0263     0.0260          9.5         1531352227
+sputnik-built           10     0.0607     0.0111          7.0         1531352227
 python                10     0.0439     0.0427          9.8         1531352227
 ruby                  10     0.0209     0.0192         13.4         1531352227
 cpp                   10     0.0381     0.0040          1.4         1531352227
@@ -540,8 +540,8 @@ Baseline before bytecode arithmetic fast paths:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      3     2.2844     2.2363          3.7    715609516598740
-amber-built            3     2.2767     2.2587          2.5    715609516598740
+sputnik-interpreted      3     2.2844     2.2363          3.7    715609516598740
+sputnik-built            3     2.2767     2.2587          2.5    715609516598740
 python                 3     0.1232     0.1228         14.7    715609516598740
 ruby                   3     0.0775     0.0772         16.0    715609516598740
 cpp                    3     0.0042     0.0042          1.4    715609516598740
@@ -553,14 +553,14 @@ variants):
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      3     0.3863     0.3833          3.6    715609516598740
-amber-built-fresh      3     0.3888     0.3824          2.6    715609516598740
+sputnik-interpreted      3     0.3863     0.3833          3.6    715609516598740
+sputnik-built-fresh      3     0.3888     0.3824          2.6    715609516598740
 python                 3     0.1311     0.1288         14.7    715609516598740
 ruby                   3     0.0878     0.0797         15.9    715609516598740
 cpp                    3     0.0955     0.0045          1.4    715609516598740
 ```
 
-`amber-built*` may be produced by the benchmark script with an existing
+`sputnik-built*` may be produced by the benchmark script with an existing
 compiler cache. Because the cache key is source-hash based, it can reuse stale
 bytecode after compiler/emitter changes.
 
@@ -569,8 +569,8 @@ The hot `main` loop disassembles to zero generic `SEND` instructions for `+`,
 arithmetic/comparison opcodes in the loop body and 19 in the method.
 
 VM profiling after those bytecode fast paths showed that the remaining time was
-not in the benchmark runner. A fresh `.amberbc` run and `iamber --eval-file`
-both settled around 0.38s. Instrumented counters for one fresh `amberbc_run`
+not in the benchmark runner. A fresh `.sputnikbc` run and `isputnik --eval-file`
+both settled around 0.38s. Instrumented counters for one fresh `sputnikbc_run`
 execution showed:
 
 ```text
@@ -597,7 +597,7 @@ Temporary probes isolated the next cost:
 
 ```text
 variant                    best_s   evidence
-baseline                   0.3782   fresh .amberbc, existing VM
+baseline                   0.3782   fresh .sputnikbc, existing VM
 noop safepoint             0.3657   upper bound for safepoint lock/check cost
 skip empty pattern erase   0.3475   avoids 12M empty unordered_map erases
 direct integer registers   0.2710   avoids generic read/write/variant probes
@@ -616,14 +616,14 @@ Fresh-cache results after the VM integer-register fast path on 2026-06-02
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      3     0.2529     0.2514          3.6    715609516598740
-amber-built-fresh      3     0.2578     0.2568          2.3    715609516598740
+sputnik-interpreted      3     0.2529     0.2514          3.6    715609516598740
+sputnik-built-fresh      3     0.2578     0.2568          2.3    715609516598740
 python                 3     0.1132     0.1126         14.7    715609516598740
 ruby                   3     0.0710     0.0705         15.6    715609516598740
 cpp                    3     0.0036     0.0035          1.4    715609516598740
 ```
 
-The next VM optimization keeps the serialized `.amberbc` format unchanged and
+The next VM optimization keeps the serialized `.sputnikbc` format unchanged and
 builds a VM-local quickened instruction array per `BcCode`. Fixed-arity hot
 opcodes read decoded `a/b/c/imm` fields instead of
 `std::vector<InstructionOperand>` on every dispatch. The VM also fuses
@@ -637,14 +637,14 @@ Fresh-cache results after VM quickening and fused compare-branch on 2026-06-03
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      5     0.2113     0.1353          3.7    715609516598740
-amber-built-fresh      5     0.1372     0.1347          2.3    715609516598740
+sputnik-interpreted      5     0.2113     0.1353          3.7    715609516598740
+sputnik-built-fresh      5     0.1372     0.1347          2.3    715609516598740
 python                 5     0.1206     0.1179         14.7    715609516598740
 ruby                   5     0.0793     0.0749         15.9    715609516598740
 cpp                    5     0.0044     0.0042          1.4    715609516598740
 ```
 
-The next VM optimization keeps the serialized `.amberbc` format unchanged and
+The next VM optimization keeps the serialized `.sputnikbc` format unchanged and
 adds a VM-frame integer sidecar (`int64_regs` plus validity bits). `LOADK`
 integer constants and integer args seed the sidecar, `IADD`/`ISUB` write
 unboxed integer results directly, and integer compare/fused-branch paths read
@@ -657,28 +657,28 @@ Fresh-cache results after the integer sidecar on 2026-06-03 (Darwin arm64):
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      5     0.1269     0.1253          3.7    715609516598740
-amber-built-fresh      5     0.1273     0.1266          2.3    715609516598740
+sputnik-interpreted      5     0.1269     0.1253          3.7    715609516598740
+sputnik-built-fresh      5     0.1273     0.1266          2.3    715609516598740
 python                 5     0.1179     0.1153         14.7    715609516598740
 ruby                   5     0.0735     0.0728         16.0    715609516598740
 cpp                    5     0.0040     0.0039          1.4    715609516598740
 ```
 
-The latest `amber-built-fresh` row used a fresh bytecode build:
+The latest `sputnik-built-fresh` row used a fresh bytecode build:
 
 ```sh
-build/amberc build bench/polyglot/amber/amber.build.json \
-  --out-dir /private/tmp/amber_sidecar_bench_rebuilt_ly31k6ae/amber/out \
-  --cache-dir /private/tmp/amber_sidecar_bench_rebuilt_ly31k6ae/amber/cache
-/private/tmp/amber_sidecar_bench_rebuilt_ly31k6ae/amberbc_run \
-  /private/tmp/amber_sidecar_bench_rebuilt_ly31k6ae/amber/out/bench.polyglot.amberbc \
+build/sputnik build bench/polyglot/sputnik/sputnik.build.json \
+  --out-dir /private/tmp/sputnik_sidecar_bench_rebuilt_ly31k6ae/sputnik/out \
+  --cache-dir /private/tmp/sputnik_sidecar_bench_rebuilt_ly31k6ae/sputnik/cache
+/private/tmp/sputnik_sidecar_bench_rebuilt_ly31k6ae/sputnikbc_run \
+  /private/tmp/sputnik_sidecar_bench_rebuilt_ly31k6ae/sputnik/out/bench.polyglot.sputnikbc \
   main
 ```
 
 The first measurement pass against that freshly built artifact had cold-process
-outliers (`amber-interpreted` first sample `0.4596s`, `amber-built-fresh`
+outliers (`sputnik-interpreted` first sample `0.4596s`, `sputnik-built-fresh`
 first sample `0.3544s`, and C++ first sample `0.1843s`). The table above is
-the immediate stable rerun against the same fresh `.amberbc` artifact.
+the immediate stable rerun against the same fresh `.sputnikbc` artifact.
 For compiler/emitter changes, continue to use a fresh `--out-dir` and
 `--cache-dir`, or clear the generated benchmark cache deliberately. The cache
 key is source-hash based and can reuse stale bytecode after compiler/emitter
@@ -686,8 +686,8 @@ changes.
 
 The `calls-collections` workload adds helper-function calls and collection
 traffic: nested list literals, `[]`, `first`, `count`, list arguments, and
-helper loops over collections. Its Amber bytecode path runs module init through
-`amberbc_run ... __init__`, because the compiled `main` closure captures helper
+helper loops over collections. Its Sputnik bytecode path runs module init through
+`sputnikbc_run ... __init__`, because the compiled `main` closure captures helper
 closures created by module initialization.
 
 Fresh-cache results for `calls-collections` on 2026-06-03 (Darwin arm64):
@@ -695,8 +695,8 @@ Fresh-cache results for `calls-collections` on 2026-06-03 (Darwin arm64):
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted      5     0.1455     0.1424          5.2         2047795430
-amber-built            5     0.1441     0.1398          3.3         2047795430
+sputnik-interpreted      5     0.1455     0.1424          5.2         2047795430
+sputnik-built            5     0.1441     0.1398          3.3         2047795430
 python                 5     0.0196     0.0193         15.1         2047795430
 ruby                   5     0.0298     0.0294         16.0         2047795430
 cpp                    5     0.0024     0.0023          1.3         2047795430
@@ -708,17 +708,17 @@ That table is the immediate stable rerun against fresh artifacts built with:
 python3 bench/polyglot/run_benchmark.py \
   --workload calls-collections \
   --repeats 5 \
-  --build-dir /private/tmp/amber_polyglot_calls_results
+  --build-dir /private/tmp/sputnik_polyglot_calls_results
 python3 bench/polyglot/run_benchmark.py \
   --workload calls-collections \
   --repeats 5 \
   --no-build \
-  --build-dir /private/tmp/amber_polyglot_calls_results
+  --build-dir /private/tmp/sputnik_polyglot_calls_results
 ```
 
 Latest local rerun after adding the captured-closure ABI and native list fast
 path on 2026-06-04 (Darwin arm64, `go version go1.26.4 darwin/arm64`). The
-runner prepares an `amberc build <file.am>` native executable for each workload
+runner prepares an `sputnik build <file.s>` native executable for each workload
 and now rejects builds whose selected entry is not native or whose native code
 count does not cover every bytecode code object. It passes `--entry main-only`
 for the arithmetic workload and `--entry init` for `calls-collections`.
@@ -732,8 +732,8 @@ Arithmetic:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.1557     0.1409          3.7    715609516598740
-amber-built           10     0.0042     0.0040          1.5    715609516598740
+sputnik-interpreted     10     0.1557     0.1409          3.7    715609516598740
+sputnik-built           10     0.0042     0.0040          1.5    715609516598740
 python                10     0.1170     0.1152         14.7    715609516598740
 ruby                  10     0.0734     0.0723         15.9    715609516598740
 cpp                   10     0.0037     0.0036          1.4    715609516598740
@@ -745,8 +745,8 @@ Calls and collections:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.0099     0.0096          5.1         2047795430
-amber-built           10     0.0032     0.0030          1.5         2047795430
+sputnik-interpreted     10     0.0099     0.0096          5.1         2047795430
+sputnik-built           10     0.0032     0.0030          1.5         2047795430
 python                10     0.0185     0.0173         15.1         2047795430
 ruby                  10     0.0280     0.0265         16.0         2047795430
 cpp                   10     0.0020     0.0019          1.3         2047795430
@@ -758,8 +758,8 @@ SHA digest:
 ```text
 program             runs     mean_s     best_s  peak_rss_mb           checksum
 ----------------------------------------------------------------------------------
-amber-interpreted     10     0.1341     0.1314          6.2         2242493101
-amber-built           10     0.0043     0.0042          2.1         2242493101
+sputnik-interpreted     10     0.1341     0.1314          6.2         2242493101
+sputnik-built           10     0.0043     0.0042          2.1         2242493101
 python                10     0.0778     0.0768         15.3         2242493101
 ruby                  10     0.0521     0.0515         16.5         2242493101
 cpp                   10     0.0024     0.0023          1.3         2242493101
@@ -770,14 +770,14 @@ The arithmetic executable reports full native coverage for 2/2 code objects.
 The `calls-collections` executable reports full native coverage for 10/10 code
 objects: module-init closures use shared native capture cells, closure calls
 stay in generated C++, and list literals plus `[]`, `count`, and `first` use
-the direct list path. Its `amber-built` mean improved from the previous
+the direct list path. Its `sputnik-built` mean improved from the previous
 `0.0101s` fallback result to `0.0032s`, about 3.2x faster and close to the Go
 result. Stack-backed native register frames also improved arithmetic from the
 previous `0.0051s` mean to `0.0042s`.
 
 The `sha-digest` executable reports full native coverage for 9/9 code objects.
 The workload exercises the SHA-256 compression schedule, list index assignment,
-integer `&`, `|`, `^`, `<<`, and `>>`. The Amber source keeps the hot 32-bit
+integer `&`, `|`, `^`, `<<`, and `>>`. The Sputnik source keeps the hot 32-bit
 rotate/mix formulas inline so the native path does not pay closure-call ABI
 cost for tiny bitwise helpers; 32-bit wrap uses `& 0xffffffff` instead of
 division-based modulo.
@@ -788,35 +788,35 @@ Commands used:
 python3 bench/polyglot/run_benchmark.py \
   --workload arithmetic \
   --repeats 10 \
-  --build-dir /private/tmp/amber_polyglot_native_closure_lists_arith
+  --build-dir /private/tmp/sputnik_polyglot_native_closure_lists_arith
 python3 bench/polyglot/run_benchmark.py \
   --workload arithmetic \
   --repeats 10 \
   --no-build \
-  --build-dir /private/tmp/amber_polyglot_native_closure_lists_arith
+  --build-dir /private/tmp/sputnik_polyglot_native_closure_lists_arith
 python3 bench/polyglot/run_benchmark.py \
   --workload calls-collections \
   --repeats 10 \
-  --build-dir /private/tmp/amber_polyglot_native_closure_lists_calls_final
+  --build-dir /private/tmp/sputnik_polyglot_native_closure_lists_calls_final
 python3 bench/polyglot/run_benchmark.py \
   --workload calls-collections \
   --repeats 10 \
   --no-build \
-  --build-dir /private/tmp/amber_polyglot_native_closure_lists_calls_final
+  --build-dir /private/tmp/sputnik_polyglot_native_closure_lists_calls_final
 python3 bench/polyglot/run_benchmark.py \
   --workload sha-digest \
   --repeats 10 \
-  --build-dir /private/tmp/amber_polyglot_sha_digest_final
+  --build-dir /private/tmp/sputnik_polyglot_sha_digest_final
 python3 bench/polyglot/run_benchmark.py \
   --workload sha-digest \
   --repeats 10 \
   --no-build \
-  --build-dir /private/tmp/amber_polyglot_sha_digest_final
+  --build-dir /private/tmp/sputnik_polyglot_sha_digest_final
 ```
 
 ## Numeric profile v1: checked Int arithmetic cost (2026-06-12)
 
-amber.numeric-profile.v1 landed checked Int64 arithmetic as the default
+sputnik.numeric-profile.v1 landed checked Int64 arithmetic as the default
 profile (`__builtin_*_overflow` + policy resolution in every VM int path,
 checked helpers + `NativeBailout` on overflow in the native lane). Same-day
 same-machine A/B of the arithmetic workload, 10 repeats, against a clean
@@ -824,8 +824,8 @@ same-machine A/B of the arithmetic workload, 10 repeats, against a clean
 
 ```text
 lane                       baseline best   checked best   delta
-amber-interpreted                 0.2984         0.3070    ~+3%
-amber-built (native)              0.0046         0.0056   ~+0.001s (noise-level)
+sputnik-interpreted                 0.2984         0.3070    ~+3%
+sputnik-built (native)              0.0046         0.0056   ~+0.001s (noise-level)
 ```
 
 Absolute numbers are not comparable with the earlier tables in this journal
@@ -839,8 +839,8 @@ VM-only; the native lane keeps default-profile semantics via bailout-restart.
 ## Phase 2 interpreter tuning (2026-06-12)
 
 Same-day A/B against the pre-change HEAD build, best of 10 direct
-`build/iamber --eval-file` runs per workload (Darwin arm64). The serialized
-`.amberbc` format is unchanged; all changes are VM-internal. Conformance
+`build/isputnik --eval-file` runs per workload (Darwin arm64). The serialized
+`.sputnikbc` format is unchanged; all changes are VM-internal. Conformance
 corpus (78), full `make test`, and `make backend-equivalence` (22) pass at
 every step.
 
@@ -893,7 +893,7 @@ snapshot that `finish_return` captures for `execute()` consumers.
 The block microbench (not part of the polyglot suite; kept here for
 reproducibility — 200k iterations x 8-element `each` = 1.6M block calls):
 
-```amber
+```sputnik
 def main():
   data = [1, 2, 3, 4, 5, 6, 7, 8]
   total = 0
@@ -996,7 +996,7 @@ lifecycle, intrusive refcounts, slab pools, moving young gen) are unchanged and
 remain the larger follow-on phases.
 
 Landed:
-- **`MALLOC=system|mimalloc|jemalloc` Makefile flag.** Sets the `AMBER_ALLOCATOR`
+- **`MALLOC=system|mimalloc|jemalloc` Makefile flag.** Sets the `SPUTNIK_ALLOCATOR`
   macro; for mimalloc/jemalloc it discovers the Homebrew prefix and, on macOS,
   `-Wl,-force_load`s the static archive so the malloc-zone override actually
   wins (plain `-l` does not interpose on Darwin). Default `system` build and
@@ -1004,15 +1004,15 @@ Landed:
 - **`RuntimeHeapStats.live_object_bytes` / `tracked_object_bytes`**, summed over
   `objects_` in `stats()` (allocation_size was already recorded per object).
   Shell bytes only — a cheap proxy, not a payload-exact live total.
-- **`AMBER_HEAP_STATS=1` dump** in the runner: one stderr line with allocator,
+- **`SPUTNIK_HEAP_STATS=1` dump** in the runner: one stderr line with allocator,
   current + peak RSS (mach `task_info` / `getrusage`), live/tracked bytes, and
   the RSS / live-bytes ratio. Off by default; never touches stdout.
-- **`bench/heap/churn.am`**: a large (RING_CAP=40000) simultaneous live set of
+- **`bench/heap/churn.s`**: a large (RING_CAP=40000) simultaneous live set of
   mixed-size graphs with mixed lifetimes, plus a distinct-interned-string loop.
   A small ring frees too promptly to show anything; the large ring builds a
   real fragmented heap then drops it.
 
-Same-machine sweep, churn.am, Darwin arm64 (mimalloc 3.3.2, jemalloc 5.3.0):
+Same-machine sweep, churn.s, Darwin arm64 (mimalloc 3.3.2, jemalloc 5.3.0):
 
 ```text
 allocator   config                          peak RSS   end RSS   returned
@@ -1072,7 +1072,7 @@ single `find`; folding is O(new slots) and runs only after an external append.
 `emplace` keeps the first id for a text, so ids and dedup semantics are byte-for-
 byte unchanged (corpus + vm_tests green, churn value identical).
 
-A/B on a distinct-string micro-bench (`bench/heap/intern_scaling.am`, 30 000
+A/B on a distinct-string micro-bench (`bench/heap/intern_scaling.s`, 30 000
 rounds ≈ 90 000 distinct strings), same machine:
 
 ```text
@@ -1091,16 +1091,16 @@ change or GC-integrated string liveness, both larger and riskier than this).
 
 The space fix (DESIGN-string-table-lifecycle §4 Options A/B) is gated on the
 §7.2 intrusive-refcount work and is not attempted yet. Its cheap, safe "now"
-step (Option D) is landed: `AMBER_HEAP_STATS` now also reports
+step (Option D) is landed: `SPUTNIK_HEAP_STATS` now also reports
 `runtime_string_count` / `runtime_string_bytes` — the slots interned past the
 module's compile-time string count, i.e. the unbounded region. Computed
-runner-side from `ExecutionResult.runtime_strings` (`tools/amberc/main.cpp`); no
+runner-side from `ExecutionResult.runtime_strings` (`tools/sputnik/main.cpp`); no
 VM API or `RuntimeHeapStats` change, stderr-only, off by default.
 
 ```text
 workload                 runtime_string_count   runtime_string_bytes
 intern_scaling (30k)            149 897                 1 267 804
-churn.am                         39 369                   334 456
+churn.s                         39 369                   334 456
 run_script fixture                    0                         0
 ```
 
@@ -1132,7 +1132,7 @@ kinds (Closure/Instance/List/Tuple/Set/Map) from `shared_ptr<T>` to an
 - White-box tests that built objects via `make_shared` now use `make_intrusive`
   (unmanaged: `ref_count=1`, `heap=null`, plain-deleted on drop).
 
-Malloc-count A/B (jemalloc cumulative `nrequests`, churn.am, 2,400,009 VM
+Malloc-count A/B (jemalloc cumulative `nrequests`, churn.s, 2,400,009 VM
 objects, same machine):
 
 ```text
@@ -1147,7 +1147,7 @@ each object is net smaller and costs one fewer malloc. `sizeof(Value)` is still
 24 B: the variant still holds `shared_ptr` for ~18 non-ObjHeader types (BigInt,
 error instances, the Runtime* objects), so the doc's 24→16 shrink needs that
 tail converted too — deferred to a follow-up phase. Full `make test` green
-(all unit suites + ambertest 81/0).
+(all unit suites + sputniktest 81/0).
 
 ### Value 24→16 tail conversion: investigated, deferred (2026-06-13)
 
@@ -1173,7 +1173,7 @@ drain under the worker's own allocation pressure: `allocate` calls
 allocations drains the current worker's queue. `drain_remote_frees` already has a
 lock-free `remote_free_pending_` early-out, so for single-strand workloads (no
 cross-strand frees) this is a thread-local increment plus an atomic load every
-256 allocations — churn.am time and value are unchanged (`remote_frees_queued=0`
+256 allocations — churn.s time and value are unchanged (`remote_frees_queued=0`
 there, so the path is a no-op). Correct-by-construction (it only drains more
 often; nesting is safe — `RuntimeWorkerScope` is thread-local save/restore);
 validated by the full suite including the cross-strand `stdlib_task_tests`. A
@@ -1185,7 +1185,7 @@ PLAN Phase 4 ("value-representation prototype"): replace the 28-alternative
 `std::variant` `Value` (24 B) with a compact tagged union (16 B), behind a
 build flag, and A/B it against the variant baseline before committing to a full
 migration. Both representations are now selectable with the `VALUE_REPR` Makefile
-flag (`variant` default, `tagged` defines `-DAMBER_VALUE_REPR_TAGGED`), mirroring
+flag (`variant` default, `tagged` defines `-DSPUTNIK_VALUE_REPR_TAGGED`), mirroring
 `MALLOC=`.
 
 Design (tagged): a 1-byte `ValueTag` + an 8-byte union (`static_assert(sizeof ==
@@ -1200,7 +1200,7 @@ the existing typed `runtime_heap_release` (all RuntimeHeap bookkeeping intact).
 The `Value::` public API (factories, `is_X`/`as_X`) is byte-for-byte identical
 across reps; only storage + method bodies differ. The three former
 direct-variant call sites now go through `kind_index()` / `integer_if()`. The
-native lane propagates the host amberc's rep into the runtime-archive compile
+native lane propagates the host sputnik's rep into the runtime-archive compile
 flags (hashed into the archive cache key), so the native backend matches.
 
 The int sidecar (`int64_regs`) is **kept** for this measurement, so the numbers
@@ -1209,7 +1209,7 @@ below are the pure representation delta (smaller copies + cheaper dispatch),
 sidecar becomes redundant; removing it is the next lever (it touches many opcode
 paths and is left as a follow-up).
 
-A/B, best-of-8 direct `iamber --eval-file`, interleaved reps, Darwin arm64:
+A/B, best-of-8 direct `isputnik --eval-file`, interleaved reps, Darwin arm64:
 
 ```text
 workload          variant     tagged     delta
@@ -1219,7 +1219,7 @@ sha-digest         0.0719     0.0702     -2.3%
 calls-collec       0.0109     0.0106     -2.3%
 ```
 
-Heap churn (`bench/heap/churn.am`, system allocator, `AMBER_HEAP_STATS=1`):
+Heap churn (`bench/heap/churn.s`, system allocator, `SPUTNIK_HEAP_STATS=1`):
 
 ```text
 metric              variant      tagged      delta
@@ -1231,7 +1231,7 @@ allocations        2,400,013    2,400,013   identical
 best time             1.827s       1.672s    -8.5%
 ```
 
-Correctness (both reps): `ambertest run corpus` 120/120, `backend-equivalence`
+Correctness (both reps): `sputniktest run corpus` 120/120, `backend-equivalence`
 61/61 byte-identical, and the Value-heavy C++ suites (`vm_tests`,
 `stdlib_collections_tests`, `stdlib_task_tests`) green. The tagged
 `backend-equivalence` runs the VM lane *and* the native lane under the tagged

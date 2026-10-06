@@ -1,8 +1,8 @@
 {
-  "schema": "amber.modules.coverage.v1",
+  "schema": "sputnik.modules.coverage.v1",
   "totals": {
-    "modules": 12,
-    "methods": 133
+    "modules": 13,
+    "methods": 138
   },
   "modules": [
     {
@@ -11,14 +11,14 @@
       "pending": [],
       "verified": 0,
       "failed": 0,
-      "unverified": 10,
+      "unverified": 0,
       "corpus": 0
     },
     {
       "id": "base64",
       "methods": 2,
       "pending": [],
-      "verified": 2,
+      "verified": 0,
       "failed": 0,
       "unverified": 0,
       "corpus": 0
@@ -27,7 +27,7 @@
       "id": "base64url",
       "methods": 2,
       "pending": [],
-      "verified": 2,
+      "verified": 0,
       "failed": 0,
       "unverified": 0,
       "corpus": 0
@@ -38,14 +38,14 @@
       "pending": [],
       "verified": 0,
       "failed": 0,
-      "unverified": 13,
+      "unverified": 0,
       "corpus": 0
     },
     {
       "id": "hex",
       "methods": 2,
       "pending": [],
-      "verified": 2,
+      "verified": 0,
       "failed": 0,
       "unverified": 0,
       "corpus": 0
@@ -54,9 +54,9 @@
       "id": "json",
       "methods": 11,
       "pending": [],
-      "verified": 2,
+      "verified": 1,
       "failed": 0,
-      "unverified": 9,
+      "unverified": 0,
       "corpus": 1
     },
     {
@@ -65,7 +65,7 @@
       "pending": [],
       "verified": 1,
       "failed": 0,
-      "unverified": 25,
+      "unverified": 0,
       "corpus": 1
     },
     {
@@ -74,7 +74,16 @@
       "pending": [],
       "verified": 0,
       "failed": 0,
-      "unverified": 6,
+      "unverified": 0,
+      "corpus": 0
+    },
+    {
+      "id": "signature",
+      "methods": 5,
+      "pending": [],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 0,
       "corpus": 0
     },
     {
@@ -83,7 +92,7 @@
       "pending": [],
       "verified": 0,
       "failed": 0,
-      "unverified": 17,
+      "unverified": 0,
       "corpus": 0
     },
     {
@@ -105,16 +114,16 @@
       ],
       "verified": 0,
       "failed": 0,
-      "unverified": 31,
+      "unverified": 0,
       "corpus": 0
     },
     {
       "id": "url",
       "methods": 6,
       "pending": [],
-      "verified": 3,
+      "verified": 0,
       "failed": 0,
-      "unverified": 3,
+      "unverified": 0,
       "corpus": 0
     },
     {
@@ -123,7 +132,7 @@
       "pending": [],
       "verified": 0,
       "failed": 0,
-      "unverified": 7,
+      "unverified": 0,
       "corpus": 0
     }
   ],

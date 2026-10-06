@@ -5,24 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta
       name="description"
-      content="Amber VM native modules: methods, signatures, effects and code examples."
+      content="Sputnik VM native modules: methods, signatures, effects and code examples."
     />
-    <meta name="theme-color" content="#f7f0e2" />
-    <title>Amber VM modules</title>
-    <link rel="icon" href="./assets/amber-logo.jpg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Code+Pro:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <meta name="theme-color" content="#f4f1e9" />
+    <title>Sputnik VM modules</title>
+    <link rel="icon" href="./assets/sputnik-mark.png" />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body class="docs-page">
     <header class="site-header">
-      <a class="brand" href="./index.html" aria-label="Amber home">
-        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
-        <span>Amber</span>
+      <a class="brand" href="./index.html" aria-label="Sputnik home">
+        <span class="brand-gem"><img src="./assets/sputnik-mark.png" alt="" /></span>
+        <span>Sputnik</span>
       </a>
       <nav class="main-nav" aria-label="Primary navigation">
         <a href="./index.html#features" data-i18n="nav.features">Возможности</a>
@@ -51,7 +45,7 @@
             <span class="eyebrow-dot"></span>
             <span data-i18n="docs.eyebrow">Native standard library · VM prelude</span>
           </div>
-          <h1 data-i18n="docs.title">Встроенные модули Amber VM</h1>
+          <h1 data-i18n="docs.title">Встроенные модули Sputnik VM</h1>
           <p data-i18n="docs.lead">
             Реальные сигнатуры из runtime registry, короткие примеры и требования
             к effects/capabilities. Импорт не нужен.
@@ -59,7 +53,11 @@
         </div>
       </section>
 
-      <div class="docs-directory">
+      <section class="library-overview">
+<h2 data-ru="Что уже на борту" data-en="Already on board">Что уже на борту</h2>
+<p data-ru="Ядро библиотеки включает IO и fs, процессы System, TCP/HTTP/TLS, задачи и каналы, Json и Yaml, Regexp, время и часовые пояса, кодеки, цифровые подписи и инструменты командной строки. Ниже — справочник модулей с документированными сигнатурами; он постепенно расширяется." data-en="The library includes IO and fs, System processes, TCP/HTTP/TLS, tasks and channels, Json and Yaml, Regexp, time and time zones, codecs, digital signatures and command-line tools. The module reference below documents selected modules and is growing."></p>
+<p><a class="text-link" href="./spec.html" data-ru="Полная спецификация и контракты →" data-en="Full specification and contracts →">Полная спецификация и контракты →</a></p>
+</section><div class="docs-directory">
         <div class="directory-toolbar">
           <div class="docs-search-wrap">
             <span aria-hidden="true">⌕</span>
@@ -90,8 +88,8 @@
 
     <footer>
       <a class="brand" href="./index.html">
-        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
-        <span>Amber</span>
+        <span class="brand-gem"><img src="./assets/sputnik-mark.png" alt="" /></span>
+        <span>Sputnik</span>
       </a>
       <p data-i18n="footer.text">Expressive language. Verified machine.</p>
       <span>runtime/stdlib_registry.cpp</span>

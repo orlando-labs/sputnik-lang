@@ -1,4 +1,4 @@
-# amber.diag.v1
+# sputnik.diag.v1
 
 Status: seed contract.
 

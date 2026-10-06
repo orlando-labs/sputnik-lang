@@ -2,8 +2,8 @@
 
 Status: proposed design
 Date: 2026-07-04
-Target: Amber standard library `Signal` module + runtime signal hub
-Scope: observing POSIX signals delivered to the Amber process, running
+Target: Sputnik standard library `Signal` module + runtime signal hub
+Scope: observing POSIX signals delivered to the Sputnik process, running
 handlers as ordinary scheduler tasks, disposition control (ignore/default),
 correct propagation of fatal signals (exit status via re-raise), self-delivery
 for coordination and tests, capability/replay integration
@@ -15,7 +15,7 @@ non-POSIX hosts (Windows), embedding hosts that install their own handlers
 ## 1. Goals
 
 Signals are the one asynchronous input channel every long-running process has
-whether it wants it or not. Today the Amber runtime installs no handlers: an
+whether it wants it or not. Today the Sputnik runtime installs no handlers: an
 untrapped `SIGINT` kills a server mid-request, and there is no way to express
 "drain connections, then die with the right exit status".
 
@@ -35,7 +35,7 @@ The module must deliver four things:
    state and introduce host nondeterminism. Both go through the capability
    model and the replay/trace story, like entropy and `TimeZone.local`.
 
-The surface keeps Amber stdlib conventions for singleton native modules:
+The surface keeps Sputnik stdlib conventions for singleton native modules:
 capitalized module namespace (`import Signal`, like `Json`, `Time`,
 `SecureRandom`, `Benchmark`), lower_snake_case selectors, no `!` forms (the
 module mutates process state, not a receiver value), explicit errors from the
@@ -90,7 +90,7 @@ disposition-changing call (§3).
 
 ### 2.2 The `Signal.Event` event value
 
-```amber
+```sputnik
 sig.name        # "TERM"        canonical upper-case name, no SIG prefix
 sig.symbol      # :term
 sig.number      # 15            host value, informative
@@ -137,14 +137,14 @@ explain refusals.
 
 ## 4. Module surface
 
-```amber
+```sputnik
 import Signal
 from Signal import Source, Event   # types, rarely needed by name
 ```
 
 ### 4.1 `Signal.watch` — the primitive
 
-```amber
+```sputnik
 source = Signal.watch(:int, :term)
 
 sig = source.recv()                # parks the task until a signal arrives
@@ -161,7 +161,7 @@ competing `recv()` callers get exactly one event each (channel semantics).
 `Source` presents the channel receiving contract so it composes with
 everything channels already work with:
 
-```amber
+```sputnik
 source.recv()                      # blocks cooperatively; Signal.Event
 source.recv(timeout: 5.0)          # TimeoutError on expiry
 source.close()                     # idempotent; unsubscribes
@@ -177,7 +177,7 @@ source.pending?()                  # true if recv() would not block
   `Channel`); it is not strand-confined and needs no `adopt!`.
 - Sources are select-compatible receive arms:
 
-```amber
+```sputnik
 select:
 when job = jobs.recv():
   handle(job)
@@ -196,7 +196,7 @@ sanctioned way back.
 
 ### 4.2 `Signal.trap` — callback sugar
 
-```amber
+```sputnik
 trap = Signal.trap(:term) |sig|:
   server.drain()
   Signal.propagate(sig)
@@ -221,7 +221,7 @@ hidden dispatcher task:
 
 The returned `Trap` handle:
 
-```amber
+```sputnik
 trap.close()                       # cancel dispatcher, unsubscribe; idempotent
 trap.active?()
 trap.signal                        # :term
@@ -233,7 +233,7 @@ normal task cancellation rules.
 
 ### 4.3 `Signal.wait` — one-shot
 
-```amber
+```sputnik
 sig = Signal.wait(:int, :term)             # park until one arrives
 sig = Signal.wait(:usr1, timeout: 10.0)    # TimeoutError on expiry
 ```
@@ -241,7 +241,7 @@ sig = Signal.wait(:usr1, timeout: 10.0)    # TimeoutError on expiry
 Sugar for `watch` + `recv` + `close`. This is the main-function idiom for
 servers:
 
-```amber
+```sputnik
 def main():
   server = start_server()
   sig = Signal.wait(:int, :term)
@@ -251,7 +251,7 @@ def main():
 
 ### 4.4 Disposition control
 
-```amber
+```sputnik
 Signal.ignore(:pipe)               # pin :ignore
 Signal.default(:hup)               # pin :default (OS behavior)
 Signal.disposition(:term)          # -> :default | :ignore | :handled
@@ -268,7 +268,7 @@ verbs, handlers get blocks, and the two never share a parameter.
 
 ### 4.5 `Signal.propagate` — die with the right status
 
-```amber
+```sputnik
 Signal.propagate(:term)            # restore default, re-deliver to self
 Signal.propagate(sig)              # same, from a Signal.Event
 ```
@@ -294,7 +294,7 @@ That asymmetry is the point of the verb.
 
 ### 4.6 `Signal.deliver` — self-delivery
 
-```amber
+```sputnik
 Signal.deliver(:usr1)
 ```
 
@@ -310,7 +310,7 @@ process.
 
 ### 4.7 Introspection
 
-```amber
+```sputnik
 Signal.supported                   # [:hup, :int, :quit, :term, ...] on this host
 Signal.reserved                    # [:segv, :bus, :fpe, :ill, :trap, :abrt, :sys, :vtalrm, :prof]
 Signal.number(:term)               # 15
@@ -355,7 +355,7 @@ of pretending signals form a lossless stream:
   For a source that remains live throughout an active handled generation, a
   burst of N deliveries for one standard signal is observed as at least one
   event whose `count`s sum to a lower bound ≤ N. Arrivals can still be coalesced
-  by the OS before Amber sees them, and arrivals in an allowed close/detach gap
+  by the OS before Sputnik sees them, and arrivals in an allowed close/detach gap
   can be dropped (§5).
 
 This makes `Source` strictly weaker than `Channel` on purpose. Code that
@@ -375,7 +375,7 @@ needs a durable work queue should have the trap handler `send` into a real
   cancellation, whichever lands first, per existing task rules).
 - During VM shutdown initiated by an *unhandled* fatal signal (disposition
   `:default`), the runtime does nothing — the OS terminates the process; no
-  Amber code runs. Cleanup-on-signal exists only if the program asked for it.
+  Sputnik code runs. Cleanup-on-signal exists only if the program asked for it.
 
 ## 8. `SIGPIPE` policy
 
@@ -383,12 +383,12 @@ Socket IO already suppresses `SIGPIPE` per-fd (`SO_NOSIGPIPE` /
 `MSG_NOSIGNAL` in `runtime/io.cpp`), surfacing `EPIPE` as a rescuable IO
 error. Writes to broken non-socket pipes (e.g. stdout into a dead pager) can
 still raise it and kill the process — which is the correct *default* for CLI
-filters (`amber ... | head`).
+filters (`sputnik ... | head`).
 
 v1 therefore does **not** globally ignore `SIGPIPE`. Long-running programs
 that prefer `EPIPE` errors opt in with one line:
 
-```amber
+```sputnik
 Signal.ignore(:pipe)
 ```
 
@@ -427,7 +427,7 @@ signal.deliver       {name}                               effect
 signal.propagate     {name}                               effect (usually final)
 ```
 
-These names must be added to `amber.replay.v1`'s canonical event set; they are
+These names must be added to `sputnik.replay.v1`'s canonical event set; they are
 not vendor events.
 
 `signal.arrive` is host nondeterminism of the same kind as entropy and wall

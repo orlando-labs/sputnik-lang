@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::native {
+namespace sputnik::native {
 
 struct NativeOwnerAssumption {
   std::uint32_t owner_index = 0;
@@ -110,7 +110,7 @@ struct NativeCodeObject {
 
 struct NativeModule {
   std::string module_name;
-  std::string format = "amber.native.v1";
+  std::string format = "sputnik.native.v1";
   bool requires_frozen_world = true;
   std::uint32_t profile_flags = 0;
   std::vector<NativeCodeObject> code_objects;
@@ -144,4 +144,4 @@ std::string module_to_dump(const NativeModule &module,
 std::string
 diagnostics_to_json(const std::vector<NativeDiagnostic> &diagnostics);
 
-} // namespace amber::native
+} // namespace sputnik::native

@@ -7,7 +7,7 @@
 #include <set>
 #include <sstream>
 
-namespace amber::checker {
+namespace sputnik::checker {
 namespace {
 
 std::string json_escape(const std::string &value) {
@@ -1182,7 +1182,7 @@ std::string check_result_to_json(const CheckResult &result,
                                  const std::string &module_name) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.typed.v1\",\n";
+  out << "  \"schema\": \"sputnik.typed.v1\",\n";
   out << "  \"status\": \"" << (result.ok() ? "ok" : "error") << "\",\n";
   out << "  \"module\": \"" << json_escape(module_name) << "\",\n";
   out << "  \"boundaries\": [\n";
@@ -1253,7 +1253,7 @@ std::string effects_result_to_json(const CheckResult &result,
 
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.effects.v1\",\n";
+  out << "  \"schema\": \"sputnik.effects.v1\",\n";
   out << "  \"status\": \"" << (effects_ok ? "ok" : "error") << "\",\n";
   out << "  \"module\": \"" << json_escape(module_name) << "\",\n";
   out << "  \"summaries\": [";
@@ -1294,4 +1294,4 @@ std::string effects_result_to_json(const CheckResult &result,
   return out.str();
 }
 
-} // namespace amber::checker
+} // namespace sputnik::checker

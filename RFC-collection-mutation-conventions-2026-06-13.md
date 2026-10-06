@@ -1,10 +1,10 @@
-# RFC: Collection Mutation Conventions for Amber
+# RFC: Collection Mutation Conventions for Sputnik
 
 **Status:** Draft / for discussion
 **Author:** (expert review, synthesizing the A/B discussion doc)
 **Date:** 2026-06-13
 **Scope:** `Array`, `Map`, `Set`, `Tuple`, `Range`, `LazySeq`, and the language-wide meaning of the `!` suffix
-**Supersedes discussion in:** `amber_collection_mutation_conventions.md` (Variant A vs Variant B)
+**Supersedes discussion in:** `sputnik_collection_mutation_conventions.md` (Variant A vs Variant B)
 
 ---
 
@@ -14,7 +14,7 @@ This RFC adopts a refined version of **Variant B (strict bang mutation)**, but d
 
 The proposal in one sentence:
 
-> **`!` is the visible, greppable marker of observable receiver mutation, everywhere in Amber. No bang, no in-place mutation.**
+> **`!` is the visible, greppable marker of observable receiver mutation, everywhere in Sputnik. No bang, no in-place mutation.**
 
 Everything else in this RFC is consequences of that rule plus the ergonomic decisions needed to make it pleasant.
 
@@ -22,7 +22,7 @@ Everything else in this RFC is consequences of that rule plus the ergonomic deci
 
 ## 2. Why this matters / motivation
 
-Amber is a new language, not a Ruby dialect. Its positioning is "Ruby-level ergonomics without Ruby's unspecifiable history." Two of Amber's central traits make hidden mutation especially costly:
+Sputnik is a new language, not a Ruby dialect. Its positioning is "Ruby-level ergonomics without Ruby's unspecifiable history." Two of Sputnik's central traits make hidden mutation especially costly:
 
 - **Expression-oriented, block-suffix, chain-heavy style.** Mutation buried mid-chain is invisible and dangerous.
 - **A planned async / runtime-facing layer.** Anything touching concurrency benefits enormously from being able to *mechanically audit* where shared state is mutated.
@@ -46,7 +46,7 @@ Therefore:
 - **Variant A is the genuinely Ruby-faithful option.** It reproduces Ruby's real rule: a `!` exists only when there is a pure twin to contrast against; structural verbs with no twin just mutate bare.
 - **Variant B is a deliberate clean break**, not a "tightening" of Ruby.
 
-This RFC chooses the clean break with eyes open. Amber should not inherit a convention whose defining property is "you must memorize which methods got historically blessed with a bang."
+This RFC chooses the clean break with eyes open. Sputnik should not inherit a convention whose defining property is "you must memorize which methods got historically blessed with a bang."
 
 ---
 
@@ -54,7 +54,7 @@ This RFC chooses the clean break with eyes open. Amber should not inherit a conv
 
 One example settles it. Under Variant A:
 
-```amber
+```sputnik
 xs.select: _1.active?    # pure — returns a new collection
 xs.keep_if: _1.active?   # mutates xs in place
 ```
@@ -63,7 +63,7 @@ xs.keep_if: _1.active?   # mutates xs in place
 
 Under this RFC:
 
-```amber
+```sputnik
 xs.select:  _1.active?   # pure
 xs.select!: _1.active?   # mutates
 xs.keep_if!: _1.active?  # mutates
@@ -79,7 +79,7 @@ No table. No adjudication. The rule *is* the spec.
 ### 5.1 Normative statement (Mutation Bang Law)
 
 ```text
-Amber Mutation Bang Law
+Sputnik Mutation Bang Law
 
 1. A method whose name ends in `!` MAY mutate its receiver in place,
    and is the ONLY way a stdlib method is permitted to do so.
@@ -97,7 +97,7 @@ Amber Mutation Bang Law
 5. Assignment and indexed assignment are a separate syntactic category and
    are exempt: `xs[i] = v`, `m[k] = v`, `@field = v`. These visibly assign.
 
-6. `!` does not carry any OTHER meaning in Amber stdlib (see §6). It is not
+6. `!` does not carry any OTHER meaning in Sputnik stdlib (see §6). It is not
    overloaded with Ruby/Rails "raise-on-failure" semantics.
 ```
 
@@ -118,13 +118,13 @@ If a receiver is frozen / immutable, invoking a `!` method on it is an error: a 
 
 ## 6. The decision the original document skips: `!` language-wide
 
-This is the most important section of the RFC. The original A/B doc scopes everything to collections and never asks what `!` means elsewhere. If Amber adopts the Rails idiom where `!` means "raise instead of returning nil/false" (`save!`, `find!`, `create!`), then `!` means **mutation** in one place and **fallibility** in another, and B's "one simple model" quietly dies — the ambiguity just moves from "which methods mutate" to "which meaning of `!` is this."
+This is the most important section of the RFC. The original A/B doc scopes everything to collections and never asks what `!` means elsewhere. If Sputnik adopts the Rails idiom where `!` means "raise instead of returning nil/false" (`save!`, `find!`, `create!`), then `!` means **mutation** in one place and **fallibility** in another, and B's "one simple model" quietly dies — the ambiguity just moves from "which methods mutate" to "which meaning of `!` is this."
 
-**Decision:** `!` means *observable receiver mutation* **language-wide**. Amber does **not** adopt `!` for raise-on-failure.
+**Decision:** `!` means *observable receiver mutation* **language-wide**. Sputnik does **not** adopt `!` for raise-on-failure.
 
 **Fallibility is handled by `.or_raise`, not by `!`.** Pure, fallible operations return a result/optional value; escalating a failure to an exception is an explicit combinator *on that value*:
 
-```amber
+```sputnik
 n = parse_int(s).or_raise              # raises on failure
 n = parse_int(s).or_raise("bad int")   # raises with a message
 n = parse_int(s).or(0)                 # non-raising fallback
@@ -169,7 +169,7 @@ The test for shipping a pure verb: *would a competent user reach for it weekly, 
 
 Methods that need "something to order, dedupe, or group by" take an **optional key block** — a block of arity 1 returning the value to compare by. There is no `_by` suffix family.
 
-```amber
+```sputnik
 xs.sorted               # natural order (elements must be Comparable)
 xs.sorted: _1.age       # ordered by key — replaces sort_by
 xs.uniq                 # dedupe by identity
@@ -187,7 +187,7 @@ Three deliberate constraints:
 
 2. **Descending and multi-key live on the key side**, not in comparators:
 
-   ```amber
+   ```sputnik
    xs.sorted(reverse: true): _1.age      # descending, single key
    xs.sorted: [_1.dept, desc(_1.pay)]    # multi-key, mixed direction
    ```
@@ -196,7 +196,7 @@ Three deliberate constraints:
 
 3. **Raw comparators are an explicit escape hatch**, taken as a *value*, not a block, so there is nothing to guess:
 
-   ```amber
+   ```sputnik
    xs.sorted(using: comparator)
    ```
 
@@ -212,7 +212,7 @@ Only the deltas from the original Variant-B tables are called out; where this RF
 
 ### 8.1 Array
 
-```amber
+```sputnik
 # pure
 xs.appended(value)
 xs.inserted(index, *values)
@@ -265,7 +265,7 @@ Deliberately absent: bare `push`, `insert`, `delete_at`, `delete`, `delete_if`, 
 
 ### 8.2 Map
 
-```amber
+```sputnik
 # pure
 m.with(key, value)
 m.without(key)
@@ -306,7 +306,7 @@ mutation. Use `select!` / `reject!` / `transform_keys!` /
 
 ### 8.3 Set
 
-```amber
+```sputnik
 # pure
 s.added(value)
 s.deleted(value)
@@ -339,7 +339,7 @@ Note: the pure union is spelled `union`. There is **no** pure `Set#merge` — th
 
 Immutable and lazy collections have **no** `!` methods at all — which under this RFC is not a special case, it is the rule working correctly (nothing here can mutate, so nothing is banged).
 
-```amber
+```sputnik
 # Tuple — pure only
 t.updated(index, value)
 t.appended(value)
@@ -378,7 +378,7 @@ Extracting mutators              -> return the removed value / entry
 
 ### 10.1 Kill Ruby's nil-on-no-change footgun (normative)
 
-Ruby's `select!`, `reject!`, `compact!`, etc. return `nil` when nothing changed — a notorious trap in exactly the chains Amber relies on. **Amber `!` methods MUST NOT do this.** A mutator returns `self` (or the removed value for extractors) unconditionally; "nothing changed" is not signaled by `nil`. This is orthogonal to A vs B and must hold regardless.
+Ruby's `select!`, `reject!`, `compact!`, etc. return `nil` when nothing changed — a notorious trap in exactly the chains Sputnik relies on. **Sputnik `!` methods MUST NOT do this.** A mutator returns `self` (or the removed value for extractors) unconditionally; "nothing changed" is not signaled by `nil`. This is orthogonal to A vs B and must hold regardless.
 
 ---
 
@@ -413,7 +413,7 @@ The strict rule taxes imperative accumulation: builders and parsers will be `pus
 
 ### 13.1 Variant A — Ruby-like structural verbs
 
-Rejected. Its only real advantage is Ruby muscle memory, which is explicitly *not* an Amber goal. Its costs are permanent: a two-criteria mental model (twin? structural verb?), an exception table in the spec (§2.7), the indefensible `select`/`keep_if` split (§4), no clean teaching diagnostics, and degraded chain auditability.
+Rejected. Its only real advantage is Ruby muscle memory, which is explicitly *not* an Sputnik goal. Its costs are permanent: a two-criteria mental model (twin? structural verb?), an exception table in the spec (§2.7), the indefensible `select`/`keep_if` split (§4), no clean teaching diagnostics, and degraded chain auditability.
 
 ### 13.2 Variant B verbatim — strict bang mutation
 
@@ -421,11 +421,11 @@ Adopted in spirit, refined in three ways: (1) the rule is lifted to **language-w
 
 ### 13.3 Swift-style — tense only, no bang
 
-Considered and rejected as the primary mechanism. Swift distinguishes `sort` (mutating) from `sorted` (pure) using tense alone, no bang. It is elegant and proves the participle naming works. But for Amber's goals it loses on **auditability**: `!` is a single, unambiguous, *greppable* token — you can mechanically enumerate every mutation site in a program, which matters for the planned async layer. Tense distinctions are easy to misread (`reverse`/`reversed`, one letter) and impossible to grep reliably. This RFC keeps both signals (bang *and* participle); the redundancy is deliberate defense-in-depth, not waste.
+Considered and rejected as the primary mechanism. Swift distinguishes `sort` (mutating) from `sorted` (pure) using tense alone, no bang. It is elegant and proves the participle naming works. But for Sputnik's goals it loses on **auditability**: `!` is a single, unambiguous, *greppable* token — you can mechanically enumerate every mutation site in a program, which matters for the planned async layer. Tense distinctions are easy to misread (`reverse`/`reversed`, one letter) and impossible to grep reliably. This RFC keeps both signals (bang *and* participle); the redundancy is deliberate defense-in-depth, not waste.
 
 ### 13.4 Why not lean on the type system (Rust `&mut`)
 
-Rust gets effect visibility from `&mut self` rather than naming. That requires a borrow/ownership model Amber does not have and should not adopt for this. Naming is the right layer for Amber.
+Rust gets effect visibility from `&mut self` rather than naming. That requires a borrow/ownership model Sputnik does not have and should not adopt for this. Naming is the right layer for Sputnik.
 
 ---
 
@@ -500,12 +500,12 @@ STD-007  Mutation naming and the bang law
 
 Adopt this RFC: **Variant B, lifted to a language-wide mono-semantic `!`, with a curated pure vocabulary, a hard nil-on-no-change ban, self-teaching diagnostics, and blessed in-place building.**
 
-The gating decision (§6) is now resolved: `!` means mutation and nothing else, and fallibility lives in `.or_raise` on a returned value. With that settled, Amber earns a property neither Ruby nor Swift has: *every mutation in a program is both locally visible and globally greppable.* That is worth more to Amber's expression-oriented, async-bound future than Ruby muscle memory ever could be.
+The gating decision (§6) is now resolved: `!` means mutation and nothing else, and fallibility lives in `.or_raise` on a returned value. With that settled, Sputnik earns a property neither Ruby nor Swift has: *every mutation in a program is both locally visible and globally greppable.* That is worth more to Sputnik's expression-oriented, async-bound future than Ruby muscle memory ever could be.
 
 Compromise framing for the language guide:
 
 ```text
-Amber borrows Ruby's `?` and `!` suffixes but gives `!` a single, strict
+Sputnik borrows Ruby's `?` and `!` suffixes but gives `!` a single, strict
 meaning Ruby never committed to: `!` marks receiver mutation, everywhere.
 No bang, no mutation. If you can grep for `!`, you can find every place
 your program changes state in place.

@@ -1,4 +1,4 @@
-# amber.bind.v1
+# sputnik.bind.v1
 
 Status: seed contract.
 
@@ -9,7 +9,7 @@ call binding, default evaluation, object-model verification, or lowering.
 
 Top-level shape:
 
-- `format`: always `amber.bind.v1`;
+- `format`: always `sputnik.bind.v1`;
 - `module`: package name or `null`;
 - `scopes`: lexical scopes in stable discovery order;
 - `bindings`: bindings in stable declaration order;
@@ -56,7 +56,7 @@ index in the block suffix scope. Sparse placeholder numbering and mixing
 implicit placeholders with explicit block params produce canonical diagnostics.
 
 Binder negative corpus cases use `phase: "bind-diag"` and compare the canonical
-`amber.diag.v1` JSON. The current binder emits the mandatory module/scope-level
+`sputnik.diag.v1` JSON. The current binder emits the mandatory module/scope-level
 diagnostics it can prove before HIR lowering, including unknown exports,
 duplicate public exports, and writes to read-only import aliases.
 
@@ -92,7 +92,7 @@ pipeline:
 
 The binder library also exposes a shape-only `bind_call_shape(...)` helper for
 the explicit-arg part of `bind_call`. It is not serialized into
-`amber.bind.v1`, because module binding cannot statically know dynamic dispatch
+`sputnik.bind.v1`, because module binding cannot statically know dynamic dispatch
 targets. The helper returns:
 
 - one source-order slot per parameter with
@@ -147,4 +147,4 @@ The same pass now validates the current subset and emits:
 
 Warnings are retained in `BindResult.diagnostics` but do not make the bind
 result fail. The CLI writes warning diagnostics to stderr and still writes the
-`amber.bind.v1` graph to stdout.
+`sputnik.bind.v1` graph to stdout.

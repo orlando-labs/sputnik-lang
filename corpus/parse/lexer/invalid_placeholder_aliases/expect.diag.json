@@ -1,8 +1,8 @@
 {
-  "format": "amber.diag.v1",
+  "format": "sputnik.diag.v1",
   "diagnostics": [
-    {"code":"L0001","severity":"error","phase":"lexer","message":"invalid block placeholder; expected '$it' or '$itN' with N starting at 1","primary_span":{"file":"corpus/parse/lexer/invalid_placeholder_aliases/source.am","start":{"line":1,"col":1,"offset":0},"end":{"line":1,"col":5,"offset":4}},"related":[],"notes":[]},
-    {"code":"L0001","severity":"error","phase":"lexer","message":"invalid block placeholder; expected '$it' or '$itN' with N starting at 1","primary_span":{"file":"corpus/parse/lexer/invalid_placeholder_aliases/source.am","start":{"line":2,"col":1,"offset":5},"end":{"line":2,"col":6,"offset":10}},"related":[],"notes":[]},
-    {"code":"L0001","severity":"error","phase":"lexer","message":"invalid block placeholder; expected '$it' or '$itN' with N starting at 1","primary_span":{"file":"corpus/parse/lexer/invalid_placeholder_aliases/source.am","start":{"line":3,"col":1,"offset":11},"end":{"line":3,"col":6,"offset":16}},"related":[],"notes":[]}
+    {"code":"L0001","severity":"error","phase":"lexer","message":"invalid block placeholder; expected '$it' or '$itN' with N starting at 1","primary_span":{"file":"corpus/parse/lexer/invalid_placeholder_aliases/source.s","start":{"line":1,"col":1,"offset":0},"end":{"line":1,"col":5,"offset":4}},"related":[],"notes":[]},
+    {"code":"L0001","severity":"error","phase":"lexer","message":"invalid block placeholder; expected '$it' or '$itN' with N starting at 1","primary_span":{"file":"corpus/parse/lexer/invalid_placeholder_aliases/source.s","start":{"line":2,"col":1,"offset":5},"end":{"line":2,"col":6,"offset":10}},"related":[],"notes":[]},
+    {"code":"L0001","severity":"error","phase":"lexer","message":"invalid block placeholder; expected '$it' or '$itN' with N starting at 1","primary_span":{"file":"corpus/parse/lexer/invalid_placeholder_aliases/source.s","start":{"line":3,"col":1,"offset":11},"end":{"line":3,"col":6,"offset":16}},"related":[],"notes":[]}
   ]
 }

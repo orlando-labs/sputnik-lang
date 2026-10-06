@@ -19,7 +19,7 @@ spec_refs:
 Функция объявляется через `def`. Поддерживаются многострочная и однострочная
 формы; тело — это выражение, и его значение становится результатом:
 
-```amber
+```sputnik
 def add(a, b):
   a + b
 
@@ -37,7 +37,7 @@ probe()
 `class` объявляет тип. Приём `@attr` прямо в сигнатуре `init` сразу заводит поле
 экземпляра — не нужно вручную перекладывать аргументы:
 
-```amber
+```sputnik
 class Collection:
   def init(@count): pass
 
@@ -61,7 +61,7 @@ probe()
 Формы `items.size` и `items.size()` эквивалентны. То же работает для методов
 класса, объявленных через `class_method`:
 
-```amber
+```sputnik
 class Collection:
   def init(@count): pass
   def size(): @count

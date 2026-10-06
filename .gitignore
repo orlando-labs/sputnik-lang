@@ -1,5 +1,5 @@
 build/
-.amber/
+.sputnik/
 # Alternate BUILD_DIRs (e.g. the tagged value-repr lane used for A/B testing).
 build-*/
 *.o
@@ -12,3 +12,6 @@ editors/vscode/out/
 *.vsix
 
 bench/polyglot/results/
+__pycache__/
+*.profraw
+*.profdata

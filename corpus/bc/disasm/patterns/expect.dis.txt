@@ -1,4 +1,4 @@
-; amber.bc.v1 sha256=50b2654431f2272ed300b9ec98dab5c85907b52d5256b3ad0214bf9d35b45bfb
+; sputnik.bc.v1 sha256=5ae81e14b9a4206d9aedc0d1717dd20d7b3bdf2b675c0f566ba6b298ee067ea2
 .header format=1.0 language=1.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
 .sections
   STRS offset=368 size=103 align=1 flags=0
@@ -11,9 +11,9 @@
   EXPT offset=1092 size=4 align=1 flags=0
   INIT offset=1096 size=9 align=1 flags=0
   PATS offset=1105 size=28 align=1 flags=0
-  SPAN offset=1133 size=1879 align=1 flags=0
-  LINE offset=3012 size=304 align=1 flags=0
-  LOCS offset=3316 size=124 align=1 flags=0
+  SPAN offset=1133 size=1854 align=1 flags=0
+  LINE offset=2987 size=304 align=1 flags=0
+  LOCS offset=3291 size=124 align=1 flags=0
 .strs
   s0 "choose"
   s1 "function"
@@ -47,13 +47,13 @@ code c1 kind=module regs=5 flags=0
   0004 LOADNULL 4
   0005 CLOSE_UPVALUES 0
   0006 RETURN 4
-  span 0..1 corpus/bc/disasm/patterns/source.am:1:1-6:8
-  span 1..2 corpus/bc/disasm/patterns/source.am:8:1-9:25
-  span 2..3 corpus/bc/disasm/patterns/source.am:1:1-6:8
-  span 3..4 corpus/bc/disasm/patterns/source.am:8:1-9:25
-  span 4..5 corpus/bc/disasm/patterns/source.am:8:1-9:25
-  span 5..6 corpus/bc/disasm/patterns/source.am:1:1-9:25
-  span 6..7 corpus/bc/disasm/patterns/source.am:1:1-9:25
+  span 0..1 corpus/bc/disasm/patterns/source.s:1:1-6:8
+  span 1..2 corpus/bc/disasm/patterns/source.s:8:1-9:25
+  span 2..3 corpus/bc/disasm/patterns/source.s:1:1-6:8
+  span 3..4 corpus/bc/disasm/patterns/source.s:8:1-9:25
+  span 4..5 corpus/bc/disasm/patterns/source.s:8:1-9:25
+  span 5..6 corpus/bc/disasm/patterns/source.s:1:1-9:25
+  span 6..7 corpus/bc/disasm/patterns/source.s:1:1-9:25
 code c2 kind=method regs=4 flags=0
   local l0 name=s4(x) role=s5(param) binding=s2(local)
   0000 P_CHECK_EQ 0 0 4
@@ -64,14 +64,14 @@ code c2 kind=method regs=4 flags=0
   0005 MOVE 1 3
   0006 CLOSE_UPVALUES 0
   0007 RETURN 1
-  span 0..1 corpus/bc/disasm/patterns/source.am:3:5-4:8
-  span 1..2 corpus/bc/disasm/patterns/source.am:4:7-4:8
-  span 2..3 corpus/bc/disasm/patterns/source.am:4:7-4:8
-  span 3..4 corpus/bc/disasm/patterns/source.am:3:5-4:8
-  span 4..5 corpus/bc/disasm/patterns/source.am:6:7-6:8
-  span 5..6 corpus/bc/disasm/patterns/source.am:6:7-6:8
-  span 6..7 corpus/bc/disasm/patterns/source.am:1:1-6:8
-  span 7..8 corpus/bc/disasm/patterns/source.am:1:1-6:8
+  span 0..1 corpus/bc/disasm/patterns/source.s:3:5-4:8
+  span 1..2 corpus/bc/disasm/patterns/source.s:4:7-4:8
+  span 2..3 corpus/bc/disasm/patterns/source.s:4:7-4:8
+  span 3..4 corpus/bc/disasm/patterns/source.s:3:5-4:8
+  span 4..5 corpus/bc/disasm/patterns/source.s:6:7-6:8
+  span 5..6 corpus/bc/disasm/patterns/source.s:6:7-6:8
+  span 6..7 corpus/bc/disasm/patterns/source.s:1:1-6:8
+  span 7..8 corpus/bc/disasm/patterns/source.s:1:1-6:8
 code c3 kind=method regs=5 flags=0
   local l0 name=s6(values) role=s5(param) binding=s2(local)
   local l1 name=s7(head) role=s8(pattern_assign) binding=s2(local)
@@ -86,16 +86,16 @@ code c3 kind=method regs=5 flags=0
   0007 P_FAIL 1
   0008 CLOSE_UPVALUES 0
   0009 RETURN 0
-  span 0..1 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 1..2 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 2..3 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 3..4 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 4..5 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 5..6 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 6..7 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 7..8 corpus/bc/disasm/patterns/source.am:9:3-9:25
-  span 8..9 corpus/bc/disasm/patterns/source.am:8:1-9:25
-  span 9..10 corpus/bc/disasm/patterns/source.am:8:1-9:25
+  span 0..1 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 1..2 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 2..3 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 3..4 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 4..5 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 5..6 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 6..7 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 7..8 corpus/bc/disasm/patterns/source.s:9:3-9:25
+  span 8..9 corpus/bc/disasm/patterns/source.s:8:1-9:25
+  span 9..10 corpus/bc/disasm/patterns/source.s:8:1-9:25
 .methods
   m0 selector=y0(choose) owner=0 signature=k3 entry=c2 flags=0
     param external=y1(x) local=s4(x) flags=0

@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // The signature backend is shared by VM stdlib dispatch and direct-native
 // executables. Entropy callbacks must enforce their caller's capability and
@@ -44,4 +44,4 @@ SignatureResult signature_verify(std::string_view algorithm,
                                  std::string_view message,
                                  std::string_view signature, bool *valid);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

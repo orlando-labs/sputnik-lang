@@ -1,6 +1,6 @@
 # Heap churn benchmark
 
-`churn.am` is the §9 "bench scenario" from
+`churn.s` is the §9 "bench scenario" from
 `RESEARCH-heap-fragmentation-allocators-2026-06-12.md`: it drives the two
 distinct RSS-retention mechanisms the research separates so they can be measured
 independently.
@@ -21,15 +21,15 @@ heap, which would hide the cross-allocator difference.
 ## Run it
 
 ```sh
-# Baseline (system allocator). Off by default; set AMBER_HEAP_STATS for the line.
-make build/amberc
-AMBER_HEAP_STATS=1 ./build/amberc bench/heap/churn.am
+# Baseline (system allocator). Off by default; set SPUTNIK_HEAP_STATS for the line.
+make build/sputnik
+SPUTNIK_HEAP_STATS=1 ./build/sputnik bench/heap/churn.s
 ```
 
 The stderr line:
 
 ```
-[amber-heap] allocator=system rss_bytes=… peak_rss_bytes=… live_object_bytes=… \
+[sputnik-heap] allocator=system rss_bytes=… peak_rss_bytes=… live_object_bytes=… \
   tracked_object_bytes=… live_objects=… allocations=… local_frees=… \
   remote_frees_queued=… remote_queue_depth=… gc_cycles=… gc_reclaimed_objects=… \
   frag_ratio_live=… frag_ratio_tracked=…
@@ -51,19 +51,19 @@ The stderr line:
 brew install mimalloc jemalloc
 
 for m in system mimalloc jemalloc; do
-  rm -f build/amberc && make build/amberc MALLOC=$m
-  AMBER_HEAP_STATS=1 ./build/amberc bench/heap/churn.am 2>&1 >/dev/null
+  rm -f build/sputnik && make build/sputnik MALLOC=$m
+  SPUTNIK_HEAP_STATS=1 ./build/sputnik bench/heap/churn.s 2>&1 >/dev/null
 done
 
 # page-return knobs (RESEARCH §10 step 1):
-MIMALLOC_PURGE_DELAY=0 AMBER_HEAP_STATS=1 ./build/amberc bench/heap/churn.am  # mimalloc
+MIMALLOC_PURGE_DELAY=0 SPUTNIK_HEAP_STATS=1 ./build/sputnik bench/heap/churn.s  # mimalloc
 MALLOC_CONF="dirty_decay_ms:0,muzzy_decay_ms:0" \
-  AMBER_HEAP_STATS=1 ./build/amberc bench/heap/churn.am                       # jemalloc
+  SPUTNIK_HEAP_STATS=1 ./build/sputnik bench/heap/churn.s                       # jemalloc
 
 # definitive allocator-level split (jemalloc): stats.resident − stats.allocated
-MALLOC_CONF="stats_print:true" ./build/amberc bench/heap/churn.am 2>&1 >/dev/null
+MALLOC_CONF="stats_print:true" ./build/sputnik bench/heap/churn.s 2>&1 >/dev/null
 # confirm the override is live (mimalloc):
-MIMALLOC_VERBOSE=1 ./build/amberc bench/heap/churn.am 2>&1 | head
+MIMALLOC_VERBOSE=1 ./build/sputnik bench/heap/churn.s 2>&1 | head
 ```
 
 ## macOS caveat

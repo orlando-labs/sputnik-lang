@@ -10,7 +10,7 @@
 
 #include <cmath>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -192,4 +192,4 @@ void register_math_runtime_module(RuntimeModuleRegistry &modules,
   register_runtime_type_descriptor(types, descriptor);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

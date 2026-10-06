@@ -6,7 +6,7 @@
 //   Url.percent_encode(text) / Url.percent_decode(text)
 //   Url.parse_query(query) / Url.build_query(map)
 //
-// Parsed URL values intentionally use ordinary Amber Maps/Lists/Strings/Ints
+// Parsed URL values intentionally use ordinary Sputnik Maps/Lists/Strings/Ints
 // instead of a new value kind. That keeps the API lightweight while still
 // giving the later net.http layer a normalized parse helper.
 
@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 RuntimeUrlQueryValue RuntimeUrlQueryValue::string(std::string value) {
   RuntimeUrlQueryValue out;
@@ -183,7 +183,7 @@ Value null_or_string(NativeStdlibCall &call, bool present,
   return present ? call.string_value(text) : Value::null();
 }
 
-Value query_value_to_amber(NativeStdlibCall &call,
+Value query_value_to_sputnik(NativeStdlibCall &call,
                            const RuntimeUrlQueryValue &value);
 
 Value make_query_map(
@@ -192,12 +192,12 @@ Value make_query_map(
   std::vector<std::pair<std::string, Value>> object;
   object.reserve(entries.size());
   for (const auto &entry : entries) {
-    object.push_back({entry.first, query_value_to_amber(call, entry.second)});
+    object.push_back({entry.first, query_value_to_sputnik(call, entry.second)});
   }
   return call.make_object(std::move(object));
 }
 
-Value query_value_to_amber(NativeStdlibCall &call,
+Value query_value_to_sputnik(NativeStdlibCall &call,
                            const RuntimeUrlQueryValue &value) {
   if (value.kind == RuntimeUrlQueryValue::Kind::String) {
     return call.string_value(value.text);
@@ -206,7 +206,7 @@ Value query_value_to_amber(NativeStdlibCall &call,
     std::vector<Value> items;
     items.reserve(value.list.size());
     for (const RuntimeUrlQueryValue &item : value.list) {
-      items.push_back(query_value_to_amber(call, item));
+      items.push_back(query_value_to_sputnik(call, item));
     }
     return call.make_list(std::move(items));
   }
@@ -280,12 +280,12 @@ bool optional_string_field(
   return true;
 }
 
-bool query_entries_from_amber_map(
+bool query_entries_from_sputnik_map(
     NativeStdlibCall &call, const Value &value,
     std::vector<std::pair<std::string, RuntimeUrlQueryValue>> *out,
     const std::string &context);
 
-bool query_value_from_amber(NativeStdlibCall &call, const Value &value,
+bool query_value_from_sputnik(NativeStdlibCall &call, const Value &value,
                             RuntimeUrlQueryValue *out,
                             const std::string &context) {
   if (value.is_string()) {
@@ -306,7 +306,7 @@ bool query_value_from_amber(NativeStdlibCall &call, const Value &value,
     list.reserve(items.size());
     for (const Value &item : items) {
       RuntimeUrlQueryValue converted;
-      if (!query_value_from_amber(call, item, &converted, context)) {
+      if (!query_value_from_sputnik(call, item, &converted, context)) {
         return false;
       }
       list.push_back(std::move(converted));
@@ -316,7 +316,7 @@ bool query_value_from_amber(NativeStdlibCall &call, const Value &value,
   }
   if (value.is_map()) {
     std::vector<std::pair<std::string, RuntimeUrlQueryValue>> map;
-    if (!query_entries_from_amber_map(call, value, &map, context)) {
+    if (!query_entries_from_sputnik_map(call, value, &map, context)) {
       return false;
     }
     *out = RuntimeUrlQueryValue::map_value(std::move(map));
@@ -326,7 +326,7 @@ bool query_value_from_amber(NativeStdlibCall &call, const Value &value,
   return false;
 }
 
-bool query_entries_from_amber_map(
+bool query_entries_from_sputnik_map(
     NativeStdlibCall &call, const Value &value,
     std::vector<std::pair<std::string, RuntimeUrlQueryValue>> *out,
     const std::string &context) {
@@ -338,7 +338,7 @@ bool query_entries_from_amber_map(
   out->reserve(entries.size());
   for (const auto &entry : entries) {
     RuntimeUrlQueryValue converted;
-    if (!query_value_from_amber(call, entry.second, &converted, context)) {
+    if (!query_value_from_sputnik(call, entry.second, &converted, context)) {
       return false;
     }
     out->push_back({entry.first, std::move(converted)});
@@ -389,7 +389,7 @@ bool parts_from_map(NativeStdlibCall &call, const Value &value,
   if ((!parts->has_query || parts->query.empty()) && query_map.has_value() &&
       !query_map->is_null()) {
     std::vector<std::pair<std::string, RuntimeUrlQueryValue>> parsed;
-    if (!query_entries_from_amber_map(call, *query_map, &parsed, "query_map")) {
+    if (!query_entries_from_sputnik_map(call, *query_map, &parsed, "query_map")) {
       return false;
     }
     parts->query = runtime_url_build_query(parsed);
@@ -407,7 +407,7 @@ bool parts_from_map(NativeStdlibCall &call, const Value &value,
 bool query_pairs_from_map(
     NativeStdlibCall &call, const Value &value,
     std::vector<std::pair<std::string, RuntimeUrlQueryValue>> *out) {
-  return query_entries_from_amber_map(call, value, out, "Url.build_query");
+  return query_entries_from_sputnik_map(call, value, out, "Url.build_query");
 }
 
 SendStatus url_parse(NativeStdlibCall &call) {
@@ -999,4 +999,4 @@ void register_url_runtime_module(RuntimeModuleRegistry &modules,
   }
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

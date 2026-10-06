@@ -1,4 +1,4 @@
-# amber.hir.v1
+# sputnik.hir.v1
 
 Status: seed contract.
 
@@ -7,7 +7,7 @@ introduces an explicit `HModule` root plus a flat procedure table.
 
 Top-level shape:
 
-- `format`: always `amber.hir.v1`;
+- `format`: always `sputnik.hir.v1`;
 - `module`: package name or `null`;
 - `root`: `HModule`;
 - `procedures`: module-init, method, and closure bodies in stable discovery

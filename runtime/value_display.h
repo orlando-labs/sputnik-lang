@@ -6,11 +6,11 @@
 #include <string>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 struct BcModule;
 }
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 enum class RuntimeStringifyMode { Display, Inspect, Pretty };
 
@@ -21,7 +21,7 @@ struct RuntimePrettyPrintOptions {
 };
 
 // Host-facing snapshots: budgets apply while walking/escaping the value, not
-// after constructing an unbounded inspection string. Never invokes Amber code.
+// after constructing an unbounded inspection string. Never invokes Sputnik code.
 struct RuntimeValuePreviewOptions {
   std::size_t max_bytes = 64U * 1024U;
   std::size_t max_nodes = 4096;
@@ -55,4 +55,4 @@ std::string value_to_debug_string(
     const std::vector<std::string> *runtime_strings = nullptr,
     const std::vector<std::string> *runtime_symbols = nullptr);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

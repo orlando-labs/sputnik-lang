@@ -9,7 +9,7 @@
 #include <thread>
 #include <variant>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 // Portable values: never retain another world's heap through project inputs.
 using NotebookInputValue = std::variant<bool, std::int64_t, double, std::string>;
 using NotebookInputSnapshot = std::map<std::string, NotebookInputValue>;
@@ -39,4 +39,4 @@ private:
   std::shared_ptr<const NotebookInputSnapshot> values_;
   std::set<std::string> reads_;
 };
-} // namespace amber::runtime
+} // namespace sputnik::runtime

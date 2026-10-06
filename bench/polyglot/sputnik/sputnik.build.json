@@ -1,0 +1,23 @@
+{
+  "schema": "sputnik.build.v1",
+  "name": "bench.polyglot",
+  "root": "bench.polyglot",
+  "profiles": {
+    "required": ["core.v1"]
+  },
+  "stdlib": [
+    {"name": "sputnik.core", "path": "stdlib/core.s", "bootstrap": "B2"}
+  ],
+  "modules": [
+    {"name": "bench.polyglot.calls_collections", "path": "src/calls_collections.s"},
+    {"name": "bench.polyglot.codecs", "path": "src/codecs.s"},
+    {"name": "bench.polyglot.json", "path": "src/json.s"},
+    {"name": "bench.polyglot.map_words", "path": "src/map_words.s"},
+    {"name": "bench.polyglot.secure_random", "path": "src/secure_random.s"},
+    {"name": "bench.polyglot.sha_digest", "path": "src/sha_digest.s"},
+    {"name": "bench.polyglot.string_ops", "path": "src/string_ops.s"},
+    {"name": "bench.polyglot.time_flow", "path": "src/time_flow.s"},
+    {"name": "bench.polyglot.uuid", "path": "src/uuid.s"},
+    {"name": "bench.polyglot", "path": "src/main.s"}
+  ]
+}

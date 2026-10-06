@@ -18,7 +18,7 @@ class PolyglotRailsApp < Rails::Application
   config.hosts = ["127.0.0.1", "localhost", "::1"]
   config.logger = Logger.new(IO::NULL)
   config.log_level = :fatal
-  config.secret_key_base = "amber-polyglot-http-rps-benchmark"
+  config.secret_key_base = "sputnik-polyglot-http-rps-benchmark"
 end
 
 module CatalogContract
@@ -103,7 +103,7 @@ module CatalogContract
 end
 
 module CatalogDatabase
-  URI = "file:amber_polyglot_rails?mode=memory&cache=shared"
+  URI = "file:sputnik_polyglot_rails?mode=memory&cache=shared"
   # Keep lock contention from changing the shared HTTP contract into a
   # driver-specific retry-policy comparison.
   LOCK = Mutex.new

@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -80,4 +80,4 @@ load_frozen_image(const std::string &serialized_image) {
   return load_frozen_image(parsed.artifact);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

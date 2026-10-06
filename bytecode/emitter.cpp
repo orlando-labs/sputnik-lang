@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::bytecode {
+namespace sputnik::bytecode {
 
 namespace {
 
@@ -228,7 +228,7 @@ std::string remove_numeric_separators(const std::string &value) {
 }
 
 // Returns nullopt when the literal does not fit the resolved `Int` type
-// (Int64 in the default numeric profile). Per amber.numeric-profile.v1 this
+// (Int64 in the default numeric profile). Per sputnik.numeric-profile.v1 this
 // is a compile-time diagnostic, never a crash or silent wrap.
 std::optional<std::int64_t> parse_integer_literal(const std::string &value) {
   std::string text = remove_numeric_separators(value);
@@ -808,7 +808,7 @@ public:
           continue;
         }
         const std::string key =
-            "amber.import.alias:" + module_name + "\t" + local_name;
+            "sputnik.import.alias:" + module_name + "\t" + local_name;
         const std::string value =
             "M\t" + dependency + "\t" + std::to_string(*slot);
         module_.attrs.push_back({intern_string(key), intern_string(value)});
@@ -830,7 +830,7 @@ public:
           continue;
         }
         const std::string key =
-            "amber.import.alias:" + module_name + "\t" + local_name;
+            "sputnik.import.alias:" + module_name + "\t" + local_name;
         const std::string value = "F\t" + dependency + "\t" + source_name +
                                   "\t" + std::to_string(*slot);
         module_.attrs.push_back({intern_string(key), intern_string(value)});
@@ -840,40 +840,40 @@ public:
 
   // Mirror each native binding into a module attr the VM reads at startup to
   // build a code-object -> logical-symbol map (native-packages 5c-ii). One attr
-  // per binding: key `amber.native.bind:<code_id>`, value `F:<logical>` for a
+  // per binding: key `sputnik.native.bind:<code_id>`, value `F:<logical>` for a
   // free function or `M:<logical>` for a handle method. A module with no native
   // defs emits nothing, so non-native bytecode is byte-identical to before.
   void emit_native_binding_attrs() {
     for (const NativeBindingRecord &record : native_bindings_) {
       const std::string key =
-          "amber.native.bind:" + std::to_string(record.code_id);
+          "sputnik.native.bind:" + std::to_string(record.code_id);
       const std::string value =
           (record.is_method ? "M:" : "F:") + record.logical;
       module_.attrs.push_back({intern_string(key), intern_string(value)});
     }
-    // Foreign-handle method dispatch table: key `amber.native.method:<tag>\t
+    // Foreign-handle method dispatch table: key `sputnik.native.method:<tag>\t
     // <selector>`, value `<logical>`. The tab separates tag (dotted, no tabs)
     // from selector. A module with no native classes emits nothing.
     for (const NativeMethodBinding &record : native_method_bindings_) {
       const std::string key =
-          "amber.native.method:" + record.tag + "\t" + record.selector;
+          "sputnik.native.method:" + record.tag + "\t" + record.selector;
       module_.attrs.push_back(
           {intern_string(key), intern_string(record.logical)});
     }
     for (const NativeTypeRecord &record : native_types_) {
-      const std::string key = "amber.native.type:" + record.amber;
+      const std::string key = "sputnik.native.type:" + record.sputnik;
       const std::string value =
           record.tag + "\t" + record.ownership + "\t" + record.destructor;
       module_.attrs.push_back({intern_string(key), intern_string(value)});
     }
     for (const NativeErrorRecord &record : native_errors_) {
-      const std::string key = "amber.native.error:" + record.name;
+      const std::string key = "sputnik.native.error:" + record.name;
       module_.attrs.push_back(
           {intern_string(key), intern_string(record.parent)});
     }
   }
 
-  // amber.numeric-profile.v1: resolve the module numeric profile before any
+  // sputnik.numeric-profile.v1: resolve the module numeric profile before any
   // literal interning and mirror it into module attrs for the VM/native lanes.
   void apply_numeric_profile(const ast::Expr &root) {
     const std::string int_type = string_field(root, "numeric_int");
@@ -890,9 +890,9 @@ public:
                "` is not supported by the reference implementation yet");
     }
     if (!int_type.empty() || !overflow.empty()) {
-      module_.attrs.push_back({intern_string("amber.numeric.int"),
+      module_.attrs.push_back({intern_string("sputnik.numeric.int"),
                                intern_string(numeric_int_type_)});
-      module_.attrs.push_back({intern_string("amber.numeric.overflow"),
+      module_.attrs.push_back({intern_string("sputnik.numeric.overflow"),
                                intern_string(numeric_overflow_)});
     }
   }
@@ -1780,7 +1780,7 @@ private:
   std::vector<NativeMethodBinding> native_method_bindings_;
 
   struct NativeTypeRecord {
-    std::string amber;
+    std::string sputnik;
     std::string tag;
     std::string ownership;
     std::string destructor;
@@ -5087,4 +5087,4 @@ EmitResult emit_program(const hir::Program &program,
   return emitter.emit();
 }
 
-} // namespace amber::bytecode
+} // namespace sputnik::bytecode

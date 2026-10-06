@@ -7,7 +7,7 @@
 #include <cstdlib>
 #include <string>
 
-namespace amber::parser {
+namespace sputnik::parser {
 namespace {
 
 constexpr const char *kParseErrorCode = "P0001";
@@ -267,7 +267,7 @@ bool is_ownership_marker_text(const std::string &text) {
   return text == "owned" || text == "borrowed" || text == "collected";
 }
 
-// A native-only leaf has no Amber implementation. In a bytecode build, calling
+// A native-only leaf has no Sputnik implementation. In a bytecode build, calling
 // it must fail closed, so we synthesize a fallback body that raises
 // NativeRequiredError (the same body-synthesis approach the attr accessors
 // use). A native build instead routes `binding` to its symbol and ignores this
@@ -286,8 +286,8 @@ synthesize_native_required_body(const std::string &def_name,
   }
   const std::string snippet =
       "raise NativeRequiredError(\"" + escaped + "\")\n";
-  amber::lexer::Lexer lexer(snippet, "<native-leaf>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+  sputnik::lexer::Lexer lexer(snippet, "<native-leaf>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   Parser sub_parser(lex_result.tokens);
   ParseModuleResult module = sub_parser.parse_module_unit();
   return std::move(module.items);
@@ -3947,8 +3947,8 @@ Parser::parse_callable_reference(const lexer::Token &ampersand) {
   }
 
   const lexer::Span span = ast::join_spans(ampersand.span, selector.span);
-  const std::string receiver_name = "__amber_callable_receiver";
-  const std::string args_name = "__amber_callable_args";
+  const std::string receiver_name = "__sputnik_callable_receiver";
+  const std::string args_name = "__sputnik_callable_args";
 
   auto make_pattern_param = [&](const std::string &pattern,
                                 const std::string &param_kind =
@@ -4477,8 +4477,8 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
           token.lexeme.substr(expr_begin, expr_end - expr_begin);
       const lexer::Position expr_base =
           offset_position_in_token(token, expr_begin);
-      amber::lexer::Lexer lexer(expr_source, token.span.file);
-      amber::lexer::LexResult lex_result = lexer.lex();
+      sputnik::lexer::Lexer lexer(expr_source, token.span.file);
+      sputnik::lexer::LexResult lex_result = lexer.lex();
       shift_token_spans_from_interpolation(&lex_result.tokens, expr_base);
       if (!lex_result.ok()) {
         for (lexer::Diagnostic diagnostic : lex_result.diagnostics) {
@@ -4661,7 +4661,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
     return chain;
   }
   // Bracket indexing is adjacency-sensitive. With whitespace, `fn [a, b]`
-  // is Amber's bare-call form with one Array argument; without whitespace,
+  // is Sputnik's bare-call form with one Array argument; without whitespace,
   // `value[a]` remains an index send. This also keeps annotation calls such
   // as `before [&auth, &audit]` unambiguous.
   if (check(lexer::TokenKind::LBracket) &&
@@ -5625,4 +5625,4 @@ lexer::Span Parser::current_zero_width_span() const {
   return span;
 }
 
-} // namespace amber::parser
+} // namespace sputnik::parser

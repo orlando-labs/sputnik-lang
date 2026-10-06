@@ -19,34 +19,34 @@ void expect(bool condition, const std::string &message) {
 }
 
 std::vector<std::uint8_t>
-serialized_module(const amber::bytecode::BcModule &module) {
-  return amber::bytecode::serialize_module(module);
+serialized_module(const sputnik::bytecode::BcModule &module) {
+  return sputnik::bytecode::serialize_module(module);
 }
 
-std::uint32_t append_string(amber::bytecode::BcModule *module,
+std::uint32_t append_string(sputnik::bytecode::BcModule *module,
                             const std::string &value) {
   module->strings.push_back(value);
   return static_cast<std::uint32_t>(module->strings.size() - 1U);
 }
 
-std::uint32_t append_symbol(amber::bytecode::BcModule *module,
+std::uint32_t append_symbol(sputnik::bytecode::BcModule *module,
                             const std::string &value) {
   module->symbols.push_back(value);
   return static_cast<std::uint32_t>(module->symbols.size() - 1U);
 }
 
-void add_dependency(amber::bytecode::BcModule *module,
+void add_dependency(sputnik::bytecode::BcModule *module,
                     const std::string &dep_name) {
-  amber::bytecode::DepEntry dep;
+  sputnik::bytecode::DepEntry dep;
   dep.module_name_str_id = append_string(module, dep_name);
   dep.required_format = {1, 0};
   dep.min_language_version = {1, 0};
   module->dependencies.push_back(dep);
 }
 
-void add_code_export(amber::bytecode::BcModule *module,
+void add_code_export(sputnik::bytecode::BcModule *module,
                      const std::string &public_name) {
-  amber::bytecode::ExportEntry entry;
+  sputnik::bytecode::ExportEntry entry;
   entry.symbol_id = append_symbol(module, public_name);
   entry.target_kind_str_id = append_string(module, "code");
   entry.target_index = 1;
@@ -54,11 +54,11 @@ void add_code_export(amber::bytecode::BcModule *module,
   module->exports.push_back(entry);
 }
 
-void add_reexport(amber::bytecode::BcModule *module,
+void add_reexport(sputnik::bytecode::BcModule *module,
                   const std::string &public_name,
                   const std::string &dependency_name,
                   const std::string &source_name) {
-  amber::bytecode::ExportEntry entry;
+  sputnik::bytecode::ExportEntry entry;
   entry.symbol_id = append_symbol(module, public_name);
   entry.target_kind_str_id = append_string(module, "reexport");
   entry.target_index = append_string(module, source_name);
@@ -68,10 +68,10 @@ void add_reexport(amber::bytecode::BcModule *module,
   module->exports.push_back(entry);
 }
 
-amber::bytecode::BcModule make_module(const std::vector<std::string> &deps,
+sputnik::bytecode::BcModule make_module(const std::vector<std::string> &deps,
                                       std::int64_t init_value,
                                       bool failing_init = false) {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -110,8 +110,8 @@ amber::bytecode::BcModule make_module(const std::vector<std::string> &deps,
   return module;
 }
 
-amber::bytecode::BcModule make_runtime_string_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule make_runtime_string_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -143,10 +143,10 @@ amber::bytecode::BcModule make_runtime_string_module() {
   return module;
 }
 
-const amber::runtime::RuntimeModuleSnapshot &
-snapshot_named(const amber::runtime::RuntimeModuleLoadResult &result,
+const sputnik::runtime::RuntimeModuleSnapshot &
+snapshot_named(const sputnik::runtime::RuntimeModuleLoadResult &result,
                const std::string &name) {
-  for (const amber::runtime::RuntimeModuleSnapshot &snapshot : result.modules) {
+  for (const sputnik::runtime::RuntimeModuleSnapshot &snapshot : result.modules) {
     if (snapshot.name == name) {
       return snapshot;
     }
@@ -156,20 +156,20 @@ snapshot_named(const amber::runtime::RuntimeModuleLoadResult &result,
   std::exit(1);
 }
 
-void add_ok(amber::runtime::RuntimeModuleLoader &loader,
-            const std::string &name, const amber::bytecode::BcModule &module) {
-  const amber::runtime::RuntimeModuleLoadResult added =
+void add_ok(sputnik::runtime::RuntimeModuleLoader &loader,
+            const std::string &name, const sputnik::bytecode::BcModule &module) {
+  const sputnik::runtime::RuntimeModuleLoadResult added =
       loader.add_serialized_module(name, serialized_module(module));
   expect(added.ok, "module add failed for " + name + ": " + added.message);
 }
 
 void test_loader_initializes_dependencies_once_in_order() {
-  amber::runtime::RuntimeModuleLoader loader;
+  sputnik::runtime::RuntimeModuleLoader loader;
   add_ok(loader, "app.main", make_module({"core.util", "core.base"}, 3));
   add_ok(loader, "core.base", make_module({}, 1));
   add_ok(loader, "core.util", make_module({"core.base"}, 2));
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_module("app.main");
   expect(initialized.ok, "app.main initialization should succeed");
   expect(initialized.has_execution_result,
@@ -185,14 +185,14 @@ void test_loader_initializes_dependencies_once_in_order() {
          "requested module should initialize last");
 
   expect(snapshot_named(initialized, "core.base").state ==
-             amber::runtime::RuntimeModuleState::Ready,
+             sputnik::runtime::RuntimeModuleState::Ready,
          "base module should be ready");
   expect(snapshot_named(initialized, "core.util").init_runs == 1,
          "dependency init should run once");
   expect(snapshot_named(initialized, "app.main").init_runs == 1,
          "root init should run once");
 
-  const amber::runtime::RuntimeModuleLoadResult second =
+  const sputnik::runtime::RuntimeModuleLoadResult second =
       loader.initialize_module("app.main");
   expect(second.ok, "second app.main initialization should succeed");
   expect(snapshot_named(second, "core.base").init_runs == 1,
@@ -204,26 +204,26 @@ void test_loader_initializes_dependencies_once_in_order() {
 }
 
 void test_loader_preserves_runtime_string_table_for_results() {
-  const amber::bytecode::BcModule module = make_runtime_string_module();
-  amber::runtime::RuntimeModuleLoader loader;
+  const sputnik::bytecode::BcModule module = make_runtime_string_module();
+  sputnik::runtime::RuntimeModuleLoader loader;
   add_ok(loader, "runtime.string", module);
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_module("runtime.string");
   expect(initialized.ok, "runtime string module initialization should succeed");
   expect(initialized.has_execution_result,
          "runtime string module should expose execution result");
-  expect(amber::runtime::value_to_debug_string(
+  expect(sputnik::runtime::value_to_debug_string(
              initialized.value, &module, &initialized.runtime_strings,
              &initialized.runtime_symbols) == "\"6\"",
          "loader should preserve runtime-created strings for display");
 }
 
 void test_loader_reports_missing_dependency() {
-  amber::runtime::RuntimeModuleLoader loader;
+  sputnik::runtime::RuntimeModuleLoader loader;
   add_ok(loader, "app.main", make_module({"core.missing"}, 1));
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(!linked.ok, "link should fail for missing dependency");
   expect(linked.error_name == "ImportError",
          "missing dependency should report ImportError");
@@ -232,166 +232,166 @@ void test_loader_reports_missing_dependency() {
 }
 
 void test_loader_rejects_unverified_bytecode() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule module = make_module({}, 1);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule module = make_module({}, 1);
   module.init.entry_code_id = 99;
 
-  const amber::runtime::RuntimeModuleLoadResult added =
+  const sputnik::runtime::RuntimeModuleLoadResult added =
       loader.add_serialized_module("bad.module", serialized_module(module));
   expect(!added.ok, "bad bytecode should be rejected at load time");
   expect(added.error_name == "BytecodeVerificationError",
          "bad bytecode should report BytecodeVerificationError");
   expect(snapshot_named(added, "bad.module").state ==
-             amber::runtime::RuntimeModuleState::Failed,
+             sputnik::runtime::RuntimeModuleState::Failed,
          "bad module should snapshot as failed");
 }
 
 void test_loader_detects_init_cycles() {
-  amber::runtime::RuntimeModuleLoader loader;
+  sputnik::runtime::RuntimeModuleLoader loader;
   add_ok(loader, "cycle.a", make_module({"cycle.b"}, 1));
   add_ok(loader, "cycle.b", make_module({"cycle.a"}, 2));
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(linked.ok, "dependency cycles should link before init access");
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_all();
   expect(!initialized.ok, "cyclic module init should fail");
   expect(initialized.error_name == "ModuleInitError",
          "cyclic module init should report ModuleInitError");
   expect(snapshot_named(initialized, "cycle.a").state ==
-             amber::runtime::RuntimeModuleState::Failed,
+             sputnik::runtime::RuntimeModuleState::Failed,
          "cycle.a should fail");
   expect(snapshot_named(initialized, "cycle.b").state ==
-             amber::runtime::RuntimeModuleState::Failed,
+             sputnik::runtime::RuntimeModuleState::Failed,
          "cycle.b should fail");
 }
 
 void test_loader_marks_failed_init() {
-  amber::runtime::RuntimeModuleLoader loader;
+  sputnik::runtime::RuntimeModuleLoader loader;
   add_ok(loader, "bad.init", make_module({}, 1, true));
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_module("bad.init");
   expect(!initialized.ok, "raising module init should fail");
   expect(initialized.error_name == "ModuleInitError",
          "raising module init should report ModuleInitError");
-  const amber::runtime::RuntimeModuleSnapshot &snapshot =
+  const sputnik::runtime::RuntimeModuleSnapshot &snapshot =
       snapshot_named(initialized, "bad.init");
-  expect(snapshot.state == amber::runtime::RuntimeModuleState::Failed,
+  expect(snapshot.state == sputnik::runtime::RuntimeModuleState::Failed,
          "raising init should mark module failed");
   expect(snapshot.init_runs == 0, "failed init should not count as successful");
   expect(snapshot.message.find("BoomInit") != std::string::npos,
          "failed init message should preserve VM fault");
 
-  const amber::runtime::RuntimeModuleLoadResult retried =
+  const sputnik::runtime::RuntimeModuleLoadResult retried =
       loader.initialize_module("bad.init");
   expect(!retried.ok, "failed init should stay failed on retry");
   expect(retried.error_name == "ModuleInitError",
          "retry should preserve ModuleInitError");
   expect(retried.message == initialized.message,
          "retry should preserve original failure message");
-  const amber::runtime::RuntimeModuleSnapshot &retry_snapshot =
+  const sputnik::runtime::RuntimeModuleSnapshot &retry_snapshot =
       snapshot_named(retried, "bad.init");
-  expect(retry_snapshot.state == amber::runtime::RuntimeModuleState::Failed,
+  expect(retry_snapshot.state == sputnik::runtime::RuntimeModuleState::Failed,
          "retry should leave failed module failed");
   expect(retry_snapshot.init_runs == 0,
          "failed module init should not rerun on retry");
 }
 
 void test_loader_materializes_exports_and_import_aliases() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule core = make_module({}, 42);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule core = make_module({}, 42);
   add_code_export(&core, "Answer");
-  amber::bytecode::BcModule app = make_module({"core.values"}, 1);
+  sputnik::bytecode::BcModule app = make_module({"core.values"}, 1);
 
   add_ok(loader, "core.values", core);
   add_ok(loader, "app.main", app);
-  const amber::runtime::RuntimeModuleLoadResult alias_added =
+  const sputnik::runtime::RuntimeModuleLoadResult alias_added =
       loader.add_import_alias("app.main", "Answer", "core.values", "Answer");
   expect(alias_added.ok, "import alias registration should succeed");
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(linked.ok, "export/import link should succeed");
-  const std::optional<amber::runtime::RuntimeExportCellSnapshot> before =
+  const std::optional<sputnik::runtime::RuntimeExportCellSnapshot> before =
       loader.export_snapshot("core.values", "Answer");
   expect(before.has_value(), "linked export cell should be visible");
-  expect(before->state == amber::runtime::RuntimeExportCellState::Uninitialized,
+  expect(before->state == sputnik::runtime::RuntimeExportCellState::Uninitialized,
          "linked export should be uninitialized before module init");
 
-  const amber::runtime::RuntimeModuleLoadResult early_read =
+  const sputnik::runtime::RuntimeModuleLoadResult early_read =
       loader.read_import_alias("app.main", "Answer");
   expect(!early_read.ok, "early import alias read should fail");
   expect(early_read.error_name == "ModuleInitError",
          "early import alias read should report ModuleInitError");
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_all();
   expect(initialized.ok, "export/import modules should initialize");
-  const std::optional<amber::runtime::RuntimeImportAliasSnapshot> alias =
+  const std::optional<sputnik::runtime::RuntimeImportAliasSnapshot> alias =
       loader.import_alias_snapshot("app.main", "Answer");
   expect(alias.has_value(), "import alias snapshot should be visible");
   expect(alias->read_only, "import alias should be read-only");
   expect(alias->export_cell.state ==
-             amber::runtime::RuntimeExportCellState::Ready,
+             sputnik::runtime::RuntimeExportCellState::Ready,
          "import alias should observe ready export cell after init");
   expect(alias->export_cell.resolved_module_name == "core.values",
          "import alias should resolve to exporting module");
 }
 
 void test_loader_live_alias_snapshots_track_export_updates() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule core = make_module({}, 42);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule core = make_module({}, 42);
   add_code_export(&core, "Answer");
-  amber::bytecode::BcModule app = make_module({"core.values"}, 1);
+  sputnik::bytecode::BcModule app = make_module({"core.values"}, 1);
 
   add_ok(loader, "core.values", core);
   add_ok(loader, "app.main", app);
-  const amber::runtime::RuntimeModuleLoadResult alias_added =
+  const sputnik::runtime::RuntimeModuleLoadResult alias_added =
       loader.add_import_alias("app.main", "Answer", "core.values", "Answer");
   expect(alias_added.ok, "live alias registration should succeed");
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(linked.ok, "live alias modules should link");
 
-  const std::optional<amber::runtime::RuntimeImportAliasSnapshot> alias_before =
+  const std::optional<sputnik::runtime::RuntimeImportAliasSnapshot> alias_before =
       loader.import_alias_snapshot("app.main", "Answer");
   expect(alias_before.has_value(),
          "live alias snapshot should be visible before init");
   expect(alias_before->export_cell.state ==
-             amber::runtime::RuntimeExportCellState::Uninitialized,
+             sputnik::runtime::RuntimeExportCellState::Uninitialized,
          "live alias should observe uninitialized export before init");
 
-  const amber::runtime::RuntimeModuleLoadResult early_read =
+  const sputnik::runtime::RuntimeModuleLoadResult early_read =
       loader.read_import_alias("app.main", "Answer");
   expect(!early_read.ok, "live alias read before export init should fail");
   expect(early_read.error_name == "ModuleInitError",
          "early live alias read should report ModuleInitError");
 
-  const amber::runtime::RuntimeModuleLoadResult core_initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult core_initialized =
       loader.initialize_module("core.values");
   expect(core_initialized.ok, "exporting module should initialize");
 
-  const std::optional<amber::runtime::RuntimeImportAliasSnapshot> alias_after =
+  const std::optional<sputnik::runtime::RuntimeImportAliasSnapshot> alias_after =
       loader.import_alias_snapshot("app.main", "Answer");
   expect(alias_after.has_value(),
          "live alias snapshot should stay visible after init");
   expect(alias_after->export_cell.state ==
-             amber::runtime::RuntimeExportCellState::Ready,
+             sputnik::runtime::RuntimeExportCellState::Ready,
          "live alias should observe ready export after init");
   expect(alias_after->export_cell.resolved_module_name == "core.values",
          "live alias should retain resolved exporting module");
 
-  const amber::runtime::RuntimeModuleLoadResult ready_read =
+  const sputnik::runtime::RuntimeModuleLoadResult ready_read =
       loader.read_import_alias("app.main", "Answer");
   expect(ready_read.ok, "live alias read should succeed after export init");
 }
 
 void test_loader_cyclic_import_aliases_fail_and_stay_failed() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule cycle_a = make_module({"cycle.b"}, 1);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule cycle_a = make_module({"cycle.b"}, 1);
   add_code_export(&cycle_a, "A");
-  amber::bytecode::BcModule cycle_b = make_module({"cycle.a"}, 2);
+  sputnik::bytecode::BcModule cycle_b = make_module({"cycle.a"}, 2);
   add_code_export(&cycle_b, "B");
 
   add_ok(loader, "cycle.a", cycle_a);
@@ -401,24 +401,24 @@ void test_loader_cyclic_import_aliases_fail_and_stay_failed() {
   expect(loader.add_import_alias("cycle.b", "A", "cycle.a", "A").ok,
          "cycle.b import alias registration should succeed");
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(linked.ok, "cyclic aliases should link before init access");
 
-  const std::optional<amber::runtime::RuntimeImportAliasSnapshot> alias_before =
+  const std::optional<sputnik::runtime::RuntimeImportAliasSnapshot> alias_before =
       loader.import_alias_snapshot("cycle.a", "B");
   expect(alias_before.has_value(),
          "cyclic alias snapshot should be visible before init");
   expect(alias_before->export_cell.state ==
-             amber::runtime::RuntimeExportCellState::Uninitialized,
+             sputnik::runtime::RuntimeExportCellState::Uninitialized,
          "cyclic alias should observe uninitialized export before init");
 
-  const amber::runtime::RuntimeModuleLoadResult early_read =
+  const sputnik::runtime::RuntimeModuleLoadResult early_read =
       loader.read_import_alias("cycle.a", "B");
   expect(!early_read.ok, "cyclic alias read before init should fail");
   expect(early_read.error_name == "ModuleInitError",
          "cyclic early alias read should report ModuleInitError");
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_all();
   expect(!initialized.ok, "cyclic import aliases should fail during init");
   expect(initialized.error_name == "ModuleInitError",
@@ -427,24 +427,24 @@ void test_loader_cyclic_import_aliases_fail_and_stay_failed() {
              std::string::npos,
          "cyclic import aliases should include cycle context");
   expect(snapshot_named(initialized, "cycle.a").state ==
-             amber::runtime::RuntimeModuleState::Failed,
+             sputnik::runtime::RuntimeModuleState::Failed,
          "cycle.a should stay failed after cyclic alias init");
   expect(snapshot_named(initialized, "cycle.b").state ==
-             amber::runtime::RuntimeModuleState::Failed,
+             sputnik::runtime::RuntimeModuleState::Failed,
          "cycle.b should stay failed after cyclic alias init");
 
-  const std::optional<amber::runtime::RuntimeImportAliasSnapshot> alias_after =
+  const std::optional<sputnik::runtime::RuntimeImportAliasSnapshot> alias_after =
       loader.import_alias_snapshot("cycle.a", "B");
   expect(alias_after.has_value(),
          "cyclic alias snapshot should remain visible after failure");
   expect(alias_after->export_cell.state ==
-             amber::runtime::RuntimeExportCellState::Failed,
+             sputnik::runtime::RuntimeExportCellState::Failed,
          "cyclic alias should observe failed export cell after init failure");
   expect(alias_after->export_cell.message.find(
              "cyclic module initialization") != std::string::npos,
          "failed cyclic alias should retain cycle message");
 
-  const amber::runtime::RuntimeModuleLoadResult retried =
+  const sputnik::runtime::RuntimeModuleLoadResult retried =
       loader.initialize_all();
   expect(!retried.ok, "cyclic init failure should stay failed on retry");
   expect(retried.error_name == "ModuleInitError",
@@ -456,15 +456,15 @@ void test_loader_cyclic_import_aliases_fail_and_stay_failed() {
 }
 
 void test_loader_reports_missing_export() {
-  amber::runtime::RuntimeModuleLoader loader;
+  sputnik::runtime::RuntimeModuleLoader loader;
   add_ok(loader, "core.values", make_module({}, 1));
   add_ok(loader, "app.main", make_module({"core.values"}, 1));
-  const amber::runtime::RuntimeModuleLoadResult alias_added =
+  const sputnik::runtime::RuntimeModuleLoadResult alias_added =
       loader.add_import_alias("app.main", "Missing", "core.values", "Missing");
   expect(alias_added.ok,
          "missing export alias registration should be accepted");
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(!linked.ok, "link should fail for missing export");
   expect(linked.error_name == "ImportError",
          "missing export should report ImportError");
@@ -481,13 +481,13 @@ void test_loader_reports_missing_export() {
 }
 
 void test_loader_reports_version_and_abi_mismatch() {
-  amber::runtime::RuntimeModuleLoader version_loader;
-  amber::bytecode::BcModule versioned_app = make_module({"core.versioned"}, 1);
+  sputnik::runtime::RuntimeModuleLoader version_loader;
+  sputnik::bytecode::BcModule versioned_app = make_module({"core.versioned"}, 1);
   versioned_app.dependencies[0].required_format = {1, 1};
   add_ok(version_loader, "core.versioned", make_module({}, 1));
   add_ok(version_loader, "app.versioned", versioned_app);
 
-  const amber::runtime::RuntimeModuleLoadResult version_linked =
+  const sputnik::runtime::RuntimeModuleLoadResult version_linked =
       version_loader.link();
   expect(!version_linked.ok, "link should fail for dependency format mismatch");
   expect(version_linked.error_name == "ImportError",
@@ -495,14 +495,14 @@ void test_loader_reports_version_and_abi_mismatch() {
   expect(version_linked.message.find("1.1") != std::string::npos,
          "version mismatch should include required version");
 
-  amber::runtime::RuntimeModuleLoader abi_loader;
-  amber::bytecode::BcModule abi_app = make_module({"core.abi"}, 1);
+  sputnik::runtime::RuntimeModuleLoader abi_loader;
+  sputnik::bytecode::BcModule abi_app = make_module({"core.abi"}, 1);
   abi_app.dependencies[0].has_abi_requirement = true;
   abi_app.dependencies[0].abi_requirement.fill(0xAB);
   add_ok(abi_loader, "core.abi", make_module({}, 1));
   add_ok(abi_loader, "app.abi", abi_app);
 
-  const amber::runtime::RuntimeModuleLoadResult abi_linked = abi_loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult abi_linked = abi_loader.link();
   expect(!abi_linked.ok, "link should fail for dependency ABI mismatch");
   expect(abi_linked.error_name == "ImportError",
          "ABI mismatch should report ImportError");
@@ -511,12 +511,12 @@ void test_loader_reports_version_and_abi_mismatch() {
 }
 
 void test_loader_rejects_unsupported_required_profile() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule module = make_module({}, 1);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule module = make_module({}, 1);
   module.required_features = {"ffi.v1"};
   add_ok(loader, "profile.bad", module);
 
-  const amber::runtime::RuntimeModuleLoadResult linked = loader.link();
+  const sputnik::runtime::RuntimeModuleLoadResult linked = loader.link();
   expect(!linked.ok, "link should fail for unsupported required profile");
   expect(linked.error_name == "UnsupportedProfileError",
          "unsupported profile should report UnsupportedProfileError");
@@ -525,26 +525,26 @@ void test_loader_rejects_unsupported_required_profile() {
 }
 
 void test_loader_resolves_reexport_chain() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule leaf = make_module({}, 1);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule leaf = make_module({}, 1);
   add_code_export(&leaf, "Thing");
 
-  amber::bytecode::BcModule facade = make_module({"core.leaf"}, 2);
+  sputnik::bytecode::BcModule facade = make_module({"core.leaf"}, 2);
   add_reexport(&facade, "Thing", "core.leaf", "Thing");
 
-  amber::bytecode::BcModule app = make_module({"core.facade"}, 3);
+  sputnik::bytecode::BcModule app = make_module({"core.facade"}, 3);
 
   add_ok(loader, "core.leaf", leaf);
   add_ok(loader, "core.facade", facade);
   add_ok(loader, "app.main", app);
-  const amber::runtime::RuntimeModuleLoadResult alias_added =
+  const sputnik::runtime::RuntimeModuleLoadResult alias_added =
       loader.add_import_alias("app.main", "Thing", "core.facade", "Thing");
   expect(alias_added.ok, "re-export import alias registration should succeed");
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_all();
   expect(initialized.ok, "re-export module chain should initialize");
-  const std::optional<amber::runtime::RuntimeImportAliasSnapshot> alias =
+  const std::optional<sputnik::runtime::RuntimeImportAliasSnapshot> alias =
       loader.import_alias_snapshot("app.main", "Thing");
   expect(alias.has_value(), "re-export alias snapshot should be visible");
   expect(alias->export_cell.has_reexport,
@@ -554,30 +554,30 @@ void test_loader_resolves_reexport_chain() {
   expect(alias->export_cell.resolved_export_name == "Thing",
          "re-export should resolve target export name");
   expect(alias->export_cell.state ==
-             amber::runtime::RuntimeExportCellState::Ready,
+             sputnik::runtime::RuntimeExportCellState::Ready,
          "re-export alias should observe ready leaf export");
 }
 
 void test_loader_reports_source_mapped_init_failure() {
-  amber::runtime::RuntimeModuleLoader loader;
-  amber::bytecode::BcModule module = make_module({}, 1, true);
+  sputnik::runtime::RuntimeModuleLoader loader;
+  sputnik::bytecode::BcModule module = make_module({}, 1, true);
   module.code_objects[0].source_spans.push_back(
-      {1, 2, {"bad_init.am", {9, 3, 80}, {9, 12, 89}}});
+      {1, 2, {"bad_init.s", {9, 3, 80}, {9, 12, 89}}});
   module.line_table.push_back({1, 1, 9});
   add_ok(loader, "bad.init", module);
 
-  const amber::runtime::RuntimeModuleLoadResult initialized =
+  const sputnik::runtime::RuntimeModuleLoadResult initialized =
       loader.initialize_module("bad.init");
   expect(!initialized.ok, "source-mapped failing init should fail");
   expect(initialized.error_name == "ModuleInitError",
          "source-mapped failing init should report ModuleInitError");
   expect(!initialized.diagnostics.empty(),
          "source-mapped failing init should include diagnostic");
-  expect(initialized.diagnostics[0].location.file == "bad_init.am",
+  expect(initialized.diagnostics[0].location.file == "bad_init.s",
          "loader diagnostic should preserve source file");
   expect(initialized.diagnostics[0].location.line == 9,
          "loader diagnostic should preserve source line");
-  expect(initialized.message.find("bad_init.am") != std::string::npos,
+  expect(initialized.message.find("bad_init.s") != std::string::npos,
          "loader message should include trace text");
 }
 

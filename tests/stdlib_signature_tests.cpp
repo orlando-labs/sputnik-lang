@@ -19,28 +19,28 @@ void expect(bool okay, const std::string &message) {
   }
 }
 
-amber::bytecode::BcModule compile(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<signature-test>");
+sputnik::bytecode::BcModule compile(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<signature-test>");
   auto tokens = lexer.lex();
-  expect(tokens.ok(), amber::lexer::diagnostics_to_json(tokens.diagnostics));
-  amber::parser::Parser parser(tokens.tokens);
+  expect(tokens.ok(), sputnik::lexer::diagnostics_to_json(tokens.diagnostics));
+  sputnik::parser::Parser parser(tokens.tokens);
   auto parsed = parser.parse_module_unit();
-  expect(parsed.ok(), amber::lexer::diagnostics_to_json(parsed.diagnostics));
-  auto bound = amber::binder::bind_module(parsed.items, parsed.module_name);
-  expect(bound.ok(), amber::lexer::diagnostics_to_json(bound.diagnostics));
+  expect(parsed.ok(), sputnik::lexer::diagnostics_to_json(parsed.diagnostics));
+  auto bound = sputnik::binder::bind_module(parsed.items, parsed.module_name);
+  expect(bound.ok(), sputnik::lexer::diagnostics_to_json(bound.diagnostics));
   auto hir =
-      amber::hir::lower_module(parsed.items, parsed.module_name, bound.graph);
-  auto emitted = amber::bytecode::emit_program(hir, parsed.module_name);
-  expect(emitted.ok(), amber::lexer::diagnostics_to_json(emitted.diagnostics));
-  auto decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emitted.module));
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+      sputnik::hir::lower_module(parsed.items, parsed.module_name, bound.graph);
+  auto emitted = sputnik::bytecode::emit_program(hir, parsed.module_name);
+  expect(emitted.ok(), sputnik::lexer::diagnostics_to_json(emitted.diagnostics));
+  auto decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emitted.module));
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult execute(const std::string &source) {
+sputnik::runtime::ExecutionResult execute(const std::string &source) {
   auto module = compile(source);
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
 void expect_true(const std::string &source, const std::string &name) {
@@ -92,7 +92,7 @@ void test_roundtrips() {
         continue;
     }
     if (name.find("gost") == 0U) {
-#ifndef AMBER_HAVE_NETTLE_GOST
+#ifndef SPUTNIK_HAVE_NETTLE_GOST
       expect_true("not Signature.available?(:" + name + ")\n",
                   name + " unavailable without Nettle");
       continue;
@@ -104,7 +104,7 @@ void test_roundtrips() {
             "keys = Signature.generate(algorithm)\n"
             "secret = keys[\"private_key\"]\n"
             "public = keys[\"public_key\"]\n"
-            "message = Bytes.new(\"amber signature test\")\n"
+            "message = Bytes.new(\"sputnik signature test\")\n"
             "sig = Signature.sign(algorithm, secret, message)\n"
             "Signature.available?(algorithm) and "
             "Signature.public_key(algorithm, secret).hex() == public.hex() and "
@@ -126,7 +126,7 @@ void test_rejections() {
   expect(!bad_key.ok() && bad_key.fault &&
              bad_key.fault->error_name == "ArgumentError",
          "malformed private key rejected");
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
   const auto bad_gost_256 =
       execute("Signature.public_key(:gost2012_256, Hex.decode(\""
               "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF6C611070995AD10045841B09B761B893"
@@ -148,24 +148,24 @@ void test_rejections() {
 void test_random_capability() {
   auto module = compile("Signature.generate(:ed25519)\n");
   module.capabilities.push_back(
-      amber::capability::make_capability("random.secure"));
-  amber::runtime::RuntimeWorldOptions denied_options;
-  amber::runtime::RuntimeWorld denied_world(module, denied_options);
+      sputnik::capability::make_capability("random.secure"));
+  sputnik::runtime::RuntimeWorldOptions denied_options;
+  sputnik::runtime::RuntimeWorld denied_world(module, denied_options);
   const auto denied = denied_world.execute(module.init.entry_code_id);
   expect(!denied.ok() && denied.fault &&
              denied.fault->error_name == "CapabilityError",
          "key generation requires random.secure capability");
 
-  amber::runtime::RuntimeWorldOptions allowed_options;
+  sputnik::runtime::RuntimeWorldOptions allowed_options;
   allowed_options.capability_grants.push_back(
-      amber::capability::make_capability("random.secure"));
-  amber::runtime::RuntimeWorld allowed_world(module, allowed_options);
+      sputnik::capability::make_capability("random.secure"));
+  sputnik::runtime::RuntimeWorld allowed_world(module, allowed_options);
   const auto allowed = allowed_world.execute(module.init.entry_code_id);
   expect(allowed.ok(), "key generation with random.secure grant succeeds");
 
-  amber::runtime::RuntimeWorldOptions replay_options = allowed_options;
+  sputnik::runtime::RuntimeWorldOptions replay_options = allowed_options;
   replay_options.enforce_replay = true;
-  amber::runtime::RuntimeWorld replay_world(module, replay_options);
+  sputnik::runtime::RuntimeWorld replay_world(module, replay_options);
   const auto replay = replay_world.execute(module.init.entry_code_id);
   expect(!replay.ok() && replay.fault &&
              replay.fault->error_name == "DeterminismError",
@@ -175,7 +175,7 @@ void test_random_capability() {
       compile("secret = Hex.decode(\"9d61b19deffd5a60ba844af492ec2cc4"
               "4449c5697b326919703bac031cae7f60\")\n"
               "Signature.sign(:ed25519, secret, Bytes.new(\"message\"))\n");
-  amber::runtime::RuntimeWorld pure_world(pure_module, replay_options);
+  sputnik::runtime::RuntimeWorld pure_world(pure_module, replay_options);
   const auto pure = pure_world.execute(pure_module.init.entry_code_id);
   expect(pure.ok(), "pure Ed25519 signing needs no random capability");
 }

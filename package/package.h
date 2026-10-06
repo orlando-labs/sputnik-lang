@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::pkg {
+namespace sputnik::pkg {
 
 struct PackageDiagnostic {
   std::string error_name;
@@ -36,7 +36,7 @@ struct PackageNativeSymbol {
 // A `[[native.types]]` entry: the foreign-handle dispatch identity for a
 // `native class` (the per-(package,type) tag) plus its ownership and reclaim.
 struct PackageNativeType {
-  std::string amber;
+  std::string sputnik;
   std::string tag;
   std::string ownership;
   std::string destructor;
@@ -53,7 +53,7 @@ struct PackageNativeError {
 
 // A `[[native]]` extension unit: the build facts behind a package's native
 // bindings (sources/flags/libs), the logical-name->symbol map, and the
-// foreign-handle type table. The Amber surface declares which defs are native;
+// foreign-handle type table. The Sputnik surface declares which defs are native;
 // this carries only how to build the native side (native-packages design §5).
 struct PackageNativeExtension {
   std::string name;
@@ -111,7 +111,7 @@ struct PackageNativeBlob {
 
 struct PackageNativeExtensionMetadata {
   std::string name;
-  std::uint32_t amber_ext_abi_version = 1;
+  std::uint32_t sputnik_ext_abi_version = 1;
   std::string target_triple;
   std::string native_source_digest;
   std::string exported_symbol_digest;
@@ -212,4 +212,4 @@ std::string artifact_to_json(const PackageArtifact &artifact);
 std::string verify_result_to_json(const PackageVerifyResult &result);
 std::string registry_result_to_json(const PackageRegistryResult &result);
 
-} // namespace amber::pkg
+} // namespace sputnik::pkg

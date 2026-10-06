@@ -1,5 +1,5 @@
 {
-  "schema": "amber.load.v1",
+  "schema": "sputnik.load.v1",
   "root": "conformance.load",
   "status": "ok",
   "init_order": ["conformance.load"],

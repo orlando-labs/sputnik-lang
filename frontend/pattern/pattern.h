@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace amber::pattern {
+namespace sputnik::pattern {
 
 enum class PatternContext {
   General,
@@ -30,4 +30,4 @@ std::unique_ptr<ast::Expr> compile_pattern_ir(const ast::Expr &pattern);
 bool is_map_subject_pattern(const ast::Expr &pattern);
 bool is_tuple_subject_pattern(const ast::Expr &pattern);
 
-} // namespace amber::pattern
+} // namespace sputnik::pattern

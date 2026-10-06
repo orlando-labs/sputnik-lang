@@ -10,7 +10,7 @@
 #include <openssl/rsa.h>
 #include <openssl/x509.h>
 
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
 #include <nettle/ecc-curve.h>
 #include <nettle/gostdsa.h>
 #endif
@@ -24,7 +24,7 @@
 #include <string>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 namespace {
 
 enum class Algorithm {
@@ -297,7 +297,7 @@ bool openssl_verify(Algorithm algorithm, EVP_PKEY *key,
              message.size()) == 1;
 }
 
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
 const ecc_curve *gost_curve(Algorithm algorithm) {
   return algorithm == Algorithm::Gost2012_256 ? nettle_get_gost_gc256b()
                                               : nettle_get_gost_gc512a();
@@ -491,7 +491,7 @@ bool signature_algorithm_available(std::string_view name) {
   const auto algorithm = parse_algorithm(std::string(name));
   if (!algorithm)
     return false;
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
   return is_gost(*algorithm) || openssl_available(*algorithm);
 #else
   return !is_gost(*algorithm) && openssl_available(*algorithm);
@@ -512,7 +512,7 @@ SignatureResult signature_generate(std::string_view name,
   std::string probe;
   if (!entropy || !entropy(1U, &probe) || probe.size() != 1U)
     return SignatureResult::EntropyFailure;
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
   if (is_gost(*algorithm)) {
     return gost_generate(entropy, *algorithm, private_key, public_key)
                ? SignatureResult::Success
@@ -535,7 +535,7 @@ SignatureResult signature_public_key(std::string_view name,
   if (public_key == nullptr)
     return SignatureResult::OperationFailure;
   const std::string private_bytes(private_key);
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
   if (is_gost(*algorithm))
     return gost_public(*algorithm, private_bytes, public_key)
                ? SignatureResult::Success
@@ -568,7 +568,7 @@ SignatureResult signature_sign(std::string_view name,
     if (!entropy || !entropy(1U, &probe) || probe.size() != 1U)
       return SignatureResult::EntropyFailure;
   }
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
   if (is_gost(*algorithm)) {
     Scalar key(gost_curve(*algorithm));
     if (!gost_load_private(*algorithm, private_bytes, &key))
@@ -601,7 +601,7 @@ SignatureResult signature_verify(std::string_view name,
   const std::string public_bytes(public_key);
   const std::string message_bytes(message);
   const std::string signature_bytes(signature);
-#ifdef AMBER_HAVE_NETTLE_GOST
+#ifdef SPUTNIK_HAVE_NETTLE_GOST
   if (is_gost(*algorithm))
     return gost_verify(*algorithm, public_bytes, message_bytes, signature_bytes,
                        valid)
@@ -740,4 +740,4 @@ void register_signature_runtime_module(RuntimeModuleRegistry &modules,
     register_runtime_error_descriptor(*errors, descriptor);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

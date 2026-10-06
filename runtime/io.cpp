@@ -22,7 +22,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -2725,4 +2725,4 @@ RuntimeIoStatus runtime_fs_copy(const RuntimePath &from, const RuntimePath &to,
   return io_ok(static_cast<std::size_t>(size));
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

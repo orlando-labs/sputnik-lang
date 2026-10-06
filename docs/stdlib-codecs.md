@@ -1,15 +1,15 @@
-# Base64, Base64Url и Hex в Amber
+# Base64, Base64Url и Hex в Sputnik
 
 `Base64`, `Base64Url` и `Hex` - встроенные модули стандартной библиотеки для
 кодирования байтов в текст и обратного декодирования текста в байты. Их не
-нужно импортировать: имена доступны как prelude-константы в обычном Amber-коде.
+нужно импортировать: имена доступны как prelude-константы в обычном Sputnik-коде.
 
 Эти модули намеренно не называются `Encoding`: они работают с binary-to-text
 кодеками, а будущий `Encoding` остаётся свободным для перекодирования текста.
 
 Короткий пример:
 
-```amber
+```sputnik
 payload = Bytes.new("hello")
 
 standard = Base64.encode(payload)                  # "aGVsbG8="
@@ -26,7 +26,7 @@ same = Hex.decode(hex).to_str()                    # "hello"
 текстом. Для бинарных данных обычно лучше оставить `Bytes` как есть или
 посмотреть на них через `.hex()`.
 
-```amber
+```sputnik
 bytes = Base64Url.decode("-_8")
 bytes.hex()                                        # "fbff"
 ```
@@ -43,7 +43,7 @@ bytes.hex()                                        # "fbff"
 `ByteBuffer`. `Str` не преобразуется в байты неявно; если строку нужно
 закодировать как UTF-8 байты, используйте `Bytes.new(text)`.
 
-```amber
+```sputnik
 Base64.encode("hello")          # TypeError
 Base64.encode(Bytes.new("hello"))
 ```
@@ -58,7 +58,7 @@ A-Z a-z 0-9 + /
 
 API:
 
-```amber
+```sputnik
 Base64.encode(bytes, padding: true) -> Str
 Base64.decode(text, mode: :strict) -> Bytes
 ```
@@ -66,7 +66,7 @@ Base64.decode(text, mode: :strict) -> Bytes
 `padding:` должен быть `Bool`. По умолчанию `padding: true`, поэтому результат
 канонически дополняется `=`.
 
-```amber
+```sputnik
 bytes = Bytes.new("abcd")
 
 padded = Base64.encode(bytes)                    # "YWJjZA=="
@@ -81,7 +81,7 @@ Base64.decode(compact).to_str()                  # "abcd"
 non-zero padding bits дают `CodecDecodeError`. В `:lenient` режиме декодер
 сначала игнорирует ASCII whitespace.
 
-```amber
+```sputnik
 folded = "Y WJj\nZA=="
 Base64.decode(folded, mode: :lenient).to_str()   # "abcd"
 ```
@@ -96,7 +96,7 @@ A-Z a-z 0-9 - _
 
 API:
 
-```amber
+```sputnik
 Base64Url.encode(bytes, padding: false) -> Str
 Base64Url.decode(text, mode: :strict) -> Bytes
 ```
@@ -104,7 +104,7 @@ Base64Url.decode(text, mode: :strict) -> Bytes
 По умолчанию `Base64Url.encode` не добавляет `=`, потому что URL-токены, имена
 файлов и компактные wire-форматы чаще используют unpadded форму.
 
-```amber
+```sputnik
 token = Base64Url.encode(Hex.decode("fbff"))       # "-_8"
 round = Base64Url.decode(token).hex()              # "fbff"
 
@@ -121,7 +121,7 @@ Base64Url.decode(padded).to_str()                  # "ok"
 
 API:
 
-```amber
+```sputnik
 Hex.encode(bytes) -> Str
 Hex.decode(text, mode: :strict) -> Bytes
 ```
@@ -129,7 +129,7 @@ Hex.decode(text, mode: :strict) -> Bytes
 `Hex.decode` принимает цифры `0-9`, `a-f` и `A-F`. В `:strict` режиме вход
 должен состоять только из hex-цифр, а количество цифр должно быть чётным.
 
-```amber
+```sputnik
 bytes = Hex.decode("CAFE")
 bytes.hex()                                        # "cafe"
 ```
@@ -138,7 +138,7 @@ bytes.hex()                                        # "cafe"
 принимает один ведущий `0x` или `0X` перед первой цифрой. После нормализации
 количество hex-цифр всё равно должно быть чётным.
 
-```amber
+```sputnik
 Hex.decode("0xCAFE")                               # CodecDecodeError
 Hex.decode("0xCA-FE", mode: :lenient).hex()        # "cafe"
 Hex.decode("68 65:6C-6c 6F", mode: :lenient).to_str()
@@ -169,7 +169,7 @@ Hex.decode("68 65:6C-6c 6F", mode: :lenient).to_str()
 Кодеки принимают `ByteBuffer` и `ByteSlice` напрямую. Для `ByteBuffer` кодируется
 его активный диапазон байтов; для `ByteSlice` - только сам slice.
 
-```amber
+```sputnik
 buf = io.ByteBuffer(3)
 buf.put!(0)
 buf.put!(127)

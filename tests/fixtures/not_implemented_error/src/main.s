@@ -1,0 +1,20 @@
+package errors.not_implemented
+
+export main
+
+native def pending() from "errors.pending":
+  raise NotImplementedError("native pending")
+
+def main():
+  caught = 0
+  try:
+    raise NotImplementedError.new("sputnik pending")
+  rescue NotImplementedError |e|:
+    if e.message == "sputnik pending" and Exception === e:
+      caught += 1
+  try:
+    pending()
+  rescue Exception |e|:
+    if NotImplementedError === e and e.message == "native pending":
+      caught += 1
+  caught

@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ANCHOR_MAP = ROOT / "docs/engineering/spec-anchor-map-v1.md"
 ANCHOR_SOURCE_GLOBS = [
     "README.md",
-    "amber_unified_final_spec.md",
+    "sputnik_unified_final_spec.md",
     "docs/engineering/*.md",
     "spec/changelog/*.md",
 ]
@@ -34,7 +34,7 @@ RUNTIME_ERRORS_YAML = ROOT / "spec/registries/runtime_errors.yaml"
 RUNTIME_ERRORS_DEF = ROOT / "spec/registries/runtime_errors.def"
 LINK_SCAN_GLOBS = [
     "README.md",
-    "amber_unified_final_spec.md",
+    "sputnik_unified_final_spec.md",
     "docs/engineering/*.md",
     "spec/changelog/*.md",
 ]
@@ -151,7 +151,7 @@ def registry_rows() -> list[tuple[str, int, str]]:
 
 def generate_anchor_map() -> str:
     markdown: list[str] = [
-        "# amber.spec-anchor-map.v1",
+        "# sputnik.spec-anchor-map.v1",
         "",
         "Status: generated W12 anchor map for the current repository docs/spec set.",
         "",
@@ -385,7 +385,7 @@ def generate_runtime_error_def() -> str:
     lines = [
         "// Generated from spec/registries/runtime_errors.yaml.",
         "// Consumed by runtime/vm.cpp and frontend/binder/binder.cpp.",
-        "// Define AMBER_RUNTIME_ERROR(name, parent, default_message,",
+        "// Define SPUTNIK_RUNTIME_ERROR(name, parent, default_message,",
         "// default_exit_code, field_mask) before including.",
     ]
     for spec in specs:
@@ -396,7 +396,7 @@ def generate_runtime_error_def() -> str:
             spec.default_exit_code if spec.default_exit_code is not None else -1
         )
         lines.append(
-            "AMBER_RUNTIME_ERROR("
+            "SPUTNIK_RUNTIME_ERROR("
             + ", ".join(
                 [
                     json.dumps(spec.name),

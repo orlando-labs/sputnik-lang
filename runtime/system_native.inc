@@ -6,14 +6,14 @@ static bool native_system_receiver(const NativeValue &value) {
   const auto &runtime = as_native_runtime_handle(value)->value;
   return (runtime.is_native_type() &&
           runtime.as_native_type().kind ==
-              amber::runtime::RuntimeNativeTypeKind::System) ||
+              sputnik::runtime::RuntimeNativeTypeKind::System) ||
          (runtime.is_io_value() &&
-          amber::runtime::system_resource(runtime.as_io_value()));
+          sputnik::runtime::system_resource(runtime.as_io_value()));
 }
 
 static NativeValue
-native_system_to_value(const amber::runtime::SystemValue &value) {
-  using Kind = amber::runtime::SystemValue::Kind;
+native_system_to_value(const sputnik::runtime::SystemValue &value) {
+  using Kind = sputnik::runtime::SystemValue::Kind;
   switch (value.kind) {
   case Kind::Null:
     return NativeValue::nullv();
@@ -29,7 +29,7 @@ native_system_to_value(const amber::runtime::SystemValue &value) {
     return NativeValue::bytes(value.text);
   case Kind::Object:
     return NativeValue::runtime_handle(
-        amber::runtime::Value::io_value(value.object));
+        sputnik::runtime::Value::io_value(value.object));
   case Kind::Opaque:
     return *std::static_pointer_cast<NativeValue>(value.opaque);
   case Kind::List: {
@@ -39,14 +39,14 @@ native_system_to_value(const amber::runtime::SystemValue &value) {
     return NativeValue::list(std::move(items));
   }
   default:
-    throw amber::runtime::SystemError("TypeError",
+    throw sputnik::runtime::SystemError("TypeError",
                                       "unsupported process result");
   }
 }
 
-static amber::runtime::SystemValue
+static sputnik::runtime::SystemValue
 native_system_from_value(const NativeValue &value) {
-  using S = amber::runtime::SystemValue;
+  using S = sputnik::runtime::SystemValue;
   using Kind = S::Kind;
   if (native_value_is_string(value))
     return S::str(native_string_text(value));
@@ -71,13 +71,13 @@ native_system_from_value(const NativeValue &value) {
     const auto &runtime = as_native_runtime_handle(value)->value;
     if (runtime.is_native_type() &&
         runtime.as_native_type().kind ==
-            amber::runtime::RuntimeNativeTypeKind::System) {
+            sputnik::runtime::RuntimeNativeTypeKind::System) {
       S v;
       v.kind = Kind::Module;
       return v;
     }
     if (runtime.is_io_value() &&
-        amber::runtime::system_resource(runtime.as_io_value()))
+        sputnik::runtime::system_resource(runtime.as_io_value()))
       return S::resource(runtime.as_io_value());
     break;
   }
@@ -97,7 +97,7 @@ native_system_from_value(const NativeValue &value) {
     for (const auto &entry : as_map(value).entries) {
       auto key = native_system_from_value(entry.first);
       if (key.kind != Kind::String)
-        throw amber::runtime::SystemError("TypeError",
+        throw sputnik::runtime::SystemError("TypeError",
                                           "env keys must be strings");
       result.entries[key.text] = native_system_from_value(entry.second);
     }
@@ -106,32 +106,32 @@ native_system_from_value(const NativeValue &value) {
   case NativeValue::Tag::Closure: {
     S result;
     result.kind = Kind::Callback;
-    const auto strand = amber::runtime::current_runtime_strand_id();
-    const auto task_id = amber::runtime::tls_runtime_task_id;
-    const auto cancel = amber::runtime::tls_runtime_task_cancel_flag;
-    const auto cancel_owner = amber::runtime::current_runtime_task_cancel_owner();
-    const auto run = amber::runtime::current_runtime_run_cancellation();
-    const bool cleanup = amber::runtime::runtime_run_cancel_requested() &&
-                         !amber::runtime::runtime_run_cancel_checkpoint_requested();
-    const auto sync_owner = amber::runtime::tls_runtime_sync_owner_id;
-    const auto context = amber::runtime::tls_runtime_task_context;
-    const auto scheduler = amber::runtime::tls_runtime_scheduler_identity;
-    const auto stdout_writer = amber::runtime::current_runtime_stdout(),
-               stderr_writer = amber::runtime::current_runtime_stderr();
+    const auto strand = sputnik::runtime::current_runtime_strand_id();
+    const auto task_id = sputnik::runtime::tls_runtime_task_id;
+    const auto cancel = sputnik::runtime::tls_runtime_task_cancel_flag;
+    const auto cancel_owner = sputnik::runtime::current_runtime_task_cancel_owner();
+    const auto run = sputnik::runtime::current_runtime_run_cancellation();
+    const bool cleanup = sputnik::runtime::runtime_run_cancel_requested() &&
+                         !sputnik::runtime::runtime_run_cancel_checkpoint_requested();
+    const auto sync_owner = sputnik::runtime::tls_runtime_sync_owner_id;
+    const auto context = sputnik::runtime::tls_runtime_task_context;
+    const auto scheduler = sputnik::runtime::tls_runtime_scheduler_identity;
+    const auto stdout_writer = sputnik::runtime::current_runtime_stdout(),
+               stderr_writer = sputnik::runtime::current_runtime_stderr();
     result.callback = [value, strand, task_id, cancel, cancel_owner, run, cleanup, sync_owner, context,
                        scheduler, stdout_writer,
                        stderr_writer](const std::vector<S> &args) {
-      amber::runtime::RuntimeStrandScope strand_scope(strand);
+      sputnik::runtime::RuntimeStrandScope strand_scope(strand);
       const auto activity = run ? run->register_task() : nullptr;
-      amber::runtime::RuntimeRunCancellationScope run_scope(run);
-      amber::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
-      amber::runtime::RuntimeTaskScope task_scope(
+      sputnik::runtime::RuntimeRunCancellationScope run_scope(run);
+      sputnik::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
+      sputnik::runtime::RuntimeTaskScope task_scope(
           task_id,
-          amber::runtime::system_callback_cancel_flag()
-              ? amber::runtime::system_callback_cancel_flag()
+          sputnik::runtime::system_callback_cancel_flag()
+              ? sputnik::runtime::system_callback_cancel_flag()
               : cancel,
           sync_owner, context, scheduler, cancel_owner);
-      amber::runtime::RuntimeOutputScope output_scope(stdout_writer,
+      sputnik::runtime::RuntimeOutputScope output_scope(stdout_writer,
                                                       stderr_writer);
       NativeCycleScope cycle_scope;
       std::vector<NativeValue> values;
@@ -140,7 +140,7 @@ native_system_from_value(const NativeValue &value) {
       S result;
       result.kind = Kind::Opaque;
       result.opaque = std::make_shared<NativeValue>(
-          amber_native_call_closure(value, values));
+          sputnik_native_call_closure(value, values));
       return result;
     };
     return result;
@@ -148,7 +148,7 @@ native_system_from_value(const NativeValue &value) {
   default:
     break;
   }
-  throw amber::runtime::SystemError("TypeError",
+  throw sputnik::runtime::SystemError("TypeError",
                                     "unsupported process argument");
 }
 
@@ -158,7 +158,7 @@ static NativeValue native_system_send(const NativeValue &receiver,
                                       const NativeKeywordArgsView &kwargs,
                                       NativeValue block) {
   try {
-    amber::runtime::SystemCall call;
+    sputnik::runtime::SystemCall call;
     call.receiver = native_system_from_value(receiver);
     call.selector = selector;
     for (const auto &arg : args)
@@ -169,30 +169,30 @@ static NativeValue native_system_send(const NativeValue &receiver,
     call.block = native_system_from_value(block);
     call.authorize = [](const std::string &capability,
                         const std::string &target) {
-      if (!amber::capability::capability_set_allows(
+      if (!sputnik::capability::capability_set_allows(
               embedded_capability_grants(), capability, target))
-        throw amber::runtime::SystemError(
+        throw sputnik::runtime::SystemError(
             "CapabilityError",
             "capability is not granted: " + capability + "=" + target);
       native_commit_effect();
     };
-    const auto cancel = amber::runtime::runtime_wait_cancel_flag();
-    call.cancelled = [cancel, owner = amber::runtime::current_runtime_task_cancel_owner(),
-                      run = amber::runtime::current_runtime_run_cancellation()] {
+    const auto cancel = sputnik::runtime::runtime_wait_cancel_flag();
+    call.cancelled = [cancel, owner = sputnik::runtime::current_runtime_task_cancel_owner(),
+                      run = sputnik::runtime::current_runtime_run_cancellation()] {
       (void)owner; (void)run;
       return cancel && cancel->load();
     };
-    amber::runtime::SystemValue result;
-    if (amber::runtime::system_blocking_selector(selector)) {
+    sputnik::runtime::SystemValue result;
+    if (sputnik::runtime::system_blocking_selector(selector)) {
       native_require_suspendable("system");
       native_commit_effect();
-      amber::runtime::SystemCallbackSuspension callback_suspension;
+      sputnik::runtime::SystemCallbackSuspension callback_suspension;
       NativeCycleSuspension suspension;
-      result = amber::runtime::system_dispatch(call);
+      result = sputnik::runtime::system_dispatch(call);
     } else
-      result = amber::runtime::system_dispatch(call);
+      result = sputnik::runtime::system_dispatch(call);
     return native_system_to_value(result);
-  } catch (const amber::runtime::SystemError &error) {
+  } catch (const sputnik::runtime::SystemError &error) {
     throw NativeRaised{native_named_error(error.name, error.what())};
   }
 }

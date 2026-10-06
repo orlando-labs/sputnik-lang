@@ -3,44 +3,44 @@
 `system` starts subprocesses on macOS and Linux. Commands contain an executable
 and an argument vector; constructing one has no process side effects.
 
-```amber
+```sputnik
 import system
 from system import cmd
 
 help = cmd"bin/run --help".output(timeout: 30.0)
-amber_code = "print(42)"
-result = cmd'bin/iamber --eval "#{amber_code}"'.capture()
+sputnik_code = "print(42)"
+result = cmd'bin/isputnik --eval "#{sputnik_code}"'.capture()
 ```
 
-In an interactive notebook, start `build/iamber --grant process.spawn` to
+In an interactive notebook, start `build/isputnik --grant process.spawn` to
 authorize child processes (or scope the grant to an executable, for example
 `--grant process.spawn=/usr/bin/printf`). Native stdlib imports work in the cell:
 
-```amber
+```sputnik
 import system
 system.cmd"/usr/bin/printf hello".output
 ```
 
 The same leading `--grant` options apply to `--project ... --run-sheet`.
 Notebook image rebuilds retain the session's grants. Without a grant, process
-creation reports `CapabilityError`. Restart an already running `iamber` to use
+creation reports `CapabilityError`. Restart an already running `isputnik` to use
 the rebuilt executable and pass the desired grants.
 
 Call-site blocks, including threaded chains and nested blocks that capture
 values from preceding cells, work in persistent notebook cells:
 
-```amber
+```sputnik
 import system
 command = system.cmd"/usr/bin/printf output"
 10_000.times.threaded(500).map: command.output .group: $it .transform_values: $it.size
 print $_
 ```
 
-The threaded collection example runs in `iamber`, `amberc run`, and a full native
-executable. Save it as `processes.am` and build with:
+The threaded collection example runs in `isputnik`, `sputnik run`, and a full native
+executable. Save it as `processes.s` and build with:
 
 ```sh
-amberc build processes.am --target native --entry init --require-full-native \
+sputnik build processes.s --target native --entry init --require-full-native \
   --grant process.spawn -o processes
 ./processes
 ```
@@ -62,7 +62,7 @@ the default is `"inherit"`. `.with(...)` returns a copy with updated options.
 
 `from system import cmd` imports a string-tag macro. An alias is supported:
 
-```amber
+```sputnik
 from system import cmd as system
 command = system'printf "%s" #{"hello world"}'
 ```
@@ -78,7 +78,7 @@ rejected. Argument-array interpolation is not supported; use
 
 Use `system.shell(script, executable: "/bin/sh", args: [...], ...)` explicitly
 for shell syntax. Additional arguments are available as `$1`, `$2`, etc.; `$0`
-is `amber-shell`. Command options also apply to shell commands.
+is `sputnik-shell`. Command options also apply to shell commands.
 
 Both `tag"..."` and `tag'...'` work for **all** `string_tag macro def` macros.
 They require adjacency between the tag and the opening quote. Both forms support
@@ -91,7 +91,7 @@ Multiline `tag"""` remains supported with a newline after the opener;
 
 ## Capture and multiblock
 
-```amber
+```sputnik
 command = system.command("/bin/cat")
 request_header = "header\n"
 request_body = "body".bytes()
@@ -110,7 +110,7 @@ result = command.capture(timeout: 30.0) with:
 ```
 
 The named blocks run concurrently with pipe I/O. Each endpoint has one logical
-reader or writer. Returning from a block closes its endpoint. Amber instructions
+reader or writer. Returning from a block closes its endpoint. Sputnik instructions
 in handlers share a serialized execution context; blocking stream and task
 operations release it so the other handlers can progress. Completion waits for
 all handlers and reaps the child. Handler exceptions propagate after cleanup.
@@ -141,7 +141,7 @@ Execution options:
 | `limit` | 16777216 | Combined automatic stdout/stderr byte limit; also a separate stdin recording limit |
 | `record_input` | `false` | Retain bytes sent to stdin |
 
-Durations follow Amber task conventions: `Float` is seconds and `Int` is
+Durations follow Sputnik task conventions: `Float` is seconds and `Int` is
 milliseconds. Handlers process raw bytes. `read!(size: 65536)` returns a chunk
 or null at EOF; `read_all!(size:, limit:)` collects bytes; `each_chunk(size:)`
 yields until EOF. `write_all!(bytes)` and `write!(bytes)` write the entire input
@@ -169,20 +169,20 @@ running. `.pid`, `.running?()`, `.stdin`, `.stdout`, `.stderr`, `.signal(number)
 process terminates and reaps it. A scoped spawn guarantees cleanup even when its
 block raises:
 
-```amber
+```sputnik
 cmd'printf hello'.spawn() |process|:
   process.communicate().stdout.to_str()
 ```
 
 ## Async, errors, and native compilation
 
-```amber
+```sputnik
 work = task.async:
   cmd'printf hello'.capture(timeout: 5.0)
 result = work.wait()
 ```
 
-Subprocess waits release the Amber scheduler worker. Cancellation terminates and
+Subprocess waits release the Sputnik scheduler worker. Cancellation terminates and
 reaps a scoped subprocess before the task finishes with `CancelledError`.
 Native programs use the same POSIX process engine and native callbacks, without
 a VM bridge or bytecode fallback. The current implementation preserves blocking
@@ -202,10 +202,10 @@ when capability enforcement is active. Explicit signals require `process.signal`
 Automatic cleanup is covered by launch ownership. Process I/O is not replayable.
 
 ```sh
-build/amberc run example.am --grant process.spawn
-build/amberc build example.am --target native --require-full-native \
+build/sputnik run example.s --grant process.spawn
+build/sputnik build example.s --target native --require-full-native \
   --grant process.spawn -o build/example
-python3 tests/system_backend_test.py build/amberc
+python3 tests/system_backend_test.py build/sputnik
 ```
 
 The backend test verifies tags, multiblock, async, errors, cancellation, denied

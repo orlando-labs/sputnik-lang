@@ -7,7 +7,7 @@
 #include <string>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -85,4 +85,4 @@ void register_digest_runtime_module(RuntimeModuleRegistry &modules,
   register_runtime_type_descriptor(types, descriptor);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

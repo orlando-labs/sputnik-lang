@@ -6,7 +6,7 @@
 #include <sstream>
 #include <string_view>
 
-namespace amber::lexer {
+namespace sputnik::lexer {
 namespace {
 
 std::string json_escape(const std::string &value) {
@@ -261,7 +261,7 @@ std::string tokens_to_json(const std::vector<Token> &tokens,
                            const std::string &source_hash) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.tokens.v1\",\n";
+  out << "  \"format\": \"sputnik.tokens.v1\",\n";
   out << "  \"source_hash\": \"sha256:" << source_hash << "\",\n";
   out << "  \"tokens\": [\n";
   for (std::size_t i = 0; i < tokens.size(); ++i) {
@@ -283,7 +283,7 @@ std::string tokens_to_json(const std::vector<Token> &tokens,
 std::string diagnostics_to_json(const std::vector<Diagnostic> &diagnostics) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"format\": \"amber.diag.v1\",\n";
+  out << "  \"format\": \"sputnik.diag.v1\",\n";
   out << "  \"diagnostics\": [\n";
   for (std::size_t i = 0; i < diagnostics.size(); ++i) {
     const Diagnostic &diagnostic = diagnostics[i];
@@ -401,4 +401,4 @@ std::string sha256_hex(const std::string &source) {
   return out.str();
 }
 
-} // namespace amber::lexer
+} // namespace sputnik::lexer

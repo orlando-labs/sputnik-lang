@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // Shared by Bool.parse and both ArgParser execution paths. Failure leaves
 // the output untouched; callers must report an error rather than use it.
@@ -40,4 +40,4 @@ inline bool parse_bool_text(std::string_view text, bool *out) {
   return false;
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

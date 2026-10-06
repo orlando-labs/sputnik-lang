@@ -1,0 +1,31 @@
+package bench.polyglot.map_words_vm_profile
+
+# A 2500x-duration diagnostic twin of map_words.s for external sampling.
+# It intentionally preserves the selector mix and the 2,000-key steady-state
+# map while making the interpreted process long enough for /usr/bin/sample.
+
+export main
+
+def main():
+  m = {}
+  i = 0
+  while i < 75000000:
+    key = "w" + ((i * i + i / 3) % 2000).to_str()
+    if m.include?(key):
+      m[key] = m[key] + 1
+    else:
+      m[key] = 1
+    i = i + 1
+  checksum = 0
+  m.each |k, v|:
+    checksum = checksum + v * k.length()
+  hits = 0
+  j = 0
+  while j < 25000000:
+    probe = "w" + ((j * 7) % 3000).to_str()
+    if m.include?(probe):
+      hits = hits + m[probe]
+    j = j + 1
+  checksum + hits + m.count()
+
+main()

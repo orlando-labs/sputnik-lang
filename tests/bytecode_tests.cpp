@@ -19,9 +19,9 @@ void expect(bool condition, const std::string &message) {
   }
 }
 
-bool has_error_code(const amber::bytecode::DecodeResult &result,
+bool has_error_code(const sputnik::bytecode::DecodeResult &result,
                     const std::string &code) {
-  for (const amber::bytecode::VerifyError &error : result.errors) {
+  for (const sputnik::bytecode::VerifyError &error : result.errors) {
     if (error.code == code) {
       return true;
     }
@@ -38,11 +38,11 @@ void write_u32_le(std::vector<std::uint8_t> &bytes, std::size_t offset,
   bytes[offset + 3U] = static_cast<std::uint8_t>((value >> 24U) & 0xffU);
 }
 
-std::string path_constant_text(const amber::bytecode::BcModule &module,
+std::string path_constant_text(const sputnik::bytecode::BcModule &module,
                                std::uint32_t ref_id) {
   expect(ref_id < module.const_pool.size(), "path ref in range");
-  const amber::bytecode::Constant &constant = module.const_pool[ref_id];
-  expect(constant.kind == amber::bytecode::ConstantKind::Path,
+  const sputnik::bytecode::Constant &constant = module.const_pool[ref_id];
+  expect(constant.kind == sputnik::bytecode::ConstantKind::Path,
          "expected path constant");
   std::string out;
   for (std::size_t i = 0; i < constant.items.size(); ++i) {
@@ -55,8 +55,8 @@ std::string path_constant_text(const amber::bytecode::BcModule &module,
   return out;
 }
 
-amber::bytecode::BcModule sample_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule sample_module() {
+  using namespace sputnik::bytecode;
 
   BcModule module;
   module.format_version = {1, 0};
@@ -92,7 +92,7 @@ amber::bytecode::BcModule sample_module() {
   code.instructions.push_back({Opcode::Return, {{0, false}}});
   code.safepoint_table.push_back({0, 0});
   code.source_spans.push_back(
-      {0, 2, {"/tmp/sample.am", {1, 1, 0}, {1, 14, 13}}});
+      {0, 2, {"/tmp/sample.s", {1, 1, 0}, {1, 14, 13}}});
   module.code_objects.push_back(code);
 
   BcMethod method;
@@ -102,7 +102,7 @@ amber::bytecode::BcModule sample_module() {
   method.entry_code_id = 7;
   module.methods.push_back(method);
 
-  amber::bytecode::DepEntry dependency;
+  sputnik::bytecode::DepEntry dependency;
   dependency.module_name_str_id = 4;
   dependency.required_format = {1, 0};
   dependency.min_language_version = {1, 0};
@@ -118,22 +118,22 @@ amber::bytecode::BcModule sample_module() {
   module.optional_features = {"typed.v1"};
   module.forbidden_features = {"ffi.v1"};
   module.capabilities.push_back(
-      amber::capability::make_capability("fs.read", "./data"));
-  module.effects.push_back(amber::effect::make_effect_summary(
+      sputnik::capability::make_capability("fs.read", "./data"));
+  module.effects.push_back(sputnik::effect::make_effect_summary(
       "compute", "function", {"fs"}, {"fs"}, true));
   module.observability_sites.push_back(
       {1,
        "task.started",
        "runtime",
        "compute",
-       {"sample.am", 1, 1},
-       amber::replay::kObservabilitySiteFlagRequired});
+       {"sample.s", 1, 1},
+       sputnik::replay::kObservabilitySiteFlagRequired});
   module.replay_metadata.required_event_names = {"task.started",
                                                  "task.completed"};
   module.replay_metadata.deterministic_sources = {"time", "random"};
   module.replay_metadata.flags =
-      amber::replay::kReplayMetadataFlagDeterministic;
-  amber::data::SchemaDefinition order_v1;
+      sputnik::replay::kReplayMetadataFlagDeterministic;
+  sputnik::data::SchemaDefinition order_v1;
   order_v1.name = "Order";
   order_v1.version = 1;
   order_v1.fields.push_back({"id",
@@ -141,64 +141,64 @@ amber::bytecode::BcModule sample_module() {
                              true,
                              false,
                              {},
-                             amber::data::kSchemaFieldFlagPrimaryKey});
+                             sputnik::data::kSchemaFieldFlagPrimaryKey});
   order_v1.fields.push_back({"amount", "float", true, false, {}, 0});
-  amber::data::SchemaDefinition order_v2 = order_v1;
+  sputnik::data::SchemaDefinition order_v2 = order_v1;
   order_v2.version = 2;
   order_v2.fields.push_back({"status", "string", false, false, "new", 0});
   module.schemas = {order_v1, order_v2};
   module.schema_migrations.push_back(
       {"Order", 1, 2, "compatible",
-       amber::data::kSchemaMigrationFlagCompatible});
-  amber::data::TablePlan high_value;
+       sputnik::data::kSchemaMigrationFlagCompatible});
+  sputnik::data::TablePlan high_value;
   high_value.plan_id = "orders.high_value";
   high_value.op = "filter";
   high_value.input_refs = {"orders"};
   high_value.arguments = {"amount > 100"};
   high_value.column_dependencies = {{"orders", "amount"}};
   high_value.effect_row = {};
-  high_value.flags = amber::data::kTablePlanFlagLazy;
+  high_value.flags = sputnik::data::kTablePlanFlagLazy;
   module.table_plans.push_back(high_value);
-  amber::wasm_accel::WasmInterfaceEntry import_entry;
+  sputnik::wasm_accel::WasmInterfaceEntry import_entry;
   import_entry.name = "fs.read";
   import_entry.kind = "resource";
   import_entry.type_signature = "resource";
   import_entry.capability =
-      amber::capability::make_capability("fs.read", "./data");
-  amber::wasm_accel::WasmInterfaceEntry export_entry;
+      sputnik::capability::make_capability("fs.read", "./data");
+  sputnik::wasm_accel::WasmInterfaceEntry export_entry;
   export_entry.name = "normalize";
   export_entry.kind = "func";
   export_entry.type_signature = "(Order) -> Order";
   export_entry.schema_name = "Order";
-  amber::wasm_accel::WasmComponent component;
+  sputnik::wasm_accel::WasmComponent component;
   component.name = "analytics.plugin";
   component.world = "analytics-plugin";
-  component.flags = amber::wasm_accel::kWasmComponentFlagFrozenWorld |
-                    amber::wasm_accel::kWasmComponentFlagRawFfiDenied |
-                    amber::wasm_accel::kWasmComponentFlagWorldMutationDenied;
+  component.flags = sputnik::wasm_accel::kWasmComponentFlagFrozenWorld |
+                    sputnik::wasm_accel::kWasmComponentFlagRawFfiDenied |
+                    sputnik::wasm_accel::kWasmComponentFlagWorldMutationDenied;
   component.imports.push_back(import_entry);
   component.exports.push_back(export_entry);
   module.wasm_components.push_back(component);
-  amber::wasm_accel::AcceleratorKernel kernel;
+  sputnik::wasm_accel::AcceleratorKernel kernel;
   kernel.kernel_id = "scale.f32";
   kernel.entry = "scale";
   kernel.target = "gpu";
   kernel.effect_row = {"gpu"};
   kernel.params.push_back({"xs", "Tensor[F32]", "device", 0});
   kernel.params.push_back({"factor", "F32", "scalar", 0});
-  kernel.flags = amber::wasm_accel::kAcceleratorKernelFlagPureHelpersOnly;
+  kernel.flags = sputnik::wasm_accel::kAcceleratorKernelFlagPureHelpersOnly;
   module.accelerator_kernels.push_back(kernel);
-  amber::modern::AgentSymbol symbol;
+  sputnik::modern::AgentSymbol symbol;
   symbol.symbol_id = "main::compute";
   symbol.name = "compute";
   symbol.kind = "function";
   symbol.module = "main";
   symbol.visibility = "public";
-  symbol.source = {"sample.am", 1, 1};
-  symbol.defined_in = "sample.am";
+  symbol.source = {"sample.s", 1, 1};
+  symbol.defined_in = "sample.s";
   symbol.effect_summary = "!{fs}";
   module.agent_symbols.push_back(symbol);
-  amber::modern::AgentPatch patch;
+  sputnik::modern::AgentPatch patch;
   patch.patch_id = "patch.rename_compute";
   patch.intent = "rename_symbol";
   patch.tool = "agent";
@@ -206,21 +206,21 @@ amber::bytecode::BcModule sample_module() {
   patch.capabilities = {"refactor"};
   patch.operations.push_back({"rename", "main::compute", "calculate", 0});
   module.agent_patches.push_back(patch);
-  amber::modern::ProvenanceRecord provenance;
+  sputnik::modern::ProvenanceRecord provenance;
   provenance.patch_id = "patch.rename_compute";
   provenance.tool = "agent";
   provenance.request_digest = "abc123";
-  provenance.files_changed = {"sample.am"};
+  provenance.files_changed = {"sample.s"};
   provenance.symbols_changed = {"main::compute"};
   provenance.checks_run = {"bind", "typed"};
   module.provenance_records.push_back(provenance);
-  amber::modern::ContractSpec contract;
+  sputnik::modern::ContractSpec contract;
   contract.owner = "Account.withdraw";
   contract.kind = "ensure";
   contract.expression = "result.balance >= 0";
   contract.effect_row = {"mut"};
   module.contracts.push_back(contract);
-  amber::modern::PropertySpec property;
+  sputnik::modern::PropertySpec property;
   property.name = "reverse_twice";
   property.owner = "Array";
   property.seed = 42;
@@ -230,19 +230,19 @@ amber::bytecode::BcModule sample_module() {
   module.privacy_labels.push_back({"pii", "pii", 0});
   module.privacy_policies.push_back(
       {"PrivateAudit", "redact", "pii", {}, 0, 0});
-  amber::modern::LineageNode lineage;
+  sputnik::modern::LineageNode lineage;
   lineage.node_id = "transform.users";
   lineage.kind = "transform";
   lineage.output = "users.redacted";
   lineage.labels = {"pii"};
   module.lineage_nodes.push_back(lineage);
-  amber::modern::WorkflowStep step;
+  sputnik::modern::WorkflowStep step;
   step.workflow = "ImportOrders";
   step.name = "commit";
   step.effect_row = {"db"};
   step.idempotency_key = "batch-1";
   module.workflow_steps.push_back(step);
-  amber::modern::WorkflowHistoryEvent event;
+  sputnik::modern::WorkflowHistoryEvent event;
   event.workflow_id = "ImportOrders/1";
   event.workflow_version = 1;
   event.step = "commit";
@@ -258,30 +258,30 @@ amber::bytecode::BcModule sample_module() {
 
 std::string bytes_hash(const std::vector<std::uint8_t> &bytes) {
   const std::string binary(bytes.begin(), bytes.end());
-  return amber::lexer::sha256_hex(binary);
+  return sputnik::lexer::sha256_hex(binary);
 }
 
 void test_round_trip_and_dump() {
-  const amber::bytecode::BcModule module = sample_module();
+  const sputnik::bytecode::BcModule module = sample_module();
   const std::vector<std::uint8_t> bytes =
-      amber::bytecode::serialize_module(module);
-  amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(bytes);
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+      sputnik::bytecode::serialize_module(module);
+  sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(bytes);
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
   const std::string artifact_hash = bytes_hash(bytes);
-  const std::string dump1 = amber::bytecode::module_to_json(
+  const std::string dump1 = sputnik::bytecode::module_to_json(
       decoded.module, decoded.sections, artifact_hash);
   const std::vector<std::uint8_t> bytes2 =
-      amber::bytecode::serialize_module(decoded.module);
+      sputnik::bytecode::serialize_module(decoded.module);
   expect(bytes == bytes2,
          "serialize -> deserialize -> serialize is not stable");
 
-  amber::bytecode::DecodeResult decoded2 =
-      amber::bytecode::deserialize_module(bytes2);
+  sputnik::bytecode::DecodeResult decoded2 =
+      sputnik::bytecode::deserialize_module(bytes2);
   expect(decoded2.ok(),
-         amber::bytecode::verify_errors_to_json(decoded2.errors));
-  const std::string dump2 = amber::bytecode::module_to_json(
+         sputnik::bytecode::verify_errors_to_json(decoded2.errors));
+  const std::string dump2 = sputnik::bytecode::module_to_json(
       decoded2.module, decoded2.sections, bytes_hash(bytes2));
   expect(dump1 == dump2, "JSON dump changed across round-trip");
   expect(decoded.sections.size() == 28,
@@ -289,7 +289,7 @@ void test_round_trip_and_dump() {
 }
 
 void test_notebook_format_minor_version_boundary() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule supported = sample_module();
   supported.format_version = {1, 1};
@@ -307,7 +307,7 @@ void test_notebook_format_minor_version_boundary() {
 }
 
 void test_notebook_cell_round_trip() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   expect(static_cast<std::uint8_t>(Opcode::PFail) == 0x4cU,
          "existing opcode value changed");
@@ -396,7 +396,7 @@ void test_notebook_cell_round_trip() {
 }
 
 void test_unknown_code_kind_rejected() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module = sample_module();
   module.code_objects[0].kind = static_cast<CodeKind>(0xffU);
@@ -407,7 +407,7 @@ void test_unknown_code_kind_rejected() {
 }
 
 void test_notebook_cell_cannot_be_an_ordinary_entry() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module = sample_module();
   BcCode notebook_cell = module.code_objects.front();
@@ -424,7 +424,7 @@ void test_notebook_cell_cannot_be_an_ordinary_entry() {
 }
 
 void test_notebook_slot_opcodes_require_notebook_cell() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module = sample_module();
   module.code_objects[0].instructions = {
@@ -439,8 +439,8 @@ void test_notebook_slot_opcodes_require_notebook_cell() {
          "expected BC1317 for notebook slot opcode in ordinary code");
 }
 
-amber::bytecode::BcModule valid_notebook_metadata_module() {
-  using namespace amber::bytecode;
+sputnik::bytecode::BcModule valid_notebook_metadata_module() {
+  using namespace sputnik::bytecode;
   BcModule module = sample_module();
   module.format_version = {1, 1};
   BcCode provider = module.code_objects.front();
@@ -470,7 +470,7 @@ amber::bytecode::BcModule valid_notebook_metadata_module() {
 }
 
 void test_notebook_metadata_negative_cases() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   {
     BcModule module = valid_notebook_metadata_module();
@@ -693,14 +693,14 @@ void test_notebook_metadata_negative_cases() {
 }
 
 void test_disasm_is_stable() {
-  const amber::bytecode::BcModule module = sample_module();
+  const sputnik::bytecode::BcModule module = sample_module();
   const std::vector<std::uint8_t> bytes =
-      amber::bytecode::serialize_module(module);
-  amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(bytes);
-  expect(decoded.ok(), amber::bytecode::verify_errors_to_json(decoded.errors));
+      sputnik::bytecode::serialize_module(module);
+  sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(bytes);
+  expect(decoded.ok(), sputnik::bytecode::verify_errors_to_json(decoded.errors));
 
-  const std::string disasm = amber::bytecode::module_to_disasm(
+  const std::string disasm = sputnik::bytecode::module_to_disasm(
       decoded.module, decoded.sections, bytes_hash(bytes));
   expect(disasm.find(".header format=1.0 language=1.0") != std::string::npos,
          "missing header line in disasm");
@@ -757,24 +757,24 @@ void test_disasm_is_stable() {
 
 void test_bad_magic_rejected() {
   std::vector<std::uint8_t> bytes =
-      amber::bytecode::serialize_module(sample_module());
+      sputnik::bytecode::serialize_module(sample_module());
   bytes[0] = 'X';
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(bytes);
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(bytes);
   expect(!decoded.ok(), "bad magic unexpectedly decoded");
   expect(has_error_code(decoded, "BC1001"), "expected BC1001 for bad magic");
 }
 
 void test_missing_required_section_rejected() {
   std::vector<std::uint8_t> bytes =
-      amber::bytecode::serialize_module(sample_module());
+      sputnik::bytecode::serialize_module(sample_module());
   expect(bytes.size() > 60, "fixture too small for section directory mutation");
   bytes[56] = 'X';
   bytes[57] = 'X';
   bytes[58] = 'X';
   bytes[59] = 'X';
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(bytes);
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(bytes);
   expect(!decoded.ok(), "unknown section tag unexpectedly decoded");
   expect(has_error_code(decoded, "BC1105"),
          "expected BC1105 for unknown section");
@@ -783,81 +783,81 @@ void test_missing_required_section_rejected() {
 }
 
 void test_invalid_code_ref_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.init.entry_code_id = 99;
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid init code ref unexpectedly decoded");
   expect(has_error_code(decoded, "BC1204"), "expected BC1204 for bad code ref");
 }
 
 void test_back_edge_requires_safepoint() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.code_objects[0].safepoint_table.clear();
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "missing safepoint unexpectedly accepted");
   expect(has_error_code(decoded, "BC1303"),
          "expected BC1303 for back-edge without safepoint");
 }
 
 void test_register_range_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.code_objects[0].instructions.clear();
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::LoadK, {{2, false}, {0, false}}});
+      {sputnik::bytecode::Opcode::LoadK, {{2, false}, {0, false}}});
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::Return, {{0, false}}});
+      {sputnik::bytecode::Opcode::Return, {{0, false}}});
   module.code_objects[0].safepoint_table.clear();
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "out-of-range register unexpectedly accepted");
   expect(has_error_code(decoded, "BC1311"),
          "expected BC1311 for out-of-range register");
 }
 
 void test_uninitialized_register_read_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.code_objects[0].instructions.clear();
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::Move, {{1, false}, {0, false}}});
+      {sputnik::bytecode::Opcode::Move, {{1, false}, {0, false}}});
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::Return, {{1, false}}});
+      {sputnik::bytecode::Opcode::Return, {{1, false}}});
   module.code_objects[0].local_layout.clear();
   module.code_objects[0].safepoint_table.clear();
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "uninitialized register read unexpectedly accepted");
   expect(has_error_code(decoded, "BC1313"),
          "expected BC1313 for uninitialized register read");
 }
 
 void test_branch_join_initializedness_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.code_objects[0].instructions.clear();
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::JumpIfFalse, {{0, false}, {3, false}}});
+      {sputnik::bytecode::Opcode::JumpIfFalse, {{0, false}, {3, false}}});
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::LoadK, {{1, false}, {0, false}}});
+      {sputnik::bytecode::Opcode::LoadK, {{1, false}, {0, false}}});
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::Jump, {{3, false}}});
+      {sputnik::bytecode::Opcode::Jump, {{3, false}}});
   module.code_objects[0].instructions.push_back(
-      {amber::bytecode::Opcode::Return, {{1, false}}});
+      {sputnik::bytecode::Opcode::Return, {{1, false}}});
   module.code_objects[0].safepoint_table.clear();
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "branch join uninitialized read unexpectedly accepted");
   expect(has_error_code(decoded, "BC1313"),
          "expected BC1313 for branch join initializedness");
 }
 
 void test_class_descriptor_round_trip() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module = sample_module();
   module.symbols.push_back("Trackable");
@@ -933,7 +933,7 @@ void test_class_descriptor_round_trip() {
 }
 
 void test_invalid_class_path_ref_rejected() {
-  using namespace amber::bytecode;
+  using namespace sputnik::bytecode;
 
   BcModule module = sample_module();
   Constant empty_keyset;
@@ -956,94 +956,94 @@ void test_invalid_class_path_ref_rejected() {
 }
 
 void test_invalid_schema_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.schemas[0].fields[0].type = "not a type";
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid schema metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1406"),
          "expected BC1406 for invalid schema metadata");
 }
 
 void test_invalid_table_plan_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.table_plans[0].op = "teleport";
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid table plan metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1407"),
          "expected BC1407 for invalid table metadata");
 }
 
 void test_invalid_wasm_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.wasm_components[0].flags &=
-      ~amber::wasm_accel::kWasmComponentFlagWorldMutationDenied;
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+      ~sputnik::wasm_accel::kWasmComponentFlagWorldMutationDenied;
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid wasm metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1408"),
          "expected BC1408 for invalid wasm metadata");
 }
 
 void test_invalid_accelerator_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.accelerator_kernels[0].forbidden_features.push_back(
       "dynamic_dispatch");
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid accelerator metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1409"),
          "expected BC1409 for invalid accelerator metadata");
 }
 
 void test_invalid_agent_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.agent_patches[0].operations[0].symbol_id = "main::stale";
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid agent metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1410"),
          "expected BC1410 for invalid agent metadata");
 }
 
 void test_invalid_contract_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.properties[0].seed = 0;
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid contract metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1411"),
          "expected BC1411 for invalid contract metadata");
 }
 
 void test_invalid_privacy_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
+  sputnik::bytecode::BcModule module = sample_module();
   module.lineage_nodes[0].kind = "export";
   module.privacy_policies[0].action = "deny";
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid privacy metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1412"),
          "expected BC1412 for invalid privacy metadata");
 }
 
 void test_invalid_workflow_metadata_rejected() {
-  amber::bytecode::BcModule module = sample_module();
-  amber::modern::WorkflowHistoryEvent conflict = module.workflow_history[0];
+  sputnik::bytecode::BcModule module = sample_module();
+  sputnik::modern::WorkflowHistoryEvent conflict = module.workflow_history[0];
   conflict.input_digest = "in-b";
   conflict.output_digest = "out-b";
   module.workflow_history.push_back(conflict);
-  const amber::bytecode::DecodeResult decoded =
-      amber::bytecode::deserialize_module(
-          amber::bytecode::serialize_module(module));
+  const sputnik::bytecode::DecodeResult decoded =
+      sputnik::bytecode::deserialize_module(
+          sputnik::bytecode::serialize_module(module));
   expect(!decoded.ok(), "invalid workflow metadata unexpectedly accepted");
   expect(has_error_code(decoded, "BC1413"),
          "expected BC1413 for invalid workflow metadata");

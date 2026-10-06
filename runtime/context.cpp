@@ -5,7 +5,7 @@
 #include <limits>
 #include <utility>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 thread_local std::uint64_t tls_runtime_worker_id = 0;
 thread_local std::uint64_t tls_runtime_strand_id = 0;
@@ -413,4 +413,4 @@ RuntimeStrandScope::~RuntimeStrandScope() {
   tls_runtime_strand_id = previous_strand_id_;
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

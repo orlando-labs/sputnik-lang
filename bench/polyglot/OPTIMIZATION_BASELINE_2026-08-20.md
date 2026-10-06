@@ -1,4 +1,4 @@
-# Amber performance optimization baseline — updated 2026-08-22
+# Sputnik performance optimization baseline — updated 2026-08-22
 
 This document is the handoff point for a new optimization session. It records
 the exact benchmark protocol, current results, known defects, and the next
@@ -26,8 +26,8 @@ mode remain identical.
   `124cefc`; the historical commits only changed reporting and remain listed
   so the older rows can be reproduced.
 - Ember: clean `9e603ddf933999c70e4b40ae9daa6d879fb8bc3a`.
-- amber-orm: clean `438be2194399fcb84680d0fdb6d9d9e927f9a981`.
-- sqlite3-amber: clean `bb62e533bb6096702fbbe36dd0a9a15813ed28eb`.
+- sputnik-orm: clean `438be2194399fcb84680d0fdb6d9d9e927f9a981`.
+- sqlite3-sputnik: clean `bb62e533bb6096702fbbe36dd0a9a15813ed28eb`.
 - Ruby `4.0.5`, Rails `8.1.3`, Puma `8.0.2`.
 - Rails uses real Strong Parameters: `expect` for create/PUT, `permit` for
   PATCH and query parameters, plus strict unknown-field checks matching Ember.
@@ -44,7 +44,7 @@ Results contain all raw samples, mean, median, sample standard deviation, CV,
 Student-t 95%
 confidence interval for the mean, exact commands, executable hashes, source
 tree hashes, tool versions, and Git tracked-dirty state. The latest fresh build
-root was `/private/tmp/amber-polyglot-124cefc`; the original baseline used the
+root was `/private/tmp/sputnik-polyglot-124cefc`; the original baseline used the
 older protocol recorded in its own result files.
 
 HTTP benchmarks use five paired repeats, 30 seconds per server, four concurrent
@@ -56,12 +56,12 @@ repeat; the displayed RPS is the median and the displayed CI is for the mean.
 
 ## HTTP baseline
 
-| Lane | Amber median RPS | CV | Mean 95% CI | Competitors and paired ratio |
+| Lane | Sputnik median RPS | CV | Mean 95% CI | Competitors and paired ratio |
 |---|---:|---:|---:|---|
 | raw / VM | 20,262 | 0.68% | 20,103–20,444 | Go 37,042 / 1.823x; Rust 37,662 / 1.845x; Python 12,513 / 0.616x |
 | raw / native | 32,426 | 1.10% | 31,848–32,734 | Go 37,005 / 1.155x; Rust 37,256 / 1.150x; Python 12,461 / 0.388x |
 | Ember / VM / pool 1 | 1,788 | 0.41% | 1,779–1,797 | Rails 1,989 / 1.110x |
-| Ember / native / pool 1 | 6,542 | 0.81% | 6,499–6,630 | Rails 1,990 / 0.304x (Amber is 3.287x faster) |
+| Ember / native / pool 1 | 6,542 | 0.81% | 6,499–6,630 | Rails 1,990 / 0.304x (Sputnik is 3.287x faster) |
 
 Derived top-level ratios (ratios across separate series are not paired):
 
@@ -91,7 +91,7 @@ size 11,930,856 bytes.
 
 Median wall time in milliseconds; lower is better.
 
-| Workload | Amber VM | Amber native | Python | Ruby | C++ | Go | Rust | VM/native |
+| Workload | Sputnik VM | Sputnik native | Python | Ruby | C++ | Go | Rust | VM/native |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | arithmetic | 192.524 | 6.244 | 192.566 | 74.025 | 4.252 | 6.152 | 4.239 | 30.83x |
 | calls-collections | 15.739 | 8.757 | 21.830 | 10.870 | 2.104 | 2.743 | 2.357 | 1.80x |
@@ -111,7 +111,7 @@ provenance envelope.
 
 ## UUID and map-words follow-up
 
-| Workload | Amber VM, ms | Amber native, ms | VM/native | State |
+| Workload | Sputnik VM, ms | Sputnik native, ms | VM/native | State |
 |---|---:|---:|---:|---|
 | uuid | 33.844 | 11.535 | 2.918x | native bailout fixed |
 | map-words | 25.715 | 9.110 | 2.823x | indexed miss scan fixed |
@@ -147,7 +147,7 @@ instead of `7.14x` and `10.08x`.
    loop. `efded10` returns immediately when the canonical index is complete;
    `7d0d0c9` ensures successful indexed hits still perform only one key-shape
    check. A checked-in 2500x diagnostic twin is
-   `bench/polyglot/amber/profile/map_words_vm_profile.am`.
+   `bench/polyglot/sputnik/profile/map_words_vm_profile.s`.
 3. The post-fix map profile disproves continued linear-scan dominance:
    `map_value_find_entry` fell to `191/7,748` samples (`2.47%`). Canonical-name
    hash lookup is now visible (`607/7,748` samples in the quick map lookup
@@ -155,14 +155,14 @@ instead of `7.14x` and `10.08x`.
 4. The suspected link to low Ember VM RPS was tested and rejected. In the
    fresh 10-second Ember VM profile, `map_value_find_entry` did not reach the
    flat-profile reporting threshold of five top-of-stack samples. The
-   unsampled five-pair follow-up at `7d0d0c9` measured Amber `1,700.51 RPS`,
-   Rails `1,888.29 RPS`, and paired Rails/Amber `1.107x` (mean-ratio 95% CI
+   unsampled five-pair follow-up at `7d0d0c9` measured Sputnik `1,700.51 RPS`,
+   Rails `1,888.29 RPS`, and paired Rails/Sputnik `1.107x` (mean-ratio 95% CI
    `1.094...1.119x`). The original paired median was `1.110x`. Thus the large
    microbenchmark win is real, but it does not explain or materially improve
    Ember request throughput. See
    `results/ember-http-rps-vm-pool1-r5-2026-08-20-115325-+0300.{json,md}`.
 5. The first map patch performed the key-shape check twice on successful hits.
-   A clean intermediate run at `efded10` measured paired Rails/Amber `1.125x`.
+   A clean intermediate run at `efded10` measured paired Rails/Sputnik `1.125x`.
    After folding hit and miss handling under one check (`7d0d0c9`), it returned
    to `1.107x`. This is why the final form, rather than `efded10` alone, is the
    optimization endpoint.
@@ -172,7 +172,7 @@ instead of `7.14x` and `10.08x`.
    an exact-binary A/B measured `+0.646%` Ember/native. It was real but small.
 7. SQLite blocking calls already run through the Blocking FFI executor. Waiting
    inside the C extension while holding the bridge lock was rejected because a
-   C library callback into Amber may need to park a strand. Pool size 1 is the
+   C library callback into Sputnik may need to park a strand. Pool size 1 is the
    fairness baseline for serialized in-memory SQLite; increasing the pool is a
    separate scalability experiment, not the explanation for the Rails gap.
 
@@ -200,9 +200,9 @@ exclusive percentages: `/usr/bin/sample` includes many parked scheduler,
 reactor, SQLite-executor, and listener threads.
 
 Raw local samples used for the summary are
-`/private/tmp/amber-map-words-vm.sample.txt`,
-`/private/tmp/amber-map-words-vm-post.sample.txt`, and
-`bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-20-114155-+0300/repeat-01-position-01-amber/server.sample.txt`.
+`/private/tmp/sputnik-map-words-vm.sample.txt`,
+`/private/tmp/sputnik-map-words-vm-post.sample.txt`, and
+`bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-20-114155-+0300/repeat-01-position-01-sputnik/server.sample.txt`.
 They are diagnostic build artifacts and are not required to trust or reproduce
 the statistical reports.
 
@@ -247,30 +247,30 @@ three-repeat commands on the same machine:
 This is a sequential same-day exact-binary gate, not a single alternating
 paired series. The final result is also 2.621% above the first tagged build.
 The old executables were saved as
-`/private/tmp/amberc-variant-before-tagged-default` and
-`/private/tmp/iamber-variant-before-tagged-default` for this gate.
+`/private/tmp/sputnik-variant-before-tagged-default` and
+`/private/tmp/isputnik-variant-before-tagged-default` for this gate.
 
 Compiler binary size improved as a second, independent consequence:
 
 | Binary | Legacy variant | Tagged default | Change |
 |---|---:|---:|---:|
-| `amberc` | 9,880,872 B | 9,010,296 B | -8.811% |
-| `iamber` | 8,415,032 B | 7,544,504 B | -10.345% |
+| `sputnik` | 9,880,872 B | 9,010,296 B | -8.811% |
+| `isputnik` | 8,415,032 B | 7,544,504 B | -10.345% |
 
 ### Current statistical HTTP matrix
 
 Every row below is an unprofiled five-repeat series with 30-second samples,
 four clients, a contract warmup before each timed sample, and balanced rotation
-seed `20260821`. All Amber rows use clean `58b3600`; Ember is clean `9e603ddf`,
-amber-orm is clean `438be219`, sqlite3-amber is clean `bb62e533`. The same
+seed `20260821`. All Sputnik rows use clean `58b3600`; Ember is clean `9e603ddf`,
+sputnik-orm is clean `438be219`, sqlite3-sputnik is clean `bb62e533`. The same
 pinned client SHA `f1a35a83...` drives every server.
 
-| Lane | Amber median RPS | Competitor medians | Paired interpretation |
+| Lane | Sputnik median RPS | Competitor medians | Paired interpretation |
 |---|---:|---|---|
 | raw / VM | 21,584.94 | Go 38,795.11; Rust 38,933.78; Python 12,634.20 | Go 1.800x; Rust 1.823x; Python 0.585x |
 | raw / native | 33,730.67 | Go 38,886.48; Rust 39,147.09; Python 12,654.26 | Go 1.152x; Rust 1.161x; Python 0.376x |
 | Ember / VM / pool 1 | 1,967.90 | Rails 1,991.74 | Rails 1.011x (+1.08% paired); median-RPS gap 1.21% |
-| Ember / native / pool 1 | 6,595.67 | Rails 1,992.70 | Rails 0.303x; Amber 3.310x by medians |
+| Ember / native / pool 1 | 6,595.67 | Rails 1,992.70 | Rails 0.303x; Sputnik 3.310x by medians |
 
 Derived ratios across separate series (not paired): raw native/VM is 1.563x;
 Ember native/VM is 3.352x. Against the original 2026-08-19 Ember/VM median of
@@ -297,7 +297,7 @@ Median wall time in milliseconds; lower is better. These are fresh clean
 `58b3600` five-repeat runs with two warmups and seed `20260821`. Every checksum
 matched.
 
-| Workload | Amber VM | Amber native | Python | Ruby | C++ | Go | Rust |
+| Workload | Sputnik VM | Sputnik native | Python | Ruby | C++ | Go | Rust |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | arithmetic | 185.043 | 6.234 | 192.859 | 73.866 | 4.188 | 6.071 | 4.070 |
 | calls-collections | 15.305 | 8.802 | 21.889 | 10.350 | 2.145 | 2.685 | 2.275 |
@@ -336,15 +336,15 @@ frame recycling.
 
 Raw samples and rendered one-run diagnostic reports:
 
-- pre: `build/http-rps/runs/ember-vm-r1-2026-08-21-002018-+0300/repeat-01-position-01-amber/server.sample.txt`;
-- post: `build/http-rps/runs/ember-vm-r1-2026-08-21-013345-+0300/repeat-01-position-01-amber/server.sample.txt`;
+- pre: `build/http-rps/runs/ember-vm-r1-2026-08-21-002018-+0300/repeat-01-position-01-sputnik/server.sample.txt`;
+- post: `build/http-rps/runs/ember-vm-r1-2026-08-21-013345-+0300/repeat-01-position-01-sputnik/server.sample.txt`;
 - post diagnostic: `results/ember-vm-tagged-post-profile-r1-2026-08-21.md`
   and `ember-http-rps-vm-pool1-r1-2026-08-21-013345-+0300.json`.
 
 ### Correctness gates
 
 - `vm_tests`, `stdlib_collections_tests`, and `stdlib_task_tests`: pass.
-- Full Amber corpus: 214 passed, 0 failed.
+- Full Sputnik corpus: 214 passed, 0 failed.
 - Legacy `VALUE_REPR=variant`: separate compiler build and smoke test pass.
 - Targeted full-native UUID: 3/3 direct-native code objects, full coverage,
   no fallback, expected output 42.
@@ -374,12 +374,12 @@ both directions of machine drift:
 
 | Position | Exact binary | Median RPS | CV |
 |---|---|---:|---:|
-| A1 | pre-change `amberc` | 1,764.77 | 0.59% |
-| B | optimized `amberc` | 1,841.86 | 0.64% |
-| A2 | pre-change `amberc` | 1,765.27 | 0.40% |
+| A1 | pre-change `sputnik` | 1,764.77 | 0.59% |
+| B | optimized `sputnik` | 1,841.86 | 0.64% |
+| A2 | pre-change `sputnik` | 1,765.27 | 0.40% |
 
 The optimized binary is **+4.368%** against A1 and **+4.338%** against A2.
-The saved control is `/private/tmp/amberc-before-header-release`, SHA-256
+The saved control is `/private/tmp/sputnik-before-header-release`, SHA-256
 `2b7bd0d1...`; the optimized binary is SHA-256 `af29d072...`. The runner marks
 the A/B repository dirty because the binaries deliberately bracketed the
 uncommitted patch; binary hashes and the reversed old/new/old order are the
@@ -409,7 +409,7 @@ inspection confirms that its type switch executes only on final release.
 Profiler throughput
 (`1,775.76 RPS`) is diagnostic only and must not be compared with unprofiled
 RPS. Raw sample:
-`build/http-rps/runs/ember-vm-r1-2026-08-22-123219-+0300/repeat-01-position-01-amber/server.sample.txt`.
+`build/http-rps/runs/ember-vm-r1-2026-08-22-123219-+0300/repeat-01-position-01-sputnik/server.sample.txt`.
 Rendered report:
 `results/ember-vm-header-release-post-profile-r1-2026-08-22.md`.
 
@@ -427,7 +427,7 @@ Median wall time in milliseconds; lower is better. All rows are clean
 matching checksums. `VM delta` and `native delta` compare with the clean
 `58b3600` series from 2026-08-21; negative is faster.
 
-| Workload | Amber VM | VM delta | Amber native | Native delta | Python | Ruby | C++ | Go | Rust |
+| Workload | Sputnik VM | VM delta | Sputnik native | Native delta | Python | Ruby | C++ | Go | Rust |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | arithmetic | 168.820 | -8.77% | 5.994 | -3.85% | 187.051 | 69.961 | 4.036 | 5.845 | 4.005 |
 | calls-collections | 13.690 | -10.55% | 8.843 | +0.47% | 21.923 | 10.527 | 2.107 | 2.759 | 2.259 |
@@ -452,12 +452,12 @@ measurement for this patch. Reports:
 These are clean `2301e12`, unprofiled five-repeat, 30-second, four-client
 series with contract smoke before every sample and balanced seed `20260822`.
 
-| Lane | Amber median RPS | CV | Competitor medians | Paired interpretation |
+| Lane | Sputnik median RPS | CV | Competitor medians | Paired interpretation |
 |---|---:|---:|---|---|
 | raw / VM | 22,310.20 | 1.00% | Go 39,458.78; Rust 39,596.97; Python 11,892.47 | Go 1.788x; Rust 1.776x; Python 0.534x |
 | raw / native | 33,775.35 | 0.52% | Go 39,492.94; Rust 39,543.64; Python 11,927.97 | Go 1.166x; Rust 1.171x; Python 0.355x |
-| Ember / VM / pool 1 | 1,958.40 | 0.36% | Rails 1,833.15 | Rails 0.935x; Amber is 1.068x by medians |
-| Ember / native / pool 1 | 6,171.63 | 0.26% | Rails 1,837.19 | Rails 0.298x; Amber is 3.359x by medians |
+| Ember / VM / pool 1 | 1,958.40 | 0.36% | Rails 1,833.15 | Rails 0.935x; Sputnik is 1.068x by medians |
+| Ember / native / pool 1 | 6,171.63 | 0.26% | Rails 1,837.19 | Rails 0.298x; Sputnik is 3.359x by medians |
 
 Raw/VM is +3.360% versus the preceding clean median, while raw/native is
 +0.132% (neutral). Current cross-series native/VM ratios are 1.514x raw and
@@ -486,7 +486,7 @@ Reports:
   smoke checksum `2047795430`: pass.
 - Raw native: 61/61 direct-native; Ember native: 2048/2048 direct-native;
   both have full body coverage and zero VM fallback/runtime bridge.
-- `amberc` is 9,010,536 bytes and `iamber` is 7,544,744 bytes: +240 bytes each
+- `sputnik` is 9,010,536 bytes and `isputnik` is 7,544,744 bytes: +240 bytes each
   versus `58b3600`. Raw and Ember native servers are 1,580,488 and 11,881,464
   bytes respectively: 16 bytes smaller each than the preceding endpoint.
 
@@ -507,7 +507,7 @@ that direct register access is safe.
 The gate used the same pinned client SHA, 4 clients, pool 1, 15-second samples,
 three repeats per phase, and the saved old compiler on both sides of the new
 compiler (`old / new / old`). The old compiler was
-`/private/tmp/amberc-before-watch-reg-fast-path`, SHA-256
+`/private/tmp/sputnik-before-watch-reg-fast-path`, SHA-256
 `af29d072531fd9aa0f50123dd2d21a7402ddf584a53157b28151a3ec5de200df`;
 the accepted compiler is SHA-256
 `4e71d30bc8e2c0fa6296eecbfce099b853c69004b5ba0f634364ef27b4a14d0e`.
@@ -527,7 +527,7 @@ is **+1.076%**. Using phase means gives **+1.145%**. Raw result files are
 
 The diagnostic profile is
 `bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-22-193147-+0300/`
-`repeat-01-position-01-amber/server.sample.txt`; its unprofiled RPS must not be
+`repeat-01-position-01-sputnik/server.sample.txt`; its unprofiled RPS must not be
 compared with statistical runs. Relative to the preceding profile at
 `ember-vm-r1-2026-08-22-123219-+0300`, top-of-stack samples changed as follows:
 
@@ -550,7 +550,7 @@ large enough target.
 Five measured runs, two warmups, seed 20260822. Times are median milliseconds;
 lower is better.
 
-| Workload | Amber VM | Amber native | Python | Ruby | C++ | Go | Rust |
+| Workload | Sputnik VM | Sputnik native | Python | Ruby | C++ | Go | Rust |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | arithmetic | 172.183 | 5.788 | 185.743 | 69.138 | 4.002 | 5.880 | 3.978 |
 | calls-collections | 13.470 | 8.718 | 21.685 | 10.437 | 2.153 | 2.868 | 2.227 |
@@ -563,7 +563,7 @@ lower is better.
 | time-flow | 92.221 | 10.339 | 239.914 | 60.921 | 2.945 | 4.986 | 3.031 |
 | uuid | 30.912 | 10.672 | 83.612 | 46.812 | 6.548 | 10.525 | 16.338 |
 
-Against the immediately preceding `header-release` medians, Amber VM improved
+Against the immediately preceding `header-release` medians, Sputnik VM improved
 on seven workloads: calls/collections +1.63%, codecs +0.96%, secure-random
 +1.88%, SHA digest +2.12%, string ops +1.61%, time-flow +4.93%, and UUID +2.82%.
 JSON was neutral (-0.29%); map-words (-1.04%, current CV 3.10%) and arithmetic
@@ -575,12 +575,12 @@ Reports are `results/micro-<workload>-watch-fast-r5-2026-08-22.{json,md}`.
 
 Five paired/rotated repeats, 30 seconds, 4 clients, pool 1, no profiling.
 
-| Lane | Amber median RPS | CV | Competitor median RPS | Current relation |
+| Lane | Sputnik median RPS | CV | Competitor median RPS | Current relation |
 |---|---:|---:|---:|---|
 | raw / VM | 22,281.32 | 0.585% | Go 39,453.00; Rust 39,429.92; Python 11,913.19 | native/VM reported below |
 | raw / native | 33,726.55 | 0.216% | Go 39,456.15; Rust 39,550.38; Python 11,940.35 | native/VM 1.514x |
-| Ember / VM / pool 1 | 1,972.23 | 0.764% | Rails 1,834.15 | Amber 1.075x; +7.53% |
-| Ember / native / pool 1 | 6,183.11 | 0.135% | Rails 1,837.84 | Amber 3.364x |
+| Ember / VM / pool 1 | 1,972.23 | 0.764% | Rails 1,834.15 | Sputnik 1.075x; +7.53% |
+| Ember / native / pool 1 | 6,183.11 | 0.135% | Rails 1,837.84 | Sputnik 3.364x |
 
 Compared with the preceding clean matrix, raw/VM is -0.129%, raw/native is
 -0.144%, Ember/VM is **+0.706%**, and Ember/native is +0.186%. Rails stayed
@@ -607,7 +607,7 @@ Reports and machine-readable samples:
   checksum `2047795430`: pass.
 - Raw native remains 61/61 direct-native; Ember native remains 2048/2048;
   both have full body coverage and zero VM fallback/runtime bridge.
-- `amberc` is 9,010,536 bytes and `iamber` is 7,544,744 bytes; raw and Ember
+- `sputnik` is 9,010,536 bytes and `isputnik` is 7,544,744 bytes; raw and Ember
   native servers are 1,580,488 and 11,881,464 bytes. All four sizes are exactly
   unchanged from `2301e12`.
 
@@ -630,7 +630,7 @@ graphs are still released before a frame enters its pool.
 ### Exact-binary gates
 
 The pre-change interpreter is
-`/private/tmp/iamber-before-borrowed-reg-fast-path`, SHA-256
+`/private/tmp/isputnik-before-borrowed-reg-fast-path`, SHA-256
 `1d10facd6f20376eebce510e59b84e1b2913bae5981a677d79c32d024b00d221`.
 The accepted interpreter is SHA-256
 `d62a627645426f095791e86bd2d94a6903c4cc23239b707e2eb3a2b7077ed29d`.
@@ -662,7 +662,7 @@ preceding `watch-fast` series. This is a same-day cross-series comparison, not
 the causal patch gate: native moved by 4--8% in several rows even though the
 patch only changes VM frames, demonstrating material host drift.
 
-| Workload | Amber VM | VM delta | VM CV | Amber native |
+| Workload | Sputnik VM | VM delta | VM CV | Sputnik native |
 |---|---:|---:|---:|---:|
 | arithmetic | 162.432 | -5.66% | 3.12% | 5.550 |
 | calls-collections | 12.968 | -3.73% | 1.40% | 8.305 |
@@ -688,7 +688,7 @@ checksums matched.
   in its cooperative socket-read case.
 - Separate legacy `VALUE_REPR=variant` interpreter build and
   calls/collections checksum `2047795430`: pass.
-- `amberc` is 9,010,664 bytes and `iamber` is 7,544,872 bytes: +128 bytes each
+- `sputnik` is 9,010,664 bytes and `isputnik` is 7,544,872 bytes: +128 bytes each
   versus `124cefc`. Native artifacts are unaffected by this VM-only change.
 - The current environment denied both elevated loopback servers and macOS
   process inspection. Therefore an Ember/VM old/new/old HTTP gate and a
@@ -706,19 +706,19 @@ remaining destructor/copy traffic before returning to borrowed register reads.
 ```sh
 python3 bench/polyglot/run_benchmark.py --workload <name> \
   --repeats 5 --warmups 2 --order-seed 20260822 \
-  --build-dir /private/tmp/amber-polyglot-fresh-<commit>
+  --build-dir /private/tmp/sputnik-polyglot-fresh-<commit>
 
 python3 bench/polyglot/run_http_rps.py --stack raw \
-  --amber-execution vm --duration 30 --clients 4 --repeats 5 \
-  --order-seed 20260822 --languages amber,go,rust,python
+  --sputnik-execution vm --duration 30 --clients 4 --repeats 5 \
+  --order-seed 20260822 --languages sputnik,go,rust,python
 
 python3 bench/polyglot/run_http_rps.py --stack ember \
-  --amber-execution vm --duration 30 --clients 4 --repeats 5 \
-  --order-seed 20260822 --amber-pool-size 1 --languages amber,rails
+  --sputnik-execution vm --duration 30 --clients 4 --repeats 5 \
+  --order-seed 20260822 --sputnik-pool-size 1 --languages sputnik,rails
 
 # Diagnostic only; profiling changes throughput and must not be compared to
 # the unprofiled statistical series.
 python3 bench/polyglot/run_http_rps.py --stack ember \
-  --amber-execution vm --duration 15 --clients 4 --repeats 1 \
-  --amber-pool-size 1 --languages amber --sample-seconds 10 --skip-build
+  --sputnik-execution vm --duration 15 --clients 4 --repeats 1 \
+  --sputnik-pool-size 1 --languages sputnik --sample-seconds 10 --skip-build
 ```

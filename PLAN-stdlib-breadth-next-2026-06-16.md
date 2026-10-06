@@ -1,8 +1,8 @@
-# PLAN — next Amber language-breadth tasks (2026-06-16)
+# PLAN — next Sputnik language-breadth tasks (2026-06-16)
 
 Self-contained plan for a **fresh-context session**. Scope: **further language &
 core-stdlib breadth** — the common collection / string / numeric / map methods and
-language idioms that are still missing, verified by probing `build/iamber` on
+language idioms that are still missing, verified by probing `build/isputnik` on
 2026-06-16. Read §0 first.
 
 > Out of scope (owned by a parallel session): application stdlib **libraries**
@@ -30,14 +30,14 @@ uncommitted changes in `runtime/vm.cpp` / `frontend/binder/binder.cpp`. Rebase /
 re-pull often; add files explicitly on commit (never `git add -A`); coordinate big
 `vm.cpp` edits.
 
-**Build/test:** `make build/iamber` (interpreter); `make test` (units + corpus,
+**Build/test:** `make build/isputnik` (interpreter); `make test` (units + corpus,
 slow — NEVER run two `make` at once); `make backend-equivalence` (VM vs native —
-run after object-model/opcode/value changes); probe with `build/iamber --eval`.
+run after object-model/opcode/value changes); probe with `build/isputnik --eval`.
 **`VALUE_REPR` matters:** anything touching `Value` (e.g. a new tail kind) must build
 & pass under BOTH `VALUE_REPR=variant` and `VALUE_REPR=tagged`. Most stdlib-method
 work here does NOT touch Value (it dispatches on existing kinds), so it's safe under both.
 
-**Fixtures:** `corpus/run/<name>/{source.am (def probe()), meta.json, expect.run.json}`;
+**Fixtures:** `corpus/run/<name>/{source.s (def probe()), meta.json, expect.run.json}`;
 string returns serialize with quotes (`"a:b"` → `value:"\"a:b\""`).
 
 **Conventions:** branch off main; FF-merge back; end commits with
@@ -49,7 +49,7 @@ Add one conformance fixture per feature; keep `make test` + `backend-equivalence
 `to_s`/`to_i`; `x as T` asserts (no convert), `T(x)`/`x.cast(T)` convert; `--eval`
 doesn't auto-run `main` — use module-level + `def probe()`.
 
-**Design steer learned this session — DO NOT add `_by` variants.** Amber prefers
+**Design steer learned this session — DO NOT add `_by` variants.** Sputnik prefers
 **key blocks** over `min_by`/`max_by`/`sort_by`: use `xs.min |k|: …`, `xs.max |k|: …`,
 `xs.sorted: _1.field`. `sort_by` is intentionally rejected with a corrective
 diagnostic. Don't reintroduce the `_by` family.
@@ -59,7 +59,7 @@ diagnostic. Don't reintroduce the `_by` family.
 ## 1. Tier 1 — core-stdlib methods (high value, mechanical; reuse this session's patterns)
 
 Each is a small addition following an established pattern. Verify each is still
-missing first (`build/iamber --eval`), then implement + fixture.
+missing first (`build/isputnik --eval`), then implement + fixture.
 
 ### 1a. Collection methods — in `apply_sequence_set_operation` (`runtime/vm.cpp`)
 Pattern: add the selector to the `sequence_extra_operation_selector` set (and to
@@ -115,7 +115,7 @@ re-encode). Pure / mutating pairs:
 - `replaced(from, to)` / `replace!(from, to)` — substring replacement, both forms.
   The pure `replace` added this session aligns to `replaced` (per the `-ed`
   convention). **Do NOT add `gsub`/`sub`** (Ruby substitution names) — `replace` /
-  `replaced` / `replace!` is the Amber spelling (Ivan: discouraged from Ruby-isms).
+  `replaced` / `replace!` is the Sputnik spelling (Ivan: discouraged from Ruby-isms).
 - `trimmed` / `trim!`, `lstripped` / `lstrip!`, `rstripped` / `rstrip!`
 
 **Unicode case mapping (sub-task):** add a simple-case-mapping table — generate from
@@ -167,7 +167,7 @@ Missing:
 ### 2a. Destructuring / multiple assignment — `a, b = expr`
 `a, b = [1, 2]` currently → **E1008** ("bare matcher expression"): a comma-LHS isn't
 recognized as a destructuring assignment. High-value, common idiom.
-- Investigate first: Amber already has **pattern assignment** (`HPatternAssign`,
+- Investigate first: Sputnik already has **pattern assignment** (`HPatternAssign`,
   `frontend/hir/hir.cpp`) and pattern destructuring in block params / `case`. The
   likely fix is **parser-only**: recognize a comma-separated LHS before `=` and lower
   it to the existing pattern-assign machinery (no new runtime). Also support

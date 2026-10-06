@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::checker {
+namespace sputnik::checker {
 
 struct TypeTerm {
   std::string kind;
@@ -69,4 +69,4 @@ std::string check_result_to_json(const CheckResult &result,
 std::string effects_result_to_json(const CheckResult &result,
                                    const std::string &module_name);
 
-} // namespace amber::checker
+} // namespace sputnik::checker

@@ -1,16 +1,16 @@
 # DESIGN - `sqlite3` package public API
 
-Status: proposed public-interface design  
-Date: 2026-07-02  
-Target: external Amber package `sqlite3`  
+Status: proposed public-interface design
+Date: 2026-07-02
+Target: external Sputnik package `sqlite3`
 Scope: public API, resource semantics, error surface, SQL macro surface, and
-full-native build contract  
+full-native build contract
 Out of scope: implementation of the native thunks, ORM layer, custom SQL
 callbacks, dynamic extension loading
 
 ## 0. Executive summary
 
-`sqlite3` is a native-only Amber package for working with SQLite databases. It
+`sqlite3` is a native-only Sputnik package for working with SQLite databases. It
 has two public abstraction layers:
 
 1. A core layer for connection handling, connection pooling, prepared
@@ -23,7 +23,7 @@ has two public abstraction layers:
 
 It exports a small module namespace:
 
-```amber
+```sputnik
 import sqlite3
 from sqlite3 import sql
 
@@ -53,11 +53,11 @@ The single-connection surface is centered on two owned native resources:
 - `Database`, wrapping a `sqlite3*`
 - `Statement`, wrapping a `sqlite3_stmt*`
 
-`Pool` is the shareable coordination object for Amber programs that use both
+`Pool` is the shareable coordination object for Sputnik programs that use both
 native threads and cooperative fibers. Individual `Database` and `Statement`
 handles remain non-shareable.
 
-Rows and command results are ordinary Amber values (`Map`, `List`, `Str`,
+Rows and command results are ordinary Sputnik values (`Map`, `List`, `Str`,
 `Bytes`, `Int`, `Float`, `Bool`, `null`) so callers do not receive raw host
 pointers or long-lived row handles.
 
@@ -67,7 +67,7 @@ the compiler would embed VM fallback.
 
 ## 1. Design anchors
 
-1. The Amber source is the public API. C is only the implementation of
+1. The Sputnik source is the public API. C is only the implementation of
    native-only leaves.
 2. Database handles are explicit resources. Users close them with `close!` or
    use block-scoped forms that close automatically.
@@ -76,9 +76,9 @@ the compiler would embed VM fallback.
    query cases, then routes through the same core execution layer.
 5. Parameter binding is the normal path. The `sql"""..."""` macro is the only
    interpolation path, and ordinary interpolants become bind parameters.
-6. Query results use plain Amber values by default. A separate array-row path
+6. Query results use plain Sputnik values by default. A separate array-row path
    exists for duplicate column names and maximum predictability.
-7. Errors are rescuable Amber errors, not integer return codes.
+7. Errors are rescuable Sputnik errors, not integer return codes.
 8. Full native is a package contract. No bytecode wrapper, whole-program restart,
    per-function VM bridge, or native fallback count is acceptable for consumer
    binaries.
@@ -113,7 +113,7 @@ The root module id is `sqlite3`.
 
 Canonical imports:
 
-```amber
+```sputnik
 import sqlite3
 
 from sqlite3 import open, Database, Statement
@@ -124,7 +124,7 @@ from sqlite3 import sql
 
 Exports:
 
-```amber
+```sputnik
 package sqlite3
 
 export open, connect, memory, pool
@@ -142,14 +142,14 @@ export JsonError, JsonUnavailableError, JsonbUnavailableError
 
 The namespace object form is preferred for examples:
 
-```amber
+```sputnik
 sqlite3.open("app.db")
 rescue sqlite3.ConstraintError |e|:
   ...
 ```
 
 The `sql` string tag is imported explicitly in examples because macros ride
-Amber's ordinary import/export system and are not runtime values.
+Sputnik's ordinary import/export system and are not runtime values.
 
 ## 3. Full native contract
 
@@ -158,7 +158,7 @@ This package is native-only:
 - `Database`, `Statement`, `Pool`, and `PoolLease` are
   `native class ... owned`.
 - `open`, `connect`, `memory`, `pool`, and all methods on `Database`,
-  `Statement`, `Pool`, and `PoolLease` are native-only leaves with no Amber
+  `Statement`, `Pool`, and `PoolLease` are native-only leaves with no Sputnik
   fallback body.
 - Bytecode execution fails closed with `NativeRequiredError` if a caller somehow
   reaches this package without a native build.
@@ -170,7 +170,7 @@ This package is native-only:
 Consumer builds must use a full-native gate. With the current toolchain this is:
 
 ```sh
-amberc build amber.build.json --target native --require-full-native
+sputnik build sputnik.build.json --target native --require-full-native
 ```
 
 The build is acceptable only when the build summary reports:
@@ -198,9 +198,9 @@ pin `--require-full-native`.
 
 ## 4. Values and parameters
 
-SQLite values map to Amber values as follows:
+SQLite values map to Sputnik values as follows:
 
-| SQLite storage class | Amber value |
+| SQLite storage class | Sputnik value |
 | --- | --- |
 | `NULL` | `null` |
 | `INTEGER` | `Int` |
@@ -210,7 +210,7 @@ SQLite values map to Amber values as follows:
 
 Accepted bind values:
 
-| Amber value | SQLite bind |
+| Sputnik value | SQLite bind |
 | --- | --- |
 | `null` | `sqlite3_bind_null` |
 | `Bool` | integer `0` or `1` |
@@ -234,7 +234,7 @@ Parameter containers:
 
 Conceptual signatures:
 
-```amber
+```sputnik
 def open(
   path as Str,
   mode: :create,
@@ -323,7 +323,7 @@ SQLite identifier. Values may be `Bool`, `Int`, `Float`, `Str`, `Symbol`, or
 `features()` returns library-level feature information for the linked SQLite
 build:
 
-```amber
+```sputnik
 {
   adapter: :sqlite3,
   dialect: :sqlite,
@@ -361,10 +361,10 @@ same map for support and reproducibility.
 
 ### 5.1. SQL macro and sanitization helpers
 
-The basic layer exports `sql` as a string-tag macro using Amber's macro and
+The basic layer exports `sql` as a string-tag macro using Sputnik's macro and
 multiline string import rules:
 
-```amber
+```sputnik
 from sqlite3 import sql
 
 threshold_age = 18
@@ -403,7 +403,7 @@ Interpolation is not string concatenation:
 
 Dynamic identifiers use `sqlite3.ident(...)`:
 
-```amber
+```sputnik
 table_name = :users
 column_name = :age
 
@@ -434,7 +434,7 @@ named placeholders.
 
 Conceptual surface:
 
-```amber
+```sputnik
 native class Database from "sqlite3.Database" owned:
   def close!()                         from "sqlite3.database_close"
   def destroy!()                       from "sqlite3.database_destroy"
@@ -551,7 +551,7 @@ native class Database from "sqlite3.Database" owned:
 
 `exec`, `execute`, and `execute_many` return an ordinary map:
 
-```amber
+```sputnik
 {
   affected_rows: 1,
   changes: 1,
@@ -600,20 +600,20 @@ statement. Use `exec` for trusted multi-statement scripts.
 
 `query` returns a list of ordinary maps:
 
-```amber
+```sputnik
 rows = db.query("select id, name from users")
 rows[0][:id]
 rows[0]["name"]
 ```
 
-The row map is name-indifferent, matching ordinary Amber `Map` behavior. Column
+The row map is name-indifferent, matching ordinary Sputnik `Map` behavior. Column
 labels are taken from SQLite's column names. If a result set contains duplicate
 column labels, later columns overwrite earlier columns in the map. Call
 `query_arrays` when duplicate labels matter.
 
 `query_arrays` returns:
 
-```amber
+```sputnik
 {
   columns: ["id", "name"],
   rows: [[1, "Ada"], [2, "Iris"]]
@@ -627,13 +627,13 @@ column is SQL `NULL` returns `null`, not `default`.
 
 `each` and `each_array` stream rows through a block and return the number of rows
 yielded. The block callback is part of the full-native contract: it must call a
-native-compiled Amber closure, not re-enter bytecode VM fallback.
+native-compiled Sputnik closure, not re-enter bytecode VM fallback.
 
 ### 6.3. Transactions
 
 Transaction block form is the canonical form:
 
-```amber
+```sputnik
 db.transaction(mode: :immediate) |tx|:
   tx.execute("insert into users(name) values (?)", params: ["Ada"])
   tx.execute("insert into users(name) values (?)", params: ["Iris"])
@@ -664,12 +664,12 @@ safe SQLite identifiers.
 ## 7. `Pool`
 
 `Pool` is part of the basic connection layer. It is the only public object in
-this package intended to be shared across Amber native threads and cooperative
+this package intended to be shared across Sputnik native threads and cooperative
 fibers.
 
 Conceptual surface:
 
-```amber
+```sputnik
 native class Pool from "sqlite3.Pool" owned:
   def close!() -> null                 from "sqlite3.pool_close"
   def destroy!() -> null               from "sqlite3.pool_destroy"
@@ -694,7 +694,7 @@ native class PoolLease from "sqlite3.PoolLease" owned:
 
 Checkout forms:
 
-```amber
+```sputnik
 sqlite3.pool("app.db", max_size: 10) |pool|:
   pool.checkout |db|:
     db.query("select id, name from users")
@@ -725,7 +725,7 @@ Thread and fiber rules:
   lease is released. If pinning is unavailable, suspension while holding a lease
   raises `PoolLeaseError`.
 - A `Database`, `Statement`, or `PoolLease` cannot be sent through cross-thread
-  channels, captured by `task.spawn`, or otherwise cross Amber's shareability
+  channels, captured by `task.spawn`, or otherwise cross Sputnik's shareability
   boundary. Violations raise the runtime's shareability error before any SQLite
   call is attempted.
 
@@ -753,7 +753,7 @@ Lease release:
 
 `stats()` returns an ordinary map:
 
-```amber
+```sputnik
 {
   min_idle_per_thread: 0,
   max_size: 10,
@@ -774,7 +774,7 @@ leased connections to be discarded when their leases are released.
 
 Conceptual surface:
 
-```amber
+```sputnik
 native class Statement from "sqlite3.Statement" owned:
   def close!() -> null                 from "sqlite3.statement_close"
   def destroy!() -> null               from "sqlite3.statement_destroy"
@@ -852,7 +852,7 @@ It is not intended to hide SQL or infer schema.
 
 Identifier arguments accept `Symbol`, `Str`, or `SqlIdent`:
 
-```amber
+```sputnik
 :users
 "users"
 [:users, :email]
@@ -864,7 +864,7 @@ Both symbols and strings are treated as identifiers and quoted by the builder.
 SQL. For hand-written SQL expressions, predicates, or aggregate projections,
 prefer the exported `sql` macro:
 
-```amber
+```sputnik
 from sqlite3 import sql
 
 sql"""count(*) as count"""
@@ -874,7 +874,7 @@ sql"""created_at > #{cutoff}"""
 For SQL produced by another trusted compiler, use
 `sqlite3.fragment(text, params)`:
 
-```amber
+```sputnik
 sqlite3.fragment("count(*) as count")
 sqlite3.fragment("created_at > ?", [cutoff])
 ```
@@ -888,7 +888,7 @@ parameters.
 
 Canonical forms:
 
-```amber
+```sputnik
 db.insert(:users,
   columns: [:name, :email],
   values: [
@@ -943,7 +943,7 @@ Return value:
 
 Canonical forms:
 
-```amber
+```sputnik
 db.update(:users,
   set: {name: "Ada Lovelace"},
   where: {id: 1}
@@ -1043,7 +1043,7 @@ and should not be treated as stable.
 
 The package exposes JSON helpers in two forms:
 
-```amber
+```sputnik
 sqlite3.json(value)
 sqlite3.jsonb(value)
 
@@ -1053,9 +1053,9 @@ db.to_jsonb(value)
 
 `sqlite3.json(value)` and `sqlite3.jsonb(value)` are query-builder expression
 wrappers. In insert/update values they render as `json(?)` or `jsonb(?)`, with
-the Amber value serialized to canonical JSON and bound as text:
+the Sputnik value serialized to canonical JSON and bound as text:
 
-```amber
+```sputnik
 db.insert(:events,
   columns: [:kind, :payload],
   values: [
@@ -1071,7 +1071,7 @@ provide JSON support. `db.to_jsonb(value)` returns SQLite JSONB bytes and raises
 
 Feature probes:
 
-```amber
+```sputnik
 db.json_available?()
 db.jsonb_available?()
 db.jsonb_each_available?()
@@ -1093,7 +1093,7 @@ Rendering `sqlite3.jsonb(value)` raises `JsonbUnavailableError` when JSONB is
 unavailable. Callers that want portability can branch on `db.json_available?()`
 or `db.jsonb_available?()` and choose the expression themselves.
 
-JSON wrapper inputs must be JSON-compatible Amber values: `null`, `Bool`, `Int`,
+JSON wrapper inputs must be JSON-compatible Sputnik values: `null`, `Bool`, `Int`,
 `Float`, `Str`, `List`, `Tuple`, `Map`, or `StrictMap` with string or symbol
 keys. Unsupported values raise `TypeError`.
 
@@ -1107,7 +1107,7 @@ Rules:
 - `destroy!` is the native-class destructor hook and behaves like `close!`.
 - Using a closed handle raises `LifetimeError` or a package-specific subclass
   when the operation can identify one.
-- `Pool` is shareable across Amber native threads and cooperative fibers.
+- `Pool` is shareable across Sputnik native threads and cooperative fibers.
 - `Database`, `Statement`, and `PoolLease` are thread/fiber confined. They may
   be used only by the execution context that opened or checked them out.
 - A checked-out `Database` may be used by one fiber at a time. It must not be
@@ -1122,7 +1122,7 @@ Rules:
 
 The scoped forms are preferred:
 
-```amber
+```sputnik
 sqlite3.open("app.db") |db|:
   db.prepare("insert into log(message) values (?)") |stmt|:
     stmt.execute(params: ["started"])
@@ -1213,7 +1213,7 @@ Sqlite3.JsonbUnavailableError < Sqlite3.JsonError
 
 Exported aliases expose those classes as:
 
-```amber
+```sputnik
 rescue sqlite3.ConstraintError |e|:
   ...
 
@@ -1222,7 +1222,7 @@ rescue ConstraintError |e|:
   ...
 ```
 
-General argument and host errors keep existing Amber classes:
+General argument and host errors keep existing Sputnik classes:
 
 - invalid `mode:`, invalid parameter shape, invalid pragma name:
   `ArgumentError`
@@ -1238,7 +1238,7 @@ General argument and host errors keep existing Amber classes:
 
 SQLite result-code mapping:
 
-| SQLite result | Amber error |
+| SQLite result | Sputnik error |
 | --- | --- |
 | `SQLITE_BUSY` | `BusyError` |
 | `SQLITE_LOCKED` | `LockedError` |
@@ -1256,7 +1256,7 @@ Other SQLite errors map to the phase-specific parent (`OpenError`,
 
 ### 13.1. Basic query
 
-```amber
+```sputnik
 import sqlite3
 
 sqlite3.open("data/app.db", busy_timeout: 2.seconds) |db|:
@@ -1268,7 +1268,7 @@ sqlite3.open("data/app.db", busy_timeout: 2.seconds) |db|:
 
 ### 13.2. Prepared statement
 
-```amber
+```sputnik
 sqlite3.open("data/app.db") |db|:
   db.prepare("insert into users(name) values (:name)") |stmt|:
     ["Ada", "Iris"].each |name|:
@@ -1277,13 +1277,13 @@ sqlite3.open("data/app.db") |db|:
 
 ### 13.3. Scalar
 
-```amber
+```sputnik
 count = db.scalar("select count(*) from users")
 ```
 
 ### 13.4. SQL macro in core and convenience calls
 
-```amber
+```sputnik
 from sqlite3 import sql
 
 threshold_age = 18
@@ -1309,7 +1309,7 @@ counts = db.select(:events,
 
 ### 13.5. Insert convenience layer
 
-```amber
+```sputnik
 db.insert(:users,
   columns: [:name, :email],
   values: [
@@ -1322,7 +1322,7 @@ db.insert(:users,
 
 ### 13.6. Insert or replace / upsert alias
 
-```amber
+```sputnik
 db.upsert(:users,
   columns: [:id, :name, :email],
   values: [
@@ -1334,7 +1334,7 @@ db.upsert(:users,
 
 ### 13.7. JSONB payload when available
 
-```amber
+```sputnik
 payload = {id: 1, tags: ["compiler", "sqlite"]}
 
 value = if db.jsonb_available?():
@@ -1350,7 +1350,7 @@ db.insert(:events,
 
 ### 13.8. Transaction
 
-```amber
+```sputnik
 db.transaction(mode: :immediate) |tx|:
   tx.execute("insert into users(name) values (?)", params: ["Ada"])
   tx.execute("insert into users(name) values (?)", params: ["Iris"])
@@ -1358,7 +1358,7 @@ db.transaction(mode: :immediate) |tx|:
 
 ### 13.9. Connection pool across fibers or native threads
 
-```amber
+```sputnik
 import sqlite3
 import task
 
@@ -1377,7 +1377,7 @@ sqlite3.pool("data/app.db", max_size: 10, max_size_per_thread: 2) |pool|:
 
 ### 13.10. Duplicate column names
 
-```amber
+```sputnik
 result = db.query_arrays(
   "select users.id, posts.id from users join posts on posts.user_id = users.id"
 )
@@ -1388,7 +1388,7 @@ result[:rows][0] # [1, 10]
 
 ### 13.11. Error handling
 
-```amber
+```sputnik
 try:
   db.execute("insert into users(id, name) values (?, ?)", params: [1, "Ada"])
 rescue sqlite3.ConstraintError |e|:
@@ -1407,7 +1407,7 @@ rescue sqlite3.BusyError |e|:
   parameters and dynamic SQL syntax must use typed helpers such as
   `sqlite3.ident(...)` or `sqlite3.fragment(...)`.
 - No user-defined SQLite scalar functions, aggregates, collations, authorizers,
-  progress handlers, or update hooks. They require callbacks into Amber and need
+  progress handlers, or update hooks. They require callbacks into Sputnik and need
   a separate full-native callback ABI decision.
 - No `load_extension` API.
 - No nonblocking SQLite execution API. Pool checkout can wait cooperatively in a
@@ -1435,7 +1435,7 @@ These are not public methods, but they are required to preserve the API contract
   `VACUUM INTO`.
 - Pool internals must track the owning native thread for every physical
   connection and must never move an open `sqlite3*` across native threads.
-- Pool wait must integrate with Amber's fiber scheduler when a fiber is active,
+- Pool wait must integrate with Sputnik's fiber scheduler when a fiber is active,
   and fall back to native mutex/condition-variable waiting for plain native
   thread callers.
 - `Pool#checkout` block form must release or discard the lease in an `ensure`
@@ -1443,7 +1443,7 @@ These are not public methods, but they are required to preserve the API contract
 - `Database`, `Statement`, and `PoolLease` operations must assert their owning
   execution context before calling into SQLite.
 - `busy_timeout!` uses SQLite's busy timeout handler. It does not install a
-  custom Amber callback.
+  custom Sputnik callback.
 - `interrupt!` calls `sqlite3_interrupt`.
 - JSON feature detection should use both version/build metadata and live
   function probes against the open connection, because compile options can omit
@@ -1456,6 +1456,6 @@ These are not public methods, but they are required to preserve the API contract
 
 - SQLite JSON functions and operators: https://www.sqlite.org/json1.html
 - SQLite release history: https://www.sqlite.org/changes.html
-- Amber macro system design: `DESIGN-macro-system-2026-06-29.md`
-- Amber multiline string literals design:
+- Sputnik macro system design: `DESIGN-macro-system-2026-06-29.md`
+- Sputnik multiline string literals design:
   `DESIGN-multiline-string-literals-2026-06-29.md`

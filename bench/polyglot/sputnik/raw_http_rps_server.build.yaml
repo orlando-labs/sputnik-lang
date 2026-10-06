@@ -1,0 +1,12 @@
+schema: sputnik.build.v1
+name: sputnik.bench.polyglot.raw_http_rps_server
+root: sputnik.bench.polyglot.raw_http_rps_server
+
+profiles:
+  required: [core.v1, ffi.v1, macro.v1]
+  optional: []
+  forbidden: []
+
+modules:
+  - name: sputnik.bench.polyglot.raw_http_rps_server
+    path: raw_http_rps_server.s

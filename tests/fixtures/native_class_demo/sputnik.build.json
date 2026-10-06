@@ -1,0 +1,29 @@
+{
+  "schema": "sputnik.build.v1",
+  "name": "nat.box",
+  "root": "nat.box",
+  "profiles": {
+    "required": ["core.v1", "ffi.v1"],
+    "optional": [],
+    "forbidden": []
+  },
+  "modules": [
+    {"name": "nat.box", "path": "src/main.s"}
+  ],
+  "native_extensions": [
+    {
+      "name": "box",
+      "language": "c",
+      "sources": ["native/box.c"],
+      "symbols": [
+        {"logical": "box.box_new", "symbol": "box_box_new"},
+        {"logical": "box.box_bump", "symbol": "box_box_bump"},
+        {"logical": "box.box_value", "symbol": "box_box_value"},
+        {"logical": "box.box_free", "symbol": "box_box_free"}
+      ],
+      "types": [
+        {"sputnik": "nat.box.Box", "tag": "box.Box", "ownership": "owned", "destructor": "box.box_free"}
+      ]
+    }
+  ]
+}

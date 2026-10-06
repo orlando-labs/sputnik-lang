@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace amber::ast {
+namespace sputnik::ast {
 
 struct Expr;
 
@@ -66,4 +66,4 @@ std::string ast_module_to_json(const std::vector<std::unique_ptr<Expr>> &items,
                                const std::string &module_name,
                                const std::string &source_hash);
 
-} // namespace amber::ast
+} // namespace sputnik::ast

@@ -12,12 +12,12 @@
 #include <stdexcept>
 #include <utility>
 
-namespace amber::pkg {
+namespace sputnik::pkg {
 
 namespace {
 
-constexpr const char *kPackageSchema = "amber.pkg.v1";
-constexpr const char *kSignatureAlgorithm = "amber-sha256-dev-v1";
+constexpr const char *kPackageSchema = "sputnik.pkg.v1";
+constexpr const char *kSignatureAlgorithm = "sputnik-sha256-dev-v1";
 
 PackageDiagnostic diagnostic(std::string error_name, std::string message,
                              std::string path = {}) {
@@ -271,11 +271,11 @@ std::string bytes_to_string(const std::vector<std::uint8_t> &bytes) {
 }
 
 std::string sha256_hex_bytes(const std::vector<std::uint8_t> &bytes) {
-  return amber::lexer::sha256_hex(bytes_to_string(bytes));
+  return sputnik::lexer::sha256_hex(bytes_to_string(bytes));
 }
 
 std::string sha256_prefixed(const std::string &value) {
-  return "sha256:" + amber::lexer::sha256_hex(value);
+  return "sha256:" + sputnik::lexer::sha256_hex(value);
 }
 
 std::string bytes_to_hex(const std::vector<std::uint8_t> &bytes) {
@@ -378,8 +378,8 @@ std::vector<PackageNativeType>
 sorted_native_types(std::vector<PackageNativeType> types) {
   std::sort(types.begin(), types.end(),
             [](const PackageNativeType &left, const PackageNativeType &right) {
-              if (left.amber != right.amber) {
-                return left.amber < right.amber;
+              if (left.sputnik != right.sputnik) {
+                return left.sputnik < right.sputnik;
               }
               return left.tag < right.tag;
             });
@@ -525,7 +525,7 @@ std::string canonical_manifest_text(const PackageManifest &manifest) {
     out << prefix << ".type.count=" << native.types.size() << "\n";
     for (std::size_t j = 0; j < native.types.size(); ++j) {
       out << prefix << ".type." << j
-          << ".amber=" << line_escape(native.types[j].amber) << "\n";
+          << ".sputnik=" << line_escape(native.types[j].sputnik) << "\n";
       out << prefix << ".type." << j
           << ".tag=" << line_escape(native.types[j].tag) << "\n";
       out << prefix << ".type." << j
@@ -640,7 +640,7 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
     out << prefix << ".type.count=" << native.types.size() << "\n";
     for (std::size_t j = 0; j < native.types.size(); ++j) {
       out << prefix << ".type." << j
-          << ".amber=" << line_escape(native.types[j].amber) << "\n";
+          << ".sputnik=" << line_escape(native.types[j].sputnik) << "\n";
       out << prefix << ".type." << j
           << ".tag=" << line_escape(native.types[j].tag) << "\n";
       out << prefix << ".type." << j
@@ -701,8 +701,8 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
     const PackageNativeExtensionMetadata &metadata = native_metadata[i];
     const std::string prefix = "native_metadata." + std::to_string(i) + ".";
     out << prefix << "name=" << line_escape(metadata.name) << "\n";
-    out << prefix << "amber_ext_abi_version="
-        << metadata.amber_ext_abi_version << "\n";
+    out << prefix << "sputnik_ext_abi_version="
+        << metadata.sputnik_ext_abi_version << "\n";
     out << prefix << "target_triple=" << line_escape(metadata.target_triple)
         << "\n";
     out << prefix << "native_source_sha256="
@@ -712,7 +712,7 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
     out << prefix << "type.count=" << metadata.types.size() << "\n";
     for (std::size_t j = 0; j < metadata.types.size(); ++j) {
       out << prefix << "type." << j
-          << ".amber=" << line_escape(metadata.types[j].amber) << "\n";
+          << ".sputnik=" << line_escape(metadata.types[j].sputnik) << "\n";
       out << prefix << "type." << j
           << ".tag=" << line_escape(metadata.types[j].tag) << "\n";
       out << prefix << "type." << j
@@ -842,7 +842,7 @@ PackageRegistryResult registry_write(const std::string &serialized,
 
   const std::filesystem::path package_path =
       package_dir /
-      (artifact.manifest.name + "-" + artifact.manifest.version + ".amberpkg");
+      (artifact.manifest.name + "-" + artifact.manifest.version + ".sputnikpkg");
   if (std::filesystem::exists(package_path)) {
     std::string existing;
     if (!read_file(package_path, &existing)) {
@@ -868,7 +868,7 @@ PackageRegistryResult registry_write(const std::string &serialized,
     return result;
   }
 
-  if (!write_file(package_dir / "amber.lock", artifact.lockfile) ||
+  if (!write_file(package_dir / "sputnik.lock", artifact.lockfile) ||
       !write_file(package_dir / "manifest.json",
                   manifest_to_json(artifact.manifest))) {
     result.diagnostics.push_back(diagnostic(
@@ -1168,8 +1168,8 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
       if (current_native_type == nullptr) {
         break;
       }
-      if (key == "amber") {
-        current_native_type->amber = value;
+      if (key == "sputnik") {
+        current_native_type->sputnik = value;
       } else if (key == "tag") {
         current_native_type->tag = value;
       } else if (key == "ownership") {
@@ -1287,10 +1287,10 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
       }
     }
     for (const PackageNativeType &type : native.types) {
-      if (type.amber.empty() || type.tag.empty()) {
+      if (type.sputnik.empty() || type.tag.empty()) {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "[[native.types]] entries require 'amber' and 'tag'", path));
+            "[[native.types]] entries require 'sputnik' and 'tag'", path));
       }
       if (type.ownership != "owned" && type.ownership != "borrowed" &&
           type.ownership != "collected") {
@@ -1331,7 +1331,7 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
 std::string manifest_to_json(const PackageManifest &manifest) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.package-manifest.v1\",\n";
+  out << "  \"schema\": \"sputnik.package-manifest.v1\",\n";
   out << "  \"name\": \"" << json_escape(manifest.name) << "\",\n";
   out << "  \"version\": \"" << json_escape(manifest.version) << "\",\n";
   out << "  \"root_module\": \"" << json_escape(manifest.root_module)
@@ -1421,7 +1421,7 @@ std::string manifest_to_json(const PackageManifest &manifest) {
       if (j != 0U) {
         out << ",";
       }
-      out << "{\"amber\":\"" << json_escape(native.types[j].amber)
+      out << "{\"sputnik\":\"" << json_escape(native.types[j].sputnik)
           << "\",\"tag\":\"" << json_escape(native.types[j].tag)
           << "\",\"ownership\":\"" << json_escape(native.types[j].ownership)
           << "\",\"destructor\":\"" << json_escape(native.types[j].destructor)
@@ -1448,8 +1448,8 @@ std::string manifest_to_json(const PackageManifest &manifest) {
 
 std::string render_lockfile(const PackageManifest &manifest) {
   std::ostringstream out;
-  out << "# amber.lock v1\n";
-  out << "schema = \"amber.lock.v1\"\n\n";
+  out << "# sputnik.lock v1\n";
+  out << "schema = \"sputnik.lock.v1\"\n\n";
   out << "[package]\n";
   out << "name = \"" << json_escape(manifest.name) << "\"\n";
   out << "version = \"" << json_escape(manifest.version) << "\"\n";
@@ -1491,7 +1491,7 @@ native_extension_metadata(const std::vector<PackageNativeExtension> &extensions,
     }
     PackageNativeExtensionMetadata metadata;
     metadata.name = extension.name;
-    metadata.amber_ext_abi_version = 1;
+    metadata.sputnik_ext_abi_version = 1;
     metadata.target_triple = target_triple.empty() ? "source" : target_triple;
     metadata.native_source_digest =
         sha256_prefixed(native_source_digest_text(extension, extension_blobs));
@@ -1867,7 +1867,7 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
     for (std::uint64_t j = 0; j < type_count; ++j) {
       PackageNativeType type;
       const std::string entry = prefix + "type." + std::to_string(j) + ".";
-      if (!get_escaped_value(values, entry + "amber", &type.amber) ||
+      if (!get_escaped_value(values, entry + "sputnik", &type.sputnik) ||
           !get_escaped_value(values, entry + "tag", &type.tag) ||
           !get_escaped_value(values, entry + "ownership", &type.ownership) ||
           !get_escaped_value(values, entry + "destructor", &type.destructor)) {
@@ -1960,8 +1960,8 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
       return result;
     }
     bool abi_ok = true;
-    metadata.amber_ext_abi_version = static_cast<std::uint32_t>(
-        parse_count(values, prefix + "amber_ext_abi_version", &abi_ok));
+    metadata.sputnik_ext_abi_version = static_cast<std::uint32_t>(
+        parse_count(values, prefix + "sputnik_ext_abi_version", &abi_ok));
     bool type_count_ok = true;
     const std::uint64_t type_count =
         parse_count(values, prefix + "type.count", &type_count_ok);
@@ -1977,7 +1977,7 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
     for (std::uint64_t j = 0; j < type_count; ++j) {
       PackageNativeType type;
       const std::string entry = prefix + "type." + std::to_string(j) + ".";
-      if (!get_escaped_value(values, entry + "amber", &type.amber) ||
+      if (!get_escaped_value(values, entry + "sputnik", &type.sputnik) ||
           !get_escaped_value(values, entry + "tag", &type.tag) ||
           !get_escaped_value(values, entry + "ownership", &type.ownership) ||
           !get_escaped_value(values, entry + "destructor", &type.destructor)) {
@@ -2160,10 +2160,10 @@ PackageVerifyResult verify_package_artifact(const std::string &serialized,
           path));
       continue;
     }
-    if (metadata.amber_ext_abi_version != 1U) {
+    if (metadata.sputnik_ext_abi_version != 1U) {
       result.diagnostics.push_back(diagnostic(
           "PackageVerifyError",
-          "native extension ABI version does not match amber_ext: " +
+          "native extension ABI version does not match sputnik_ext: " +
               metadata.name,
           path));
     }
@@ -2196,7 +2196,7 @@ PackageVerifyResult verify_package_artifact(const std::string &serialized,
       for (std::size_t i = 0; i < metadata.types.size(); ++i) {
         const PackageNativeType &left = metadata.types[i];
         const PackageNativeType &right = expected.types[i];
-        if (left.amber != right.amber || left.tag != right.tag ||
+        if (left.sputnik != right.sputnik || left.tag != right.tag ||
             left.ownership != right.ownership ||
             left.destructor != right.destructor) {
           result.diagnostics.push_back(diagnostic(
@@ -2279,7 +2279,7 @@ PackageRegistryResult publish_package_artifact(const std::string &serialized,
 std::string artifact_to_json(const PackageArtifact &artifact) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.pkg.inspect.v1\",\n";
+  out << "  \"schema\": \"sputnik.pkg.inspect.v1\",\n";
   out << "  \"package\": {\"name\":\"" << json_escape(artifact.manifest.name)
       << "\",\"version\":\"" << json_escape(artifact.manifest.version)
       << "\",\"root_module\":\"" << json_escape(artifact.manifest.root_module)
@@ -2358,8 +2358,8 @@ std::string artifact_to_json(const PackageArtifact &artifact) {
     }
     const PackageNativeExtensionMetadata &metadata = native_metadata[i];
     out << "\n    {\"name\":\"" << json_escape(metadata.name)
-        << "\",\"amber_ext_abi_version\":"
-        << metadata.amber_ext_abi_version << ",\"target_triple\":\""
+        << "\",\"sputnik_ext_abi_version\":"
+        << metadata.sputnik_ext_abi_version << ",\"target_triple\":\""
         << json_escape(metadata.target_triple)
         << "\",\"native_source_sha256\":\""
         << json_escape(metadata.native_source_digest)
@@ -2370,7 +2370,7 @@ std::string artifact_to_json(const PackageArtifact &artifact) {
       if (j != 0U) {
         out << ",";
       }
-      out << "{\"amber\":\"" << json_escape(metadata.types[j].amber)
+      out << "{\"sputnik\":\"" << json_escape(metadata.types[j].sputnik)
           << "\",\"tag\":\"" << json_escape(metadata.types[j].tag)
           << "\",\"ownership\":\""
           << json_escape(metadata.types[j].ownership)
@@ -2407,7 +2407,7 @@ std::string artifact_to_json(const PackageArtifact &artifact) {
 std::string verify_result_to_json(const PackageVerifyResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.pkg.verify.v1\",\n";
+  out << "  \"schema\": \"sputnik.pkg.verify.v1\",\n";
   out << "  \"status\": \"" << (result.ok ? "ok" : "error") << "\",\n";
   out << "  \"package\": \"" << json_escape(result.package_name) << "\",\n";
   out << "  \"version\": \"" << json_escape(result.version) << "\",\n";
@@ -2436,7 +2436,7 @@ std::string verify_result_to_json(const PackageVerifyResult &result) {
 std::string registry_result_to_json(const PackageRegistryResult &result) {
   std::ostringstream out;
   out << "{\n";
-  out << "  \"schema\": \"amber.pkg.registry.v1\",\n";
+  out << "  \"schema\": \"sputnik.pkg.registry.v1\",\n";
   out << "  \"status\": \"" << (result.ok ? "ok" : "error") << "\",\n";
   out << "  \"package\": \"" << json_escape(result.package_name) << "\",\n";
   out << "  \"version\": \"" << json_escape(result.version) << "\",\n";
@@ -2455,4 +2455,4 @@ std::string registry_result_to_json(const PackageRegistryResult &result) {
   return out.str();
 }
 
-} // namespace amber::pkg
+} // namespace sputnik::pkg

@@ -1,9 +1,9 @@
-#ifndef AMBER_NATIVE_EXT_DEP_OPS_H
-#define AMBER_NATIVE_EXT_DEP_OPS_H
+#ifndef SPUTNIK_NATIVE_EXT_DEP_OPS_H
+#define SPUTNIK_NATIVE_EXT_DEP_OPS_H
 
-#include "runtime/amber_ext.h"
+#include "runtime/sputnik_ext.h"
 
-AmberStatus amber_dep_doubled(AmberCtx *cx, const AmberValue *args,
-                              size_t argc, AmberValue *out);
+SputnikStatus sputnik_dep_doubled(SputnikCtx *cx, const SputnikValue *args,
+                              size_t argc, SputnikValue *out);
 
 #endif

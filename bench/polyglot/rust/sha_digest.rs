@@ -236,12 +236,12 @@ fn fold_digest(checksum: u64, digest: &[u8]) -> u64 {
 
 fn main_workload() -> u64 {
     let payloads: [&[u8]; 4] = [
-        b"Amber digest polyglot benchmark payload zero",
-        b"Amber digest polyglot benchmark payload one 1234567890",
+        b"Sputnik digest polyglot benchmark payload zero",
+        b"Sputnik digest polyglot benchmark payload one 1234567890",
         b"The quick brown fox jumps over the lazy dog",
         b"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     ];
-    let key: &[u8] = b"amber-digest-benchmark-key";
+    let key: &[u8] = b"sputnik-digest-benchmark-key";
     let mut checksum: u64 = 0;
     for i in 0..4000usize {
         let data = payloads[i % payloads.len()];

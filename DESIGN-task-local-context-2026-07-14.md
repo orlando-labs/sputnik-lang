@@ -7,7 +7,7 @@ the direct-native runtime, and VM fallback paths.
 
 ## Problem
 
-Amber tasks are resumable scheduler strands. A suspended strand may resume on
+Sputnik tasks are resumable scheduler strands. A suspended strand may resume on
 a different native worker, so an OS thread-local value is not a task-local
 value. Scheduler-local numeric task ids are also not a safe slot namespace:
 different schedulers and resumable VMs may reuse the same numbers.
@@ -18,7 +18,7 @@ process-global `task_id -> value` table.
 
 ## Public surface
 
-```amber
+```sputnik
 import task
 
 CURRENT = task.local(inherit: false)
@@ -76,7 +76,7 @@ context before the child becomes runnable:
 - subsequent child `set!` or `clear!` replaces only the child's map entry.
 
 Mutable payloads inside an inherited value are consequently shared, not
-deep-copied. They must already satisfy Amber's ownership/shareability rules and
+deep-copied. They must already satisfy Sputnik's ownership/shareability rules and
 must be synchronized if mutated concurrently. Exclusive resources such as
 database connections, transactions, leases, and file cursors must use
 `inherit: false`.
@@ -105,7 +105,7 @@ the already-installed logical context.
 
 ## Lifecycle and GC
 
-Binding holders own ordinary Amber values:
+Binding holders own ordinary Sputnik values:
 
 - `set!` retains the new value;
 - overwrite releases the replaced holder;
@@ -114,7 +114,7 @@ Binding holders own ordinary Amber values:
 - inherited child entries retain shallow value copies independently;
 - normal completion and cancellation clear all current and shadow bindings.
 
-Amber's collector requires explicit roots. Live task contexts are therefore
+Sputnik's collector requires explicit roots. Live task contexts are therefore
 registered in a compact GC-root registry. The registry stores context pointers,
 not bindings or task identities, is consulted only during collection, and
 reuses slots on context destruction. Hot-path lookup never touches it. Scheduler
@@ -139,7 +139,7 @@ strand afterward. Production wakeups and work stealing remain unchanged.
 
 ## Downstream use
 
-`sqlite3-amber` should allocate one non-inheriting local per pool and bind the
+`sqlite3-sputnik` should allocate one non-inheriting local per pool and bind the
 checked-out transaction executor with `with`. Nested ORM calls then resolve the
 same executor after suspension/migration, while a child `task.spawn` observes
 no transaction binding and cannot concurrently use the exclusive connection.

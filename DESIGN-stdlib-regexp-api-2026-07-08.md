@@ -24,7 +24,7 @@ native codegen patches, which are implementation work gated on this surface.
 
 The ergonomic literal surface is a string-tag macro:
 
-```amber
+```sputnik
 from Regexp import r
 
 digits = r"""\d+"""
@@ -34,7 +34,7 @@ digits.match?("abc")      # false
 
 Plain untagged strings are not regexp literals:
 
-```amber
+```sputnik
 text = """\\d+"""         # ordinary Str, no tag macro expansion
 pat = r"""\d+"""          # Regexp.Pattern
 ```
@@ -49,7 +49,7 @@ named `r`.
 
 The primary v1 surface is the already-implemented string-tag trigger:
 
-```amber
+```sputnik
 pat = r"""
   ^\p{L}+@\p{L}+\.\p{L}+$
   """
@@ -66,7 +66,7 @@ invocation whose provider is the `Regexp` module.
 Regexps often fit on one line. The regexp design therefore wants the string-tag
 trigger generalized from text blocks to any string literal opener:
 
-```amber
+```sputnik
 from Regexp import r
 
 word = r"\w+"
@@ -81,10 +81,10 @@ next parser milestone.
 ### 2.3 Pattern source handed to `r`
 
 The `r` tag consumes the template's authored source chunks after text-block
-dedent, not the cooked `Str` value after Amber string escapes. That keeps regexp
+dedent, not the cooked `Str` value after Sputnik string escapes. That keeps regexp
 escapes readable:
 
-```amber
+```sputnik
 r"""\d+\s+\w+"""          # pattern source is \d+\s+\w+
 ```
 
@@ -93,14 +93,14 @@ The string-template AST therefore needs both views for tagged strings:
 - `source_chunks`: the dedented literal text exactly as authored, with
   backslashes preserved for the tag.
 - `cooked_chunks`: the ordinary string-literal value view for tags that want
-  Amber escape handling.
+  Sputnik escape handling.
 
 `Regexp.r` uses `source_chunks`. Plain untagged strings keep the ordinary `Str`
 lowering.
 
 ## 3. Module surface
 
-```amber
+```sputnik
 import Regexp
 from Regexp import Pattern, Match, r
 
@@ -114,7 +114,7 @@ Regexp.try_compile("(")              # Result.err(Regexp.CompileError)
 
 Module methods:
 
-```amber
+```sputnik
 Regexp.compile(pattern,
   ignore_case: false,
   multiline: false,
@@ -138,7 +138,7 @@ runtime default.
 
 Pattern methods:
 
-```amber
+```sputnik
 pat.source                           # canonical pattern source
 pat.flags                            # [:unicode, :ignore_case, ...]
 pat.names                            # named capture names, in pattern order
@@ -165,7 +165,7 @@ pat.replace(text) { |m| ... }        # -> Str
 
 Match operators:
 
-```amber
+```sputnik
 text =~ pat                          # -> Regexp.Match?
 pat =~ text                          # -> Regexp.Match?
 text !~ pat                          # -> Bool
@@ -174,7 +174,7 @@ pat !~ text                          # -> Bool
 
 Recommended `Str` sugar, once value-method registration is in place:
 
-```amber
+```sputnik
 text.match(pat)                      # == pat.match(text)
 text.match?(pat)
 text.scan(pat)
@@ -191,7 +191,7 @@ The module methods are the canonical surface; `Str` sugar is convenience only.
 
 ## 4. Match operators
 
-Amber should add two regexp-specific infix operators:
+Sputnik should add two regexp-specific infix operators:
 
 - `=~` - search match; returns `Regexp.Match?`.
 - `!~` - search non-match; returns `Bool`.
@@ -199,7 +199,7 @@ Amber should add two regexp-specific infix operators:
 Both operand orders are accepted when exactly one operand is a
 `Regexp.Pattern` and the other is a `Str`:
 
-```amber
+```sputnik
 input =~ r"""^\d+"""                 # r"""^\d+""".match(input)
 r"""^\d+""" =~ input                 # same result
 
@@ -210,15 +210,15 @@ r"""^\d+""" !~ input                 # same boolean
 `=~` deliberately returns the match object, not a boolean, so it composes with
 capture extraction while still being naturally truthy/falsey in guards:
 
-```amber
+```sputnik
 if m = input =~ r"""(?<name>\w+)=(\d+)""":
   config[m[:name]] = Int.parse(m[2])
 ```
 
-Because Amber already defines `$_` as the last expression result, the terse form
+Because Sputnik already defines `$_` as the last expression result, the terse form
 also works when the match expression is the branch condition:
 
-```amber
+```sputnik
 if input =~ r"""(?<name>\w+)=(\d+)""":
   config[$_[:name]] = Int.parse($_[2])
 
@@ -235,7 +235,7 @@ another expression result.
 The operator always uses `match` search semantics, not `full_match`. Full-string
 matching remains explicit through anchors or `.full_match`:
 
-```amber
+```sputnik
 input =~ r"""^\d+$"""                # anchored search
 r"""\d+""".full_match(input)         # explicit full-match method
 ```
@@ -244,7 +244,7 @@ No implicit compile happens for `Str =~ Str` or `Str !~ Str`; that would hide
 allocation and diagnostics in an operator. Dynamic patterns must be compiled
 explicitly:
 
-```amber
+```sputnik
 input =~ Regexp.compile(pattern_text)
 ```
 
@@ -263,7 +263,7 @@ Parser/lowering notes:
 `Regexp.Match` is immutable and keeps the matched source `Str` alive so capture
 access is stable.
 
-```amber
+```sputnik
 m = r"""(?<name>\w+)=(\d+)""".match("port=8080")
 
 m.text                 # "port=8080"      group 0
@@ -301,7 +301,7 @@ Rules:
 Regexp interpolation has the same security shape as SQL interpolation: authored
 static chunks are regexp syntax, but ordinary holes are data.
 
-```amber
+```sputnik
 prefix = "user+"
 pat = r"""^#{prefix}\d+$"""
 ```
@@ -312,14 +312,14 @@ The hole above inserts `Regexp.escape(prefix)`, so the pattern means literal
 
 Trusted syntax fragments require an explicit branded value:
 
-```amber
+```sputnik
 frag = Regexp.fragment("\\d+")
 pat = r"""^id=#{frag}$"""
 ```
 
 Surface:
 
-```amber
+```sputnik
 Regexp.escape(text)                  # -> Str
 Regexp.fragment(pattern)             # -> Regexp.Fragment
 ```
@@ -336,7 +336,7 @@ fragments are inserted as syntax.
 
 ## 7. Flags and syntax
 
-Amber regexps are Unicode by default because `Str` is UTF-8 by construction.
+Sputnik regexps are Unicode by default because `Str` is UTF-8 by construction.
 The engine always runs in UTF mode and Unicode-property mode.
 
 Flags:
@@ -352,7 +352,7 @@ Flags:
 
 Tagged literals use inline flags:
 
-```amber
+```sputnik
 pat = r"""(?im)^\w+$"""
 ```
 
@@ -362,12 +362,12 @@ Dynamic compile calls may use keyword flags. There is no suffix syntax such as
 ## 8. Engine contract
 
 The reference implementation should use PCRE2 in UTF + UCP mode, vendored or
-declared as a build dependency by the Amber build system. C++ `std::regex` is
+declared as a build dependency by the Sputnik build system. C++ `std::regex` is
 not acceptable for the reference engine: its Unicode behavior, diagnostics, and
 implementation quality are too inconsistent for a language contract.
 
-The language contract is "Amber regexp syntax is PCRE2-compatible UTF syntax
-with the Amber API semantics in this document." That gives the stdlib full
+The language contract is "Sputnik regexp syntax is PCRE2-compatible UTF syntax
+with the Sputnik API semantics in this document." That gives the stdlib full
 coverage for:
 
 - character classes, Unicode properties, POSIX classes;
@@ -394,7 +394,7 @@ changing this module.
 
 Replacement is available from both sides:
 
-```amber
+```sputnik
 pat.replace(text, replacement, count: :all)
 text.replace(pat, replacement, count: :all)
 text.replaced(pat, replacement, count: :all)
@@ -412,7 +412,7 @@ alias.
 
 Replacement strings use `$` references, not backslash references:
 
-```amber
+```sputnik
 pat.replace("a=1 b=2", "${key}:$1")  # named and numbered captures
 "a=1 b=2".replace(pat, "${key}:$1")  # same replacement from the Str side
 ```
@@ -426,12 +426,12 @@ Replacement grammar:
 - Any other `$` sequence is `Regexp.ReplacementError`.
 
 Backslash has no replacement magic. This avoids a second escaping language
-fighting Amber strings and regexp strings.
+fighting Sputnik strings and regexp strings.
 
 Block replacement is preferred for nontrivial cases. This is a different method
 clause / argument pattern, not a different verb:
 
-```amber
+```sputnik
 pat.replace(text) |m|:
   m[:name].upcase()
 
@@ -447,7 +447,7 @@ argument. A call with a pattern and no replacement must either provide a block
 or raise `ArgumentError`; it must not silently stringify `null` or do nothing.
 
 In block forms the block receives the `Regexp.Match` and must return a `Str` or
-a value accepted by `Amber.stringify` as a display string. Exceptions propagate
+a value accepted by `Sputnik.stringify` as a display string. Exceptions propagate
 normally.
 
 ## 10. Splitting and scanning
@@ -548,7 +548,7 @@ Required native coverage:
 6. Backend-equivalence fixtures comparing VM and native output for captures,
    Unicode offsets, replacements, split edge cases, and match-limit errors.
 
-This is "full native coverage" in Amber's native-backend sense: no bytecode
+This is "full native coverage" in Sputnik's native-backend sense: no bytecode
 wrapper and no whole-program VM fallback for the regexp workload.
 
 ## 14. Pattern matching integration
@@ -558,7 +558,7 @@ full-match semantics are too easy to misunderstand.
 
 Use explicit calls:
 
-```amber
+```sputnik
 case value:
 when r"""^\d+$""".full_match?(value):
   ...
@@ -566,7 +566,7 @@ when r"""^\d+$""".full_match?(value):
 
 For search semantics, the operator is fine in an ordinary condition:
 
-```amber
+```sputnik
 if text =~ r"""error \d+""":
   ...
 ```
@@ -574,7 +574,7 @@ if text =~ r"""error \d+""":
 After the matcher protocol is settled for custom values, a future extension can
 add a named matcher such as:
 
-```amber
+```sputnik
 case text:
 when Regexp.full(r"""[A-Z]+"""):
   ...
@@ -586,7 +586,7 @@ The explicit wrapper names keep semantics readable.
 
 ## 15. Documentation examples
 
-```amber
+```sputnik
 from Regexp import r
 
 email = r"""(?i)^\S+@\S+\.\S+$"""
@@ -595,7 +595,7 @@ if input =~ email:
   print("ok")
 ```
 
-```amber
+```sputnik
 from Regexp import r
 
 pair = r"""(?<key>\w+)=(?<value>\d+)"""
@@ -603,14 +603,14 @@ if m = "port=8080" =~ pair:
   config = {m[:key]: Int.parse(m[:value])}
 ```
 
-```amber
+```sputnik
 from Regexp import r
 
 csvish = r"""\s*,\s*"""
 items = csvish.split("a, b, c")
 ```
 
-```amber
+```sputnik
 from Regexp import r
 
 slug = r"""[^\p{L}\p{N}]+"""

@@ -27,7 +27,7 @@ Implementation deviations from the recommendations (deliberate, minimal):
   receivers.
 
 Companion to the `Computed property descriptors` section of
-`amber_unified_final_spec.md`.
+`sputnik_unified_final_spec.md`.
 
 Each gap gets: the recommended ruling, the normative rule sketch, and the
 registry/test consequences. Diagnostic names follow the registry convention
@@ -335,7 +335,7 @@ What this buys:
   nondeterminism.
 
 Future escape hatch: none in v1. If async properties are ever wanted, they
-require explicit use-site marking (Swift SE-0310-style `await`), which Amber
+require explicit use-site marking (Swift SE-0310-style `await`), which Sputnik
 deliberately does not have — so the prohibition is structurally
 future-proof, revisitable only alongside an explicit-await RFC.
 
@@ -344,7 +344,7 @@ future-proof, revisitable only alongside an explicit-await RFC.
 ## Gap 10 — Spec patch set (land as one change)
 
 The RFC text plus all of the above must land together with these
-contradiction fixes in `amber_unified_final_spec.md`:
+contradiction fixes in `sputnik_unified_final_spec.md`:
 
 | Location (line) | Current statement | Change |
 |---|---|---|

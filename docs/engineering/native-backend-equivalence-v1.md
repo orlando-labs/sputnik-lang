@@ -1,4 +1,4 @@
-# amber.native-backend-equivalence.v1
+# sputnik.native-backend-equivalence.v1
 
 Status: active guard; run via `make backend-equivalence`
 (`tools/backend_equivalence.py`), wired into CI after `make conformance`.
@@ -6,7 +6,7 @@ Status: active guard; run via `make backend-equivalence`
 ## What it checks
 
 Every `corpus/run` fixture is compiled into two executables with
-`amberc build`:
+`sputnik build`:
 
 - `--target bytecode-wrapper`: the VM lane (the semantic oracle);
 - `--target native`: the `cpp-bytecode-direct-v1` lane, which runs generated
@@ -49,7 +49,7 @@ families are safe by reachability:
   sampled value and every value derived from it are abandoned too.
 
 The eligibility scan in `native_cpp_code_supported`
-(`tools/amberc/main.cpp`) rejects every effectful shape that lacks a complete
+(`tools/sputnik/main.cpp`) rejects every effectful shape that lacks a complete
 direct-native helper and an effect barrier. Supported text output, task
 operations, and the `net.http.Client#query` path commit that barrier
 before the effect. No mutable object crosses the scalar VM bridge, so native
@@ -70,22 +70,22 @@ in-place array append all compile with `--require-full-native`.
 
 ## Direct native-extension leaves
 
-A code object carrying an `amber.native.bind:<code_id>` attribute is classified
+A code object carrying an `sputnik.native.bind:<code_id>` attribute is classified
 as `native-extension` when its native package is linked. Generated callers
 marshal arguments through a thread-local runtime host and call
 `RuntimeWorld::invoke_native_extension`, which invokes the registered
-`amber_ext.h` ABI thunk directly. It does not push, step, or execute the bound
-code object's Amber fallback body.
+`sputnik_ext.h` ABI thunk directly. It does not push, step, or execute the bound
+code object's Sputnik fallback body.
 
 Native-extension code objects count toward `native_graph_native_code_count`,
 while `native_graph_vm_fallback_code_count` remains reserved for bytecode
-execution. The amber-orm SQLite selftest pins this distinction at 916/916
+execution. The sputnik-orm SQLite selftest pins this distinction at 916/916
 native code objects: 881 generated C++ bodies, 35 direct SQLite extension
 thunks, 0 VM bridges, and 0 fallback objects. The executable returns `29`.
 The standalone SQLite selftest is 477/477 native and returns `35`.
 
 When every code object is either `direct-native` or `native-extension`, the
-generated source omits `run_vm_entry`, `amber_vm_fallback_call`, and every
+generated source omits `run_vm_entry`, `sputnik_vm_fallback_call`, and every
 `RuntimeWorld::execute` call. A `NativeBailout` is then a native execution error
 rather than permission to restart the program under bytecode.
 
@@ -138,9 +138,9 @@ Headers, streaming responses, generated-source bridge absence, and
 `--require-full-native`; body coverage alone is not used as a substitute.
 
 Generated request dispatch has one cycle-GC mutator boundary per external
-HTTP/task/runtime callback. `amber_native_call_code` does not open another
+HTTP/task/runtime callback. `sputnik_native_call_code` does not open another
 `NativeCycleScope` for nested method and block calls; doing so would turn an
-Amber call into a repeated VM-shaped runtime boundary even when no VM bridge
+Sputnik call into a repeated VM-shaped runtime boundary even when no VM bridge
 exists. Nested allocation tracking remains in the callback's active scope and
 uses its explicit checkpoint path.
 
@@ -157,7 +157,7 @@ reduction.
 ## Per-function VM fallback (step 2, scalar bridge)
 
 Code objects that fail the native allowlist but pass
-`native_cpp_code_vm_callable` (`tools/amberc/main.cpp`) no longer doom the
+`native_cpp_code_vm_callable` (`tools/sputnik/main.cpp`) no longer doom the
 program to the whole-program restart. The generated executable lazily
 decodes its embedded bytecode into one `RuntimeWorld` (module init is NOT
 run inside it) and executes just that code object per call across a scalar
@@ -170,7 +170,7 @@ Soundness rests on three constraints, each enforced where stated:
    selector is on the bridge allow-list. It can therefore neither observe nor
    mutate state shared with the native lane, and module init need not run in
    the fallback world. The check (`native_vm_callable_code_body` in
-   `tools/amberc/main.cpp`) is recursive over the block bodies the entry
+   `tools/sputnik/main.cpp`) is recursive over the block bodies the entry
    constructs (see the block-support bullet). Two selector families are
    admitted:
    - `native_vm_callable_pure_selector` — effect-free value transforms:

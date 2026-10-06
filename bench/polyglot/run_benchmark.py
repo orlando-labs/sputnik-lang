@@ -26,9 +26,9 @@ from benchmark_support import (
 class Workload:
     name: str
     expected_checksum: str
-    amber_module: str
-    amber_entry: str
-    amber_source: str
+    sputnik_module: str
+    sputnik_entry: str
+    sputnik_source: str
     python_source: str
     ruby_source: str
     cpp_source: str
@@ -37,8 +37,8 @@ class Workload:
     go_binary: str
     rust_source: str
     rust_binary: str
-    requires_full_amber_native: bool = True
-    amber_grants: tuple[str, ...] = ()
+    requires_full_sputnik_native: bool = True
+    sputnik_grants: tuple[str, ...] = ()
 
 
 JSON_RECORDS = 20000
@@ -49,9 +49,9 @@ WORKLOADS = {
     "arithmetic": Workload(
         name="arithmetic",
         expected_checksum="715609516598740",
-        amber_module="bench.polyglot",
-        amber_entry="main",
-        amber_source="main.am",
+        sputnik_module="bench.polyglot",
+        sputnik_entry="main",
+        sputnik_source="main.s",
         python_source="main.py",
         ruby_source="main.rb",
         cpp_source="main.cpp",
@@ -64,9 +64,9 @@ WORKLOADS = {
     "calls-collections": Workload(
         name="calls-collections",
         expected_checksum="2047795430",
-        amber_module="bench.polyglot.calls_collections",
-        amber_entry="__init__",
-        amber_source="calls_collections.am",
+        sputnik_module="bench.polyglot.calls_collections",
+        sputnik_entry="__init__",
+        sputnik_source="calls_collections.s",
         python_source="calls_collections.py",
         ruby_source="calls_collections.rb",
         cpp_source="calls_collections.cpp",
@@ -78,10 +78,10 @@ WORKLOADS = {
     ),
     "sha-digest": Workload(
         name="sha-digest",
-        expected_checksum="5616000",
-        amber_module="bench.polyglot.sha_digest",
-        amber_entry="__init__",
-        amber_source="sha_digest.am",
+        expected_checksum="5512000",
+        sputnik_module="bench.polyglot.sha_digest",
+        sputnik_entry="__init__",
+        sputnik_source="sha_digest.s",
         python_source="sha_digest.py",
         ruby_source="sha_digest.rb",
         cpp_source="sha_digest.cpp",
@@ -94,9 +94,9 @@ WORKLOADS = {
     "json": Workload(
         name="json",
         expected_checksum="1531352227",
-        amber_module="bench.polyglot.json",
-        amber_entry="main",
-        amber_source="json.am",
+        sputnik_module="bench.polyglot.json",
+        sputnik_entry="main",
+        sputnik_source="json.s",
         python_source="json_workload.py",
         ruby_source="json_workload.rb",
         cpp_source="json_workload.cpp",
@@ -105,14 +105,14 @@ WORKLOADS = {
         go_binary="json_workload",
         rust_source="json_workload.rs",
         rust_binary="json_workload",
-        amber_grants=("fs.read=bench/polyglot/build/json/events.jsonl",),
+        sputnik_grants=("fs.read=bench/polyglot/build/json/events.jsonl",),
     ),
     "string-ops": Workload(
         name="string-ops",
         expected_checksum="280113",
-        amber_module="bench.polyglot.string_ops",
-        amber_entry="main",
-        amber_source="string_ops.am",
+        sputnik_module="bench.polyglot.string_ops",
+        sputnik_entry="main",
+        sputnik_source="string_ops.s",
         python_source="string_ops.py",
         ruby_source="string_ops.rb",
         cpp_source="string_ops.cpp",
@@ -125,9 +125,9 @@ WORKLOADS = {
     "map-words": Workload(
         name="map-words",
         expected_checksum="235174",
-        amber_module="bench.polyglot.map_words",
-        amber_entry="main",
-        amber_source="map_words.am",
+        sputnik_module="bench.polyglot.map_words",
+        sputnik_entry="main",
+        sputnik_source="map_words.s",
         python_source="map_words.py",
         ruby_source="map_words.rb",
         cpp_source="map_words.cpp",
@@ -140,9 +140,9 @@ WORKLOADS = {
     "codecs": Workload(
         name="codecs",
         expected_checksum="2056190",
-        amber_module="bench.polyglot.codecs",
-        amber_entry="main",
-        amber_source="codecs.am",
+        sputnik_module="bench.polyglot.codecs",
+        sputnik_entry="main",
+        sputnik_source="codecs.s",
         python_source="codecs_workload.py",
         ruby_source="codecs_workload.rb",
         cpp_source="codecs_workload.cpp",
@@ -155,9 +155,9 @@ WORKLOADS = {
     "secure-random": Workload(
         name="secure-random",
         expected_checksum="296000",
-        amber_module="bench.polyglot.secure_random",
-        amber_entry="main",
-        amber_source="secure_random.am",
+        sputnik_module="bench.polyglot.secure_random",
+        sputnik_entry="main",
+        sputnik_source="secure_random.s",
         python_source="secure_random.py",
         ruby_source="secure_random.rb",
         cpp_source="secure_random.cpp",
@@ -166,14 +166,14 @@ WORKLOADS = {
         go_binary="secure_random",
         rust_source="secure_random.rs",
         rust_binary="secure_random",
-        amber_grants=("random.secure",),
+        sputnik_grants=("random.secure",),
     ),
     "time-flow": Workload(
         name="time-flow",
         expected_checksum="110397732",
-        amber_module="bench.polyglot.time_flow",
-        amber_entry="main",
-        amber_source="time_flow.am",
+        sputnik_module="bench.polyglot.time_flow",
+        sputnik_entry="main",
+        sputnik_source="time_flow.s",
         python_source="time_flow.py",
         ruby_source="time_flow.rb",
         cpp_source="time_flow.cpp",
@@ -186,9 +186,9 @@ WORKLOADS = {
     "uuid": Workload(
         name="uuid",
         expected_checksum="1040000",
-        amber_module="bench.polyglot.uuid",
-        amber_entry="main",
-        amber_source="uuid.am",
+        sputnik_module="bench.polyglot.uuid",
+        sputnik_entry="main",
+        sputnik_source="uuid.s",
         python_source="uuid_workload.py",
         ruby_source="uuid_workload.rb",
         cpp_source="uuid_workload.cpp",
@@ -197,7 +197,7 @@ WORKLOADS = {
         go_binary="uuid_workload",
         rust_source="uuid_workload.rs",
         rust_binary="uuid_workload",
-        amber_grants=("random.secure",),
+        sputnik_grants=("random.secure",),
     ),
 }
 
@@ -252,7 +252,7 @@ def choose_rust() -> Optional[str]:
 
 
 def choose_ruby() -> str:
-    override = os.environ.get("AMBER_BENCH_RUBY")
+    override = os.environ.get("SPUTNIK_BENCH_RUBY")
     candidates = [Path(override).expanduser()] if override else []
     candidates += sorted(
         (Path.home() / ".rvm" / "rubies").glob("ruby-*/bin/ruby"),
@@ -265,14 +265,14 @@ def choose_ruby() -> str:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return str(candidate.resolve())
     raise RuntimeError(
-        "ruby was not found; set AMBER_BENCH_RUBY to a Ruby executable"
+        "ruby was not found; set SPUTNIK_BENCH_RUBY to a Ruby executable"
     )
 
 
-def ensure_amber_tools(root: Path) -> None:
+def ensure_sputnik_tools(root: Path) -> None:
     # Let make verify source timestamps even when both tools already exist.
-    # A merely present iamber may predate the VM changes being benchmarked.
-    run_command(["make", "build/amberc", "build/iamber"], root, capture=False)
+    # A merely present isputnik may predate the VM changes being benchmarked.
+    run_command(["make", "build/sputnik", "build/isputnik"], root, capture=False)
 
 
 def prepare_json_fixture(root: Path) -> Path:
@@ -290,8 +290,8 @@ def prepare_json_fixture(root: Path) -> Path:
     return path
 
 
-def amber_artifact_path(build_dir: Path, workload: Workload) -> Path:
-    return build_dir / "amber" / "out" / f"{workload.amber_module}.amberbc"
+def sputnik_artifact_path(build_dir: Path, workload: Workload) -> Path:
+    return build_dir / "sputnik" / "out" / f"{workload.sputnik_module}.sputnikbc"
 
 
 def safe_artifact_name(value: str) -> str:
@@ -301,20 +301,20 @@ def safe_artifact_name(value: str) -> str:
     ) or "artifact"
 
 
-def amber_native_path(build_dir: Path, workload: Workload) -> Path:
-    return build_dir / "amber" / "native" / safe_artifact_name(workload.amber_module)
+def sputnik_native_path(build_dir: Path, workload: Workload) -> Path:
+    return build_dir / "sputnik" / "native" / safe_artifact_name(workload.sputnik_module)
 
 
-def build_amber_bytecode(root: Path, build_dir: Path) -> None:
-    out_dir = build_dir / "amber" / "out"
-    cache_dir = build_dir / "amber" / "cache"
+def build_sputnik_bytecode(root: Path, build_dir: Path) -> None:
+    out_dir = build_dir / "sputnik" / "out"
+    cache_dir = build_dir / "sputnik" / "cache"
     out_dir.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
     run_command(
         [
-            root / "build" / "amberc",
+            root / "build" / "sputnik",
             "build",
-            root / "bench" / "polyglot" / "amber" / "amber.build.json",
+            root / "bench" / "polyglot" / "sputnik" / "sputnik.build.json",
             "--out-dir",
             out_dir,
             "--cache-dir",
@@ -325,22 +325,22 @@ def build_amber_bytecode(root: Path, build_dir: Path) -> None:
         root,
     )
     for workload in WORKLOADS.values():
-        artifact = amber_artifact_path(build_dir, workload)
+        artifact = sputnik_artifact_path(build_dir, workload)
         if not artifact.exists():
             raise RuntimeError(
-                f"expected Amber bytecode artifact is missing: {artifact}"
+                f"expected Sputnik bytecode artifact is missing: {artifact}"
             )
 
 
-def build_amber_native_executable(
+def build_sputnik_native_executable(
     root: Path, build_dir: Path, workload: Workload
 ) -> Path:
-    output = amber_native_path(build_dir, workload)
+    output = sputnik_native_path(build_dir, workload)
     output.parent.mkdir(parents=True, exist_ok=True)
-    source = root / "bench" / "polyglot" / "amber" / "src" / workload.amber_source
-    entry = "init" if workload.amber_entry == "__init__" else "main-only"
+    source = root / "bench" / "polyglot" / "sputnik" / "src" / workload.sputnik_source
+    entry = "init" if workload.sputnik_entry == "__init__" else "main-only"
     command = [
-        root / "build" / "amberc",
+        root / "build" / "sputnik",
         "build",
         source,
         "-o",
@@ -348,36 +348,36 @@ def build_amber_native_executable(
         "--entry",
         entry,
     ]
-    for grant in workload.amber_grants:
+    for grant in workload.sputnik_grants:
         command.extend(["--grant", grant])
     completed = run_command(command, root)
     build_result = json.loads(completed.stdout)
     if build_result.get("status") != "ok":
-        raise RuntimeError(f"Amber native build failed: {completed.stdout}")
-    if not workload.requires_full_amber_native:
+        raise RuntimeError(f"Sputnik native build failed: {completed.stdout}")
+    if not workload.requires_full_sputnik_native:
         if not output.exists():
-            raise RuntimeError(f"expected Amber built executable is missing: {output}")
+            raise RuntimeError(f"expected Sputnik built executable is missing: {output}")
         return output
     if build_result.get("native_backend") != "cpp-bytecode-direct-v1":
         raise RuntimeError(
-            "Amber built benchmark expected native backend "
+            "Sputnik built benchmark expected native backend "
             f"cpp-bytecode-direct-v1, got {build_result.get('native_backend')!r}"
         )
     if build_result.get("native_entry") is not True:
         raise RuntimeError(
-            "Amber built benchmark entry is not native: "
+            "Sputnik built benchmark entry is not native: "
             f"{build_result.get('native_fallback_reason')}"
         )
     native_code_count = build_result.get("native_code_count")
     bytecode_code_count = build_result.get("bytecode_code_count")
     if native_code_count != bytecode_code_count:
         raise RuntimeError(
-            "Amber built benchmark requires full native coverage, got "
+            "Sputnik built benchmark requires full native coverage, got "
             f"{native_code_count}/{bytecode_code_count} code objects: "
             f"{build_result.get('native_fallback_reason')}"
         )
     if not output.exists():
-        raise RuntimeError(f"expected Amber native executable is missing: {output}")
+        raise RuntimeError(f"expected Sputnik native executable is missing: {output}")
     return output
 
 
@@ -446,11 +446,11 @@ def compile_rust_program(
     return output
 
 
-def compile_amberbc_runner(root: Path, build_dir: Path, cxx: str) -> Path:
-    output = build_dir / "amberbc_run"
+def compile_sputnikbc_runner(root: Path, build_dir: Path, cxx: str) -> Path:
+    output = build_dir / "sputnikbc_run"
     output.parent.mkdir(parents=True, exist_ok=True)
     sources = [
-        root / "bench" / "polyglot" / "tools" / "amberbc_run.cpp",
+        root / "bench" / "polyglot" / "tools" / "sputnikbc_run.cpp",
         root / "bytecode" / "format.cpp",
         root / "frontend" / "lexer" / "token.cpp",
         root / "profile" / "capabilities.cpp",
@@ -537,7 +537,7 @@ print(json.dumps({
 
 def extract_checksum(name: str, stdout: str) -> str:
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
-    if name == "amber-interpreted":
+    if name == "sputnik-interpreted":
         for line in lines:
             if line.startswith("=> "):
                 return line[3:].strip()
@@ -662,7 +662,7 @@ def micro_comparisons(
     samples_by_name: dict[str, list[dict]], program_names: list[str]
 ) -> list[dict]:
     comparisons = []
-    for baseline in ("amber-interpreted", "amber-built"):
+    for baseline in ("sputnik-interpreted", "sputnik-built"):
         baseline_samples = samples_by_name.get(baseline, [])
         if not baseline_samples:
             continue
@@ -718,8 +718,8 @@ def micro_provenance(
     ruby: str,
 ) -> dict:
     artifacts = {
-        "amberc": file_provenance(root / "build/amberc"),
-        "iamber": file_provenance(root / "build/iamber"),
+        "sputnik": file_provenance(root / "build/sputnik"),
+        "isputnik": file_provenance(root / "build/isputnik"),
     }
     for name, command in programs:
         for part in command:
@@ -729,8 +729,8 @@ def micro_provenance(
     sources = [
         root / "bench/polyglot/run_benchmark.py",
         root / "bench/polyglot/benchmark_support.py",
-        root / "bench/polyglot/amber/amber.build.json",
-        root / "bench/polyglot/amber/src" / workload.amber_source,
+        root / "bench/polyglot/sputnik/sputnik.build.json",
+        root / "bench/polyglot/sputnik/src" / workload.sputnik_source,
         root / "bench/polyglot/python" / workload.python_source,
         root / "bench/polyglot/ruby" / workload.ruby_source,
         root / "bench/polyglot/cpp" / workload.cpp_source,
@@ -739,12 +739,12 @@ def micro_provenance(
     ]
     return {
         "host": host_provenance(),
-        "repositories": {"amber": git_provenance(root)},
+        "repositories": {"sputnik": git_provenance(root)},
         "artifacts": artifacts,
         "source_tree": tree_provenance(sources, relative_to=root),
         "build_dir": str(build_dir.resolve()),
         "versions": {
-            "amberc": version_line([root / "build/amberc", "--version"], root),
+            "sputnik": version_line([root / "build/sputnik", "--version"], root),
             "python": platform.python_version(),
             "ruby": version_line([ruby, "--version"], root),
             "cxx": version_line([cxx, "--version"], root),
@@ -752,7 +752,7 @@ def micro_provenance(
             "rust": version_line([rust, "--version"], root) if rust else None,
         },
         "environment": relevant_environment(
-            ["CXX", "CC", "RUSTFLAGS", "GOFLAGS", "AMBER_BENCH_RUBY"]
+            ["CXX", "CC", "RUSTFLAGS", "GOFLAGS", "SPUTNIK_BENCH_RUBY"]
         ),
         "argv": sys.argv,
     }
@@ -770,7 +770,7 @@ def markdown_report(payload: dict) -> str:
         f"Host: `{payload['provenance']['host']['platform']}`<br>",
         f"Repeats: `{payload['repeats']}` measured, `{payload['warmups']}` warmup; balanced rotation seed `{payload['order_seed']}`.",
         "",
-        "| Program | Median, s | Mean, s | Stdev | CV | Mean 95% CI | Peak RSS | vs Amber VM | vs Amber native |",
+        "| Program | Median, s | Mean, s | Stdev | CV | Mean 95% CI | Peak RSS | vs Sputnik VM | vs Sputnik native |",
         "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in payload["results"]:
@@ -780,11 +780,11 @@ def markdown_report(payload: dict) -> str:
             )
             continue
         timing = row["timing_s"]
-        vm = comparisons.get(("amber-interpreted", row["name"]))
-        native = comparisons.get(("amber-built", row["name"]))
+        vm = comparisons.get(("sputnik-interpreted", row["name"]))
+        native = comparisons.get(("sputnik-built", row["name"]))
         vm_text = (
             "1.000×"
-            if row["name"] == "amber-interpreted"
+            if row["name"] == "sputnik-interpreted"
             else (
                 f"{vm['paired_throughput_ratio']['median']:.3f}×"
                 if vm is not None
@@ -793,7 +793,7 @@ def markdown_report(payload: dict) -> str:
         )
         native_text = (
             "1.000×"
-            if row["name"] == "amber-built"
+            if row["name"] == "sputnik-built"
             else (
                 f"{native['paired_throughput_ratio']['median']:.3f}×"
                 if native is not None
@@ -819,10 +819,10 @@ def markdown_report(payload: dict) -> str:
         lines.append(f"- repeat {index}: `{' → '.join(order)}`")
     lines += ["", "## Provenance", ""]
     provenance = payload["provenance"]
-    repository = provenance["repositories"]["amber"]
+    repository = provenance["repositories"]["sputnik"]
     dirty = "dirty" if repository.get("tracked_dirty") else "clean"
     lines.append(
-        f"- Amber: `{repository.get('commit')}` ({dirty}, `{repository['path']}`)"
+        f"- Sputnik: `{repository.get('commit')}` ({dirty}, `{repository['path']}`)"
     )
     for name, artifact in provenance["artifacts"].items():
         lines.append(
@@ -841,7 +841,7 @@ def markdown_report(payload: dict) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the Amber/Python/Ruby/C++/Go/Rust polyglot benchmark."
+        description="Run the Sputnik/Python/Ruby/C++/Go/Rust polyglot benchmark."
     )
     parser.add_argument("--repeats", type=int, default=5)
     parser.add_argument(
@@ -873,13 +873,13 @@ def main() -> int:
     parser.add_argument(
         "--no-build",
         action="store_true",
-        help="reuse existing generated binaries and Amber bytecode artifacts",
+        help="reuse existing generated binaries and Sputnik bytecode artifacts",
     )
     parser.add_argument(
         "--build-dir",
         type=Path,
         default=None,
-        help="directory for generated binaries and Amber bytecode artifacts",
+        help="directory for generated binaries and Sputnik bytecode artifacts",
     )
     parser.add_argument(
         "--json-out",
@@ -918,10 +918,10 @@ def main() -> int:
     go_unavailable_reason = None
     rust_unavailable_reason = None
     if args.no_build:
-        amber_built = amber_native_path(build_dir, workload)
-        amber_built_command = [amber_built]
-        if not amber_built.exists():
-            raise RuntimeError(f"Amber native executable missing: {amber_built}")
+        sputnik_built = sputnik_native_path(build_dir, workload)
+        sputnik_built_command = [sputnik_built]
+        if not sputnik_built.exists():
+            raise RuntimeError(f"Sputnik native executable missing: {sputnik_built}")
         cpp_binary = build_dir / "cpp" / workload.cpp_binary
         go_binary = build_dir / "go" / workload.go_binary
         if not go_binary.exists():
@@ -936,10 +936,10 @@ def main() -> int:
             else:
                 rust_unavailable_reason = f"rust binary missing: {rust_binary}"
     else:
-        ensure_amber_tools(root)
-        build_amber_bytecode(root, build_dir)
-        amber_built = build_amber_native_executable(root, build_dir, workload)
-        amber_built_command = [amber_built]
+        ensure_sputnik_tools(root)
+        build_sputnik_bytecode(root, build_dir)
+        sputnik_built = build_sputnik_native_executable(root, build_dir, workload)
+        sputnik_built_command = [sputnik_built]
         cpp_binary = compile_cpp_program(root, build_dir, cxx, workload)
         if go is None:
             go_binary = None
@@ -956,19 +956,19 @@ def main() -> int:
 
     all_programs = [
         (
-            "amber-interpreted",
+            "sputnik-interpreted",
             [
-                root / "build" / "iamber",
+                root / "build" / "isputnik",
                 "--eval-file",
                 root
                 / "bench"
                 / "polyglot"
-                / "amber"
+                / "sputnik"
                 / "src"
-                / workload.amber_source,
+                / workload.sputnik_source,
             ],
         ),
-        ("amber-built", amber_built_command),
+        ("sputnik-built", sputnik_built_command),
         (
             "python",
             [
@@ -1068,7 +1068,7 @@ def main() -> int:
     results = [
         results_by_name[name]
         for name in (
-            "amber-interpreted", "amber-built", "python", "ruby",
+            "sputnik-interpreted", "sputnik-built", "python", "ruby",
             "cpp", "go", "rust",
         )
         if name in results_by_name
@@ -1091,7 +1091,7 @@ def main() -> int:
     except ValueError:
         json_result = str(json_out)
     payload = {
-        "schema": "amber.polyglot.micro.v2",
+        "schema": "sputnik.polyglot.micro.v2",
         "timestamp": dt.datetime.now().astimezone().isoformat(),
         "workload": workload.name,
         "expected_checksum": workload.expected_checksum,

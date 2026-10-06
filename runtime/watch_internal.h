@@ -10,7 +10,7 @@
 #include <mutex>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 // One bounded event source shared by every RuntimeState generation belonging
 // to a RuntimeWorld. Keeping ids and the event sequence here prevents package
@@ -56,4 +56,4 @@ private:
   std::shared_ptr<const RuntimeWatchActivityNotifier> activity_notifier_;
 };
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

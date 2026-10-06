@@ -1,7 +1,7 @@
 #include "runtime/stdlib_bool.h"
 #include "runtime/stdlib_registry.h"
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
 namespace {
 
@@ -51,4 +51,4 @@ void register_bool_runtime_module(RuntimeModuleRegistry &modules,
   register_runtime_type_descriptor(types, descriptor);
 }
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

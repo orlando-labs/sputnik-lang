@@ -10,9 +10,9 @@
 #include <string>
 #include <vector>
 
-namespace amber::runtime {
+namespace sputnik::runtime {
 
-// The process engine has no dependency on Vm, bytecode or either Amber value
+// The process engine has no dependency on Vm, bytecode or either Sputnik value
 // representation. Adapters preserve arbitrary callback results as opaque
 // values.
 struct SystemValue {
@@ -68,7 +68,7 @@ struct SystemCall {
   std::function<bool()> cancelled;
 };
 
-// Named handlers share the calling strand. Serialize their Amber instructions,
+// Named handlers share the calling strand. Serialize their Sputnik instructions,
 // releasing the gate while IO waits, so captured mutable values remain safe.
 class SystemCallbackScope {
 public:
@@ -96,4 +96,4 @@ const std::atomic<bool> *system_callback_cancel_flag();
 bool system_blocking_selector(const std::string &selector);
 SystemValue system_dispatch(const SystemCall &call);
 
-} // namespace amber::runtime
+} // namespace sputnik::runtime

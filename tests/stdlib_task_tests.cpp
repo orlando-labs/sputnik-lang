@@ -41,72 +41,72 @@ bool wait_for_condition(const std::function<bool()> &condition,
   return condition();
 }
 
-amber::bytecode::BcModule compile_source_or_die(const std::string &source) {
-  amber::lexer::Lexer lexer(source, "<stdlib-task-source-test>");
-  amber::lexer::LexResult lex_result = lexer.lex();
+sputnik::bytecode::BcModule compile_source_or_die(const std::string &source) {
+  sputnik::lexer::Lexer lexer(source, "<stdlib-task-source-test>");
+  sputnik::lexer::LexResult lex_result = lexer.lex();
   if (!lex_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(lex_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(lex_result.diagnostics);
     std::exit(1);
   }
 
-  amber::parser::Parser parser(lex_result.tokens);
-  amber::parser::ParseModuleResult parse_result = parser.parse_module_unit();
+  sputnik::parser::Parser parser(lex_result.tokens);
+  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
   if (!parse_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(parse_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(parse_result.diagnostics);
     std::exit(1);
   }
 
-  amber::binder::BindResult bind_result =
-      amber::binder::bind_module(parse_result.items, parse_result.module_name);
+  sputnik::binder::BindResult bind_result =
+      sputnik::binder::bind_module(parse_result.items, parse_result.module_name);
   if (!bind_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(bind_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(bind_result.diagnostics);
     std::exit(1);
   }
 
-  amber::hir::Program program = amber::hir::lower_module(
+  sputnik::hir::Program program = sputnik::hir::lower_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
-  amber::bytecode::EmitResult emit_result =
-      amber::bytecode::emit_program(program, parse_result.module_name);
+  sputnik::bytecode::EmitResult emit_result =
+      sputnik::bytecode::emit_program(program, parse_result.module_name);
   if (!emit_result.ok()) {
-    std::cerr << amber::lexer::diagnostics_to_json(emit_result.diagnostics);
+    std::cerr << sputnik::lexer::diagnostics_to_json(emit_result.diagnostics);
     std::exit(1);
   }
 
-  amber::bytecode::DecodeResult decoded = amber::bytecode::deserialize_module(
-      amber::bytecode::serialize_module(emit_result.module));
+  sputnik::bytecode::DecodeResult decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emit_result.module));
   if (!decoded.ok()) {
-    std::cerr << amber::bytecode::verify_errors_to_json(decoded.errors);
+    std::cerr << sputnik::bytecode::verify_errors_to_json(decoded.errors);
     std::exit(1);
   }
   return std::move(decoded.module);
 }
 
-amber::runtime::ExecutionResult
+sputnik::runtime::ExecutionResult
 execute_source_or_die(const std::string &source) {
-  amber::bytecode::BcModule module = compile_source_or_die(source);
+  sputnik::bytecode::BcModule module = compile_source_or_die(source);
   expect(module.init.has_entry_code_id, "source module should have init code");
-  return amber::runtime::execute_code(module, module.init.entry_code_id);
+  return sputnik::runtime::execute_code(module, module.init.entry_code_id);
 }
 
-void expect_integer(const amber::runtime::Value &value, std::int64_t expected,
+void expect_integer(const sputnik::runtime::Value &value, std::int64_t expected,
                     const std::string &message) {
   expect(value.is_integer(), message + " should be integer");
   expect(value.as_integer() == expected, message + " value");
 }
 
-void expect_bool(const amber::runtime::Value &value, bool expected,
+void expect_bool(const sputnik::runtime::Value &value, bool expected,
                  const std::string &message) {
   expect(value.is_bool(), message + " should be bool");
   expect(value.as_bool() == expected, message + " value");
 }
 
-void expect_channel_integer(const amber::runtime::RuntimeChannelResult &result,
+void expect_channel_integer(const sputnik::runtime::RuntimeChannelResult &result,
                             std::int64_t expected, const std::string &message) {
   expect(result.ok && result.received, message + " should receive");
   expect_integer(result.value, expected, message);
 }
 
-void expect_integer_values(const std::vector<amber::runtime::Value> &values,
+void expect_integer_values(const std::vector<sputnik::runtime::Value> &values,
                            const std::vector<std::int64_t> &expected,
                            const std::string &message) {
   expect(values.size() == expected.size(), message + " size");
@@ -116,7 +116,7 @@ void expect_integer_values(const std::vector<amber::runtime::Value> &values,
   }
 }
 
-void expect_integer_list_value(const amber::runtime::Value &value,
+void expect_integer_list_value(const sputnik::runtime::Value &value,
                                const std::vector<std::int64_t> &expected,
                                const std::string &message) {
   expect(value.is_list() && value.as_list() != nullptr,
@@ -125,7 +125,7 @@ void expect_integer_list_value(const amber::runtime::Value &value,
 }
 
 void expect_integer_list_values(
-    const std::vector<amber::runtime::Value> &values,
+    const std::vector<sputnik::runtime::Value> &values,
     const std::vector<std::vector<std::int64_t>> &expected,
     const std::string &message) {
   expect(values.size() == expected.size(), message + " size");
@@ -135,19 +135,19 @@ void expect_integer_list_values(
   }
 }
 
-void expect_state(amber::runtime::RuntimeTaskHandleState actual,
-                  amber::runtime::RuntimeTaskHandleState expected,
+void expect_state(sputnik::runtime::RuntimeTaskHandleState actual,
+                  sputnik::runtime::RuntimeTaskHandleState expected,
                   const std::string &message) {
   expect(actual == expected, message);
 }
 
 void test_std010_task_async_spawn_and_wait_return_values() {
-  amber::runtime::RuntimeTaskModule task(2);
+  sputnik::runtime::RuntimeTaskModule task(2);
 
-  const amber::runtime::RuntimeTaskHandle same_strand =
-      task.async([]() { return amber::runtime::Value::integer(21); });
-  const amber::runtime::RuntimeTaskHandle new_strand =
-      task.spawn([]() { return amber::runtime::Value::integer(42); });
+  const sputnik::runtime::RuntimeTaskHandle same_strand =
+      task.async([]() { return sputnik::runtime::Value::integer(21); });
+  const sputnik::runtime::RuntimeTaskHandle new_strand =
+      task.spawn([]() { return sputnik::runtime::Value::integer(42); });
 
   expect(same_strand.active(), "task.async should return active handle");
   expect(new_strand.active(), "task.spawn should return active handle");
@@ -156,9 +156,9 @@ void test_std010_task_async_spawn_and_wait_return_values() {
   expect(same_strand.strand_id() == same_strand.task_id(),
          "same-strand handle should expose runtime strand id");
 
-  const amber::runtime::RuntimeTaskPublicResult same_result =
+  const sputnik::runtime::RuntimeTaskPublicResult same_result =
       same_strand.wait(std::chrono::milliseconds(1000));
-  const amber::runtime::RuntimeTaskPublicResult spawn_result =
+  const sputnik::runtime::RuntimeTaskPublicResult spawn_result =
       new_strand.wait(std::chrono::milliseconds(1000));
 
   expect(same_result.ok && same_result.ready, "task.async wait should succeed");
@@ -171,27 +171,27 @@ void test_std010_task_async_spawn_and_wait_return_values() {
   expect(!same_strand.failed() && !new_strand.cancelled(),
          "successful handles should not report failure/cancellation");
 
-  const amber::runtime::RuntimeTaskPublicResult nonblocking =
+  const sputnik::runtime::RuntimeTaskPublicResult nonblocking =
       new_strand.result();
   expect(nonblocking.ok && nonblocking.ready,
          "result() should read completed task without blocking");
-  expect_state(nonblocking.state, amber::runtime::RuntimeTaskHandleState::Done,
+  expect_state(nonblocking.state, sputnik::runtime::RuntimeTaskHandleState::Done,
                "result() should expose done state");
   expect_integer(nonblocking.value, 42, "task.spawn result()");
 }
 
 void test_std010_task_completion_releases_function_captures() {
-  amber::runtime::RuntimeTaskModule task(1);
+  sputnik::runtime::RuntimeTaskModule task(1);
   auto retained = std::make_shared<int>(42);
   std::weak_ptr<int> retained_weak = retained;
   std::uint64_t task_id = 0;
   {
-    const amber::runtime::RuntimeTaskHandle handle = task.spawn(
-        [retained]() { return amber::runtime::Value::integer(*retained); });
+    const sputnik::runtime::RuntimeTaskHandle handle = task.spawn(
+        [retained]() { return sputnik::runtime::Value::integer(*retained); });
     task_id = handle.task_id();
     retained.reset();
 
-    const amber::runtime::RuntimeTaskPublicResult result =
+    const sputnik::runtime::RuntimeTaskPublicResult result =
         handle.wait(std::chrono::milliseconds(1000));
     expect(result.ok && result.ready,
            "completed capture-release task should remain joinable");
@@ -207,21 +207,21 @@ void test_std010_task_completion_releases_function_captures() {
 }
 
 void test_std010_last_scheduler_owner_can_release_on_worker() {
-  auto task = std::make_shared<amber::runtime::RuntimeTaskModule>(2);
-  std::weak_ptr<amber::runtime::RuntimeTaskModule> task_weak = task;
+  auto task = std::make_shared<sputnik::runtime::RuntimeTaskModule>(2);
+  std::weak_ptr<sputnik::runtime::RuntimeTaskModule> task_weak = task;
   auto entered = std::make_shared<std::atomic<bool>>(false);
   auto release = std::make_shared<std::atomic<bool>>(false);
   auto returned = std::make_shared<std::atomic<bool>>(false);
 
-  amber::runtime::RuntimeTaskHandle handle = task->spawn(
-      [task, entered, release, returned]() -> amber::runtime::Value {
+  sputnik::runtime::RuntimeTaskHandle handle = task->spawn(
+      [task, entered, release, returned]() -> sputnik::runtime::Value {
         entered->store(true, std::memory_order_release);
         while (!release->load(std::memory_order_acquire)) {
           std::this_thread::yield();
         }
         (void)task->sync_active();
         returned->store(true, std::memory_order_release);
-        return amber::runtime::Value::null();
+        return sputnik::runtime::Value::null();
       });
 
   expect(wait_for_condition(
@@ -229,7 +229,7 @@ void test_std010_last_scheduler_owner_can_release_on_worker() {
              std::chrono::milliseconds(1000)),
          "self-owned scheduler task should start");
   task.reset();
-  handle = amber::runtime::RuntimeTaskHandle();
+  handle = sputnik::runtime::RuntimeTaskHandle();
   release->store(true, std::memory_order_release);
 
   expect(wait_for_condition(
@@ -243,16 +243,16 @@ void test_std010_last_scheduler_owner_can_release_on_worker() {
 }
 
 void test_std010_cancel_releases_terminal_capture_outside_scheduler_lock() {
-  amber::runtime::RuntimeTaskModule task(1);
+  sputnik::runtime::RuntimeTaskModule task(1);
   auto blocker_entered = std::make_shared<std::atomic<bool>>(false);
   auto release_blocker = std::make_shared<std::atomic<bool>>(false);
-  const amber::runtime::RuntimeTaskHandle blocker =
-      task.spawn([blocker_entered, release_blocker]() -> amber::runtime::Value {
+  const sputnik::runtime::RuntimeTaskHandle blocker =
+      task.spawn([blocker_entered, release_blocker]() -> sputnik::runtime::Value {
         blocker_entered->store(true, std::memory_order_release);
         while (!release_blocker->load(std::memory_order_acquire)) {
           std::this_thread::yield();
         }
-        return amber::runtime::Value::null();
+        return sputnik::runtime::Value::null();
       });
   expect(wait_for_condition(
              [blocker_entered]() {
@@ -263,7 +263,7 @@ void test_std010_cancel_releases_terminal_capture_outside_scheduler_lock() {
 
   std::atomic<bool> capture_destroyed{false};
   struct ReentrantCapture {
-    amber::runtime::RuntimeScheduler *scheduler = nullptr;
+    sputnik::runtime::RuntimeScheduler *scheduler = nullptr;
     std::atomic<bool> *destroyed = nullptr;
     ~ReentrantCapture() {
       (void)scheduler->stats();
@@ -273,8 +273,8 @@ void test_std010_cancel_releases_terminal_capture_outside_scheduler_lock() {
   auto capture = std::make_shared<ReentrantCapture>();
   capture->scheduler = &task.scheduler();
   capture->destroyed = &capture_destroyed;
-  const amber::runtime::RuntimeTaskHandle cancelled =
-      task.spawn([capture]() { return amber::runtime::Value::null(); });
+  const sputnik::runtime::RuntimeTaskHandle cancelled =
+      task.spawn([capture]() { return sputnik::runtime::Value::null(); });
   capture.reset();
 
   expect(cancelled.cancel(), "queued capture task should cancel");
@@ -288,44 +288,44 @@ void test_std010_cancel_releases_terminal_capture_outside_scheduler_lock() {
 }
 
 void test_std010_task_wait_timeout_does_not_cancel_child() {
-  amber::runtime::RuntimeTaskModule task(2);
+  sputnik::runtime::RuntimeTaskModule task(2);
 
-  const amber::runtime::RuntimeTaskHandle handle = task.spawn([]() {
+  const sputnik::runtime::RuntimeTaskHandle handle = task.spawn([]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(40));
-    return amber::runtime::Value::integer(7);
+    return sputnik::runtime::Value::integer(7);
   });
 
-  const amber::runtime::RuntimeTaskPublicResult timed_out =
+  const sputnik::runtime::RuntimeTaskPublicResult timed_out =
       handle.wait(std::chrono::milliseconds(1));
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
          "wait(timeout) should report TimeoutError");
   const bool timeout_state_is_current =
-      timed_out.state == amber::runtime::RuntimeTaskHandleState::Runnable ||
-      timed_out.state == amber::runtime::RuntimeTaskHandleState::Running ||
-      timed_out.state == amber::runtime::RuntimeTaskHandleState::Done;
+      timed_out.state == sputnik::runtime::RuntimeTaskHandleState::Runnable ||
+      timed_out.state == sputnik::runtime::RuntimeTaskHandleState::Running ||
+      timed_out.state == sputnik::runtime::RuntimeTaskHandleState::Done;
   expect(timeout_state_is_current,
          "timed-out wait should expose current task state");
   expect(!handle.cancelled(), "wait timeout should not cancel child task");
 
-  const amber::runtime::RuntimeTaskPublicResult joined =
+  const sputnik::runtime::RuntimeTaskPublicResult joined =
       handle.wait(std::chrono::milliseconds(1000));
   expect(joined.ok && joined.ready, "timed-out child should still be joinable");
   expect_integer(joined.value, 7, "timed-out child eventual result");
 }
 
 void test_std010_task_yield_sleep_and_cancel_surface() {
-  amber::runtime::RuntimeTaskModule task(2);
+  sputnik::runtime::RuntimeTaskModule task(2);
   std::atomic<bool> entered{false};
 
-  const amber::runtime::RuntimeTaskHandle handle =
+  const sputnik::runtime::RuntimeTaskHandle handle =
       task.spawn([&task, &entered]() {
         entered = true;
-        while (!amber::runtime::current_runtime_task_cancel_requested()) {
+        while (!sputnik::runtime::current_runtime_task_cancel_requested()) {
           task.yield_current();
         }
         task.sleep(std::chrono::milliseconds(0));
-        return amber::runtime::Value::integer(99);
+        return sputnik::runtime::Value::integer(99);
       });
 
   expect(wait_for_condition([&entered]() { return entered.load(); },
@@ -333,48 +333,48 @@ void test_std010_task_yield_sleep_and_cancel_surface() {
          "spawned task should enter cancellation loop");
   expect(handle.cancel(), "cancel should request child cancellation");
 
-  const amber::runtime::RuntimeTaskPublicResult cancelled =
+  const sputnik::runtime::RuntimeTaskPublicResult cancelled =
       handle.wait(std::chrono::milliseconds(1000));
   expect(!cancelled.ok && cancelled.cancelled &&
              cancelled.error_name == "CancelledError",
          "cancelled child wait should report CancelledError");
   expect_state(cancelled.state,
-               amber::runtime::RuntimeTaskHandleState::Cancelled,
+               sputnik::runtime::RuntimeTaskHandleState::Cancelled,
                "cancelled child wait should expose cancelled state");
   expect(handle.cancelled(), "cancelled handle should report cancellation");
 
-  const amber::runtime::RuntimeTaskFailureInfo failure = handle.failure();
+  const sputnik::runtime::RuntimeTaskFailureInfo failure = handle.failure();
   expect(failure.ready && failure.cancelled &&
              failure.error_name == "CancelledError",
          "failure() should expose cancellation state");
-  expect_state(failure.state, amber::runtime::RuntimeTaskHandleState::Cancelled,
+  expect_state(failure.state, sputnik::runtime::RuntimeTaskHandleState::Cancelled,
                "failure() should expose cancelled state");
 
-  const amber::runtime::RuntimeTaskPublicResult result = handle.result();
+  const sputnik::runtime::RuntimeTaskPublicResult result = handle.result();
   expect(result.ready && result.cancelled &&
              result.error_name == "CancelledError",
          "result() should expose cancelled state");
-  expect_state(result.state, amber::runtime::RuntimeTaskHandleState::Cancelled,
+  expect_state(result.state, sputnik::runtime::RuntimeTaskHandleState::Cancelled,
                "result() should expose cancelled state");
 }
 
 void test_std010_task_sync_block_suppresses_cooperative_yield() {
-  amber::runtime::RuntimeTaskModule task(1);
+  sputnik::runtime::RuntimeTaskModule task(1);
   std::atomic<int> marker{0};
   std::atomic<bool> release{false};
 
-  const amber::runtime::RuntimeTaskHandle guarded =
+  const sputnik::runtime::RuntimeTaskHandle guarded =
       task.spawn([&task, &marker, &release]() {
         return task.sync([&task, &marker, &release]() {
           expect(task.sync_active() &&
-                     amber::runtime::current_runtime_task_sync_active(),
+                     sputnik::runtime::current_runtime_task_sync_active(),
                  "task sync block should expose active sync state");
           marker = 1;
 
-          const amber::runtime::Value nested = task.sync([&task]() {
+          const sputnik::runtime::Value nested = task.sync([&task]() {
             expect(task.sync_active(),
                    "nested task sync block should keep sync active");
-            return amber::runtime::Value::integer(5);
+            return sputnik::runtime::Value::integer(5);
           });
           expect_integer(nested, 5, "nested task sync return value");
 
@@ -390,7 +390,7 @@ void test_std010_task_sync_block_suppresses_cooperative_yield() {
           }
           expect(marker.load() == 1,
                  "sibling task should not run until sync block exits");
-          return amber::runtime::Value::integer(11);
+          return sputnik::runtime::Value::integer(11);
         });
       });
 
@@ -398,22 +398,22 @@ void test_std010_task_sync_block_suppresses_cooperative_yield() {
                             std::chrono::milliseconds(1000)),
          "sync guard task should enter sync block");
 
-  const amber::runtime::RuntimeTaskHandle sibling = task.spawn([&marker]() {
+  const sputnik::runtime::RuntimeTaskHandle sibling = task.spawn([&marker]() {
     marker = 2;
-    return amber::runtime::Value::integer(22);
+    return sputnik::runtime::Value::integer(22);
   });
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
   expect(marker.load() == 1,
          "queued sibling should wait while sync block is active");
 
   release = true;
-  const amber::runtime::RuntimeTaskPublicResult guarded_result =
+  const sputnik::runtime::RuntimeTaskPublicResult guarded_result =
       guarded.wait(std::chrono::milliseconds(1000));
   expect(guarded_result.ok && guarded_result.ready,
          "sync guard task should finish");
   expect_integer(guarded_result.value, 11, "task sync return value");
 
-  const amber::runtime::RuntimeTaskPublicResult sibling_result =
+  const sputnik::runtime::RuntimeTaskPublicResult sibling_result =
       sibling.wait(std::chrono::milliseconds(1000));
   expect(sibling_result.ok && sibling_result.ready,
          "sibling task should run after sync block exits");
@@ -423,136 +423,136 @@ void test_std010_task_sync_block_suppresses_cooperative_yield() {
 }
 
 void test_std010_task_failure_is_reported_by_handle() {
-  amber::runtime::RuntimeTaskModule task(2);
+  sputnik::runtime::RuntimeTaskModule task(2);
 
-  const amber::runtime::RuntimeTaskHandle handle = task.spawn([]() {
-    throw amber::runtime::RuntimeTaskFailure("BoomError", "boom");
-    return amber::runtime::Value::null();
+  const sputnik::runtime::RuntimeTaskHandle handle = task.spawn([]() {
+    throw sputnik::runtime::RuntimeTaskFailure("BoomError", "boom");
+    return sputnik::runtime::Value::null();
   });
 
-  const amber::runtime::RuntimeTaskPublicResult waited =
+  const sputnik::runtime::RuntimeTaskPublicResult waited =
       handle.wait(std::chrono::milliseconds(1000));
   expect(!waited.ok && waited.failed && waited.error_name == "BoomError",
          "failed child wait should surface original error");
-  expect_state(waited.state, amber::runtime::RuntimeTaskHandleState::Failed,
+  expect_state(waited.state, sputnik::runtime::RuntimeTaskHandleState::Failed,
                "failed child wait should expose failed state");
   expect(handle.failed(), "failed handle should report failed state");
 
-  const amber::runtime::RuntimeTaskFailureInfo failure = handle.failure();
+  const sputnik::runtime::RuntimeTaskFailureInfo failure = handle.failure();
   expect(failure.ready && failure.failed && failure.error_name == "BoomError",
          "failure() should expose failed state");
-  expect_state(failure.state, amber::runtime::RuntimeTaskHandleState::Failed,
+  expect_state(failure.state, sputnik::runtime::RuntimeTaskHandleState::Failed,
                "failure() should expose failed state");
 
-  const amber::runtime::RuntimeTaskPublicResult result = handle.result();
+  const sputnik::runtime::RuntimeTaskPublicResult result = handle.result();
   expect(result.ready && result.failed && result.error_name == "BoomError",
          "result() should expose original failed state");
-  expect_state(result.state, amber::runtime::RuntimeTaskHandleState::Failed,
+  expect_state(result.state, sputnik::runtime::RuntimeTaskHandleState::Failed,
                "result() should expose failed state");
 }
 
 void test_std011_task_handle_state_result_failure_contract() {
-  amber::runtime::RuntimeTaskHandle inactive;
-  const amber::runtime::RuntimeTaskHandleSnapshot inactive_snapshot =
+  sputnik::runtime::RuntimeTaskHandle inactive;
+  const sputnik::runtime::RuntimeTaskHandleSnapshot inactive_snapshot =
       inactive.snapshot();
   expect(!inactive_snapshot.active,
          "default task handle snapshot should be inactive");
   expect_state(inactive_snapshot.state,
-               amber::runtime::RuntimeTaskHandleState::Inactive,
+               sputnik::runtime::RuntimeTaskHandleState::Inactive,
                "default task handle should expose inactive state");
   expect(inactive.result().error_name == "LifetimeError",
          "inactive result() should report LifetimeError");
   expect(inactive.failure().error_name == "LifetimeError",
          "inactive failure() should report LifetimeError");
 
-  amber::runtime::RuntimeTaskModule task(2);
+  sputnik::runtime::RuntimeTaskModule task(2);
   std::atomic<bool> entered{false};
   std::atomic<bool> release{false};
 
-  const amber::runtime::RuntimeTaskHandle handle =
+  const sputnik::runtime::RuntimeTaskHandle handle =
       task.spawn([&entered, &release]() {
         entered = true;
         while (!release.load()) {
           std::this_thread::yield();
         }
-        return amber::runtime::Value::integer(123);
+        return sputnik::runtime::Value::integer(123);
       });
 
   expect(wait_for_condition([&entered]() { return entered.load(); },
                             std::chrono::milliseconds(1000)),
          "state contract task should enter running loop");
 
-  const amber::runtime::RuntimeTaskHandleSnapshot running_snapshot =
+  const sputnik::runtime::RuntimeTaskHandleSnapshot running_snapshot =
       handle.snapshot();
   expect(running_snapshot.active, "running snapshot should be active");
   expect(!running_snapshot.ready, "running snapshot should not be ready");
   expect(running_snapshot.running,
          "running snapshot should expose running state");
-  expect_state(handle.state(), amber::runtime::RuntimeTaskHandleState::Running,
+  expect_state(handle.state(), sputnik::runtime::RuntimeTaskHandleState::Running,
                "state() should expose running state");
 
-  const amber::runtime::RuntimeTaskPublicResult early_result = handle.result();
+  const sputnik::runtime::RuntimeTaskPublicResult early_result = handle.result();
   expect(!early_result.ok && !early_result.ready &&
              early_result.error_name == "TaskNotDoneError",
          "result() should be non-blocking for unfinished tasks");
   expect_state(early_result.state,
-               amber::runtime::RuntimeTaskHandleState::Running,
+               sputnik::runtime::RuntimeTaskHandleState::Running,
                "unfinished result() should expose running state");
 
-  const amber::runtime::RuntimeTaskFailureInfo early_failure = handle.failure();
+  const sputnik::runtime::RuntimeTaskFailureInfo early_failure = handle.failure();
   expect(!early_failure.ready && early_failure.error_name == "TaskNotDoneError",
          "failure() should be non-blocking for unfinished tasks");
   expect_state(early_failure.state,
-               amber::runtime::RuntimeTaskHandleState::Running,
+               sputnik::runtime::RuntimeTaskHandleState::Running,
                "unfinished failure() should expose running state");
 
   release = true;
-  const amber::runtime::RuntimeTaskPublicResult joined =
+  const sputnik::runtime::RuntimeTaskPublicResult joined =
       handle.wait(std::chrono::milliseconds(1000));
   expect(joined.ok && joined.ready, "released task should join successfully");
-  expect_state(joined.state, amber::runtime::RuntimeTaskHandleState::Done,
+  expect_state(joined.state, sputnik::runtime::RuntimeTaskHandleState::Done,
                "joined task should expose done state");
 
-  const amber::runtime::RuntimeTaskHandleSnapshot done_snapshot =
+  const sputnik::runtime::RuntimeTaskHandleSnapshot done_snapshot =
       handle.snapshot();
   expect(done_snapshot.ready && done_snapshot.succeeded,
          "done snapshot should expose success");
   expect_state(done_snapshot.state,
-               amber::runtime::RuntimeTaskHandleState::Done,
+               sputnik::runtime::RuntimeTaskHandleState::Done,
                "done snapshot should expose done state");
 
-  const amber::runtime::RuntimeTaskFailureInfo done_failure = handle.failure();
+  const sputnik::runtime::RuntimeTaskFailureInfo done_failure = handle.failure();
   expect(done_failure.ready && !done_failure.failed &&
              !done_failure.cancelled && done_failure.error_name.empty(),
          "failure() should return a ready empty failure for successful tasks");
-  expect_state(done_failure.state, amber::runtime::RuntimeTaskHandleState::Done,
+  expect_state(done_failure.state, sputnik::runtime::RuntimeTaskHandleState::Done,
                "successful failure() should expose done state");
 }
 
 void test_std012_channel_buffered_fifo_close_and_isolation() {
-  amber::runtime::RuntimeHeap heap;
-  amber::runtime::RuntimeChannel channel(3);
+  sputnik::runtime::RuntimeHeap heap;
+  sputnik::runtime::RuntimeChannel channel(3);
 
-  expect(channel.send(amber::runtime::Value::integer(1)).ok,
+  expect(channel.send(sputnik::runtime::Value::integer(1)).ok,
          "buffered channel should accept first value");
-  expect(channel.send(amber::runtime::Value::integer(2)).ok,
+  expect(channel.send(sputnik::runtime::Value::integer(2)).ok,
          "buffered channel should accept second value");
-  expect(channel.send(amber::runtime::Value::integer(3)).ok,
+  expect(channel.send(sputnik::runtime::Value::integer(3)).ok,
          "buffered channel should accept third value");
 
-  const amber::runtime::RuntimeChannelStats filled_stats = channel.stats();
+  const sputnik::runtime::RuntimeChannelStats filled_stats = channel.stats();
   expect(filled_stats.capacity == 3 && filled_stats.buffered_values == 3,
          "channel stats should expose capacity and buffered count");
 
-  const amber::runtime::Value confined = heap.make_list_value({});
-  const amber::runtime::RuntimeChannelResult rejected =
+  const sputnik::runtime::Value confined = heap.make_list_value({});
+  const sputnik::runtime::RuntimeChannelResult rejected =
       channel.send(confined, std::chrono::milliseconds(0));
   expect(!rejected.ok && rejected.error_name == "IsolationError",
          "checked channel send should reject confined payload");
 
-  const amber::runtime::Value transitively_confined =
+  const sputnik::runtime::Value transitively_confined =
       heap.make_list_value({confined}, true);
-  const amber::runtime::RuntimeChannelResult nested_rejected =
+  const sputnik::runtime::RuntimeChannelResult nested_rejected =
       channel.send(transitively_confined, std::chrono::milliseconds(0));
   expect(!nested_rejected.ok && nested_rejected.error_name == "IsolationError",
          "checked channel send should reject transitively confined payload");
@@ -561,8 +561,8 @@ void test_std012_channel_buffered_fifo_close_and_isolation() {
   expect(!channel.close(), "channel close should be idempotent");
   expect(channel.closed(), "closed? should report closed channel");
 
-  const amber::runtime::RuntimeChannelResult send_after_close =
-      channel.send(amber::runtime::Value::integer(4));
+  const sputnik::runtime::RuntimeChannelResult send_after_close =
+      channel.send(sputnik::runtime::Value::integer(4));
   expect(!send_after_close.ok && send_after_close.closed &&
              send_after_close.error_name == "ChannelClosedError",
          "send after close should report ChannelClosedError");
@@ -574,12 +574,12 @@ void test_std012_channel_buffered_fifo_close_and_isolation() {
   expect_channel_integer(channel.recv(), 3,
                          "closed buffered channel third FIFO recv");
 
-  const amber::runtime::RuntimeChannelResult closed_empty = channel.recv();
+  const sputnik::runtime::RuntimeChannelResult closed_empty = channel.recv();
   expect(!closed_empty.ok && closed_empty.closed &&
              closed_empty.error_name == "ChannelClosedError",
          "closed empty channel recv should report ChannelClosedError");
 
-  const amber::runtime::RuntimeChannelStats stats = channel.stats();
+  const sputnik::runtime::RuntimeChannelStats stats = channel.stats();
   expect(stats.sends == 3 && stats.receives == 3 && stats.closes == 1,
          "channel stats should count successful sends, receives, and close");
   expect(stats.isolation_rejections == 2,
@@ -587,19 +587,19 @@ void test_std012_channel_buffered_fifo_close_and_isolation() {
 }
 
 void test_std012_channel_waiting_senders_fifo_and_send_timeout() {
-  amber::runtime::RuntimeTaskModule task(4);
-  amber::runtime::RuntimeChannel channel(0);
+  sputnik::runtime::RuntimeTaskModule task(4);
+  sputnik::runtime::RuntimeChannel channel(0);
   std::atomic<int> released_senders{0};
-  std::vector<amber::runtime::RuntimeTaskHandle> senders;
+  std::vector<sputnik::runtime::RuntimeTaskHandle> senders;
 
   for (int value = 1; value <= 3; ++value) {
     senders.push_back(task.spawn([&channel, &released_senders, value]() {
-      const amber::runtime::RuntimeChannelResult sent =
-          channel.send(amber::runtime::Value::integer(value),
+      const sputnik::runtime::RuntimeChannelResult sent =
+          channel.send(sputnik::runtime::Value::integer(value),
                        std::chrono::milliseconds(1000));
       expect(sent.ok && sent.sent, "waiting sender should complete");
       released_senders.fetch_add(1);
-      return amber::runtime::Value::integer(value);
+      return sputnik::runtime::Value::integer(value);
     }));
     expect(wait_for_condition(
                [&channel, value]() {
@@ -614,42 +614,42 @@ void test_std012_channel_waiting_senders_fifo_and_send_timeout() {
          "rendezvous senders should wait until receivers arrive");
 
   for (int expected = 1; expected <= 3; ++expected) {
-    const amber::runtime::RuntimeChannelResult received =
+    const sputnik::runtime::RuntimeChannelResult received =
         channel.recv(std::chrono::milliseconds(1000));
     expect_channel_integer(received, expected,
                            "rendezvous channel waiting-sender FIFO recv");
   }
 
-  for (const amber::runtime::RuntimeTaskHandle &sender : senders) {
-    const amber::runtime::RuntimeTaskPublicResult joined =
+  for (const sputnik::runtime::RuntimeTaskHandle &sender : senders) {
+    const sputnik::runtime::RuntimeTaskPublicResult joined =
         sender.wait(std::chrono::milliseconds(1000));
     expect(joined.ok && joined.ready, "sender task should join");
   }
   expect(released_senders.load() == 3,
          "all waiting senders should be released by receives");
 
-  const amber::runtime::RuntimeChannelResult timed_out = channel.send(
-      amber::runtime::Value::integer(99), std::chrono::milliseconds(5));
+  const sputnik::runtime::RuntimeChannelResult timed_out = channel.send(
+      sputnik::runtime::Value::integer(99), std::chrono::milliseconds(5));
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
          "unmatched rendezvous send should support timeout");
 
-  const amber::runtime::RuntimeChannelStats stats = channel.stats();
+  const sputnik::runtime::RuntimeChannelStats stats = channel.stats();
   expect(stats.sends == 3 && stats.receives == 3 && stats.send_timeouts == 1,
          "channel stats should count waiting sends and send timeout");
 }
 
 void test_std012_channel_waiting_receivers_fifo_timeout_and_cancellation() {
-  amber::runtime::RuntimeTaskModule task(4);
-  amber::runtime::RuntimeChannel channel(0);
+  sputnik::runtime::RuntimeTaskModule task(4);
+  sputnik::runtime::RuntimeChannel channel(0);
   std::mutex received_mutex;
   std::vector<std::int64_t> received_by_receiver(3, 0);
-  std::vector<amber::runtime::RuntimeTaskHandle> receivers;
+  std::vector<sputnik::runtime::RuntimeTaskHandle> receivers;
 
   for (int receiver_id = 1; receiver_id <= 3; ++receiver_id) {
     receivers.push_back(task.spawn([&channel, &received_mutex,
                                     &received_by_receiver, receiver_id]() {
-      const amber::runtime::RuntimeChannelResult received =
+      const sputnik::runtime::RuntimeChannelResult received =
           channel.recv(std::chrono::milliseconds(1000));
       expect(received.ok && received.received && received.value.is_integer(),
              "waiting receiver should receive value");
@@ -658,7 +658,7 @@ void test_std012_channel_waiting_receivers_fifo_timeout_and_cancellation() {
         received_by_receiver[static_cast<std::size_t>(receiver_id - 1)] =
             received.value.as_integer();
       }
-      return amber::runtime::Value::integer(received.value.as_integer());
+      return sputnik::runtime::Value::integer(received.value.as_integer());
     }));
     expect(wait_for_condition(
                [&channel, receiver_id]() {
@@ -670,13 +670,13 @@ void test_std012_channel_waiting_receivers_fifo_timeout_and_cancellation() {
   }
 
   for (int value = 10; value <= 12; ++value) {
-    const amber::runtime::RuntimeChannelResult sent = channel.send(
-        amber::runtime::Value::integer(value), std::chrono::milliseconds(1000));
+    const sputnik::runtime::RuntimeChannelResult sent = channel.send(
+        sputnik::runtime::Value::integer(value), std::chrono::milliseconds(1000));
     expect(sent.ok && sent.sent, "send should release waiting receiver");
   }
 
-  for (const amber::runtime::RuntimeTaskHandle &receiver : receivers) {
-    const amber::runtime::RuntimeTaskPublicResult joined =
+  for (const sputnik::runtime::RuntimeTaskHandle &receiver : receivers) {
+    const sputnik::runtime::RuntimeTaskPublicResult joined =
         receiver.wait(std::chrono::milliseconds(1000));
     expect(joined.ok && joined.ready, "receiver task should join");
   }
@@ -688,28 +688,28 @@ void test_std012_channel_waiting_receivers_fifo_timeout_and_cancellation() {
            "waiting receivers should be served FIFO");
   }
 
-  amber::runtime::RuntimeChannel timeout_channel(0);
-  const amber::runtime::RuntimeChannelResult timed_out =
+  sputnik::runtime::RuntimeChannel timeout_channel(0);
+  const sputnik::runtime::RuntimeChannelResult timed_out =
       timeout_channel.recv(std::chrono::milliseconds(5));
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
          "empty open channel recv should support timeout");
 
-  amber::runtime::RuntimeTaskModule cancel_task(2);
-  amber::runtime::RuntimeChannel cancellation_channel(0);
+  sputnik::runtime::RuntimeTaskModule cancel_task(2);
+  sputnik::runtime::RuntimeChannel cancellation_channel(0);
   std::atomic<bool> cancellation_waiter_entered{false};
-  const amber::runtime::RuntimeTaskHandle waiting_receiver = cancel_task.spawn(
+  const sputnik::runtime::RuntimeTaskHandle waiting_receiver = cancel_task.spawn(
       [&cancellation_channel, &cancellation_waiter_entered]() {
         cancellation_waiter_entered = true;
-        const amber::runtime::RuntimeChannelResult received =
+        const sputnik::runtime::RuntimeChannelResult received =
             cancellation_channel.recv(std::chrono::milliseconds(50));
         if (received.cancelled && received.error_name == "CancelledError") {
-          return amber::runtime::Value::integer(1);
+          return sputnik::runtime::Value::integer(1);
         }
         if (received.timed_out) {
-          return amber::runtime::Value::integer(2);
+          return sputnik::runtime::Value::integer(2);
         }
-        return amber::runtime::Value::integer(3);
+        return sputnik::runtime::Value::integer(3);
       });
 
   expect(wait_for_condition(
@@ -721,7 +721,7 @@ void test_std012_channel_waiting_receivers_fifo_timeout_and_cancellation() {
          "cancellable receiver should enter wait queue");
   expect(waiting_receiver.cancel(),
          "cancelling receiver task should request cancellation");
-  const amber::runtime::RuntimeTaskPublicResult cancelled =
+  const sputnik::runtime::RuntimeTaskPublicResult cancelled =
       waiting_receiver.wait(std::chrono::milliseconds(1000));
   expect(cancelled.ok && cancelled.ready,
          "channel cancellation observer should finish task");
@@ -730,9 +730,9 @@ void test_std012_channel_waiting_receivers_fifo_timeout_and_cancellation() {
 }
 
 void test_std013_mutex_lock_unlock_owned_and_errors() {
-  amber::runtime::RuntimeMutex mutex;
+  sputnik::runtime::RuntimeMutex mutex;
 
-  const amber::runtime::RuntimeMutexResult locked = mutex.lock();
+  const sputnik::runtime::RuntimeMutexResult locked = mutex.lock();
   expect(locked.ok && locked.locked,
          "mutex lock should acquire unlocked mutex");
   expect(mutex.locked(), "locked? should report held mutex");
@@ -740,7 +740,7 @@ void test_std013_mutex_lock_unlock_owned_and_errors() {
 
   std::string non_owner_error;
   std::thread other_thread([&mutex, &non_owner_error]() {
-    const amber::runtime::RuntimeMutexResult result = mutex.unlock();
+    const sputnik::runtime::RuntimeMutexResult result = mutex.unlock();
     non_owner_error = result.error_name;
   });
   other_thread.join();
@@ -749,34 +749,34 @@ void test_std013_mutex_lock_unlock_owned_and_errors() {
   expect(mutex.locked() && mutex.owned(),
          "failed non-owner unlock should keep mutex held by owner");
 
-  const amber::runtime::RuntimeMutexResult reentrant =
+  const sputnik::runtime::RuntimeMutexResult reentrant =
       mutex.lock(std::chrono::milliseconds(0));
   expect(!reentrant.ok && reentrant.error_name == "DeadlockError",
          "same owner double lock should report DeadlockError");
 
-  const amber::runtime::RuntimeMutexResult unlocked = mutex.unlock();
+  const sputnik::runtime::RuntimeMutexResult unlocked = mutex.unlock();
   expect(unlocked.ok && unlocked.unlocked, "mutex unlock should release owner");
   expect(!mutex.locked() && !mutex.owned(),
          "released mutex should not be locked or owned");
 
-  const amber::runtime::RuntimeMutexResult unlocked_again = mutex.unlock();
+  const sputnik::runtime::RuntimeMutexResult unlocked_again = mutex.unlock();
   expect(!unlocked_again.ok && unlocked_again.error_name == "OwnershipError",
          "unlocking an unlocked mutex should report OwnershipError");
 }
 
 void test_std013_mutex_waiter_fifo() {
-  amber::runtime::RuntimeTaskModule task(4);
-  amber::runtime::RuntimeMutex mutex;
+  sputnik::runtime::RuntimeTaskModule task(4);
+  sputnik::runtime::RuntimeMutex mutex;
   std::mutex order_mutex;
   std::vector<std::int64_t> acquisition_order;
-  std::vector<amber::runtime::RuntimeTaskHandle> waiters;
+  std::vector<sputnik::runtime::RuntimeTaskHandle> waiters;
 
   expect(mutex.lock().ok, "main task should hold mutex before waiter setup");
 
   for (int value = 1; value <= 3; ++value) {
     waiters.push_back(task.spawn([&mutex, &order_mutex, &acquisition_order,
                                   value]() {
-      const amber::runtime::RuntimeMutexResult locked =
+      const sputnik::runtime::RuntimeMutexResult locked =
           mutex.lock(std::chrono::milliseconds(1000));
       expect(locked.ok && locked.locked, "waiting locker should acquire mutex");
       expect(mutex.owned(), "waiting locker should become mutex owner");
@@ -784,10 +784,10 @@ void test_std013_mutex_waiter_fifo() {
         std::lock_guard<std::mutex> lock(order_mutex);
         acquisition_order.push_back(value);
       }
-      const amber::runtime::RuntimeMutexResult unlocked = mutex.unlock();
+      const sputnik::runtime::RuntimeMutexResult unlocked = mutex.unlock();
       expect(unlocked.ok && unlocked.unlocked,
              "waiting locker should release mutex");
-      return amber::runtime::Value::integer(value);
+      return sputnik::runtime::Value::integer(value);
     }));
     expect(wait_for_condition(
                [&mutex, value]() {
@@ -799,8 +799,8 @@ void test_std013_mutex_waiter_fifo() {
   }
 
   expect(mutex.unlock().ok, "main task should release mutex to waiters");
-  for (const amber::runtime::RuntimeTaskHandle &waiter : waiters) {
-    const amber::runtime::RuntimeTaskPublicResult joined =
+  for (const sputnik::runtime::RuntimeTaskHandle &waiter : waiters) {
+    const sputnik::runtime::RuntimeTaskPublicResult joined =
         waiter.wait(std::chrono::milliseconds(1000));
     expect(joined.ok && joined.ready, "mutex waiter task should join");
   }
@@ -812,19 +812,19 @@ void test_std013_mutex_waiter_fifo() {
            "mutex waiters should acquire lock FIFO");
   }
 
-  const amber::runtime::RuntimeMutexStats stats = mutex.stats();
+  const sputnik::runtime::RuntimeMutexStats stats = mutex.stats();
   expect(stats.locks == 4 && stats.unlocks == 4 && stats.contentions == 3,
          "mutex stats should count owner lock and FIFO waiter locks");
 }
 
 void test_std013_mutex_synchronize_return_and_unwind() {
-  amber::runtime::RuntimeMutex mutex;
+  sputnik::runtime::RuntimeMutex mutex;
 
-  const amber::runtime::RuntimeMutexResult synchronized =
+  const sputnik::runtime::RuntimeMutexResult synchronized =
       mutex.synchronize([&mutex]() {
         expect(mutex.locked() && mutex.owned(),
                "synchronize block should run while mutex is owned");
-        return amber::runtime::Value::integer(314);
+        return sputnik::runtime::Value::integer(314);
       });
   expect(synchronized.ok && synchronized.locked && synchronized.unlocked,
          "synchronize should acquire and release mutex");
@@ -837,7 +837,7 @@ void test_std013_mutex_synchronize_return_and_unwind() {
       expect(mutex.locked() && mutex.owned(),
              "throwing synchronize block should run while mutex is owned");
       throw std::runtime_error("boom");
-      return amber::runtime::Value::null();
+      return sputnik::runtime::Value::null();
     });
   } catch (const std::runtime_error &) {
     caught = true;
@@ -852,25 +852,25 @@ void test_std013_mutex_synchronize_return_and_unwind() {
 }
 
 void test_std013_mutex_owner_ids_are_unique_across_schedulers() {
-  amber::runtime::RuntimeTaskModule first_scheduler(1);
-  amber::runtime::RuntimeTaskModule second_scheduler(1);
-  amber::runtime::RuntimeMutex mutex;
+  sputnik::runtime::RuntimeTaskModule first_scheduler(1);
+  sputnik::runtime::RuntimeTaskModule second_scheduler(1);
+  sputnik::runtime::RuntimeMutex mutex;
   std::atomic<bool> first_locked{false};
   std::atomic<bool> second_synchronized{false};
 
-  const amber::runtime::RuntimeTaskHandle first =
+  const sputnik::runtime::RuntimeTaskHandle first =
       first_scheduler.spawn([&]() {
-        const amber::runtime::RuntimeMutexResult synchronized =
+        const sputnik::runtime::RuntimeMutexResult synchronized =
             mutex.synchronize(
                 [&]() {
                   first_locked.store(true, std::memory_order_release);
                   std::this_thread::sleep_for(std::chrono::milliseconds(30));
-                  return amber::runtime::Value::null();
+                  return sputnik::runtime::Value::null();
                 },
                 std::chrono::milliseconds(1000));
         expect(synchronized.ok,
                "first scheduler should release shared mutex");
-        return amber::runtime::Value::null();
+        return sputnik::runtime::Value::null();
       });
 
   expect(wait_for_condition(
@@ -878,15 +878,15 @@ void test_std013_mutex_owner_ids_are_unique_across_schedulers() {
              std::chrono::milliseconds(1000)),
          "first scheduler should acquire shared mutex");
 
-  const amber::runtime::RuntimeTaskHandle second =
+  const sputnik::runtime::RuntimeTaskHandle second =
       second_scheduler.spawn([&]() {
-        const amber::runtime::RuntimeMutexResult synchronized =
+        const sputnik::runtime::RuntimeMutexResult synchronized =
             mutex.synchronize(
-                []() { return amber::runtime::Value::null(); },
+                []() { return sputnik::runtime::Value::null(); },
                 std::chrono::milliseconds(1000));
         second_synchronized.store(synchronized.ok,
                                   std::memory_order_release);
-        return amber::runtime::Value::null();
+        return sputnik::runtime::Value::null();
       });
 
   expect(first.wait(std::chrono::milliseconds(1000)).ok,
@@ -898,27 +898,27 @@ void test_std013_mutex_owner_ids_are_unique_across_schedulers() {
 }
 
 void test_std013_mutex_lock_wait_cancellation() {
-  amber::runtime::RuntimeTaskModule task(2);
-  amber::runtime::RuntimeMutex mutex;
+  sputnik::runtime::RuntimeTaskModule task(2);
+  sputnik::runtime::RuntimeMutex mutex;
   std::atomic<bool> waiter_entered{false};
 
   expect(mutex.lock().ok, "main task should hold mutex before cancellation");
-  const amber::runtime::RuntimeTaskHandle waiter =
+  const sputnik::runtime::RuntimeTaskHandle waiter =
       task.spawn([&mutex, &waiter_entered]() {
         waiter_entered = true;
-        const amber::runtime::RuntimeMutexResult locked =
+        const sputnik::runtime::RuntimeMutexResult locked =
             mutex.lock(std::chrono::milliseconds(1000));
         if (locked.cancelled && locked.error_name == "CancelledError") {
-          return amber::runtime::Value::integer(1);
+          return sputnik::runtime::Value::integer(1);
         }
         if (locked.timed_out) {
-          return amber::runtime::Value::integer(2);
+          return sputnik::runtime::Value::integer(2);
         }
         if (locked.ok) {
           (void)mutex.unlock();
-          return amber::runtime::Value::integer(3);
+          return sputnik::runtime::Value::integer(3);
         }
-        return amber::runtime::Value::integer(4);
+        return sputnik::runtime::Value::integer(4);
       });
 
   expect(wait_for_condition(
@@ -931,7 +931,7 @@ void test_std013_mutex_lock_wait_cancellation() {
   expect(waiter.cancel(),
          "cancelling mutex locker task should request cancellation");
 
-  const amber::runtime::RuntimeTaskPublicResult cancelled =
+  const sputnik::runtime::RuntimeTaskPublicResult cancelled =
       waiter.wait(std::chrono::milliseconds(1000));
   expect(cancelled.ok && cancelled.ready,
          "mutex cancellation observer should finish task");
@@ -945,7 +945,7 @@ void test_std013_mutex_lock_wait_cancellation() {
 }
 
 void test_std014_atomic_get_set_compare_and_set_and_guard() {
-  amber::runtime::RuntimeAtomic atomic(0);
+  sputnik::runtime::RuntimeAtomic atomic(0);
   expect(atomic.get() == 0, "atomic get should read initial integer");
   atomic.set(5);
   expect(atomic.get() == 5, "atomic set should publish integer value");
@@ -955,50 +955,50 @@ void test_std014_atomic_get_set_compare_and_set_and_guard() {
          "atomic compare_and_set should reject stale integer expected value");
   expect(atomic.get() == 6, "failed integer CAS should leave value unchanged");
 
-  const amber::runtime::RuntimeAtomic::Result bool_set =
-      atomic.set_value(amber::runtime::Value::boolean(true));
+  const sputnik::runtime::RuntimeAtomic::Result bool_set =
+      atomic.set_value(sputnik::runtime::Value::boolean(true));
   expect(bool_set.ok && bool_set.updated && bool_set.value.as_bool(),
          "atomic set_value should accept bool payload");
   expect(atomic.get_value().as_bool(),
          "atomic get_value should return latest bool payload");
 
-  amber::runtime::RuntimeHeap heap;
-  const amber::runtime::Value frozen_tuple =
-      heap.make_tuple_value({amber::runtime::Value::integer(7)});
-  const amber::runtime::RuntimeAtomic::Result tuple_set =
+  sputnik::runtime::RuntimeHeap heap;
+  const sputnik::runtime::Value frozen_tuple =
+      heap.make_tuple_value({sputnik::runtime::Value::integer(7)});
+  const sputnik::runtime::RuntimeAtomic::Result tuple_set =
       atomic.set_value(frozen_tuple);
   expect(tuple_set.ok && tuple_set.updated,
          "atomic set_value should accept shareable heap payload");
 
-  const amber::runtime::Value equal_but_distinct_tuple =
-      heap.make_tuple_value({amber::runtime::Value::integer(7)});
-  const amber::runtime::RuntimeAtomic::Result identity_miss =
+  const sputnik::runtime::Value equal_but_distinct_tuple =
+      heap.make_tuple_value({sputnik::runtime::Value::integer(7)});
+  const sputnik::runtime::RuntimeAtomic::Result identity_miss =
       atomic.compare_and_set_value(equal_but_distinct_tuple,
-                                   amber::runtime::Value::integer(8));
+                                   sputnik::runtime::Value::integer(8));
   expect(identity_miss.ok && !identity_miss.matched,
          "atomic CAS should compare heap payloads by identity");
   expect(atomic.get_value().as_tuple() == frozen_tuple.as_tuple(),
          "failed identity CAS should leave heap value unchanged");
 
-  const amber::runtime::RuntimeAtomic::Result identity_hit =
+  const sputnik::runtime::RuntimeAtomic::Result identity_hit =
       atomic.compare_and_set_value(frozen_tuple,
-                                   amber::runtime::Value::integer(9));
+                                   sputnik::runtime::Value::integer(9));
   expect(identity_hit.ok && identity_hit.matched && identity_hit.updated,
          "atomic CAS should update matching heap identity");
   expect(atomic.get() == 9, "matching heap CAS should publish replacement");
 
-  const amber::runtime::Value confined = heap.make_list_value({});
+  const sputnik::runtime::Value confined = heap.make_list_value({});
   bool constructor_rejected = false;
   try {
-    amber::runtime::RuntimeAtomic rejected_atomic(confined);
+    sputnik::runtime::RuntimeAtomic rejected_atomic(confined);
     (void)rejected_atomic;
-  } catch (const amber::runtime::RuntimeTaskFailure &failure) {
+  } catch (const sputnik::runtime::RuntimeTaskFailure &failure) {
     constructor_rejected = failure.error_name() == "AtomicCompatibilityError";
   }
   expect(constructor_rejected,
          "atomic constructor should reject incompatible initial payload");
 
-  const amber::runtime::RuntimeAtomic::Result rejected_set =
+  const sputnik::runtime::RuntimeAtomic::Result rejected_set =
       atomic.set_value(confined);
   expect(!rejected_set.ok &&
              rejected_set.error_name == "AtomicCompatibilityError",
@@ -1006,8 +1006,8 @@ void test_std014_atomic_get_set_compare_and_set_and_guard() {
   expect(atomic.get() == 9,
          "rejected atomic set_value should leave value unchanged");
 
-  const amber::runtime::RuntimeAtomic::Result rejected_cas =
-      atomic.compare_and_set_value(amber::runtime::Value::integer(9), confined);
+  const sputnik::runtime::RuntimeAtomic::Result rejected_cas =
+      atomic.compare_and_set_value(sputnik::runtime::Value::integer(9), confined);
   expect(!rejected_cas.ok &&
              rejected_cas.error_name == "AtomicCompatibilityError",
          "atomic CAS should reject incompatible replacement payload");
@@ -1015,11 +1015,11 @@ void test_std014_atomic_get_set_compare_and_set_and_guard() {
 }
 
 void test_std014_atomic_update_value_retry_and_guard() {
-  amber::runtime::RuntimeAtomic atomic(1);
-  const amber::runtime::RuntimeAtomic::Result incremented =
-      atomic.update([](const amber::runtime::Value &current) {
+  sputnik::runtime::RuntimeAtomic atomic(1);
+  const sputnik::runtime::RuntimeAtomic::Result incremented =
+      atomic.update([](const sputnik::runtime::Value &current) {
         expect(current.is_integer(), "atomic update should read integer");
-        return amber::runtime::Value::integer(current.as_integer() + 1);
+        return sputnik::runtime::Value::integer(current.as_integer() + 1);
       });
   expect(incremented.ok && incremented.matched && incremented.updated,
          "atomic update should publish replacement");
@@ -1028,10 +1028,10 @@ void test_std014_atomic_update_value_retry_and_guard() {
          "uncontended atomic update should run block once");
   expect(atomic.get() == 2, "atomic update should store return value");
 
-  amber::runtime::RuntimeAtomic retried(0);
+  sputnik::runtime::RuntimeAtomic retried(0);
   int calls = 0;
-  const amber::runtime::RuntimeAtomic::Result retry_result =
-      retried.update([&retried, &calls](const amber::runtime::Value &current) {
+  const sputnik::runtime::RuntimeAtomic::Result retry_result =
+      retried.update([&retried, &calls](const sputnik::runtime::Value &current) {
         ++calls;
         expect(current.is_integer(), "retrying atomic update should read int");
         if (calls == 1) {
@@ -1039,7 +1039,7 @@ void test_std014_atomic_update_value_retry_and_guard() {
                                          current.as_integer() + 1),
                  "test CAS should create an update retry");
         }
-        return amber::runtime::Value::integer(current.as_integer() + 1);
+        return sputnik::runtime::Value::integer(current.as_integer() + 1);
       });
   expect(retry_result.ok && retry_result.matched && retry_result.updated,
          "atomic update should eventually publish after retry");
@@ -1048,10 +1048,10 @@ void test_std014_atomic_update_value_retry_and_guard() {
   expect_integer(retry_result.value, 2, "retrying atomic update return value");
   expect(retried.get() == 2, "retrying atomic update final value");
 
-  amber::runtime::RuntimeHeap heap;
-  const amber::runtime::Value confined = heap.make_list_value({});
-  const amber::runtime::RuntimeAtomic::Result rejected = retried.update(
-      [&confined](const amber::runtime::Value &) { return confined; });
+  sputnik::runtime::RuntimeHeap heap;
+  const sputnik::runtime::Value confined = heap.make_list_value({});
+  const sputnik::runtime::RuntimeAtomic::Result rejected = retried.update(
+      [&confined](const sputnik::runtime::Value &) { return confined; });
   expect(!rejected.ok && rejected.attempts == 1 &&
              rejected.error_name == "AtomicCompatibilityError",
          "atomic update should reject incompatible replacement");
@@ -1060,30 +1060,30 @@ void test_std014_atomic_update_value_retry_and_guard() {
 }
 
 void test_std014_atomic_cross_strand_counter() {
-  amber::runtime::RuntimeTaskModule task(4);
-  amber::runtime::RuntimeAtomic counter(0);
-  std::vector<amber::runtime::RuntimeTaskHandle> workers;
+  sputnik::runtime::RuntimeTaskModule task(4);
+  sputnik::runtime::RuntimeAtomic counter(0);
+  std::vector<sputnik::runtime::RuntimeTaskHandle> workers;
   constexpr int kWorkers = 4;
   constexpr int kIterations = 250;
 
   for (int worker = 0; worker < kWorkers; ++worker) {
     workers.push_back(task.spawn([&counter]() {
       for (int iteration = 0; iteration < kIterations; ++iteration) {
-        const amber::runtime::RuntimeAtomic::Result incremented =
-            counter.update([](const amber::runtime::Value &current) {
+        const sputnik::runtime::RuntimeAtomic::Result incremented =
+            counter.update([](const sputnik::runtime::Value &current) {
               expect(current.is_integer(),
                      "cross-strand atomic update should read integer");
-              return amber::runtime::Value::integer(current.as_integer() + 1);
+              return sputnik::runtime::Value::integer(current.as_integer() + 1);
             });
         expect(incremented.ok && incremented.matched,
                "cross-strand atomic update should succeed");
       }
-      return amber::runtime::Value::integer(1);
+      return sputnik::runtime::Value::integer(1);
     }));
   }
 
-  for (const amber::runtime::RuntimeTaskHandle &worker : workers) {
-    const amber::runtime::RuntimeTaskPublicResult joined =
+  for (const sputnik::runtime::RuntimeTaskHandle &worker : workers) {
+    const sputnik::runtime::RuntimeTaskPublicResult joined =
         worker.wait(std::chrono::milliseconds(3000));
     expect(joined.ok && joined.ready,
            "atomic counter worker should finish successfully");
@@ -1094,36 +1094,36 @@ void test_std014_atomic_cross_strand_counter() {
 }
 
 void test_std015_barrier_release_timeout_and_cancellation() {
-  amber::runtime::RuntimeTaskModule task(4);
-  amber::runtime::RuntimeBarrier barrier(3);
+  sputnik::runtime::RuntimeTaskModule task(4);
+  sputnik::runtime::RuntimeBarrier barrier(3);
   std::atomic<int> arrived{0};
-  std::vector<amber::runtime::RuntimeTaskHandle> waiters;
+  std::vector<sputnik::runtime::RuntimeTaskHandle> waiters;
 
   for (int worker = 0; worker < 3; ++worker) {
     waiters.push_back(task.spawn([&barrier, &arrived]() {
       arrived.fetch_add(1);
-      const amber::runtime::RuntimeBarrierResult passed =
+      const sputnik::runtime::RuntimeBarrierResult passed =
           barrier.wait(std::chrono::milliseconds(1000));
       expect(passed.ok && passed.passed,
              "barrier worker should pass released generation");
-      return amber::runtime::Value::integer(passed.last ? 1 : 0);
+      return sputnik::runtime::Value::integer(passed.last ? 1 : 0);
     }));
   }
 
-  for (const amber::runtime::RuntimeTaskHandle &waiter : waiters) {
-    const amber::runtime::RuntimeTaskPublicResult joined =
+  for (const sputnik::runtime::RuntimeTaskHandle &waiter : waiters) {
+    const sputnik::runtime::RuntimeTaskPublicResult joined =
         waiter.wait(std::chrono::milliseconds(1000));
     expect(joined.ok && joined.ready, "barrier waiter should join");
   }
   expect(arrived.load() == 3, "all barrier workers should arrive");
 
-  const amber::runtime::RuntimeBarrierStats released_stats = barrier.stats();
+  const sputnik::runtime::RuntimeBarrierStats released_stats = barrier.stats();
   expect(released_stats.arrivals == 3 && released_stats.passes == 1 &&
              released_stats.waiting == 0 && released_stats.generation == 1,
          "barrier stats should count released generation");
 
-  amber::runtime::RuntimeBarrier timeout_barrier(2);
-  const amber::runtime::RuntimeBarrierResult timed_out =
+  sputnik::runtime::RuntimeBarrier timeout_barrier(2);
+  const sputnik::runtime::RuntimeBarrierResult timed_out =
       timeout_barrier.wait(std::chrono::milliseconds(5));
   expect(!timed_out.ok && timed_out.timed_out &&
              timed_out.error_name == "TimeoutError",
@@ -1132,21 +1132,21 @@ void test_std015_barrier_release_timeout_and_cancellation() {
              timeout_barrier.stats().waiting == 0,
          "barrier timeout should remove waiter");
 
-  amber::runtime::RuntimeBarrier cancellation_barrier(2);
-  amber::runtime::RuntimeTaskModule cancel_task(2);
+  sputnik::runtime::RuntimeBarrier cancellation_barrier(2);
+  sputnik::runtime::RuntimeTaskModule cancel_task(2);
   std::atomic<bool> waiter_entered{false};
-  const amber::runtime::RuntimeTaskHandle cancellable =
+  const sputnik::runtime::RuntimeTaskHandle cancellable =
       cancel_task.spawn([&cancellation_barrier, &waiter_entered]() {
         waiter_entered = true;
-        const amber::runtime::RuntimeBarrierResult cancelled =
+        const sputnik::runtime::RuntimeBarrierResult cancelled =
             cancellation_barrier.wait(std::chrono::milliseconds(1000));
         if (cancelled.cancelled && cancelled.error_name == "CancelledError") {
-          return amber::runtime::Value::integer(1);
+          return sputnik::runtime::Value::integer(1);
         }
         if (cancelled.timed_out) {
-          return amber::runtime::Value::integer(2);
+          return sputnik::runtime::Value::integer(2);
         }
-        return amber::runtime::Value::integer(3);
+        return sputnik::runtime::Value::integer(3);
       });
 
   expect(wait_for_condition(
@@ -1158,7 +1158,7 @@ void test_std015_barrier_release_timeout_and_cancellation() {
          "cancellable barrier waiter should enter wait set");
   expect(cancellable.cancel(),
          "cancelling barrier waiter should request cancellation");
-  const amber::runtime::RuntimeTaskPublicResult cancelled =
+  const sputnik::runtime::RuntimeTaskPublicResult cancelled =
       cancellable.wait(std::chrono::milliseconds(1000));
   expect(cancelled.ok && cancelled.ready,
          "barrier cancellation observer should finish task");
@@ -1170,21 +1170,21 @@ void test_std015_barrier_release_timeout_and_cancellation() {
 }
 
 void test_std015_flow_gather_and_scatter_map_ordered_results() {
-  amber::runtime::RuntimeTaskModule task(3);
-  std::vector<amber::runtime::RuntimeTaskHandle> handles;
+  sputnik::runtime::RuntimeTaskModule task(3);
+  std::vector<sputnik::runtime::RuntimeTaskHandle> handles;
   handles.push_back(task.spawn([]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    return amber::runtime::Value::integer(1);
+    return sputnik::runtime::Value::integer(1);
   }));
   handles.push_back(
-      task.spawn([]() { return amber::runtime::Value::integer(2); }));
+      task.spawn([]() { return sputnik::runtime::Value::integer(2); }));
   handles.push_back(task.spawn([]() {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    return amber::runtime::Value::integer(3);
+    return sputnik::runtime::Value::integer(3);
   }));
 
-  amber::runtime::RuntimeFlowModule flow(4);
-  const amber::runtime::RuntimeFlowGatherResult gathered =
+  sputnik::runtime::RuntimeFlowModule flow(4);
+  const sputnik::runtime::RuntimeFlowGatherResult gathered =
       flow.gather(std::move(handles));
   expect(gathered.ok && !gathered.failed && gathered.values.size() == 3,
          "flow gather should return ordered successful values");
@@ -1192,12 +1192,12 @@ void test_std015_flow_gather_and_scatter_map_ordered_results() {
   expect_integer(gathered.values[1], 2, "flow gather second value");
   expect_integer(gathered.values[2], 3, "flow gather third value");
 
-  std::vector<amber::runtime::Value> items = {
-      amber::runtime::Value::integer(3), amber::runtime::Value::integer(1),
-      amber::runtime::Value::integer(2)};
-  const amber::runtime::RuntimeFlowGatherResult mapped = flow.scatter_map(
-      items, [](const amber::runtime::Value &value, std::size_t index) {
-        return amber::runtime::Value::integer(value.as_integer() * 10 +
+  std::vector<sputnik::runtime::Value> items = {
+      sputnik::runtime::Value::integer(3), sputnik::runtime::Value::integer(1),
+      sputnik::runtime::Value::integer(2)};
+  const sputnik::runtime::RuntimeFlowGatherResult mapped = flow.scatter_map(
+      items, [](const sputnik::runtime::Value &value, std::size_t index) {
+        return sputnik::runtime::Value::integer(value.as_integer() * 10 +
                                               static_cast<std::int64_t>(index));
       });
   expect(mapped.ok && !mapped.failed && mapped.values.size() == 3,
@@ -1206,34 +1206,34 @@ void test_std015_flow_gather_and_scatter_map_ordered_results() {
   expect_integer(mapped.values[1], 11, "flow scatter_map second value");
   expect_integer(mapped.values[2], 22, "flow scatter_map third value");
 
-  const amber::runtime::RuntimeFlowStats stats = flow.stats();
+  const sputnik::runtime::RuntimeFlowStats stats = flow.stats();
   expect(stats.gathers >= 2 && stats.flows >= 1 && stats.completed_workers >= 6,
          "flow stats should count gather and scatter workers");
 }
 
 void test_std015_flow_reduce_broadcast_and_failure_collection() {
-  amber::runtime::RuntimeFlowModule flow(4);
-  std::vector<amber::runtime::Value> items = {
-      amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
-      amber::runtime::Value::integer(3), amber::runtime::Value::integer(4)};
+  sputnik::runtime::RuntimeFlowModule flow(4);
+  std::vector<sputnik::runtime::Value> items = {
+      sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+      sputnik::runtime::Value::integer(3), sputnik::runtime::Value::integer(4)};
 
-  const amber::runtime::RuntimeFlowReduceResult reduced = flow.scatter_reduce(
-      items, amber::runtime::Value::integer(0),
-      [](const amber::runtime::Value &value, std::size_t) {
-        return amber::runtime::Value::integer(value.as_integer() *
+  const sputnik::runtime::RuntimeFlowReduceResult reduced = flow.scatter_reduce(
+      items, sputnik::runtime::Value::integer(0),
+      [](const sputnik::runtime::Value &value, std::size_t) {
+        return sputnik::runtime::Value::integer(value.as_integer() *
                                               value.as_integer());
       },
-      [](const amber::runtime::Value &acc, const amber::runtime::Value &value) {
-        return amber::runtime::Value::integer(acc.as_integer() +
+      [](const sputnik::runtime::Value &acc, const sputnik::runtime::Value &value) {
+        return sputnik::runtime::Value::integer(acc.as_integer() +
                                               value.as_integer());
       });
   expect(reduced.ok, "flow scatter_reduce should complete successfully");
   expect_integer(reduced.value, 30, "flow scatter_reduce sum of squares");
 
-  const amber::runtime::RuntimeFlowGatherResult broadcast = flow.broadcast(
-      amber::runtime::Value::integer(5), 3,
-      [](const amber::runtime::Value &value, std::size_t worker) {
-        return amber::runtime::Value::integer(
+  const sputnik::runtime::RuntimeFlowGatherResult broadcast = flow.broadcast(
+      sputnik::runtime::Value::integer(5), 3,
+      [](const sputnik::runtime::Value &value, std::size_t worker) {
+        return sputnik::runtime::Value::integer(
             value.as_integer() + static_cast<std::int64_t>(worker));
       });
   expect(broadcast.ok && broadcast.values.size() == 3,
@@ -1242,17 +1242,17 @@ void test_std015_flow_reduce_broadcast_and_failure_collection() {
   expect_integer(broadcast.values[1], 6, "flow broadcast second value");
   expect_integer(broadcast.values[2], 7, "flow broadcast third value");
 
-  amber::runtime::RuntimeFlowOptions collect_failures;
+  sputnik::runtime::RuntimeFlowOptions collect_failures;
   collect_failures.failure_policy =
-      amber::runtime::RuntimeFlowFailurePolicy::Collect;
-  const amber::runtime::RuntimeFlowGatherResult collected = flow.scatter_map(
+      sputnik::runtime::RuntimeFlowFailurePolicy::Collect;
+  const sputnik::runtime::RuntimeFlowGatherResult collected = flow.scatter_map(
       items,
-      [](const amber::runtime::Value &value, std::size_t) {
+      [](const sputnik::runtime::Value &value, std::size_t) {
         if (value.as_integer() == 2) {
-          throw amber::runtime::RuntimeTaskFailure("FlowPartitionError",
+          throw sputnik::runtime::RuntimeTaskFailure("FlowPartitionError",
                                                    "bad partition");
         }
-        return amber::runtime::Value::integer(value.as_integer() * 10);
+        return sputnik::runtime::Value::integer(value.as_integer() * 10);
       },
       collect_failures);
   expect(collected.ok && collected.failed && collected.failures.size() == 1,
@@ -1263,33 +1263,33 @@ void test_std015_flow_reduce_broadcast_and_failure_collection() {
   expect_integer(collected.values[0], 10, "flow collect failure first success");
   expect_integer(collected.values[2], 30, "flow collect failure later success");
 
-  const amber::runtime::RuntimeFlowStats stats = flow.stats();
+  const sputnik::runtime::RuntimeFlowStats stats = flow.stats();
   expect(stats.reductions == 1 && stats.broadcasts == 1 &&
              stats.failed_workers >= 1,
          "flow stats should count reduce, broadcast, and failed workers");
 }
 
 void test_std015_flow_isolation_checked_and_unchecked() {
-  amber::runtime::RuntimeFlowModule flow(2);
-  amber::runtime::RuntimeHeap heap;
-  const amber::runtime::Value confined = heap.make_list_value({});
+  sputnik::runtime::RuntimeFlowModule flow(2);
+  sputnik::runtime::RuntimeHeap heap;
+  const sputnik::runtime::Value confined = heap.make_list_value({});
 
-  const amber::runtime::RuntimeFlowGatherResult rejected_partition =
+  const sputnik::runtime::RuntimeFlowGatherResult rejected_partition =
       flow.scatter_map({confined},
-                       [](const amber::runtime::Value &, std::size_t) {
-                         return amber::runtime::Value::integer(0);
+                       [](const sputnik::runtime::Value &, std::size_t) {
+                         return sputnik::runtime::Value::integer(0);
                        });
   expect(!rejected_partition.ok &&
              rejected_partition.error_name == "IsolationError",
          "checked flow should reject non-shareable partitions");
 
-  amber::runtime::RuntimeFlowOptions unchecked;
-  unchecked.isolation = amber::runtime::RuntimeFlowIsolationMode::Unchecked;
-  const amber::runtime::RuntimeFlowGatherResult unchecked_result =
+  sputnik::runtime::RuntimeFlowOptions unchecked;
+  unchecked.isolation = sputnik::runtime::RuntimeFlowIsolationMode::Unchecked;
+  const sputnik::runtime::RuntimeFlowGatherResult unchecked_result =
       flow.scatter_map(
           {confined},
-          [](const amber::runtime::Value &value, std::size_t) {
-            return amber::runtime::Value::integer(value.is_list() ? 1 : 0);
+          [](const sputnik::runtime::Value &value, std::size_t) {
+            return sputnik::runtime::Value::integer(value.is_list() ? 1 : 0);
           },
           unchecked);
   expect(unchecked_result.ok && unchecked_result.values.size() == 1,
@@ -1297,10 +1297,10 @@ void test_std015_flow_isolation_checked_and_unchecked() {
   expect_integer(unchecked_result.values[0], 1,
                  "unchecked flow confined partition result");
 
-  const amber::runtime::RuntimeFlowGatherResult rejected_result =
-      flow.scatter_map({amber::runtime::Value::integer(1)},
-                       [](const amber::runtime::Value &, std::size_t) {
-                         return amber::runtime::make_list_value({});
+  const sputnik::runtime::RuntimeFlowGatherResult rejected_result =
+      flow.scatter_map({sputnik::runtime::Value::integer(1)},
+                       [](const sputnik::runtime::Value &, std::size_t) {
+                         return sputnik::runtime::make_list_value({});
                        });
   expect(!rejected_result.ok && rejected_result.failed &&
              rejected_result.error_name == "IsolationError",
@@ -1310,14 +1310,14 @@ void test_std015_flow_isolation_checked_and_unchecked() {
 }
 
 void test_std016_threaded_collection_iteration_and_transforms() {
-  std::vector<amber::runtime::Value> items = {
-      amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
-      amber::runtime::Value::integer(3), amber::runtime::Value::integer(4)};
-  amber::runtime::RuntimeThreadedCollection threaded(items, 2);
+  std::vector<sputnik::runtime::Value> items = {
+      sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+      sputnik::runtime::Value::integer(3), sputnik::runtime::Value::integer(4)};
+  sputnik::runtime::RuntimeThreadedCollection threaded(items, 2);
 
-  const amber::runtime::RuntimeFlowGatherResult mapped =
-      threaded.map([](const amber::runtime::Value &value, std::size_t index) {
-        return amber::runtime::Value::integer(value.as_integer() * 10 +
+  const sputnik::runtime::RuntimeFlowGatherResult mapped =
+      threaded.map([](const sputnik::runtime::Value &value, std::size_t index) {
+        return sputnik::runtime::Value::integer(value.as_integer() * 10 +
                                               static_cast<std::int64_t>(index));
       });
   expect(mapped.ok && !mapped.failed,
@@ -1325,20 +1325,20 @@ void test_std016_threaded_collection_iteration_and_transforms() {
   expect_integer_values(mapped.values, {10, 21, 32, 43},
                         "threaded map ordered results");
 
-  const amber::runtime::RuntimeFlowGatherResult filter_mapped =
-      threaded.filter_map([](const amber::runtime::Value &value, std::size_t) {
+  const sputnik::runtime::RuntimeFlowGatherResult filter_mapped =
+      threaded.filter_map([](const sputnik::runtime::Value &value, std::size_t) {
         if (value.as_integer() % 2 != 0) {
-          return amber::runtime::Value::null();
+          return sputnik::runtime::Value::null();
         }
-        return amber::runtime::Value::integer(value.as_integer() * 10);
+        return sputnik::runtime::Value::integer(value.as_integer() * 10);
       });
   expect(filter_mapped.ok && !filter_mapped.failed,
          "threaded filter_map should complete successfully");
   expect_integer_values(filter_mapped.values, {20, 40},
                         "threaded filter_map ordered results");
 
-  const amber::runtime::RuntimeFlowGatherResult selected =
-      threaded.select([](const amber::runtime::Value &value, std::size_t) {
+  const sputnik::runtime::RuntimeFlowGatherResult selected =
+      threaded.select([](const sputnik::runtime::Value &value, std::size_t) {
         return value.as_integer() % 2 == 1;
       });
   expect(selected.ok && !selected.failed,
@@ -1346,8 +1346,8 @@ void test_std016_threaded_collection_iteration_and_transforms() {
   expect_integer_values(selected.values, {1, 3},
                         "threaded select ordered results");
 
-  const amber::runtime::RuntimeFlowGatherResult rejected =
-      threaded.reject([](const amber::runtime::Value &value, std::size_t) {
+  const sputnik::runtime::RuntimeFlowGatherResult rejected =
+      threaded.reject([](const sputnik::runtime::Value &value, std::size_t) {
         return value.as_integer() % 2 == 1;
       });
   expect(rejected.ok && !rejected.failed,
@@ -1355,22 +1355,22 @@ void test_std016_threaded_collection_iteration_and_transforms() {
   expect_integer_values(rejected.values, {2, 4},
                         "threaded reject ordered results");
 
-  const amber::runtime::RuntimeFlowGatherResult flat_mapped =
-      threaded.flat_map([](const amber::runtime::Value &value, std::size_t) {
-        return std::vector<amber::runtime::Value>{
-            value, amber::runtime::Value::integer(value.as_integer() + 10)};
+  const sputnik::runtime::RuntimeFlowGatherResult flat_mapped =
+      threaded.flat_map([](const sputnik::runtime::Value &value, std::size_t) {
+        return std::vector<sputnik::runtime::Value>{
+            value, sputnik::runtime::Value::integer(value.as_integer() + 10)};
       });
   expect(flat_mapped.ok && !flat_mapped.failed,
          "threaded flat_map should complete successfully");
   expect_integer_values(flat_mapped.values, {1, 11, 2, 12, 3, 13, 4, 14},
                         "threaded flat_map ordered results");
 
-  amber::runtime::RuntimeAtomic sum(0);
-  const amber::runtime::RuntimeFlowGatherResult each =
-      threaded.each([&sum](const amber::runtime::Value &value, std::size_t) {
-        const amber::runtime::RuntimeAtomic::Result updated =
-            sum.update([&value](const amber::runtime::Value &current) {
-              return amber::runtime::Value::integer(current.as_integer() +
+  sputnik::runtime::RuntimeAtomic sum(0);
+  const sputnik::runtime::RuntimeFlowGatherResult each =
+      threaded.each([&sum](const sputnik::runtime::Value &value, std::size_t) {
+        const sputnik::runtime::RuntimeAtomic::Result updated =
+            sum.update([&value](const sputnik::runtime::Value &current) {
+              return sputnik::runtime::Value::integer(current.as_integer() +
                                                     value.as_integer());
             });
         expect(updated.ok && updated.updated,
@@ -1381,7 +1381,7 @@ void test_std016_threaded_collection_iteration_and_transforms() {
   expect_integer_values(each.values, {1, 2, 3, 4},
                         "threaded each should return original items in order");
 
-  const amber::runtime::RuntimeThreadedCollectionStats stats = threaded.stats();
+  const sputnik::runtime::RuntimeThreadedCollectionStats stats = threaded.stats();
   expect(stats.operations == 6 && stats.map_operations == 1 &&
              stats.filter_map_operations == 1 && stats.filter_operations == 2 &&
              stats.flat_map_operations == 1 && stats.each_operations == 1,
@@ -1391,33 +1391,33 @@ void test_std016_threaded_collection_iteration_and_transforms() {
 }
 
 void test_std016_threaded_collection_scatter_policies_bound_task_count() {
-  std::vector<amber::runtime::Value> items;
+  std::vector<sputnik::runtime::Value> items;
   for (std::int64_t value = 1; value <= 8; ++value) {
-    items.push_back(amber::runtime::Value::integer(value));
+    items.push_back(sputnik::runtime::Value::integer(value));
   }
 
   auto run_ids =
-      [&items](amber::runtime::RuntimeFlowPartitionPolicy scatter_policy) {
-        amber::runtime::RuntimeThreadedCollection threaded(
-            items, 4, amber::runtime::RuntimeFlowOptions{}, scatter_policy);
+      [&items](sputnik::runtime::RuntimeFlowPartitionPolicy scatter_policy) {
+        sputnik::runtime::RuntimeThreadedCollection threaded(
+            items, 4, sputnik::runtime::RuntimeFlowOptions{}, scatter_policy);
         std::mutex mutex;
         std::unordered_set<std::uint64_t> task_ids;
-        const amber::runtime::RuntimeFlowGatherResult mapped =
-            threaded.map([&mutex, &task_ids](const amber::runtime::Value &value,
+        const sputnik::runtime::RuntimeFlowGatherResult mapped =
+            threaded.map([&mutex, &task_ids](const sputnik::runtime::Value &value,
                                              std::size_t) {
               std::lock_guard<std::mutex> lock(mutex);
-              task_ids.insert(amber::runtime::current_runtime_task_id());
+              task_ids.insert(sputnik::runtime::current_runtime_task_id());
               return value;
             });
         expect(mapped.ok && !mapped.failed && mapped.values.size() == 8,
                "threaded scatter policy map should complete");
-        return std::pair<amber::runtime::RuntimeThreadedCollectionStats,
+        return std::pair<sputnik::runtime::RuntimeThreadedCollectionStats,
                          std::unordered_set<std::uint64_t>>{
             threaded.stats(), std::move(task_ids)};
       };
 
   const auto atomic_run =
-      run_ids(amber::runtime::RuntimeFlowPartitionPolicy::Atomic);
+      run_ids(sputnik::runtime::RuntimeFlowPartitionPolicy::Atomic);
   expect(atomic_run.first.flow.worker_tasks == 4 &&
              atomic_run.first.flow.completed_workers == 4,
          "atomic threaded scatter should spawn one task per worker");
@@ -1425,7 +1425,7 @@ void test_std016_threaded_collection_scatter_policies_bound_task_count() {
          "atomic threaded scatter should use at most worker-count task ids");
 
   const auto chunks_run =
-      run_ids(amber::runtime::RuntimeFlowPartitionPolicy::Chunks);
+      run_ids(sputnik::runtime::RuntimeFlowPartitionPolicy::Chunks);
   expect(chunks_run.first.flow.worker_tasks == 4 &&
              chunks_run.first.flow.completed_workers == 4,
          "chunked threaded scatter should spawn one task per worker");
@@ -1433,7 +1433,7 @@ void test_std016_threaded_collection_scatter_policies_bound_task_count() {
          "chunked threaded scatter should process four non-empty chunks");
 
   const auto items_run =
-      run_ids(amber::runtime::RuntimeFlowPartitionPolicy::Items);
+      run_ids(sputnik::runtime::RuntimeFlowPartitionPolicy::Items);
   expect(items_run.first.flow.worker_tasks == 8 &&
              items_run.first.flow.completed_workers == 8,
          "item threaded scatter should preserve per-item task mode");
@@ -1442,20 +1442,20 @@ void test_std016_threaded_collection_scatter_policies_bound_task_count() {
 }
 
 void test_std016_threaded_cancellation_joins_running_callbacks() {
-  for (const auto policy : {amber::runtime::RuntimeFlowPartitionPolicy::Atomic,
-                            amber::runtime::RuntimeFlowPartitionPolicy::Chunks,
-                            amber::runtime::RuntimeFlowPartitionPolicy::Stride}) {
-    amber::runtime::RuntimeTaskModule tasks(1);
-    amber::runtime::RuntimeThreadedCollection threaded(
-        {amber::runtime::Value::integer(1)}, 1,
-        amber::runtime::RuntimeFlowOptions{}, policy);
+  for (const auto policy : {sputnik::runtime::RuntimeFlowPartitionPolicy::Atomic,
+                            sputnik::runtime::RuntimeFlowPartitionPolicy::Chunks,
+                            sputnik::runtime::RuntimeFlowPartitionPolicy::Stride}) {
+    sputnik::runtime::RuntimeTaskModule tasks(1);
+    sputnik::runtime::RuntimeThreadedCollection threaded(
+        {sputnik::runtime::Value::integer(1)}, 1,
+        sputnik::runtime::RuntimeFlowOptions{}, policy);
     std::atomic<bool> entered{false};
     std::atomic<bool> completed{false};
     const auto parent = tasks.spawn([&]() {
       const auto result = threaded.map([&](const auto &value, std::size_t) {
         entered.store(true);
         // Simulate cleanup in a callback that cannot stop immediately.
-        while (!amber::runtime::current_runtime_task_cancel_requested())
+        while (!sputnik::runtime::current_runtime_task_cancel_requested())
           std::this_thread::yield();
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         completed.store(true);
@@ -1464,7 +1464,7 @@ void test_std016_threaded_cancellation_joins_running_callbacks() {
       expect(result.cancelled, "threaded gather should observe cancellation");
       expect(completed.load(),
              "cancelled gather must join callbacks before releasing their stack");
-      return amber::runtime::Value::null();
+      return sputnik::runtime::Value::null();
     });
     expect(wait_for_condition([&]() { return entered.load(); },
                               std::chrono::milliseconds(2000)),
@@ -1476,19 +1476,19 @@ void test_std016_threaded_cancellation_joins_running_callbacks() {
 }
 
 void test_std016_threaded_collection_combination_and_permutation() {
-  std::vector<amber::runtime::Value> items = {
-      amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
-      amber::runtime::Value::integer(3)};
-  amber::runtime::RuntimeThreadedCollection threaded(items, 3);
+  std::vector<sputnik::runtime::Value> items = {
+      sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+      sputnik::runtime::Value::integer(3)};
+  sputnik::runtime::RuntimeThreadedCollection threaded(items, 3);
 
-  const amber::runtime::RuntimeFlowGatherResult combinations =
+  const sputnik::runtime::RuntimeFlowGatherResult combinations =
       threaded.combination(2);
   expect(combinations.ok && !combinations.failed,
          "threaded combination should complete successfully");
   expect_integer_list_values(combinations.values, {{1, 2}, {1, 3}, {2, 3}},
                              "threaded combination ordered results");
 
-  const amber::runtime::RuntimeFlowGatherResult permutations =
+  const sputnik::runtime::RuntimeFlowGatherResult permutations =
       threaded.permutation(2);
   expect(permutations.ok && !permutations.failed,
          "threaded permutation should complete successfully");
@@ -1496,73 +1496,73 @@ void test_std016_threaded_collection_combination_and_permutation() {
                              {{1, 2}, {1, 3}, {2, 1}, {2, 3}, {3, 1}, {3, 2}},
                              "threaded permutation ordered results");
 
-  const amber::runtime::RuntimeFlowGatherResult too_large =
+  const sputnik::runtime::RuntimeFlowGatherResult too_large =
       threaded.combination(4);
   expect(too_large.ok && too_large.values.empty(),
          "threaded combination should return empty result for too-large count");
 
-  const amber::runtime::RuntimeThreadedCollectionStats stats = threaded.stats();
+  const sputnik::runtime::RuntimeThreadedCollectionStats stats = threaded.stats();
   expect(stats.combination_operations == 2 &&
              stats.permutation_operations == 1 && stats.generated_values == 9,
          "threaded collection stats should count generated rows");
 }
 
 void test_std016_threaded_collection_failure_and_isolation() {
-  amber::runtime::RuntimeHeap heap;
-  const amber::runtime::Value confined = heap.make_list_value({});
+  sputnik::runtime::RuntimeHeap heap;
+  const sputnik::runtime::Value confined = heap.make_list_value({});
 
-  amber::runtime::RuntimeThreadedCollection checked({confined}, 2);
-  const amber::runtime::RuntimeFlowGatherResult rejected_partition =
-      checked.map([](const amber::runtime::Value &, std::size_t) {
-        return amber::runtime::Value::integer(0);
+  sputnik::runtime::RuntimeThreadedCollection checked({confined}, 2);
+  const sputnik::runtime::RuntimeFlowGatherResult rejected_partition =
+      checked.map([](const sputnik::runtime::Value &, std::size_t) {
+        return sputnik::runtime::Value::integer(0);
       });
   expect(!rejected_partition.ok &&
              rejected_partition.error_name == "IsolationError",
          "threaded collection should reject confined checked input");
-  const amber::runtime::RuntimeFlowGatherResult rejected_generated =
+  const sputnik::runtime::RuntimeFlowGatherResult rejected_generated =
       checked.permutation(1);
   expect(!rejected_generated.ok &&
              rejected_generated.error_name == "IsolationError",
          "threaded generated rows should reject confined checked source");
 
-  amber::runtime::RuntimeFlowOptions unchecked_options;
+  sputnik::runtime::RuntimeFlowOptions unchecked_options;
   unchecked_options.isolation =
-      amber::runtime::RuntimeFlowIsolationMode::Unchecked;
-  amber::runtime::RuntimeThreadedCollection unchecked({confined}, 2,
+      sputnik::runtime::RuntimeFlowIsolationMode::Unchecked;
+  sputnik::runtime::RuntimeThreadedCollection unchecked({confined}, 2,
                                                       unchecked_options);
-  const amber::runtime::RuntimeFlowGatherResult unchecked_result =
-      unchecked.map([](const amber::runtime::Value &value, std::size_t) {
-        return amber::runtime::Value::integer(value.is_list() ? 1 : 0);
+  const sputnik::runtime::RuntimeFlowGatherResult unchecked_result =
+      unchecked.map([](const sputnik::runtime::Value &value, std::size_t) {
+        return sputnik::runtime::Value::integer(value.is_list() ? 1 : 0);
       });
   expect(unchecked_result.ok && unchecked_result.values.size() == 1,
          "threaded unchecked mode should accept confined input");
   expect_integer(unchecked_result.values[0], 1,
                  "threaded unchecked mode result");
 
-  amber::runtime::RuntimeThreadedCollection result_guard(
-      {amber::runtime::Value::integer(1)}, 2);
-  const amber::runtime::RuntimeFlowGatherResult rejected_result =
-      result_guard.map([&heap](const amber::runtime::Value &, std::size_t) {
+  sputnik::runtime::RuntimeThreadedCollection result_guard(
+      {sputnik::runtime::Value::integer(1)}, 2);
+  const sputnik::runtime::RuntimeFlowGatherResult rejected_result =
+      result_guard.map([&heap](const sputnik::runtime::Value &, std::size_t) {
         return heap.make_list_value({});
       });
   expect(!rejected_result.ok && rejected_result.failed &&
              rejected_result.error_name == "IsolationError",
          "threaded collection should reject confined checked result");
 
-  amber::runtime::RuntimeFlowOptions collect_failures;
+  sputnik::runtime::RuntimeFlowOptions collect_failures;
   collect_failures.failure_policy =
-      amber::runtime::RuntimeFlowFailurePolicy::Collect;
-  amber::runtime::RuntimeThreadedCollection failures(
-      {amber::runtime::Value::integer(1), amber::runtime::Value::integer(2),
-       amber::runtime::Value::integer(3)},
+      sputnik::runtime::RuntimeFlowFailurePolicy::Collect;
+  sputnik::runtime::RuntimeThreadedCollection failures(
+      {sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+       sputnik::runtime::Value::integer(3)},
       2, collect_failures);
-  const amber::runtime::RuntimeFlowGatherResult collected =
-      failures.map([](const amber::runtime::Value &value, std::size_t) {
+  const sputnik::runtime::RuntimeFlowGatherResult collected =
+      failures.map([](const sputnik::runtime::Value &value, std::size_t) {
         if (value.as_integer() == 2) {
-          throw amber::runtime::RuntimeTaskFailure("ThreadedError",
+          throw sputnik::runtime::RuntimeTaskFailure("ThreadedError",
                                                    "bad threaded item");
         }
-        return amber::runtime::Value::integer(value.as_integer() * 10);
+        return sputnik::runtime::Value::integer(value.as_integer() * 10);
       });
   expect(collected.ok && collected.failed && collected.failures.size() == 1,
          "threaded collection should support collect failure policy");
@@ -1576,7 +1576,7 @@ void test_std016_threaded_collection_failure_and_isolation() {
 }
 
 void test_std017_source_level_task_sync_stack_compiles_and_runs() {
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       execute_source_or_die("import task\n"
                             "from sync import Channel, Mutex, Atomic, Barrier\n"
                             "\n"
@@ -1603,7 +1603,7 @@ void test_std017_source_level_task_sync_stack_compiles_and_runs() {
 
   expect(exec.ok(), "source-level task/sync stack should execute");
   expect(exec.value.is_list(), "source-level task/sync result should be list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 4,
          "source-level task/sync result shape");
@@ -1615,7 +1615,7 @@ void test_std017_source_level_task_sync_stack_compiles_and_runs() {
 }
 
 void test_std017_source_level_task_module_is_stable_across_spawn() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "root = task\n"
       "same_vm = task == root\n"
@@ -1626,7 +1626,7 @@ void test_std017_source_level_task_module_is_stable_across_spawn() {
   expect(exec.ok(), "source-level task module identity should execute");
   expect(exec.value.is_list() && exec.value.as_list() != nullptr,
          "source-level task module identity result should be a list");
-  const std::vector<amber::runtime::Value> &items = exec.value.as_list()->items;
+  const std::vector<sputnik::runtime::Value> &items = exec.value.as_list()->items;
   expect(items.size() == 2, "source-level task module identity result shape");
   expect_bool(items[0], true,
               "repeated task lookup in one VM should reuse the module");
@@ -1635,7 +1635,7 @@ void test_std017_source_level_task_module_is_stable_across_spawn() {
 }
 
 void test_std017_source_level_flow_and_threaded_collection_compile_and_run() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "from task.flow import Flow, ThreadedCollection\n"
       "\n"
       "flowed = Flow.new().scatter_map([1, 2, 3]): _1 * 10 + _2\n"
@@ -1656,7 +1656,7 @@ void test_std017_source_level_flow_and_threaded_collection_compile_and_run() {
 
   expect(exec.ok(), "source-level flow/threaded stack should execute");
   expect(exec.value.is_list(), "source-level flow result should be list");
-  const amber::runtime::IntrusivePtr<amber::runtime::ListValue> values =
+  const sputnik::runtime::IntrusivePtr<sputnik::runtime::ListValue> values =
       exec.value.as_list();
   expect(values != nullptr && values->items.size() == 8,
          "source-level flow result shape");
@@ -1684,7 +1684,7 @@ void test_std017_source_level_threaded_each_matches_sequential_each() {
     for (const std::string policy : {"atomic", "chunks", "items"}) {
       const std::string options =
           "(" + std::to_string(workers) + ", scatter: :" + policy + ")";
-      const amber::runtime::ExecutionResult exec = execute_source_or_die(
+      const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
           "serial = [3, 1, 4, 1, 5].each: _1 * 10\n"
           "threaded = [3, 1, 4, 1, 5].threaded" + options +
           ".each: _1 * 10\n"
@@ -1719,7 +1719,7 @@ void test_std017_source_level_threaded_each_matches_sequential_each() {
 }
 
 void test_std018_task_local_basic_nested_exception_and_sleep() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "local = task.local()\n"
       "before_bound = local.bound?()\n"
@@ -1742,7 +1742,7 @@ void test_std018_task_local_basic_nested_exception_and_sleep() {
   expect(exec.ok(), "task-local basic/nested source should execute");
   expect(exec.value.is_list() && exec.value.as_list() != nullptr,
          "task-local basic result should be list");
-  const std::vector<amber::runtime::Value> &items = exec.value.as_list()->items;
+  const std::vector<sputnik::runtime::Value> &items = exec.value.as_list()->items;
   expect(items.size() == 8, "task-local basic result shape");
   expect_bool(items[0], false, "task-local initially unbound");
   expect_integer(items[1], 90, "task-local default");
@@ -1756,7 +1756,7 @@ void test_std018_task_local_basic_nested_exception_and_sleep() {
 }
 
 void test_std018_task_local_spawn_inheritance_and_isolation() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "private_local = task.local(inherit: false)\n"
       "request_local = task.local(inherit: true)\n"
@@ -1772,13 +1772,13 @@ void test_std018_task_local_spawn_inheritance_and_isolation() {
   expect(exec.ok(), "task-local inheritance source should execute");
   expect(exec.value.is_list() && exec.value.as_list() != nullptr,
          "task-local inheritance result should be list");
-  const std::vector<amber::runtime::Value> &items = exec.value.as_list()->items;
+  const std::vector<sputnik::runtime::Value> &items = exec.value.as_list()->items;
   expect(items.size() == 3, "task-local inheritance result shape");
   expect_integer(items[0], 11, "non-inherited parent value remains");
   expect_integer(items[1], 22, "inherited parent value remains snapshot");
   expect(items[2].is_list() && items[2].as_list() != nullptr,
          "task-local child result shape");
-  const std::vector<amber::runtime::Value> &child = items[2].as_list()->items;
+  const std::vector<sputnik::runtime::Value> &child = items[2].as_list()->items;
   expect(child.size() == 2 && child[0].is_list() &&
              child[0].as_list() != nullptr,
          "task-local child observations shape");
@@ -1790,24 +1790,24 @@ void test_std018_task_local_spawn_inheritance_and_isolation() {
 }
 
 void test_std018_task_local_distinct_tasks_and_parallel_stress() {
-  amber::runtime::RuntimeTaskModule task(4);
-  amber::runtime::RuntimeTaskLocal local(false);
+  sputnik::runtime::RuntimeTaskModule task(4);
+  sputnik::runtime::RuntimeTaskLocal local(false);
   constexpr std::size_t count = 1024;
   constexpr std::size_t batch_size = 32;
   for (std::size_t base = 0; base < count; base += batch_size) {
-    std::vector<amber::runtime::RuntimeTaskHandle> handles;
+    std::vector<sputnik::runtime::RuntimeTaskHandle> handles;
     handles.reserve(batch_size);
     for (std::size_t offset = 0; offset < batch_size; ++offset) {
       const std::size_t index = base + offset;
       handles.push_back(task.spawn([&task, &local, index]() {
-        local.set(amber::runtime::Value::integer(
+        local.set(sputnik::runtime::Value::integer(
             static_cast<std::int64_t>(index)));
         task.yield_current();
-        return local.get(amber::runtime::Value::integer(-1));
+        return local.get(sputnik::runtime::Value::integer(-1));
       }));
     }
     for (std::size_t offset = 0; offset < handles.size(); ++offset) {
-      const amber::runtime::RuntimeTaskPublicResult result =
+      const sputnik::runtime::RuntimeTaskPublicResult result =
           handles[offset].wait(std::chrono::milliseconds(5000));
       expect(result.ok, "task-local parallel stress task should complete");
       expect_integer(result.value,
@@ -1816,18 +1816,18 @@ void test_std018_task_local_distinct_tasks_and_parallel_stress() {
     }
   }
 
-  amber::runtime::RuntimeTaskModule single_worker(1);
-  amber::runtime::RuntimeTaskLocal same_worker_local(false);
-  const amber::runtime::RuntimeTaskHandle first =
+  sputnik::runtime::RuntimeTaskModule single_worker(1);
+  sputnik::runtime::RuntimeTaskLocal same_worker_local(false);
+  const sputnik::runtime::RuntimeTaskHandle first =
       single_worker.spawn([&same_worker_local]() {
-        same_worker_local.set(amber::runtime::Value::integer(101));
+        same_worker_local.set(sputnik::runtime::Value::integer(101));
         return same_worker_local.get();
       });
-  const amber::runtime::RuntimeTaskHandle second =
+  const sputnik::runtime::RuntimeTaskHandle second =
       single_worker.spawn([&same_worker_local]() {
         expect(!same_worker_local.bound(),
                "second task on same worker must start unbound");
-        same_worker_local.set(amber::runtime::Value::integer(202));
+        same_worker_local.set(sputnik::runtime::Value::integer(202));
         return same_worker_local.get();
       });
   expect_integer(first.wait().value, 101, "first same-worker task local");
@@ -1835,9 +1835,9 @@ void test_std018_task_local_distinct_tasks_and_parallel_stress() {
 }
 
 void test_std018_task_local_deterministic_worker_migration() {
-  amber::runtime::RuntimeScheduler scheduler(
-      amber::runtime::RuntimeSchedulerConfig{2, 700});
-  amber::runtime::RuntimeTaskLocal local(false);
+  sputnik::runtime::RuntimeScheduler scheduler(
+      sputnik::runtime::RuntimeSchedulerConfig{2, 700});
+  sputnik::runtime::RuntimeTaskLocal local(false);
   std::atomic<int> phase{0};
   std::atomic<std::uint64_t> before_worker{0};
   std::atomic<std::uint64_t> after_worker{0};
@@ -1846,15 +1846,15 @@ void test_std018_task_local_deterministic_worker_migration() {
   const std::uint64_t strand_id = scheduler.spawn_strand(
       [&scheduler, &local, &phase, &before_worker, &after_worker, &observed]() {
         if (phase.load(std::memory_order_acquire) == 0) {
-          local.set(amber::runtime::Value::integer(777));
-          before_worker.store(amber::runtime::current_runtime_worker_id(),
+          local.set(sputnik::runtime::Value::integer(777));
+          before_worker.store(sputnik::runtime::current_runtime_worker_id(),
                               std::memory_order_release);
           phase.store(1, std::memory_order_release);
           expect(scheduler.park_current(std::nullopt),
                  "migration probe should park its logical task");
           return;
         }
-        after_worker.store(amber::runtime::current_runtime_worker_id(),
+        after_worker.store(sputnik::runtime::current_runtime_worker_id(),
                            std::memory_order_release);
         observed.store(local.get().as_integer(), std::memory_order_release);
         phase.store(2, std::memory_order_release);
@@ -1862,11 +1862,11 @@ void test_std018_task_local_deterministic_worker_migration() {
 
   expect(wait_for_condition(
              [&scheduler, strand_id]() {
-               const std::optional<amber::runtime::RuntimeStrandSnapshot>
+               const std::optional<sputnik::runtime::RuntimeStrandSnapshot>
                    snapshot = scheduler.strand_snapshot(strand_id);
                return snapshot.has_value() &&
                       snapshot->state ==
-                          amber::runtime::RuntimeStrandState::Sleeping;
+                          sputnik::runtime::RuntimeStrandState::Sleeping;
              },
              std::chrono::milliseconds(2000)),
          "migration probe should reach deterministic parked state");
@@ -1877,8 +1877,8 @@ void test_std018_task_local_deterministic_worker_migration() {
   const bool migration_idle =
       scheduler.wait_until_idle(std::chrono::milliseconds(2000));
   if (!migration_idle) {
-    const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
-    const std::optional<amber::runtime::RuntimeStrandSnapshot> snapshot =
+    const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+    const std::optional<sputnik::runtime::RuntimeStrandSnapshot> snapshot =
         scheduler.strand_snapshot(strand_id);
     std::cerr << "migration debug: phase=" << phase.load()
               << " state="
@@ -1905,24 +1905,24 @@ void test_std018_task_local_deterministic_worker_migration() {
 
 void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
   const std::uint64_t baseline_values =
-      amber::runtime::runtime_task_local_retained_value_count();
+      sputnik::runtime::runtime_task_local_retained_value_count();
   const std::uint64_t baseline_capacity =
-      amber::runtime::runtime_task_local_registry_capacity();
+      sputnik::runtime::runtime_task_local_registry_capacity();
 
-  amber::runtime::RuntimeTaskLocal local(false);
+  sputnik::runtime::RuntimeTaskLocal local(false);
   {
-    const std::shared_ptr<amber::runtime::RuntimeTaskContext> context =
-        amber::runtime::RuntimeTaskContext::create();
-    amber::runtime::RuntimeTaskContextScope scope(context);
-    auto first = std::make_shared<amber::runtime::RuntimeTaskLocal>();
-    std::weak_ptr<amber::runtime::RuntimeTaskLocal> first_weak = first;
-    local.set(amber::runtime::Value::task_local(first));
+    const std::shared_ptr<sputnik::runtime::RuntimeTaskContext> context =
+        sputnik::runtime::RuntimeTaskContext::create();
+    sputnik::runtime::RuntimeTaskContextScope scope(context);
+    auto first = std::make_shared<sputnik::runtime::RuntimeTaskLocal>();
+    std::weak_ptr<sputnik::runtime::RuntimeTaskLocal> first_weak = first;
+    local.set(sputnik::runtime::Value::task_local(first));
     first.reset();
     expect(!first_weak.expired(), "task-local set must retain value");
 
-    auto second = std::make_shared<amber::runtime::RuntimeTaskLocal>();
-    std::weak_ptr<amber::runtime::RuntimeTaskLocal> second_weak = second;
-    local.set(amber::runtime::Value::task_local(second));
+    auto second = std::make_shared<sputnik::runtime::RuntimeTaskLocal>();
+    std::weak_ptr<sputnik::runtime::RuntimeTaskLocal> second_weak = second;
+    local.set(sputnik::runtime::Value::task_local(second));
     second.reset();
     expect(first_weak.expired(), "task-local overwrite must release old value");
     expect(!second_weak.expired(), "task-local overwrite retains new value");
@@ -1930,14 +1930,14 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
     expect(second_weak.expired(), "task-local clear must release value");
   }
 
-  amber::runtime::RuntimeTaskModule task(2);
-  std::weak_ptr<amber::runtime::RuntimeTaskLocal> completed_weak;
-  const amber::runtime::RuntimeTaskHandle completed =
+  sputnik::runtime::RuntimeTaskModule task(2);
+  std::weak_ptr<sputnik::runtime::RuntimeTaskLocal> completed_weak;
+  const sputnik::runtime::RuntimeTaskHandle completed =
       task.spawn([&local, &completed_weak]() {
-        auto retained = std::make_shared<amber::runtime::RuntimeTaskLocal>();
+        auto retained = std::make_shared<sputnik::runtime::RuntimeTaskLocal>();
         completed_weak = retained;
-        local.set(amber::runtime::Value::task_local(std::move(retained)));
-        return amber::runtime::Value::null();
+        local.set(sputnik::runtime::Value::task_local(std::move(retained)));
+        return sputnik::runtime::Value::null();
       });
   expect(completed.wait(std::chrono::milliseconds(2000)).ok,
          "task-local lifecycle completion task should finish");
@@ -1945,23 +1945,23 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
          "normal task completion must release task-local values");
 
   std::atomic<bool> parked{false};
-  std::weak_ptr<amber::runtime::RuntimeTaskLocal> cancelled_outer_weak;
-  std::weak_ptr<amber::runtime::RuntimeTaskLocal> cancelled_scoped_weak;
-  const amber::runtime::RuntimeTaskHandle cancelled =
+  std::weak_ptr<sputnik::runtime::RuntimeTaskLocal> cancelled_outer_weak;
+  std::weak_ptr<sputnik::runtime::RuntimeTaskLocal> cancelled_scoped_weak;
+  const sputnik::runtime::RuntimeTaskHandle cancelled =
       task.spawn([&task, &local, &parked, &cancelled_outer_weak,
                   &cancelled_scoped_weak]() {
-        auto outer = std::make_shared<amber::runtime::RuntimeTaskLocal>();
+        auto outer = std::make_shared<sputnik::runtime::RuntimeTaskLocal>();
         cancelled_outer_weak = outer;
-        local.set(amber::runtime::Value::task_local(std::move(outer)));
-        auto scoped = std::make_shared<amber::runtime::RuntimeTaskLocal>();
+        local.set(sputnik::runtime::Value::task_local(std::move(outer)));
+        auto scoped = std::make_shared<sputnik::runtime::RuntimeTaskLocal>();
         cancelled_scoped_weak = scoped;
         (void)local.push_scope(
-            amber::runtime::Value::task_local(std::move(scoped)));
+            sputnik::runtime::Value::task_local(std::move(scoped)));
         parked.store(true, std::memory_order_release);
         expect(task.scheduler().park_current(std::nullopt),
                "task-local cancellation probe should park");
-        amber::runtime::runtime_mark_task_parked();
-        return amber::runtime::Value::null();
+        sputnik::runtime::runtime_mark_task_parked();
+        return sputnik::runtime::Value::null();
       });
   expect(wait_for_condition([&parked]() { return parked.load(); },
                             std::chrono::milliseconds(2000)),
@@ -1969,12 +1969,12 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
   expect(wait_for_condition(
              [&cancelled]() {
                return cancelled.state() ==
-                      amber::runtime::RuntimeTaskHandleState::Sleeping;
+                      sputnik::runtime::RuntimeTaskHandleState::Sleeping;
              },
              std::chrono::milliseconds(2000)),
          "task-local cancellation probe should park");
   expect(cancelled.cancel(), "task-local cancellation should be requested");
-  const amber::runtime::RuntimeTaskPublicResult cancelled_result =
+  const sputnik::runtime::RuntimeTaskPublicResult cancelled_result =
       cancelled.wait(std::chrono::milliseconds(2000));
   expect(cancelled_result.cancelled,
          "task-local cancellation probe should report cancellation");
@@ -1983,18 +1983,18 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
   expect(cancelled_scoped_weak.expired(),
          "cancelled task must release active scoped task-local values");
 
-  amber::runtime::RuntimeTaskLocal inherited_local(true);
+  sputnik::runtime::RuntimeTaskLocal inherited_local(true);
   std::atomic<bool> inherited_parked{false};
-  std::weak_ptr<amber::runtime::RuntimeTaskLocal> inherited_weak;
-  amber::runtime::RuntimeTaskHandle inherited_child;
+  std::weak_ptr<sputnik::runtime::RuntimeTaskLocal> inherited_weak;
+  sputnik::runtime::RuntimeTaskHandle inherited_child;
   {
-    const std::shared_ptr<amber::runtime::RuntimeTaskContext> parent_context =
-        amber::runtime::RuntimeTaskContext::create();
-    amber::runtime::RuntimeTaskContextScope parent_scope(parent_context);
-    auto retained = std::make_shared<amber::runtime::RuntimeTaskLocal>();
+    const std::shared_ptr<sputnik::runtime::RuntimeTaskContext> parent_context =
+        sputnik::runtime::RuntimeTaskContext::create();
+    sputnik::runtime::RuntimeTaskContextScope parent_scope(parent_context);
+    auto retained = std::make_shared<sputnik::runtime::RuntimeTaskLocal>();
     inherited_weak = retained;
     inherited_local.set(
-        amber::runtime::Value::task_local(std::move(retained)));
+        sputnik::runtime::Value::task_local(std::move(retained)));
     inherited_child = task.spawn([&task, &inherited_local,
                                   &inherited_parked]() {
       expect(inherited_local.bound(),
@@ -2003,8 +2003,8 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
       inherited_parked.store(true, std::memory_order_release);
       expect(task.scheduler().park_current(std::nullopt),
              "inherited lifecycle child should park");
-      amber::runtime::runtime_mark_task_parked();
-      return amber::runtime::Value::null();
+      sputnik::runtime::runtime_mark_task_parked();
+      return sputnik::runtime::Value::null();
     });
     expect(inherited_local.clear(),
            "parent should clear its inherited lifecycle binding");
@@ -2018,7 +2018,7 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
   expect(wait_for_condition(
              [&inherited_child]() {
                return inherited_child.state() ==
-                      amber::runtime::RuntimeTaskHandleState::Sleeping;
+                      sputnik::runtime::RuntimeTaskHandleState::Sleeping;
              },
              std::chrono::milliseconds(2000)),
          "inherited lifecycle child should park");
@@ -2030,23 +2030,23 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
          "child cancellation must release inherited snapshot value");
 
   for (int wave = 0; wave < 250; ++wave) {
-    std::vector<amber::runtime::RuntimeTaskHandle> short_tasks;
+    std::vector<sputnik::runtime::RuntimeTaskHandle> short_tasks;
     short_tasks.reserve(4);
     for (int index = 0; index < 4; ++index) {
       short_tasks.push_back(task.spawn([&local, index]() {
-        local.set(amber::runtime::Value::integer(index));
-        return amber::runtime::Value::null();
+        local.set(sputnik::runtime::Value::integer(index));
+        return sputnik::runtime::Value::null();
       }));
     }
-    for (const amber::runtime::RuntimeTaskHandle &handle : short_tasks) {
+    for (const sputnik::runtime::RuntimeTaskHandle &handle : short_tasks) {
       expect(handle.wait(std::chrono::milliseconds(2000)).ok,
              "short task-local task should finish");
     }
   }
-  expect(amber::runtime::runtime_task_local_retained_value_count() ==
+  expect(sputnik::runtime::runtime_task_local_retained_value_count() ==
              baseline_values,
          "short tasks must not leave retained task-local values");
-  expect(amber::runtime::runtime_task_local_registry_capacity() <=
+  expect(sputnik::runtime::runtime_task_local_registry_capacity() <=
              baseline_capacity + 8,
          "short tasks must reuse bounded task-context registry slots");
 }
@@ -2059,7 +2059,7 @@ void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
 // parked state; if it blocked the worker, `parks` would stall below eight and
 // the wait would time out.
 void test_layerb_scheduler_park_resume_frees_worker() {
-  amber::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeScheduler scheduler(2);
   const int strand_count = 8;
   std::atomic<int> entered{0};
   std::atomic<int> resumed{0};
@@ -2103,7 +2103,7 @@ void test_layerb_scheduler_park_resume_frees_worker() {
   expect(resumed.load() == strand_count,
          "park: every parked strand should resume and complete");
 
-  const amber::runtime::RuntimeSchedulerStats stats = scheduler.stats();
+  const sputnik::runtime::RuntimeSchedulerStats stats = scheduler.stats();
   expect(stats.park_resumes >= static_cast<std::uint64_t>(strand_count),
          "park: park_resumes should reflect every resume dispatch");
 
@@ -2118,12 +2118,12 @@ void test_layerb_scheduler_park_resume_frees_worker() {
 // correct.
 void test_layerb_cooperative_sleep_parks_in_task() {
   const std::uint64_t parks_before =
-      amber::runtime::runtime_cooperative_task_park_count();
+      sputnik::runtime::runtime_cooperative_task_park_count();
   // A closure that references the `task` import directly (`task.sleep` in the
   // task body) compiles and verifies: the import alias resolves to a runtime
   // constant and is never captured as an upvalue (see emitter_tests
   // test_closure_module_import_reference_verifies for the BC1313 regression).
-  const amber::runtime::ExecutionResult exec =
+  const sputnik::runtime::ExecutionResult exec =
       execute_source_or_die("import task\n"
                             "\n"
                             "a = task.spawn: task.sleep(10)\n"
@@ -2133,7 +2133,7 @@ void test_layerb_cooperative_sleep_parks_in_task() {
                             "\n"
                             "[a.wait(), b.wait(), c.wait(), d.wait()]\n");
   const std::uint64_t parks_after =
-      amber::runtime::runtime_cooperative_task_park_count();
+      sputnik::runtime::runtime_cooperative_task_park_count();
 
   expect(exec.ok(), "cooperative sleep: source program should execute");
   expect(exec.value.is_list() && exec.value.as_list() != nullptr &&
@@ -2148,7 +2148,7 @@ void test_layerb_cooperative_sleep_parks_in_task() {
 // until the loopback peer writes, then resumes and completes the read. This is
 // the IO analogue of test_layerb_cooperative_sleep_parks_in_task: it drives the
 // VM socket dispatch -> reactor wait -> park -> wake -> retry path entirely
-// from Amber source. The reader CONNECTS its own client socket inside the task
+// from Sputnik source. The reader CONNECTS its own client socket inside the task
 // body (so the socket and the ByteBuffer are owned by the reader strand, not
 // shared across strands) and reaches read! before the server writes, so the
 // read genuinely blocks and parks. Keeping the socket strand-local keeps this
@@ -2157,8 +2157,8 @@ void test_layerb_cooperative_sleep_parks_in_task() {
 // test_strand_confinement_handoff_to_task / _rejects_cross_strand below).
 void test_layerb_cooperative_socket_read_parks_in_task() {
   const std::uint64_t parks_before =
-      amber::runtime::runtime_cooperative_task_park_count();
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+      sputnik::runtime::runtime_cooperative_task_park_count();
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "import net\n"
       "from io import ByteBuffer\n"
@@ -2184,7 +2184,7 @@ void test_layerb_cooperative_socket_read_parks_in_task() {
       // string table from C++): true only if the bytes read equal the payload.
       "out == \"pong\"\n");
   const std::uint64_t parks_after =
-      amber::runtime::runtime_cooperative_task_park_count();
+      sputnik::runtime::runtime_cooperative_task_park_count();
 
   expect(exec.ok(),
          "cooperative socket read: source program should execute" +
@@ -2218,7 +2218,7 @@ void test_layerb_cooperative_socket_read_parks_in_task() {
 // surface a different error. This is the cross-strand half of test (1) at the
 // language level; the unit-level namespace soundness lives in io_tests.
 void test_strand_confinement_rejects_cross_strand() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "from io import ByteBuffer\n"
       "\n"
@@ -2243,7 +2243,7 @@ void test_strand_confinement_rejects_cross_strand() {
 // task strand so the access is allowed by design. This is test (2): the
 // accept/create-on-one-strand, use-in-another pattern, made deterministic.
 void test_strand_confinement_handoff_to_task() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "from io import ByteBuffer\n"
       "\n"
@@ -2268,7 +2268,7 @@ void test_strand_confinement_handoff_to_task() {
 // client already wrote. Proves the handoff works for a confined TcpStream, not
 // only a ByteBuffer.
 void test_strand_confinement_socket_handoff_read_in_task() {
-  const amber::runtime::ExecutionResult exec = execute_source_or_die(
+  const sputnik::runtime::ExecutionResult exec = execute_source_or_die(
       "import task\n"
       "import net\n"
       "from io import ByteBuffer\n"
@@ -2304,9 +2304,9 @@ void test_strand_confinement_socket_handoff_read_in_task() {
 // the park transition -- exercising the park/wake race fix. A lost wake would
 // hang the strand and time out wait_until_idle.
 void test_layerb_io_park_via_reactor() {
-  amber::runtime::RuntimeScheduler scheduler(2);
-  amber::runtime::RuntimeReactor &reactor =
-      amber::runtime::RuntimeReactor::instance();
+  sputnik::runtime::RuntimeScheduler scheduler(2);
+  sputnik::runtime::RuntimeReactor &reactor =
+      sputnik::runtime::RuntimeReactor::instance();
 
   int fds[2];
   expect(::socketpair(AF_UNIX, SOCK_STREAM, 0, fds) == 0,
@@ -2319,13 +2319,13 @@ void test_layerb_io_park_via_reactor() {
   std::atomic<bool> resumed{false};
   scheduler.spawn_strand([&scheduler, &reactor, &phase, &resumed, read_fd]() {
     if (phase.fetch_add(1) == 0) {
-      const std::uint64_t self_id = amber::runtime::current_runtime_strand_id();
+      const std::uint64_t self_id = sputnik::runtime::current_runtime_strand_id();
       // Park first, then register interest: a completion that fires before we
       // finish parking sets park_wake_pending rather than being lost.
       scheduler.park_current(std::nullopt);
-      reactor.wait_async(read_fd, amber::runtime::ReactorInterest::Read,
+      reactor.wait_async(read_fd, sputnik::runtime::ReactorInterest::Read,
                          std::nullopt, nullptr,
-                         [&scheduler, self_id](amber::runtime::ReactorOutcome) {
+                         [&scheduler, self_id](sputnik::runtime::ReactorOutcome) {
                            scheduler.wake_strand(self_id);
                          });
       return;

@@ -1,0 +1,12 @@
+schema: sputnik.build.v1
+name: native.http_server_core
+root: native.http_server_core
+
+profiles:
+  required: [core.v1, ffi.v1]
+  optional: []
+  forbidden: []
+
+modules:
+  - name: native.http_server_core
+    path: main.s

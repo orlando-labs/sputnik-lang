@@ -6,6 +6,9 @@
 #include "runtime/heap.h"
 #include "runtime/value.h"
 #include "runtime/watch.h"
+#include "runtime/notebook_display.h"
+#include "runtime/notebook_live.h"
+#include "runtime/notebook_inputs.h"
 
 #include <chrono>
 #include <cstddef>
@@ -316,6 +319,19 @@ struct RuntimeNotebookCellContext {
   ObserveDependency observe_dependency;
   GcRoots gc_roots;
   RuntimeDependencyCaptureRequest dependency_capture;
+  // Runtime-owned, closed when the root notebook execution returns.
+  std::shared_ptr<NotebookDisplayCollector> display_collector;
+  // Runtime-owned, closed when the root notebook execution returns.  The
+  // adapter may provide a parent store so progress from ordinary package code
+  // coalesces into the same live run.
+  std::shared_ptr<NotebookLiveStore> live_store;
+  std::uint64_t live_cell_id = 0;
+  // Generation returned by NotebookLiveStore::begin_cell.  A late callback
+  // from a prior execution is rejected when it carries an old generation.
+  std::uint64_t live_generation = 0;
+  std::shared_ptr<const NotebookInputSnapshot> project_inputs;
+  // World-owned run-local reader; not an externally supplied callback.
+  std::shared_ptr<NotebookInputCapture> input_capture;
 };
 
 struct RuntimeWorldOptions {
@@ -411,6 +427,11 @@ struct ExecutionResult {
   // fault may carry a partial set for diagnostics, but adapters must publish
   // it only after the complete cell execution succeeds.
   RuntimeDependencySet dependency_capture;
+  std::vector<NotebookDisplay> displays;
+  // Immutable, explicitly nontransactional live telemetry. Failed/cancelled
+  // cells retain their last accepted count/frame separately from slot commits.
+  std::vector<NotebookLiveEvent> live_events;
+  std::set<std::string> input_dependencies;
   // Native bridge calls may return only an append-only suffix. Callers apply
   // each non-empty vector at its offset; ordinary execute results use offset
   // zero and therefore retain their full-table semantics.

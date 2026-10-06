@@ -50,8 +50,10 @@ bool park_native_http_task(
   RuntimeReactor::instance().wait_async(
       request.fd,
       request.want_write ? ReactorInterest::Write : ReactorInterest::Read,
-      request.deadline, tls_runtime_task_cancel_flag,
-      [task, self_id](ReactorOutcome) {
+      request.deadline, runtime_wait_cancel_flag(),
+      [task, self_id, cancel_owner = current_runtime_task_cancel_owner(),
+       run_owner = current_runtime_run_cancellation()](ReactorOutcome) {
+        (void)cancel_owner; (void)run_owner;
         task->scheduler().wake_strand(self_id);
       });
   return true;

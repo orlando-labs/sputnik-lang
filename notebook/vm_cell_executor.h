@@ -57,6 +57,8 @@ vm_notebook_image_manifest(const bytecode::BcModule &module,
 // independent of runtime presentation details (and so callers can retain
 // the expression result for cells that do not write a binding).
 struct VmCellExecutionReport {
+  std::vector<runtime::NotebookDisplay> displays;
+  std::vector<runtime::NotebookLiveEvent> progress;
   runtime::Value value = runtime::Value::null();
   std::vector<runtime::ExecutionLocal> locals;
   std::uint64_t watch_epoch = 0;
@@ -87,6 +89,9 @@ public:
                          CellId consumer_cell_id);
 
   bool valid() const noexcept { return validation_error_.empty(); }
+  void set_project_inputs(std::shared_ptr<const runtime::NotebookInputSnapshot> values) {
+    project_inputs_ = std::move(values);
+  }
   const std::string &validation_error() const noexcept {
     return validation_error_;
   }
@@ -110,6 +115,7 @@ private:
   VmCellDescriptorTable descriptors_;
   std::map<std::uint32_t, VmSlotDescriptor> by_descriptor_;
   std::string validation_error_;
+  std::shared_ptr<const runtime::NotebookInputSnapshot> project_inputs_;
 };
 
 } // namespace amber::notebook

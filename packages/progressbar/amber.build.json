@@ -1,0 +1,14 @@
+{
+  "schema": "amber.build.v1",
+  "name": "progressbar",
+  "root": "progressbar",
+  "profiles": {
+    "required": ["core.v1"],
+    "optional": [],
+    "forbidden": []
+  },
+  "stdlib": [],
+  "modules": [
+    {"name": "progressbar", "path": "src/progressbar.am"}
+  ]
+}

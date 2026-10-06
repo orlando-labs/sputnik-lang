@@ -1,4 +1,5 @@
 #include "tools/iamber/tabs.h"
+#include "tools/iamber/dependencies.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -10,6 +11,18 @@
 
 namespace {
 
+void validate_new_tab_id(const std::string &id) {
+  const auto start = [](char ch) {
+    return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+  };
+  if (id.empty() || !start(id.front()) ||
+      !std::all_of(id.begin(), id.end(), [&](char ch) {
+        return start(ch) || (ch >= '0' && ch <= '9');
+      })) {
+    throw std::invalid_argument("new tab id must match [A-Za-z_][A-Za-z0-9_]*");
+  }
+}
+
 bool same_bundled_sources(const std::vector<BundledModuleSource> &left,
                           const std::vector<BundledModuleSource> &right) {
   if (left.size() != right.size()) {
@@ -19,7 +32,7 @@ bool same_bundled_sources(const std::vector<BundledModuleSource> &left,
     const BundledModuleSource &a = left[index];
     const BundledModuleSource &b = right[index];
     if (a.id != b.id || a.path != b.path || a.source != b.source ||
-        a.auto_import != b.auto_import) {
+        a.auto_import != b.auto_import || a.load_error != b.load_error) {
       return false;
     }
   }
@@ -55,6 +68,11 @@ bool sheet_modified_for_display(
         (saved.source != current.source || saved.mode != mode)) {
       return true;
     }
+    if (current.kind == "text" &&
+        (saved.source != current.source ||
+         saved.formatting != current.formatting)) {
+      return true;
+    }
   }
   return false;
 }
@@ -74,18 +92,20 @@ ProjectTabs::ProjectTabs(amber::notebook::LoadedProject project,
                          const std::string &initial_sheet,
                          const std::string &initial_module)
     : project_(std::move(project)),
-      environment_sources_(load_project_bundled_sources(project_)) {
+      environment_sources_(load_project_bundled_sources(project_, true)) {
   if (!initial_sheet.empty() && !initial_module.empty()) {
     throw std::invalid_argument(
         "initial_sheet and initial_module are mutually exclusive");
   }
   amber::notebook::validate_project_document(project_.document);
+  inputs_ = amber::notebook::project_input_defaults(project_.document);
 
   tabs_.reserve(project_.document.sheets.size() +
                 project_.document.modules.size());
   for (const auto &sheet : project_.document.sheets) {
     auto tab = std::make_unique<ProjectTab>();
     load_project_into_session(&tab->session, project_, sheet.id);
+    tab->session.project_inputs = inputs_;
     // Every sheet starts from the same immutable source snapshot. Loading a
     // sheet is intentionally source-only; it does not build or run a VM.
     tab->session.bundled_modules = environment_sources_;
@@ -220,6 +240,208 @@ void ProjectTabs::save_active() {
   }
 }
 
+void ProjectTabs::attach_new_tab(ProjectTab *tab) {
+  tab->session.project_inputs = inputs_;
+  // Carry host policy, not another tab's runtime or editor state. All these
+  // potentially allocating operations happen before disk publication.
+  tab->session.runtime_capability_grants =
+      active().session.runtime_capability_grants;
+  tab->session.runtime_watch_event_capacity =
+      active().session.runtime_watch_event_capacity;
+  tab->session.set_activity_wakeup(activity_.notifier());
+  tab->activity = tab->session.activity_waiter();
+  tab->environment_generation = environment_generation_;
+}
+
+bool ProjectTabs::set_input(const std::string &id, const std::string &json) {
+  require_idle();
+  const auto &definitions = project_.document.inputs;
+  const auto found = std::find_if(definitions.begin(), definitions.end(), [&](const auto &input) { return input.id == id; });
+  if (found == definitions.end()) throw std::runtime_error("unknown project input: " + id);
+  auto value = amber::notebook::parse_project_input_value(json);
+  amber::notebook::validate_project_input_value(*found, value);
+  if (found->type == "number" && std::holds_alternative<std::int64_t>(value))
+    value = static_cast<double>(std::get<std::int64_t>(value));
+  if (inputs_->at(id) == value) return false;
+  auto next = std::make_shared<amber::runtime::NotebookInputSnapshot>(*inputs_);
+  next->at(id) = std::move(value);
+  inputs_ = next;
+  // Publish to every sheet before executing any: callbacks never see a
+  // partially distributed snapshot. Each sheet owns its own runtime Values.
+  for (const auto &tab : tabs_) tab->session.project_inputs = inputs_;
+  for (const auto &tab : tabs_) apply_project_input_changes(&tab->session, {id});
+  return true;
+}
+
+void ProjectTabs::create_input(const amber::notebook::ProjectInput &input) {
+  require_idle();
+  auto next = project_.document;
+  next.version = std::max(next.version, 2U);
+  next.inputs.push_back(input);
+  amber::notebook::validate_project_document(next);
+  auto values = std::make_shared<amber::runtime::NotebookInputSnapshot>(*inputs_);
+  auto value = input.initial;
+  if (input.type == "number" && std::holds_alternative<std::int64_t>(value))
+    value = static_cast<double>(std::get<std::int64_t>(value));
+  values->emplace(input.id, std::move(value));
+  amber::notebook::save_project(&project_, next);
+  inputs_ = values;
+  for (const auto &tab : tabs_) tab->session.project_inputs = inputs_;
+  // Defining project structure never executes user code.
+}
+
+void ProjectTabs::save_board(const amber::notebook::ProjectBoard &board) {
+  require_idle();
+  auto next = project_.document;
+  next.version = std::max(next.version, 2U);
+  const auto found = std::find_if(next.boards.begin(), next.boards.end(), [&](const auto &item) { return item.id == board.id; });
+  if (found == next.boards.end()) next.boards.push_back(board);
+  else {
+    auto replacement = board;
+    // A host editor may only understand today's component properties. Keep
+    // opaque metadata for surviving identities, including exact JSON numbers.
+    replacement.extra.insert(found->extra.begin(), found->extra.end());
+    for (auto &component : replacement.components) {
+      const auto old = std::find_if(found->components.begin(), found->components.end(),
+          [&](const auto &item) { return item.id == component.id; });
+      if (old != found->components.end()) component.extra.insert(old->extra.begin(), old->extra.end());
+    }
+    *found = std::move(replacement);
+  }
+  amber::notebook::save_project(&project_, next);
+}
+
+void ProjectTabs::add_dependency(const std::string &directory) {
+  require_idle();
+  const auto root = std::filesystem::canonical(project_.directory / directory);
+  amber::notebook::ProjectDependency dependency;
+  dependency.path = root.lexically_relative(project_.directory).generic_string();
+  if (dependency.path.empty()) dependency.path = root.string();
+  (void)load_directory_dependency(project_.directory, dependency);
+  auto next = project_.document;
+  next.version = 3;
+  next.dependencies.push_back(dependency);
+  amber::notebook::save_project(&project_, next);
+  for (const auto &tab : tabs_) if (!tab->module) tab->session.environment_stale = true;
+  active().session.status = "dependency linked; structure saved; Apply to load it (no code copied or executed)";
+}
+
+void ProjectTabs::remove_dependency(const std::string &path) {
+  require_idle();
+  auto next = project_.document;
+  const auto found = std::find_if(next.dependencies.begin(), next.dependencies.end(), [&](const auto &d) { return d.path == path; });
+  if (found == next.dependencies.end()) throw std::invalid_argument("unknown dependency path: " + path);
+  next.dependencies.erase(found);
+  amber::notebook::save_project(&project_, next);
+  for (const auto &tab : tabs_) if (!tab->module) tab->session.environment_stale = true;
+  active().session.status = "dependency unlinked; package files untouched; Apply to load the new environment";
+}
+
+void ProjectTabs::create_sheet(const std::string &id, const std::string &title) {
+  require_idle();
+  validate_new_tab_id(id);
+  auto next = project_.document;
+  amber::notebook::ProjectSheet sheet;
+  sheet.id = id;
+  sheet.title = title.empty() ? id : title;
+  amber::notebook::ProjectCell saved_cell;
+  saved_cell.id = amber::notebook::allocate_cell_id();
+  sheet.cells.push_back(saved_cell);
+  next.sheets.push_back(sheet);
+  amber::notebook::validate_project_document(next);
+
+  auto tab = std::make_unique<ProjectTab>();
+  tab->session.project_sheet_id = id;
+  tab->session.project_label = next.title + "/" + sheet.title;
+  // New sheets start at the project's last applied source snapshot. Structure
+  // edits (including auto-import settings) never initialize a candidate world.
+  tab->session.bundled_modules = environment_sources_;
+  Cell cell;
+  cell.id = saved_cell.id;
+  tab->session.cells.push_back(std::move(cell));
+  tab->session.status = "sheet created; structure saved; not evaluated";
+  attach_new_tab(tab.get());
+  tabs_.reserve(tabs_.size() + 1U);
+  const std::size_t index = project_.document.sheets.size();
+  const auto publish = [&] {
+    tabs_.insert(tabs_.begin() + index, std::move(tab));
+    selected_ = index;
+  };
+  try {
+    // Merge with the saved document only, not other tabs' unsaved contents.
+    amber::notebook::save_project(&project_, next);
+  } catch (...) {
+    // A directory-sync error can follow a successful manifest rename. The
+    // persistence layer advances its baseline at that boundary; reflect it in
+    // the tab host too, then propagate the durability warning to the user.
+    if (project_.document.sheets.size() == index + 1U &&
+        project_.document.sheets.back().id == id)
+      publish();
+    throw;
+  }
+  publish();
+}
+
+void ProjectTabs::create_module(const std::string &id) {
+  require_idle();
+  validate_new_tab_id(id);
+  const amber::notebook::ProjectModule entry{id, "modules/" + id + ".am", {}};
+  const std::string source = "package " + id + "\n";
+  auto preview = project_;
+  preview.document.modules.push_back(entry);
+  preview.baseline = amber::notebook::serialize_project_document(preview.document);
+  auto tab = std::make_unique<ProjectTab>();
+  tab->module = amber::notebook::LoadedProjectModule{id, entry.path, source, source};
+  // This adapter only checks the staged manifest and builds an editor buffer;
+  // it neither follows the new path nor executes its source.
+  load_project_module_into_session(&tab->session, preview, *tab->module);
+  tab->session.cells.front().cursor = source.size();
+  tab->session.status = "module created; structure saved; not run";
+  attach_new_tab(tab.get());
+  tabs_.reserve(tabs_.size() + 1U);
+  const std::size_t old_count = project_.document.modules.size();
+  const auto publish = [&] {
+    tabs_.push_back(std::move(tab));
+    selected_ = tabs_.size() - 1U;
+  };
+  try {
+    (void)amber::notebook::create_project_module(&project_, entry, source);
+  } catch (...) {
+    if (project_.document.modules.size() == old_count + 1U &&
+        project_.document.modules.back().id == id)
+      publish();
+    throw;
+  }
+  publish();
+}
+
+bool ProjectTabs::set_auto_import(const std::string &module_id, bool enabled) {
+  require_idle();
+  const auto &modules = project_.document.modules;
+  if (std::none_of(modules.begin(), modules.end(), [&](const auto &module) {
+        return module.id == module_id;
+      }))
+    throw std::invalid_argument("unknown module: " + module_id);
+
+  auto next = project_.document;
+  const auto found = std::find(next.auto_imports.begin(), next.auto_imports.end(),
+                              module_id);
+  const bool present = found != next.auto_imports.end();
+  if (enabled && !present)
+    next.auto_imports.push_back(module_id);
+  else if (!enabled && present)
+    next.auto_imports.erase(found);
+  std::string status = present == enabled
+      ? "auto-import unchanged; F6 Apply to use saved settings"
+      : std::string("auto-import ") + (enabled ? "enabled" : "disabled") +
+            "; structure saved; F6 Apply to use changes";
+  // Even a no-op validates the external manifest baseline. Applied source
+  // snapshots, generation and staleness change only after successful Apply.
+  amber::notebook::save_project(&project_, next);
+  active().session.status.swap(status);
+  return present != enabled;
+}
+
 bool ProjectTabs::apply_active(bool force_all, bool show_running,
                                const EvaluationProgress &progress) {
   require_idle();
@@ -311,6 +533,12 @@ std::string ProjectTabs::tab_bar() const {
     append(index, false);
   }
   out << " | env:" << environment_generation_;
+  if (active().module) {
+    const auto &imports = project_.document.auto_imports;
+    out << " auto-import:"
+        << (std::find(imports.begin(), imports.end(), active().module->id) !=
+                    imports.end() ? "on" : "off");
+  }
   return out.str();
 }
 

@@ -415,6 +415,52 @@ void test_default_cmdline_uses_process_arguments() {
                     "ArgParser default cmdline uses process arguments");
 }
 
+void test_boolean_parsing_contract() {
+  const std::vector<std::pair<std::string, bool>> tokens = {
+      {"true", true},   {"t", true},      {"1", true},     {"yes", true},
+      {"on", true},     {"false", false}, {"f", false},    {"0", false},
+      {"no", false},    {"off", false},   {"null", false}, {" T ", true},
+      {" NuLl ", false}};
+  for (const auto &[token, expected] : tokens) {
+    const std::string literal = "\"" + token + "\"";
+    const auto result = execute_source(
+        "parser = ArgParser(cmdline: [\"--value\", " + literal + ", \"--flag=" +
+        token + "\", " + literal + "], env: {\"BOOL_VALUE\": " + literal +
+        "})\n"
+        "parser.arg(\"--value\", type: Bool)\n"
+        "parser.flag(\"--flag\")\n"
+        "parser.pos(\"positional\", type: Bool)\n"
+        "parser.arg(\"--env\", type: Bool, env: \"BOOL_VALUE\")\n"
+        "args = parser.parse_or_raise()\n"
+        "expected = Bool.parse(" +
+        literal +
+        ")\n"
+        "if expected == " +
+        (expected ? "true" : "false") +
+        " and args[\"value\"] == expected and args[\"flag\"] == expected"
+        " and args[\"positional\"] == expected and args[\"env\"] == expected:\n"
+        "  42\nelse:\n  0\n");
+    expect_ok_integer(result, 42, "shared Bool parsing for " + token);
+  }
+  for (const std::string &token : {"", " ", "maybe", "2", "flase"}) {
+    expect_fault("parser = ArgParser(cmdline: [\"--flag=" + token +
+                     "\"])\n"
+                     "parser.flag(\"--flag\")\nparser.parse_or_raise()\n",
+                 "ArgParser.InvalidValue", "invalid explicit Bool flag");
+    expect_fault("parser = ArgParser(cmdline: [\"--value=" + token +
+                     "\"])\n"
+                     "parser.arg(\"--value\", type: Bool)\n"
+                     "parser.parse_or_raise()\n",
+                 "ArgParser.InvalidValue", "invalid explicit Bool option");
+    expect_fault("parser = ArgParser(cmdline: [], env: {\"ENABLED\": \"" +
+                     token +
+                     "\"})\n"
+                     "parser.flag(\"--enabled\", env: \"ENABLED\")\n"
+                     "parser.parse_or_raise()\n",
+                 "ArgParser.InvalidValue", "invalid Bool environment");
+  }
+}
+
 } // namespace
 
 int main() {
@@ -432,6 +478,7 @@ int main() {
   test_parse_cli_behavior();
   test_declaration_validation();
   test_default_cmdline_uses_process_arguments();
+  test_boolean_parsing_contract();
 
   std::cout << "stdlib_argparser_tests: ok\n";
   return 0;

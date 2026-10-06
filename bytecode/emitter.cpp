@@ -1691,6 +1691,18 @@ private:
   }
 
   void build_exports(const ast::Expr &root) {
+    std::unordered_map<std::string, std::pair<std::string, std::string>> imported;
+    if (const ast::ListField *imports = list_field(root, "imports")) {
+      for (const auto &item : imports->values) {
+        if (item->kind != "HImportNames") continue;
+        const ast::ListField *names = list_field(*item, "names");
+        if (names == nullptr) continue;
+        for (const auto &name : names->values) {
+          imported[string_field(*name, "local_name")] =
+              {string_field(*item, "module_id"), string_field(*name, "source_name")};
+        }
+      }
+    }
     const ast::ListField *exports = list_field(root, "exports");
     if (exports == nullptr) {
       return;
@@ -1710,6 +1722,13 @@ private:
         module_.exports.push_back({intern_symbol(public_name),
                                    intern_string("class"), class_it->second,
                                    1});
+        continue;
+      }
+      const auto imported_it = imported.find(local_name);
+      if (imported_it != imported.end()) {
+        module_.exports.push_back({intern_symbol(public_name), intern_string("reexport"),
+                                   intern_string(imported_it->second.second), 1, true,
+                                   intern_string(imported_it->second.first)});
         continue;
       }
       diag(item->span, "BC2002",
@@ -3985,7 +4004,11 @@ std::uint32_t CodeEmitter::compile_try(const ast::Expr &expr) {
       code_.handler_table.push_back(
           {protected_from, protected_to, handler_pc, handler.code_id,
            handler_flags(kHandlerKindRescue, handler.exception_slot, dst)});
-    } else if (ensure_body != nullptr) {
+    }
+    // Exception dispatch prefers the earlier Rescue entry on a same-range
+    // tie. Non-rescuable unwinds (return/throw/host cancellation) still need a
+    // direct Ensure entry; the rescue code's own ensure is unreachable then.
+    if (ensure_body != nullptr) {
       const HandlerCodeInfo handler =
           owner_->emit_ensure_handler_code(*procedure_, *ensure_body);
       code_.handler_table.push_back(
@@ -4738,7 +4761,13 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
   }
   if (expr.kind == "HStoreLocal") {
     const ast::Expr *value = node_field(expr, "expr");
-    const std::uint32_t slot = parse_slot(string_field(expr, "slot"), 'l');
+    const auto slot_name = string_field(expr, "slot");
+    if (std::none_of(procedure_->locals.begin(), procedure_->locals.end(),
+                     [&](const auto &local) { return local.slot == slot_name; })) {
+      diag(expr.span, "BC2001", "HStoreLocal references no declared local slot: " + slot_name);
+      return alloc_temp();
+    }
+    const std::uint32_t slot = parse_slot(slot_name, 'l');
     if (value == nullptr) {
       diag(expr.span, "BC2001", "HStoreLocal is missing expr");
       return slot;

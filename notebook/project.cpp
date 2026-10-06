@@ -105,6 +105,8 @@ struct MemberParent {
   std::string leaf;
 };
 
+void sync_directory(int root);
+
 MemberParent open_member_parent(int root, const std::string &path) {
   FileDescriptor parent(::fcntl(root, F_DUPFD_CLOEXEC, 0));
   if (parent.get() < 0)
@@ -128,6 +130,66 @@ MemberParent open_member_parent(int root, const std::string &path) {
     start = slash + 1;
   }
   return {std::move(parent), path.substr(last_slash + 1)};
+}
+
+MemberParent open_or_create_member_parent(int root, const std::string &path) {
+  FileDescriptor parent(::fcntl(root, F_DUPFD_CLOEXEC, 0));
+  if (parent.get() < 0)
+    io_error("duplicate project descriptor");
+  const auto last_slash = path.rfind('/');
+  if (last_slash == std::string::npos)
+    return {std::move(parent), path};
+
+  std::size_t start = 0;
+  while (start < last_slash) {
+    const auto slash = path.find('/', start);
+    const auto end = slash == std::string::npos ? last_slash : slash;
+    const auto part = path.substr(start, end - start);
+    bool created = false;
+    int fd = ::openat(parent.get(), part.c_str(),
+                      O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK |
+                          O_DIRECTORY);
+    if (fd < 0 && errno == ENOENT) {
+      if (::mkdirat(parent.get(), part.c_str(), 0700) != 0) {
+        if (errno != EEXIST)
+          io_error("create parent for " + path);
+      } else {
+        created = true;
+      }
+      // mkdirat has no no-follow flag. Re-open the component with
+      // O_NOFOLLOW, which rejects a concurrently installed symlink and pins
+      // the directory descriptor used for all later operations.
+      fd = ::openat(parent.get(), part.c_str(),
+                    O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK |
+                        O_DIRECTORY);
+    }
+    if (fd < 0)
+      io_error("open parent for " + path);
+    FileDescriptor next(fd);
+    if (created) {
+      // Sync the directory containing the new entry as well as the new
+      // directory itself. Syncing only the child would not make the parent
+      // link durable after a crash.
+      sync_directory(parent.get());
+      sync_directory(next.get());
+    }
+    parent = std::move(next);
+    if (slash == std::string::npos || slash >= last_slash)
+      break;
+    start = slash + 1;
+  }
+  return {std::move(parent), path.substr(last_slash + 1)};
+}
+
+void require_new_member_target(int directory, const std::string &leaf,
+                               const std::string &path) {
+  struct stat info{};
+  if (::fstatat(directory, leaf.c_str(), &info, AT_SYMLINK_NOFOLLOW) == 0) {
+    throw std::runtime_error("notebook project: module path already exists: " +
+                             path);
+  }
+  if (errno != ENOENT)
+    io_error("check module path " + path);
 }
 
 void validate_members(int root, const ProjectDocument &document) {
@@ -402,6 +464,107 @@ void save_project_module(const LoadedProject &project,
   module->source.swap(published_source);
   module->baseline.swap(baseline);
   sync_directory(parent.directory.get());
+}
+
+LoadedProjectModule create_project_module(LoadedProject *project,
+                                          const ProjectModule &entry,
+                                          const std::string &source) {
+  if (!project)
+    throw std::invalid_argument("notebook project: null project");
+  if (source.size() > kMaxModuleBytes) {
+    throw std::runtime_error("notebook project: module source exceeds 16 MiB");
+  }
+
+  // Keep the API scoped to bundled modules. The general document validator
+  // rejects traversal, absolute paths, symlinks-in-name tricks, and malformed
+  // IDs; this additional check prevents publishing an arbitrary project
+  // member through the create API.
+  if (entry.path.rfind("modules/", 0) != 0 ||
+      entry.path.substr(entry.path.rfind('/') + 1) != entry.id + ".am") {
+    throw std::runtime_error(
+        "notebook project: new module path must be modules/<id>.am");
+  }
+
+  // Validate the complete candidate before opening or creating any directory.
+  // module_manifest_snapshot also rejects a dirty in-memory project view.
+  ProjectDocument published_document = module_manifest_snapshot(*project);
+  published_document.modules.push_back(entry);
+  std::string published_baseline =
+      serialize_project_document(published_document);
+  // Allocate the return object before any publication. Its source and
+  // baseline are both exact caller bytes, including incomplete/non-UTF-8
+  // editor buffers.
+  LoadedProjectModule published_module{entry.id, entry.path, source, source};
+
+  auto root = open_directory(project->directory);
+  ProjectLock lock(root.get());
+  if (read_document(root.get()) != project->baseline) {
+    throw std::runtime_error(
+        "notebook project: project.json changed externally; reopen before "
+        "creating a module");
+  }
+
+  const ProjectDocument manifest = parse_project_document(project->baseline);
+  validate_members(root.get(), manifest);
+  MemberParent parent = open_or_create_member_parent(root.get(), entry.path);
+  // If open_or_create_member_parent created `modules/` or a nested parent,
+  // make the directory entries durable before a manifest can reference the
+  // eventual source. This also syncs the root edge to a newly-created
+  // modules/ directory.
+  sync_directory(root.get());
+  require_new_member_target(parent.directory.get(), parent.leaf, entry.path);
+
+  // Stage both pieces before making either visible. In particular, a failed
+  // manifest serialization/write leaves the existing manifest untouched.
+  StagedMember staged_module(parent.directory.get(), parent.leaf, source);
+  StagedMember staged_manifest(root.get(), kDocumentName,
+                               published_baseline);
+
+  // Avoid needlessly creating an orphan when a non-cooperating writer changed
+  // the manifest while we were staging.
+  if (read_document(root.get()) != project->baseline) {
+    throw std::runtime_error(
+        "notebook project: project.json changed during module creation; "
+        "reopen before creating a module");
+  }
+
+  bool module_published = false;
+  try {
+    staged_module.create();
+    module_published = true;
+
+    // Ensure the source directory entry is durable before the manifest can
+    // point at it. A failure here intentionally leaves an explicit,
+    // recoverable unreferenced source file.
+    sync_directory(parent.directory.get());
+
+    // The final exact check closes the normal cooperative-writer window. If a
+    // non-cooperating writer wins the race, retain the newly-created source;
+    // deleting it could destroy an unrelated replacement after a race.
+    if (read_document(root.get()) != project->baseline) {
+      throw std::runtime_error(
+          "notebook project: project.json changed before module manifest "
+          "commit");
+    }
+    validate_members(root.get(), published_document);
+    staged_manifest.replace();
+  } catch (const std::exception &error) {
+    if (module_published) {
+      throw std::runtime_error(
+          "notebook project: module source was published at " + entry.path +
+          " but its manifest was not committed; source remains recoverable "
+          "and unreferenced: " + error.what());
+    }
+    throw;
+  }
+
+  // renameat above has committed the manifest. Move the preallocated state
+  // into the caller before the directory fsync, because fsync errors report a
+  // committed write and the caller must reconcile from these baselines.
+  project->baseline.swap(published_baseline);
+  project->document = std::move(published_document);
+  sync_directory(root.get());
+  return published_module;
 }
 
 } // namespace amber::notebook

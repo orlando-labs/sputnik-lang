@@ -7,12 +7,13 @@
 // avoiding a RuntimeWorld/VM round-trip for every extension leaf.
 
 #include "runtime/amber_ext_runtime.h"
+#include "runtime/native_call_buffer.h"
 
 #include "runtime/io.h"
 
 #include <algorithm>
 #include <cstdint>
-#include <deque>
+#include <forward_list>
 #include <memory>
 #include <string>
 #include <utility>
@@ -51,11 +52,12 @@ struct AmberCtx {
   void *direct_state = nullptr;
   // The per-call value arena. `AmberValue` is a 1-based index encoded as a
   // pointer, so reallocation here never invalidates a handle.
-  std::vector<Value> arena;
+  amber::runtime::NativeCallValueArena<Value> arena;
   // Stable backing for borrowed string views (`stdlib_text_of` returns a copy);
-  // a deque keeps element addresses valid across pushes for the call's
-  // duration.
-  std::deque<std::string> str_keep;
+  // Nodes keep element addresses valid across pushes for the call's duration.
+  // Empty contexts allocate no backing storage, including native direct calls
+  // whose string views are supplied by direct_ops.
+  std::forward_list<std::string> str_keep;
   // Keepalives for borrowed bytes views, retained so the viewed storage
   // outlives the thunk.
   std::vector<Value> keepalives;
@@ -178,8 +180,8 @@ int amber_str_view(AmberCtx *cx, AmberValue value, const char **ptr,
   if (!text.has_value()) {
     return 0;
   }
-  cx->str_keep.push_back(*text);
-  const std::string &stored = cx->str_keep.back();
+  cx->str_keep.push_front(*text);
+  const std::string &stored = cx->str_keep.front();
   *ptr = stored.data();
   *len = stored.size();
   return 1;
@@ -319,7 +321,7 @@ AmberValue amber_make_handle(AmberCtx *cx, const char *tag, void *ptr) {
   if (cx->direct_ops != nullptr) {
     return cx->direct_ops->make_handle(cx->direct_state, tag, ptr);
   }
-  const std::string tag_str = tag == nullptr ? std::string() : tag;
+  std::string tag_str = tag == nullptr ? std::string() : tag;
   const amber::runtime::NativeTypeDescriptor *descriptor =
       cx->tags == nullptr ? nullptr : cx->tags->lookup(tag_str);
   if (descriptor == nullptr) {
@@ -328,7 +330,7 @@ AmberValue amber_make_handle(AmberCtx *cx, const char *tag, void *ptr) {
     return cx->push(Value::null());
   }
   auto handle = std::make_shared<amber::runtime::RuntimeForeignHandle>();
-  handle->tag = tag_str;
+  handle->tag = std::move(tag_str);
   handle->ptr = ptr;
   handle->ownership = descriptor->ownership;
   switch (descriptor->ownership) {
@@ -434,6 +436,14 @@ amber_ext_invoke_direct_method(const AmberExtDirectOps &ops, void *state,
   AmberExtDirectCallOutcome outcome;
   outcome.status = fn(&ctx, self, args, argc, &outcome.value);
   return outcome;
+}
+
+bool amber_ext_destroy_direct(const AmberExtDirectOps &ops, void *state,
+                              RuntimeForeignHandle &handle) {
+  AmberCtx ctx;
+  ctx.direct_ops = &ops;
+  ctx.direct_state = state;
+  return handle.destroy(&ctx);
 }
 
 // ---- process-global registration ---------------------------------------
@@ -574,10 +584,10 @@ NativeExtCallOutcome amber_ext_invoke_free(StdlibHost &host, const void *frame,
   ctx.host = &host;
   ctx.frame = frame;
   ctx.tags = &tags;
-  std::vector<AmberValue> handles;
-  handles.reserve(args.size());
-  for (const Value &arg : args) {
-    handles.push_back(ctx.push(arg));
+  ctx.arena.reserve(args.size() + 1U);
+  NativeCallHandleBuffer<AmberValue> handles(args.size());
+  for (std::size_t index = 0; index < args.size(); ++index) {
+    handles[index] = ctx.push(args[index]);
   }
   AmberValue out = nullptr;
   const AmberStatus status = fn(&ctx, handles.data(), handles.size(), &out);
@@ -597,11 +607,11 @@ amber_ext_invoke_method(StdlibHost &host, const void *frame,
   ctx.host = &host;
   ctx.frame = frame;
   ctx.tags = &tags;
+  ctx.arena.reserve(args.size() + 2U);
   const AmberValue self_handle = ctx.push(self);
-  std::vector<AmberValue> handles;
-  handles.reserve(args.size());
-  for (const Value &arg : args) {
-    handles.push_back(ctx.push(arg));
+  NativeCallHandleBuffer<AmberValue> handles(args.size());
+  for (std::size_t index = 0; index < args.size(); ++index) {
+    handles[index] = ctx.push(args[index]);
   }
   AmberValue out = nullptr;
   const AmberStatus status =

@@ -34,19 +34,23 @@ bool parse_native_binding_code_id(const std::string &key,
 void RuntimeModuleRegistry::register_native_type_path(
     std::string path, RuntimeNativeTypeKind kind) {
   bindings_[std::move(path)] = RuntimeBindingRef::native_type_binding(kind);
+  ++revision_;
 }
 
 void RuntimeModuleRegistry::register_native_function_path(
     std::string path, RuntimeNativeFunctionKind kind) {
   bindings_[std::move(path)] = RuntimeBindingRef::native_function_binding(kind);
+  ++revision_;
 }
 
 void RuntimeModuleRegistry::register_task_module_path(std::string path) {
   bindings_[std::move(path)] = RuntimeBindingRef::task_module_binding();
+  ++revision_;
 }
 
 void RuntimeModuleRegistry::register_flow_module_path(std::string path) {
   bindings_[std::move(path)] = RuntimeBindingRef::flow_module_binding();
+  ++revision_;
 }
 
 std::optional<RuntimeBindingRef>
@@ -291,6 +295,15 @@ std::uint16_t RuntimeErrorRegistry::append_error(ErrorRecord record,
   const std::uint16_t id = static_cast<std::uint16_t>(errors_.size());
   if (update_name_index) {
     error_ids_.emplace(record.name, id);
+    // Namespace lookup is also on the ordinary qualified-function path.
+    // Index every nonempty dotted prefix once, including nested namespaces.
+    for (std::size_t dot = record.name.find('.');
+         dot != std::string::npos; dot = record.name.find('.', dot + 1U)) {
+      if (dot != 0U) {
+        error_namespaces_.insert(record.name.substr(0, dot));
+      }
+    }
+    ++revision_;
   }
   errors_.push_back(std::move(record));
   return id;
@@ -306,17 +319,7 @@ RuntimeErrorRegistry::error_id(const std::string &name) const {
 }
 
 bool RuntimeErrorRegistry::has_error_namespace(const std::string &name) const {
-  if (name.empty()) {
-    return false;
-  }
-  const std::string prefix = name + ".";
-  for (const auto &[error_name, error_id] : error_ids_) {
-    (void)error_id;
-    if (error_name.compare(0, prefix.size(), prefix) == 0) {
-      return true;
-    }
-  }
-  return false;
+  return error_namespaces_.find(name) != error_namespaces_.end();
 }
 
 const char *RuntimeErrorRegistry::error_name(std::uint16_t error_id) const {
@@ -535,10 +538,12 @@ void register_runtime_native_package_descriptor(
 // The single list of builtin libraries. New libraries add one line here and
 // ship as `runtime/stdlib_<name>.{cpp}` — no further edit to `vm.cpp`.
 void register_builtin_stdlib(NativeRegistry &registry) {
+  register_bool(registry);
   register_math(registry);
   register_json(registry);
   register_codecs(registry);
   register_digest(registry);
+  register_signature(registry);
   register_benchmark(registry);
   register_secure_random(registry);
   register_argparser(registry);
@@ -553,6 +558,7 @@ void register_builtin_runtime_modules(RuntimeModuleRegistry &modules,
                                       RuntimeDispatchRegistry &dispatch,
                                       RuntimeTypeRegistry &types,
                                       RuntimeErrorRegistry *errors) {
+  register_bool_runtime_module(modules, dispatch, types);
   register_io_runtime_module(modules, dispatch, types);
   register_fs_runtime_module(modules, dispatch, types);
   register_net_runtime_module(modules, dispatch, types, errors);
@@ -562,6 +568,7 @@ void register_builtin_runtime_modules(RuntimeModuleRegistry &modules,
   register_json_runtime_module(modules, dispatch, types, errors);
   register_codecs_runtime_module(modules, dispatch, types, errors);
   register_digest_runtime_module(modules, dispatch, types);
+  register_signature_runtime_module(modules, dispatch, types, errors);
   register_benchmark_runtime_module(modules, dispatch, types, errors);
   register_secure_random_runtime_module(modules, dispatch, types, errors);
   register_argparser_runtime_module(modules, dispatch, types, errors);
@@ -573,6 +580,7 @@ void register_builtin_runtime_modules(RuntimeModuleRegistry &modules,
 }
 
 void register_core_prelude_bindings(RuntimeModuleRegistry &registry) {
+  registry.register_native_type_path("notebook", RuntimeNativeTypeKind::Notebook);
   registry.register_native_type_path("system", RuntimeNativeTypeKind::System);
   registry.register_native_type_path("system.cmd", RuntimeNativeTypeKind::System);
   registry.register_native_function_path("print",

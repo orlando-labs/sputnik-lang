@@ -518,20 +518,37 @@ private:
         return;
       }
       if (expr.kind == "AstImportStmt") {
-        // Native stdlib imports need no module initializer: every imported
-        // binding lowers to an existing runtime constant. Keep rejecting
-        // imports that would require linking a new ordinary module image.
+        // Imports resolve only against native constants or the exact public
+        // export map of the environment image prepared by the host.
+        const auto module = string_value(expr, "module_path");
+        if (notebook_options_ && notebook_options_->import_paths &&
+            notebook_options_->import_paths->count(module)) {
+          if (string_value(expr, "import_kind") == "module") return;
+          if (const auto *names = list_field(expr, "names")) {
+            for (const auto &name : names->values) {
+              const auto imported = string_value(*name, "source_name");
+              if (notebook_export_path(module, imported).empty())
+                diagnostics->push_back({"NB1008", "error", "hir",
+                    "module '" + module + "' has no public export '" + imported + "'", name->span});
+            }
+            return;
+          }
+        }
         bool found = false;
-        bool native_only = true;
+        bool resolved_imports = true;
         for (const auto &binding : graph_.bindings) {
           if (binding.kind != "import_alias" ||
               binding.span.start.offset < expr.span.start.offset ||
               binding.span.end.offset > expr.span.end.offset) continue;
           found = true;
-          native_only = native_only &&
-              !stdlib_import_alias_constant_path(binding).empty();
+          resolved_imports = resolved_imports &&
+              (!import_alias_constant_path(binding).empty() || notebook_module_import(binding));
         }
-        if (found && native_only) return;
+        if (found && resolved_imports) return;
+      }
+      if (expr.kind == "AstName" && notebook_namespace_binding(expr)) {
+        diagnostics->push_back({"NB1008", "error", "hir", "a module namespace is not a runtime value; use module.export or from-import", expr.span});
+        return;
       }
       if (unsupported.count(expr.kind) != 0U) {
         diagnostics->push_back(
@@ -680,7 +697,7 @@ private:
       // MakeClosure that reads an uninitialized register and trip the bytecode
       // verifier (BC1313).
       if (binding->kind == "import_alias" &&
-          !stdlib_import_alias_constant_path(*binding).empty()) {
+          (!import_alias_constant_path(*binding).empty() || notebook_module_import(*binding))) {
         return;
       }
       if (scope_is_within(binding->scope_index, scope_index)) {
@@ -2375,10 +2392,10 @@ private:
         return fallback;
       }
       // Lexical resolution always wins. Only a still-unresolved ordinary name
-      // in an object method may fall back to a dynamic, syntactically-nullary
+      // in an object method may fall back to a dynamic, zero-argument-callable
       // send to the current receiver. This deliberately shares the existing
       // bare-member path (`self.name`): inherited and included members resolve
-      // through runtime linearization, while non-nullary methods retain the
+      // through runtime linearization, while methods requiring arguments retain the
       // AMB_BARE_NON_NULLARY/ArgumentError behavior. Module/top-level
       // procedures have no object receiver and continue to produce an
       // unresolved-name/constant-path error.
@@ -2409,7 +2426,7 @@ private:
     }
     if (binding.kind == "import_alias") {
       const std::string stdlib_path =
-          stdlib_import_alias_constant_path(binding);
+          import_alias_constant_path(binding);
       if (!stdlib_path.empty()) {
         auto node = make_node("HLoadConst", expr.span);
         node->string_field("path", stdlib_path);
@@ -3380,6 +3397,37 @@ private:
       return path;
     }
     return path.substr(dot + 1);
+  }
+
+  bool notebook_module_import(const binder::Binding &binding) const {
+    return notebook_options_ && notebook_options_->import_paths && binding.kind == "import_alias" &&
+        binding.role == "module_import" && notebook_options_->import_paths->count(binding.source);
+  }
+
+  const binder::Binding *notebook_namespace_binding(const ast::Expr &base) const {
+    if (base.kind != "AstName") return nullptr;
+    const auto *ref = find_reference(base.span, string_value(base, "name"), string_value(base, "syntax_context"), "name");
+    const auto *binding = ref && ref->resolved ? binding_for_id(ref->binding_id) : nullptr;
+    return binding && notebook_module_import(*binding) ? binding : nullptr;
+  }
+
+  std::string notebook_export_path(const std::string &module, const std::string &name) const {
+    if (!notebook_options_ || !notebook_options_->import_paths) return {};
+    const auto found = notebook_options_->import_paths->find(module);
+    if (found == notebook_options_->import_paths->end()) return {};
+    const auto value = found->second.find(name);
+    return value == found->second.end() ? std::string{} : value->second;
+  }
+
+  std::string import_alias_constant_path(const binder::Binding &binding) const {
+    if (binding.role == "from_import") {
+      const auto colon = binding.source.rfind(':');
+      if (colon != std::string::npos) {
+        const auto path = notebook_export_path(binding.source.substr(0, colon), binding.source.substr(colon + 1));
+        if (!path.empty()) return path;
+      }
+    }
+    return stdlib_import_alias_constant_path(binding);
   }
 
   static std::string

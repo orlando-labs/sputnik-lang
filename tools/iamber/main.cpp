@@ -660,6 +660,8 @@ void clamp_cell_scroll(Session *session, int visible_count) {
 }
 
 std::string cell_status(const Cell &cell) {
+  if (cell.kind == "text")
+    return "text (read-only)";
   if (cell.kind != "code")
     return "read-only:" + cell.kind;
   if (cell.running) {
@@ -925,8 +927,10 @@ void draw_footer(const Session &session, bool edit_mode, int rows, int cols) {
     mvaddch(actions_y, x, ' ');
   }
   int x = 0;
-  if (!session.tab_bar.empty())
+  if (!session.tab_bar.empty()) {
+    draw_footer_segment(actions_y, &x, cols, "F3", "Project");
     draw_footer_segment(actions_y, &x, cols, "F7/F8", "Tabs");
+  }
   if (!session.project_sheet_id.empty() && !session.module_editor)
     draw_footer_segment(actions_y, &x, cols, "F6", "Apply");
   for (const auto &action : footer_actions(edit_mode)) {
@@ -1005,6 +1009,8 @@ std::string selected_error_message(const Cell &cell) {
 }
 
 std::string cell_result_line(const Cell &cell) {
+  if (cell.kind == "text")
+    return "text block; edit formatting in Amber Notebook";
   return cell.ok ? "=> " + cell.result
                  : (cell.error.empty() ? "=> not evaluated"
                                        : "! " + first_line(cell.error));
@@ -1036,7 +1042,8 @@ void draw_cell_code(WINDOW *window, Session *session, std::size_t index,
   const std::vector<std::string> lines = split_lines(cell.source);
   const std::vector<std::size_t> line_offsets = line_start_offsets(cell.source);
   const std::vector<SyntaxSpan> syntax_spans =
-      syntax_spans_for_source(cell.source);
+      cell.kind == "code" ? syntax_spans_for_source(cell.source)
+                          : std::vector<SyntaxSpan>{};
   const int text_width = code_width - 2;
   const int detail_rows = cell_detail_row_count(cell, height, text_width);
   const int detail_start = height - 1 - detail_rows;
@@ -1485,6 +1492,60 @@ bool handle_edit_key(Session *session, int ch, bool *edit_mode) {
   }
 }
 
+void execute_project_command(ProjectTabs *workspace, const std::string &text) {
+  std::istringstream input(text);
+  std::string command, id, argument, extra;
+  input >> command >> id;
+  if ((command == "add-dependency" || command == "remove-dependency") && !id.empty()) {
+    std::string rest; std::getline(input, rest);
+    if (command == "add-dependency") workspace->add_dependency(id + rest);
+    else workspace->remove_dependency(id + rest);
+  } else if (command == "set-input" && !id.empty()) {
+    std::string json; std::getline(input >> std::ws, json);
+    workspace->set_input(id, json);
+  } else if (command == "new-sheet" && !id.empty()) {
+    std::string title;
+    std::getline(input >> std::ws, title);
+    workspace->create_sheet(id, title);
+  } else if (command == "new-module" && !id.empty() && !(input >> extra)) {
+    workspace->create_module(id);
+  } else if (command == "auto-import" && !id.empty() && (input >> argument) &&
+             !(input >> extra) && (argument == "on" || argument == "off")) {
+    workspace->set_auto_import(id, argument == "on");
+  } else {
+    throw std::invalid_argument(
+        "use new-sheet <id> [title], new-module <id>, auto-import <id> on|off, set-input <id> <JSON value>, add-dependency <directory>, remove-dependency <path>");
+  }
+}
+
+void draw_project_command(const std::string &command) {
+  int rows = 0, cols = 0;
+  getmaxyx(stdscr, rows, cols);
+  if (rows < 12 || cols < 60)
+    return;
+  const std::string prompt = ":" + command;
+  // Keep the insertion end visible. The input is append/backspace/Ctrl-U;
+  // UTF-8 title bytes are left intact in the buffer and validated on commit.
+  std::size_t start = prompt.size() > static_cast<std::size_t>(cols - 1)
+      ? prompt.size() - static_cast<std::size_t>(cols - 1) : 0U;
+  while (start < prompt.size() &&
+         (static_cast<unsigned char>(prompt[start]) & 0xc0U) == 0x80U)
+    ++start;
+  attron(footer_status_attr());
+  mvhline(rows - 2, 0, ' ', cols);
+  mvaddnstr(rows - 2, 0, prompt.c_str() + start, cols - 1);
+  int cursor_y = 0, cursor_x = 0;
+  getyx(stdscr, cursor_y, cursor_x);
+  attroff(footer_status_attr());
+  mvhline(rows - 1, 0, ' ', cols);
+  mvaddnstr(rows - 1, 0,
+            "new-sheet <id> [title] | new-module <id> | auto-import <id> on|off"
+            " | set-input <id> <JSON> | Enter applies; Esc cancels", cols);
+  curs_set(1);
+  move(cursor_y, cursor_x);
+  refresh();
+}
+
 int run_curses_console(
     std::optional<amber::notebook::LoadedProject> project = {},
     const std::string &sheet_id = {},
@@ -1499,24 +1560,27 @@ int run_curses_console(
   TerminalEventWaiter terminal_wait;
   std::unique_ptr<ProjectTabs> workspace;
   std::unique_ptr<ProjectTab> scratch;
-  std::vector<ProjectTab *> tabs;
   if (project) {
     workspace = std::make_unique<ProjectTabs>(
         std::move(*project), sheet_id, project_module ? project_module->id : "");
-    for (const auto &tab : workspace->tabs())
-      tabs.push_back(tab.get());
   } else {
     scratch = std::make_unique<ProjectTab>();
     Cell initial;
     initial.id = amber::notebook::allocate_cell_id();
     scratch->session.cells.push_back(std::move(initial));
     scratch->activity = scratch->session.activity_waiter();
-    tabs.push_back(scratch.get());
   }
   const auto current_tab = [&]() -> ProjectTab & {
     return workspace ? workspace->active() : *scratch;
   };
-  for (auto *tab : tabs) tab->session.runtime_capability_grants = grants;
+  // Resolve the collection afresh: structural commands can insert tabs, while
+  // the pointed-to Session objects and the registered host fd stay stable.
+  const auto tab_count = [&] { return workspace ? workspace->tabs().size() : 1U; };
+  const auto tab_at = [&](std::size_t index) -> ProjectTab & {
+    return workspace ? *workspace->tabs()[index] : *scratch;
+  };
+  for (std::size_t index = 0; index < tab_count(); ++index)
+    tab_at(index).session.runtime_capability_grants = grants;
   // One stable descriptor wakes the owner for any tab. Local mailboxes retain
   // the identity of pending work; neither switching nor a hint executes code.
   const auto activity = workspace ? workspace->activity_waiter()
@@ -1563,6 +1627,7 @@ int run_curses_console(
   bool running = true;
   bool redraw = true;
   bool confirm_discard = false;
+  std::optional<std::string> project_command;
   std::size_t runtime_cursor = 0;
   while (running) {
     // Deliver a queued SIGWINCH even under continuous keyboard input; curses
@@ -1572,6 +1637,8 @@ int run_curses_console(
       auto &tab = current_tab();
       tab.session.tab_bar = workspace ? workspace->tab_bar() : "";
       draw(&tab.session, tab.edit_mode);
+      if (project_command)
+        draw_project_command(*project_command);
       redraw = false;
     }
     const int ch = getch();
@@ -1581,8 +1648,35 @@ int run_curses_console(
         auto &session = tab.session;
         const bool discard = confirm_discard && ch == 'Q';
         confirm_discard = false;
-        if (discard) {
+        if (project_command) {
+          if (ch == 27) {
+            project_command.reset();
+            session.status = "project command cancelled";
+          } else if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+            const auto command = std::move(*project_command);
+            project_command.reset();
+            execute_project_command(workspace.get(), command);
+          } else if (ch == KEY_BACKSPACE || ch == 127 || ch == 8) {
+            if (!project_command->empty()) {
+              std::size_t position = project_command->size() - 1U;
+              while (position > 0U &&
+                     (static_cast<unsigned char>((*project_command)[position]) &
+                      0xc0U) == 0x80U)
+                --position;
+              project_command->erase(position);
+            }
+          } else if (ch == 21) {
+            project_command->clear();
+          } else if (ch >= 32 && ch <= 255 && project_command->size() < 1024U) {
+            project_command->push_back(static_cast<char>(ch));
+          }
+        } else if (discard) {
           running = false;
+        } else if (ch == KEY_F(3)) {
+          if (workspace)
+            project_command.emplace();
+          else
+            session.status = "project commands require --project";
         } else if (workspace && (ch == KEY_F(7) || ch == KEY_F(8))) {
           workspace->switch_by(ch == KEY_F(7) ? -1 : 1);
         } else if (ch == KEY_F(6) && workspace) {
@@ -1626,10 +1720,11 @@ int run_curses_console(
       // All tab producers forward to the host. Avoid locking every local
       // mailbox on ordinary keystrokes with no activity to dispatch.
       if (hints.runtime_ready || hints.input_ready) {
-        for (auto *tab : tabs) {
-          const auto local = tab->activity.wait(std::chrono::milliseconds(0));
+        for (std::size_t index = 0; index < tab_count(); ++index) {
+          auto &tab = tab_at(index);
+          const auto local = tab.activity.wait(std::chrono::milliseconds(0));
           if (local.runtime_ready)
-            tab->runtime_dispatch.notify_runtime();
+            tab.runtime_dispatch.notify_runtime();
         }
       }
     } else if (hints.runtime_ready) {
@@ -1637,19 +1732,19 @@ int run_curses_console(
     }
     // At most one bounded pump between keyboard reads. Round-robin service
     // prevents a busy inactive tab from starving other tabs or terminal input.
-    for (std::size_t offset = 0; offset < tabs.size(); ++offset) {
-      const auto index = (runtime_cursor + offset) % tabs.size();
-      auto &tab = *tabs[index];
+    for (std::size_t offset = 0; offset < tab_count(); ++offset) {
+      const auto index = (runtime_cursor + offset) % tab_count();
+      auto &tab = tab_at(index);
       if (!tab.runtime_dispatch.due(RuntimePumpDispatch::Clock::now()))
         continue;
       const bool visible = &tab == &current_tab();
-      const auto result = visible
+      const auto result = visible && !project_command
           ? pump_runtime_events_ui(&tab.session, tab.edit_mode)
           : pump_runtime_events_detailed(&tab.session, false);
       tab.runtime_dispatch.complete(result, RuntimePumpDispatch::Clock::now());
       redraw = redraw ||
           (visible && (result.handled() || result.needs_recovery()));
-      runtime_cursor = (index + 1U) % tabs.size();
+      runtime_cursor = (index + 1U) % tab_count();
       break;
     }
     if (ch != ERR || redraw) {
@@ -1661,8 +1756,8 @@ int run_curses_console(
     }
     std::optional<std::chrono::milliseconds> wait_timeout;
     const auto now = RuntimePumpDispatch::Clock::now();
-    for (const auto *tab : tabs) {
-      const auto deadline = tab->runtime_dispatch.wait_timeout(now);
+    for (std::size_t index = 0; index < tab_count(); ++index) {
+      const auto deadline = tab_at(index).runtime_dispatch.wait_timeout(now);
       if (deadline && (!wait_timeout || *deadline < *wait_timeout))
         wait_timeout = deadline;
     }
@@ -1776,6 +1871,8 @@ int run_project_sheet(const amber::notebook::LoadedProject &project,
   }
   bool ok = true;
   for (const Cell &cell : session.cells) {
+    if (cell.kind == "text")
+      continue;
     for (const std::string &line : output_detail_lines(cell.output_events, 120))
       std::cout << line << "\n";
     if (cell.ok)
@@ -1804,6 +1901,10 @@ void usage(std::ostream &out) {
   out << "  Prefix notebook commands with --grant <cap[=target]> (repeatable),\n"
          "  e.g. iamber --grant process.spawn\n";
   out << "  In a project: F7/F8 switches sheet/module tabs without evaluation.\n";
+  out << "  F3 opens project commands: new-sheet <id> [title], new-module <id>, "
+         "auto-import <id> on|off, set-input <id> <JSON value>.\n";
+  out << "  Structure commands only save; set-input reevaluates Watch consumers. Esc cancels.\n";
+  out << "  F3 add-dependency <directory> links an external package; remove-dependency <path> unlinks it.\n";
   out << "  Ctrl-S / F4 saves the active tab; quitting warns about unsaved "
          "edits.\n";
   out << "  F6 applies bundled modules to the sheet and reevaluates Watch "
@@ -1883,7 +1984,9 @@ int main(int argc, char **argv) {
     }
     if (argc == 3 && std::string(argv[1]) == "--project-info") {
       const auto project = amber::notebook::load_project(argv[2]);
-      std::cout << project.document.title << " (amber-notebook v1)\n";
+      std::cout << project.document.title << " (amber-notebook v" << project.document.version << ")\n";
+      for (const auto &dependency : project.document.dependencies)
+        std::cout << "dependency " << dependency.path << (dependency.auto_import ? " [auto-import root exports]" : " [explicit import]") << '\n';
       for (const auto &sheet : project.document.sheets) {
         std::cout << "sheet " << sheet.id << ": " << sheet.title << " ("
                   << sheet.cells.size() << " cells)"
@@ -1894,6 +1997,11 @@ int main(int argc, char **argv) {
       for (const auto &module : project.document.modules) {
         std::cout << "module " << module.id << ": " << module.path << "\n";
       }
+      for (const auto &board : project.document.boards)
+        std::cout << "board " << board.id << ": " << board.title << " (sheet " << board.sheet << ")\n";
+      for (const auto &input : project.document.inputs)
+        std::cout << "input " << input.id << " [" << input.type << "] = "
+                  << amber::notebook::serialize_project_input_value(input.initial) << "\n";
       for (const auto &id : project.document.auto_imports)
         std::cout << "auto import " << id << "\n";
       std::cout << "not evaluated; use F6 Apply or --run-sheet to initialize "

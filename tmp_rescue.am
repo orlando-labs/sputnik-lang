@@ -1,0 +1,6 @@
+def main():
+  try:
+    1.foo
+  rescue NoMethodError:
+    0
+  42

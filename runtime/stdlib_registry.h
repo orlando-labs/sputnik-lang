@@ -4,7 +4,7 @@
 //
 // A native stdlib library is reached through two hand-written `if`-chains in
 // the 1.1 MB `runtime/vm.cpp`: dispatch (`try_apply_native_stdlib_send`) and
-// name resolution (`lookup_native_prelude_constant`). This header is the seam
+// name resolution (`resolve_constant_lookup`). This header is the seam
 // that lets a library land as a self-contained `runtime/stdlib_<name>.{h,cpp}`
 // translation unit registered through a table, instead of more branches.
 //
@@ -725,10 +725,13 @@ public:
 
   bool has_namespace(const std::string &path) const;
 
+  std::uint64_t revision() const { return revision_; }
+
   void import_native_paths(const NativeRegistry &registry);
 
 private:
   std::unordered_map<std::string, RuntimeBindingRef> bindings_;
+  std::uint64_t revision_ = 0;
 };
 
 struct RuntimeTypeCallDescriptor {
@@ -867,6 +870,7 @@ public:
 
   std::optional<std::uint16_t> error_id(const std::string &name) const;
   bool has_error_namespace(const std::string &name) const;
+  std::uint64_t revision() const { return revision_; }
   const char *error_name(std::uint16_t error_id) const;
   bool error_is_a(std::uint16_t error_id,
                   std::uint16_t ancestor_error_id) const;
@@ -888,6 +892,8 @@ private:
 
   std::vector<ErrorRecord> errors_;
   std::unordered_map<std::string, std::uint16_t> error_ids_;
+  std::unordered_set<std::string> error_namespaces_;
+  std::uint64_t revision_ = 0;
 };
 
 struct RuntimeNativeModulePathDescriptor {
@@ -1013,6 +1019,10 @@ void register_task_runtime_module(RuntimeModuleRegistry &modules,
                                   RuntimeDispatchRegistry &dispatch,
                                   RuntimeTypeRegistry &types,
                                   RuntimeErrorRegistry *errors = nullptr);
+void register_bool(NativeRegistry &registry);
+void register_bool_runtime_module(RuntimeModuleRegistry &modules,
+                                  RuntimeDispatchRegistry &dispatch,
+                                  RuntimeTypeRegistry &types);
 void register_math(NativeRegistry &registry);
 void register_math_runtime_module(RuntimeModuleRegistry &modules,
                                   RuntimeDispatchRegistry &dispatch,
@@ -1031,6 +1041,11 @@ void register_digest(NativeRegistry &registry);
 void register_digest_runtime_module(RuntimeModuleRegistry &modules,
                                     RuntimeDispatchRegistry &dispatch,
                                     RuntimeTypeRegistry &types);
+void register_signature(NativeRegistry &registry);
+void register_signature_runtime_module(RuntimeModuleRegistry &modules,
+                                       RuntimeDispatchRegistry &dispatch,
+                                       RuntimeTypeRegistry &types,
+                                       RuntimeErrorRegistry *errors = nullptr);
 void register_benchmark(NativeRegistry &registry);
 void register_benchmark_runtime_module(RuntimeModuleRegistry &modules,
                                        RuntimeDispatchRegistry &dispatch,

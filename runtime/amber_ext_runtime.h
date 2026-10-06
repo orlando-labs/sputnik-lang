@@ -131,6 +131,11 @@ amber_ext_invoke_direct_method(const AmberExtDirectOps &ops, void *state,
                                AmberMethodFn fn, AmberValue self,
                                const AmberValue *args, std::size_t argc);
 
+// Deterministic teardown needs a live ABI context, but a destructor has a
+// different signature from a method thunk. Preserve the handle tombstone.
+bool amber_ext_destroy_direct(const AmberExtDirectOps &ops, void *state,
+                              RuntimeForeignHandle &handle);
+
 // Build an AmberCtx over (host, frame, tags), marshal `args` (and `self` for a
 // method) into the per-call arena, invoke the thunk, and marshal the result
 // back. The frame is type-erased to `const void *` exactly as in StdlibHost.

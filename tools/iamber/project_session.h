@@ -7,7 +7,7 @@
 // activity channel/backend. Acquire wait handles AFTER loading, never before.
 // A multi-tab host retains each loaded Session instead of reloading on switch.
 std::vector<BundledModuleSource> load_project_bundled_sources(
-    const amber::notebook::LoadedProject &project);
+    const amber::notebook::LoadedProject &project, bool defer_dependency_errors = false);
 void load_project_into_session(Session *session,
                                const amber::notebook::LoadedProject &project,
                                const std::string &sheet_id = {});

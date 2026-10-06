@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Amber VM native modules: methods, signatures, effects and code examples."
+    />
+    <meta name="theme-color" content="#f7f0e2" />
+    <title>Amber VM modules</title>
+    <link rel="icon" href="./assets/amber-logo.jpg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Code+Pro:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="docs-page">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="Amber home">
+        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
+        <span>Amber</span>
+      </a>
+      <nav class="main-nav" aria-label="Primary navigation">
+        <a href="./index.html#features" data-i18n="nav.features">Возможности</a>
+        <a href="./index.html#inside" data-i18n="nav.technology">Технологии</a>
+        <a href="./learn.html" data-i18n="nav.guide">Гид</a>
+        <a href="./modules.html" class="active" data-i18n="nav.modules">Модули VM</a>
+        <a href="./spec.html" data-i18n="nav.spec">Спека</a>
+      </nav>
+      <div class="header-actions">
+        <div class="language-switch" role="group" aria-label="Language">
+          <button type="button" data-lang="ru" aria-pressed="true">RU</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="header-cta" href="./spec.html">
+          <span data-i18n="nav.spec">Спека</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </header>
+
+    <main class="docs-main">
+      <section class="docs-hero">
+        <div class="docs-hero-bg" aria-hidden="true"></div>
+        <div>
+          <div class="eyebrow">
+            <span class="eyebrow-dot"></span>
+            <span data-i18n="docs.eyebrow">Native standard library · VM prelude</span>
+          </div>
+          <h1 data-i18n="docs.title">Встроенные модули Amber VM</h1>
+          <p data-i18n="docs.lead">
+            Реальные сигнатуры из runtime registry, короткие примеры и требования
+            к effects/capabilities. Импорт не нужен.
+          </p>
+        </div>
+      </section>
+
+      <div class="docs-directory">
+        <div class="directory-toolbar">
+          <div class="docs-search-wrap">
+            <span aria-hidden="true">⌕</span>
+            <input
+              id="module-search"
+              type="search"
+              autocomplete="off"
+              placeholder="Модуль или метод"
+              data-i18n-placeholder="docs.search"
+            />
+            <kbd>/</kbd>
+          </div>
+          <div class="directory-count">
+            <span id="result-count"></span>
+            <span data-i18n="docs.toolbar"> модулей в каталоге</span>
+          </div>
+        </div>
+        <section class="docs-content docs-content-index">
+          <div id="module-list"></div>
+          <div id="empty-state" class="empty-state" hidden>
+            <span>◇</span>
+            <h2 data-i18n="docs.emptyTitle">Ничего не найдено</h2>
+            <p data-i18n="docs.emptyText">Попробуйте имя модуля или метода, например Json, parse или sha256.</p>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <footer>
+      <a class="brand" href="./index.html">
+        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
+        <span>Amber</span>
+      </a>
+      <p data-i18n="footer.text">Expressive language. Verified machine.</p>
+      <span>runtime/stdlib_registry.cpp</span>
+    </footer>
+
+    <script src="./modules-data.js"></script>
+    <script src="./app.js"></script>
+  </body>
+</html>

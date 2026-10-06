@@ -372,6 +372,35 @@ void test_class_paths_are_module_qualified() {
 } // namespace
 
 int main() {
+  {
+    auto leaf = module("leaf");
+    add_class_export(&leaf, "Thing");
+    auto facade = module("facade", {"leaf"});
+    facade.module.symbols = {"Alias"};
+    facade.module.strings = {"leaf", "reexport", "Thing"};
+    facade.module.exports.push_back({0, 1, 2, 1, true, 0});
+    auto outer = module("outer", {"facade"});
+    outer.module.symbols = {"Public"};
+    outer.module.strings = {"facade", "reexport", "Alias"};
+    outer.module.exports.push_back({0, 1, 2, 1, true, 0});
+    auto linked = amber::bytecode::link_graph({outer, leaf, facade}, "outer");
+    expect_valid_output(linked);
+    expect(linked.exports.size() == 3 && linked.exports.back().qualified_path == "leaf.Thing" &&
+           linked.exports.back().class_index == linked.exports.front().class_index,
+           "transitive re-exports preserve class identity");
+    outer.module.strings[2] = "Missing";
+    expect(!amber::bytecode::link_graph({outer, leaf, facade}, "outer").ok,
+           "missing re-export source fails");
+  }
+  {
+    auto native_errors = module("vendor.errors");
+    add_class_export(&native_errors, "Vendor.Errors.Failure");
+    native_errors.module.classes.front().flags = amber::bytecode::kClassFlagNativeError;
+    auto linked = amber::bytecode::link_graph({native_errors}, "vendor.errors");
+    expect_valid_output(linked);
+    expect(linked.module.symbols.at(linked.module.classes.front().class_name_sym_id) ==
+               "Vendor.Errors.Failure", "native error registry names must not be prefixed again");
+  }
   test_root_union_and_determinism();
   test_transitive_order_and_external_namespace();
   test_dependency_declaration_order_is_preserved();

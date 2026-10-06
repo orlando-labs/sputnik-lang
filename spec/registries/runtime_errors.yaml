@@ -281,3 +281,5 @@ errors:
     parent: ProcessError
   - name: ProcessDecodeError
     parent: ProcessError
+  - name: NotImplementedError
+    parent: Exception

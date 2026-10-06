@@ -95,6 +95,10 @@ SystemValue system_from_value(const Frame &frame, const Value &value,
     const auto task_id = tls_runtime_task_id,
                sync_owner = tls_runtime_sync_owner_id;
     const auto cancel = tls_runtime_task_cancel_flag;
+    const auto cancel_owner = current_runtime_task_cancel_owner();
+    const auto run = current_runtime_run_cancellation();
+    const bool cleanup = runtime_run_cancel_requested() &&
+                         !runtime_run_cancel_checkpoint_requested();
     const auto context = tls_runtime_task_context;
     const auto scheduler = tls_runtime_scheduler_identity;
     const auto stdout_writer = current_runtime_stdout(),
@@ -103,14 +107,16 @@ SystemValue system_from_value(const Frame &frame, const Value &value,
     converted.kind = Kind::Callback;
     converted.callback =
         [this, scoped = !detached, fn = std::move(*invoker), strand, task_id,
-         sync_owner, cancel, context, scheduler, stdout_writer,
+         sync_owner, cancel, cancel_owner, run, cleanup, context, scheduler, stdout_writer,
          stderr_writer](const std::vector<SystemValue> &args) mutable {
           RuntimeStrandScope strand_scope(strand);
+          RuntimeRunCancellationScope run_scope(run);
+          RuntimeRunCancellationMask cleanup_mask(cleanup);
           RuntimeTaskScope task_scope(task_id,
                                       system_callback_cancel_flag()
                                           ? system_callback_cancel_flag()
                                           : cancel,
-                                      sync_owner, context, scheduler);
+                                      sync_owner, context, scheduler, cancel_owner);
           RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
           IoParkGuard no_park(false);
           // The outer operation has already parked this VM's strand. A
@@ -201,8 +207,14 @@ apply_system_send(const Frame &source_frame, const Value &receiver,
         throw NativeBlockUnwind();
       }
     };
-    const auto cancel = tls_runtime_task_cancel_flag;
-    call.cancelled = [cancel] { return cancel && cancel->load(); };
+    const auto cancel = runtime_wait_cancel_flag();
+    // A subprocess monitor may retain this predicate on another host thread.
+    // Keep both possible owners of the borrowed cancellation flag alive.
+    call.cancelled = [cancel, owner = current_runtime_task_cancel_owner(),
+                      run = current_runtime_run_cancellation()] {
+      (void)owner; (void)run;
+      return cancel && cancel->load();
+    };
     if (parkable_ && blocking) {
       auto pending = std::make_shared<PendingNativeExtensionCall>();
       pending->logical = "stdlib.system";

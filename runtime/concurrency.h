@@ -723,12 +723,16 @@ public:
   // rather than restart it. With `wake_after` a timer wake is scheduled;
   // otherwise the strand stays parked until an explicit wake_strand(). Returns
   // false when there is no current scheduler strand, in which case the caller
-  // must fall back to blocking.
+  // must fall back to blocking. wake_on_cancel=false is reserved for an
+  // in-flight foreign call whose frame cannot be retired before completion.
   bool park_current(
-      std::optional<std::chrono::milliseconds> wake_after = std::nullopt);
+      std::optional<std::chrono::milliseconds> wake_after = std::nullopt,
+      bool wake_on_cancel = true);
 
   bool cancel_task(std::uint64_t task_id);
   bool task_cancel_requested(std::uint64_t task_id) const;
+  // Status/snapshot inspection does not consume a failure. Only explicit
+  // result retrieval (including a successful join of a failed task) does.
   RuntimeTaskJoinResult join_task(
       std::uint64_t task_id,
       std::chrono::milliseconds timeout = std::chrono::milliseconds::max());
@@ -743,6 +747,7 @@ private:
   std::uint64_t spawn_managed_task(RuntimeTaskOptions options,
                                    StrandFunction function);
   void release_managed_task(std::uint64_t task_id);
+  void observe_task_failure(std::uint64_t task_id) const;
 
   class Impl;
   std::shared_ptr<Impl> impl_;

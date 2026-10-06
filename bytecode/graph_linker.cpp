@@ -709,7 +709,8 @@ private:
       }
       const std::string prefix = state.input->name + ".";
       const std::string qualified =
-          source_name.rfind(prefix, 0) == 0U ? source_name
+          (klass.flags & kClassFlagNativeError) != 0U ||
+                  source_name.rfind(prefix, 0) == 0U ? source_name
                                              : prefix + source_name;
       state.local_class_names.insert(source_name);
       state.qualified_class_names[source_name] = qualified;
@@ -1152,11 +1153,8 @@ private:
           bc_string_or_empty(state.input->module, source.target_kind_str_id);
       const std::string export_name =
           bc_symbol_or_empty(state.input->module, source.symbol_id);
-      if (source.has_reexport_module_name || kind == "reexport") {
-        throw std::runtime_error("re-export is unsupported in merged graph: " +
-                                 state.input->name + "." + export_name);
-      }
-      if (kind != "method" && kind != "code" && kind != "class") {
+      const bool reexport = source.has_reexport_module_name || kind == "reexport";
+      if (!reexport && kind != "method" && kind != "code" && kind != "class") {
         throw std::runtime_error("unsupported export target kind '" + kind +
                                  "' in module " + state.input->name);
       }
@@ -1166,7 +1164,27 @@ private:
       }
       GraphExportRef ref;
       ref.kind = kind;
-      if (kind == "method") {
+      if (reexport) {
+        const std::string dependency = bc_string_or_empty(
+            state.input->module, source.reexport_module_name_str_id);
+        const std::string original = kind == "reexport"
+            ? bc_string_or_empty(state.input->module, source.target_index) : export_name;
+        const bool declared = std::any_of(state.input->module.dependencies.begin(),
+            state.input->module.dependencies.end(), [&](const DepEntry &dep) {
+              return bc_string_or_empty(state.input->module, dep.module_name_str_id) == dependency;
+            });
+        const auto resolved = declared ? resolve_import(dependency, original) : std::nullopt;
+        if (!resolved.has_value()) {
+          throw std::runtime_error("unresolved re-export: " + state.input->name +
+                                   "." + export_name + " from " + dependency + "." + original);
+        }
+        ref = *resolved;
+        entry.target_kind_str_id = intern_string(ref.kind);
+        entry.target_index = ref.kind == "class" ? ref.class_index :
+                             ref.kind == "method" ? ref.method_index : ref.code_id;
+        entry.has_reexport_module_name = false;
+        entry.reexport_module_name_str_id = 0;
+      } else if (kind == "method") {
         if (source.target_index >= state.input->module.methods.size()) {
           throw std::runtime_error("method export index is out of range in module " +
                                    state.input->name);

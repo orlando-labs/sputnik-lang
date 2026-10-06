@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -57,6 +58,8 @@ struct Program {
 // previous notebook version), and by name for the current cell's published
 // writes.
 struct NotebookLoweringOptions {
+  // Only verified exports of modules linked into this notebook generation.
+  const std::map<std::string, std::map<std::string, std::string>> *import_paths = nullptr;
   std::function<std::optional<std::uint32_t>(const std::string &,
                                              const lexer::Span &)>
       external_read_descriptor;

@@ -14,6 +14,25 @@ Current baseline:
 
 Useful commands:
 
+The first native macOS notebook (SwiftUI/AppKit, no Electron) is available via
+`make notebook-macos`; launch `build/Amber Notebook.app`. See the
+[native notebook guide](docs/engineering/notebook-macos-v1.md) for workflow,
+requirements and first-version limits. It shares `.amberbook` projects with iamber.
+External packages can be linked from their existing directories without copying
+their code into the notebook; see [directory dependencies](docs/engineering/notebook-dependencies-v1.md).
+The native editor supports portable rich-text blocks and live Amber syntax
+highlighting in cells and module sources. Text blocks include paragraph headings,
+bullet/numbered lists, editable tables, and `{{name}}` interpolation with a searchable
+variable picker and Preview; templates never execute Amber code.
+
+The [MNIST showcase](docs/engineering/notebook-mnist-showcase.md) trains the real
+ambertorch model with live loss/accuracy plots, native progress and Stop / Force
+Stop. Native-package projects automatically use an isolated worker on macOS;
+other projects can opt in with `--isolated-worker`. iamber and ordinary GUI
+projects otherwise retain the in-process backend. `make test-notebook-progress`
+and `make test-notebook-worker` check the live channel and lifecycle. See the
+[execution and progress plan](docs/engineering/notebook-execution-live-progress.md).
+
 ```sh
 make build
 make test
@@ -60,6 +79,8 @@ Documentation:
   everyday patterns, and notes on optional profiles and spec/compiler differences.
 - [Json standard library guide](docs/stdlib-json.md) - parse/generate, JSONL,
   streaming, file I/O, and `.to_json` examples.
+- [Bool parsing guide](docs/stdlib-bool.md) - strict `Bool.parse`, accepted
+  spellings, errors, and shared ArgParser behavior.
 - [Base64, Base64Url, and Hex guide](docs/stdlib-codecs.md) - byte/text
   codecs, strict/lenient decode modes, `Bytes`, `ByteBuffer`, and error cases.
 - [Url standard library guide](docs/stdlib-url.md) - parse/build, percent

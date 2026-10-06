@@ -1070,6 +1070,38 @@ ExecutionResult RuntimeWorld::execute_notebook_cell(
   }
   NotebookDependencyCollectorGuard dependency_collector_guard(
       dependency_collector.get());
+  const auto displays = std::make_shared<NotebookDisplayCollector>();
+  context.display_collector = displays;
+  if (context.live_cell_id == 0) context.live_cell_id = code_id;
+  const bool own_live_store = context.live_store == nullptr;
+  if (own_live_store)
+    context.live_store = std::make_shared<NotebookLiveStore>();
+  if (context.live_generation == 0)
+    context.live_generation = context.live_store->begin_cell(context.live_cell_id);
+  const auto live_store = context.live_store;
+  const std::uint64_t live_cell_id = context.live_cell_id;
+  const std::uint64_t live_generation = context.live_generation;
+  const auto inputs = std::make_shared<NotebookInputCapture>(context.project_inputs);
+  context.project_inputs.reset();
+  context.input_capture = inputs;
+  struct InputGuard {
+    std::shared_ptr<NotebookInputCapture> capture;
+    ~InputGuard() { (void)capture->finish(); }
+  } input_guard{inputs};
+  struct DisplayGuard {
+    std::shared_ptr<NotebookDisplayCollector> collector;
+    ~DisplayGuard() { collector->close(); }
+  } display_guard{displays};
+  struct LiveGuard {
+    std::shared_ptr<NotebookLiveStore> store;
+    bool owned = false;
+    ~LiveGuard() {
+      // A host-owned run store spans several cells; RuntimeWorld closes only
+      // the private fallback it created for a direct cell invocation.
+      if (owned) store->close();
+    }
+  } live_guard{live_store, own_live_store};
+  NotebookLiveScope live_scope(live_store, live_cell_id, live_generation);
   impl_->state->initialize_for_module(*impl_->module);
   impl_->record_event(replay::make_event(
       "task.started", {{"code_id", std::to_string(code_id)}}));
@@ -1098,6 +1130,15 @@ ExecutionResult RuntimeWorld::execute_notebook_cell(
   ExecutionResult result = execute_runtime_vm(
       impl_->module_owner, impl_->runtime_strings, impl_->runtime_symbols,
       std::move(vm_context), code_id, args, Value::null(), Value::null());
+  result.live_events = live_store->snapshot_cell(live_cell_id);
+  if (result.ok()) {
+    result.displays = displays->take();
+  } else {
+    displays->close();
+    // Live telemetry is deliberately not a slot transaction. The host retains
+    // and labels the final accepted frame/count even after Stop or failure.
+  }
+  result.input_dependencies = inputs->finish();
   if (dependency_collector != nullptr) {
     // This is the end of the run-local scope and happens before any result is
     // returned, including a VM fault.  The adapter decides whether the set is

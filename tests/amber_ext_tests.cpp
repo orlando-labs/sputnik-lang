@@ -9,6 +9,7 @@
 #include "runtime/amber_ext_runtime.h"
 #include "runtime/concurrency.h"
 #include "runtime/io.h"
+#include "runtime/native_call_buffer.h"
 #include "runtime/stdlib_registry.h"
 #include "runtime/world.h"
 
@@ -452,6 +453,31 @@ void test_amber_ext_scalar_round_trip() {
   amber::runtime::amber_ext_ctx_close(cx);
 }
 
+void test_call_arena_value_lifetime() {
+  std::weak_ptr<RuntimeBytes> weak;
+  Value retained;
+  {
+    amber::runtime::NativeCallValueArena<Value> arena;
+    auto bytes = std::make_shared<RuntimeBytes>("retained through overflow");
+    weak = bytes;
+    arena.push_back(Value::io_value(std::move(bytes)));
+    const Value *first = &arena[0];
+    for (std::int64_t i = 1; i < 128; ++i) {
+      arena.push_back(Value::integer(i));
+    }
+    expect(&arena[0] == first && !weak.expired(),
+           "inline values remain alive and stable through overflow growth");
+    for (std::size_t i = 1; i < arena.size(); ++i) {
+      expect(arena[i].as_integer() == static_cast<std::int64_t>(i),
+             "arena handles address both inline and overflow values");
+    }
+    retained = arena[0];
+  }
+  expect(!weak.expired(), "a returned value outlives its call arena");
+  retained = Value::null();
+  expect(weak.expired(), "call arena releases its resource ownership");
+}
+
 void test_amber_ext_str_and_bytes_round_trip() {
   RecordingHost host;
   NativeTagRegistry tags;
@@ -467,6 +493,19 @@ void test_amber_ext_str_and_bytes_round_trip() {
   expect(str_len == text.size() &&
              std::memcmp(str_ptr, text.data(), text.size()) == 0,
          "str view round-trips the bytes");
+
+  for (std::size_t i = 0; i < 256; ++i) {
+    const std::string extra = "borrowed-" + std::to_string(i);
+    const AmberValue value = amber_make_str(cx, extra.data(), extra.size());
+    const char *next_ptr = nullptr;
+    std::size_t next_len = 0;
+    expect(amber_str_view(cx, value, &next_ptr, &next_len) == 1 &&
+               next_len == extra.size() &&
+               std::memcmp(next_ptr, extra.data(), extra.size()) == 0,
+           "subsequent string views remain valid");
+  }
+  expect(std::memcmp(str_ptr, text.data(), text.size()) == 0,
+         "borrowed string storage survives subsequent arena and view growth");
 
   const std::string blob = std::string("\x00\x01\xfe\xff", 4);
   const AmberValue bytes_v = amber_make_bytes(
@@ -739,6 +778,24 @@ void test_direct_amber_ctx_dispatch() {
   expect(faulted.status == AMBER_ERR && arena.error_name == "TypeError" &&
              arena.error_message == "increment expects one Int",
          "direct AmberCtx dispatch records thunk faults in its backend");
+
+  RuntimeForeignHandle owned;
+  owned.ownership = RuntimeForeignHandle::Ownership::Owned;
+  int destroy_calls = 0;
+  owned.ptr = &destroy_calls;
+  AmberValue destructor_result = nullptr;
+  owned.teardown = [&](void *ctx, void *resource) {
+    expect(resource == &destroy_calls, "destructor receives the resource pointer");
+    ++destroy_calls;
+    destructor_result = amber_make_int(static_cast<AmberCtx *>(ctx), 73);
+  };
+  expect(amber::runtime::amber_ext_destroy_direct(ops, &arena, owned) &&
+             !owned.live && destroy_calls == 1 &&
+             arena.resolve(destructor_result, &output) && output == 73,
+         "direct teardown supplies a live ABI context and tombstones the handle");
+  expect(!amber::runtime::amber_ext_destroy_direct(ops, &arena, owned) &&
+             destroy_calls == 1,
+         "direct teardown is idempotent");
 }
 
 AmberStatus blocking_thread_probe(AmberCtx *cx, const AmberValue * /*args*/,
@@ -937,6 +994,7 @@ void test_runtime_world_direct_native_extension_call() {
 } // namespace
 
 int main() {
+  test_call_arena_value_lifetime();
   test_amber_ext_scalar_round_trip();
   test_amber_ext_str_and_bytes_round_trip();
   test_amber_ext_handle_lifecycle();

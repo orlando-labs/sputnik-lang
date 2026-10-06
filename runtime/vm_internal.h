@@ -102,6 +102,13 @@ struct CallCacheEntry {
   // for method/world invalidation.
   std::optional<std::uint32_t> attr_reader_ivar_symbol_id;
   bytecode::BcMethod method;
+  // A collection callback commonly sends to several receiver classes at one
+  // bytecode site. Retain a small bounded set instead of replacing the only
+  // entry on every layer. Alternatives are flat (their own vectors are empty).
+  std::vector<CallCacheEntry> alternatives;
+  // Admission hint only, never a dispatch guard. Two consecutive misses for
+  // the same shape allow a full cache to adapt to a changed hot receiver.
+  mutable std::optional<std::uint64_t> pending_overflow_shape;
 };
 
 struct IvarCacheEntry {
@@ -118,6 +125,7 @@ struct IvarCacheEntry {
 enum class QuickOpcode : std::uint8_t {
   Fallback,
   LoadK,
+  LookupConst,
   LoadNull,
   LoadBool,
   Move,
@@ -227,6 +235,31 @@ struct QuickInsn {
 
 struct QuickCode {
   std::vector<QuickInsn> instructions;
+};
+
+enum class ConstantLookupKind : std::uint8_t {
+  Unresolved,
+  Class,
+  ErrorClass,
+  NativeType,
+  NativeFunction,
+  TaskModule,
+  FlowModule,
+  ErrorNamespace,
+  ModuleBinding,
+  Missing,
+  Ambiguous,
+};
+
+struct ConstantLookupCache {
+  std::string path;
+  std::string binding_key;
+  ConstantLookupKind kind = ConstantLookupKind::Unresolved;
+  std::uint32_t target = 0;
+  // Cache the storage address, never a closure/watch snapshot. unordered_map
+  // rehash preserves this address; clearing the map invalidates the generation.
+  // The RuntimeState owns both this Value and its GC roots.
+  const Value *binding = nullptr;
 };
 
 struct PendingThrow {
@@ -353,6 +386,9 @@ struct Frame {
   std::unique_ptr<Frame> *direct_return_frame_sink = nullptr;
   std::optional<std::uint32_t> active_call_pc;
   std::optional<Value> return_override;
+  // Constructor continuation: run the inherited after_init! hook only after
+  // this init activation returns normally, before publishing its instance.
+  bool after_init_pending = false;
   bool merge_registers_to_caller = false;
   std::optional<Value> pending_exception_on_return;
   std::optional<PendingThrow> pending_throw_on_return;
@@ -549,6 +585,7 @@ struct RuntimeState {
   std::vector<std::uint32_t> resolved_class_refs;
   bool module_init_completed = false;
   std::unordered_map<std::string, Value> module_bindings;
+  std::uint64_t module_bindings_revision = 0;
   std::shared_ptr<std::atomic<std::uint64_t>> next_shape_id =
       std::make_shared<std::atomic<std::uint64_t>>(1);
   std::vector<std::shared_ptr<ShapeDescriptor>> root_shapes;
@@ -1110,6 +1147,7 @@ struct RuntimeState {
     call_cache_entry_count = 0;
     module_init_completed = false;
     module_bindings.clear();
+    ++module_bindings_revision;
     ++world_epoch;
   }
 
@@ -1175,6 +1213,7 @@ struct RuntimeState {
     initialize_inline_cache_layout(module);
     module_init_completed = false;
     module_bindings.clear();
+    ++module_bindings_revision;
     ++world_epoch;
   }
 };

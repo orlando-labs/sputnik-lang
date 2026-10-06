@@ -15,6 +15,7 @@
 #include <optional>
 #include <sstream>
 #include <string>
+#include <string_view>
 #include <unordered_set>
 #include <vector>
 
@@ -599,7 +600,187 @@ std::string runtime_stringify_value_impl(RuntimeStringifyContext *context,
   return "<unknown>";
 }
 
+// A separate bounded writer keeps the language's inspect/pretty semantics
+// unchanged. In particular a host preview must not allocate an entire large
+// string, recursively expand an exponential DAG, or stringify a huge BigInt.
+class PreviewWriter {
+public:
+  RuntimeStringifyContext context;
+  RuntimeValuePreviewOptions limits;
+  RuntimeValuePreview result;
+  std::size_t nodes = 0;
+  bool stopped = false;
+
+  void append(std::string_view text) {
+    if (stopped) return;
+    const auto remaining = limits.max_bytes - result.text.size();
+    if (text.size() <= remaining) { result.text.append(text); return; }
+    std::size_t count = remaining;
+    // Do not split a UTF-8 scalar at the output budget boundary.
+    while (count && count < text.size() &&
+           (static_cast<unsigned char>(text[count]) & 0xc0U) == 0x80U) --count;
+    result.text.append(text.substr(0, count));
+    result.truncated = stopped = true;
+  }
+  void limit() { result.truncated = true; append("…"); }
+  void indent(std::size_t depth) { append(std::string(depth * 2U, ' ')); }
+  void quoted(std::string_view text) {
+    append("\"");
+    for (std::size_t i = 0; i < text.size() && !stopped;) {
+      const auto c = static_cast<unsigned char>(text[i]);
+      switch (c) {
+      case '\\': append("\\\\"); break;
+      case '"': append("\\\""); break;
+      case '\n': append("\\n"); break;
+      case '\r': append("\\r"); break;
+      case '\t': append("\\t"); break;
+      default:
+        if (c < 0x20U) {
+          constexpr char hex[] = "0123456789abcdef";
+          const char escape[] = {'\\', 'x', hex[c >> 4U], hex[c & 15U]};
+          append(std::string_view(escape, 4));
+        } else {
+          const std::size_t width = c < 0x80U ? 1 : c < 0xe0U ? 2 : c < 0xf0U ? 3 : 4;
+          append(text.substr(i, width));
+          i += width;
+          continue;
+        }
+      }
+      ++i;
+    }
+    append("\"");
+  }
+  void symbol(std::uint32_t id) {
+    const auto *table = symbol_table_for(context);
+    append(table && id < table->size() ? std::string_view((*table)[id]) : "<invalid>");
+  }
+  template<class Item>
+  void sequence(std::string_view open, std::string_view close, std::size_t size,
+                RuntimeStringifyMode mode, std::size_t depth, Item item,
+                bool singleton_comma = false) {
+    append(open);
+    const bool pretty = mode == RuntimeStringifyMode::Pretty;
+    for (std::size_t i = 0; i < size && !stopped; ++i) {
+      if (i) append(pretty ? "," : ", ");
+      if (pretty) { append("\n"); indent(depth + 1); }
+      if (nodes >= limits.max_nodes) { limit(); break; }
+      item(i);
+    }
+    if (size && pretty) { append("\n"); indent(depth); }
+    else if (size == 1 && singleton_comma) append(",");
+    append(close);
+  }
+  void value(const Value &v, RuntimeStringifyMode mode, std::size_t depth = 0) {
+    if (stopped) return;
+    if (nodes++ >= limits.max_nodes || depth >= limits.max_depth) { limit(); return; }
+    const void *identity = heap_identity_for(v);
+    if (v.is_result()) identity = v.as_result().get();
+    if (v.is_watch_cell()) identity = v.as_watch_cell().get();
+    if (identity && context.active.count(identity)) { append("#<cycle>"); return; }
+    RuntimeStringifyGuard guard(&context, identity);
+    if (v.is_string()) {
+      const auto *table = string_table_for(context);
+      const std::string *text = v.is_heap_string()
+          ? (v.as_heap_string() ? &v.as_heap_string()->text : nullptr)
+          : (table && v.as_string().string_id < table->size() ? &(*table)[v.as_string().string_id] : nullptr);
+      if (mode == RuntimeStringifyMode::Display) append(text ? std::string_view(*text) : "<invalid>");
+      else quoted(text ? std::string_view(*text) : "<invalid>");
+    } else if (v.is_symbol()) {
+      if (mode != RuntimeStringifyMode::Display) append(":");
+      symbol(v.as_symbol().symbol_id);
+    } else if (v.is_result()) {
+      const auto r = v.as_result();
+      if (!r) { append("<result null>"); return; }
+      append(r->is_ok ? "Ok(" : "Err(");
+      value(r->payload, mode == RuntimeStringifyMode::Display ? RuntimeStringifyMode::Inspect : mode, depth + 1);
+      append(")");
+    } else if (v.is_watch_cell()) {
+      const auto cell = v.as_watch_cell();
+      if (!cell) { append("<watch-cell null>"); return; }
+      const auto snapshot = cell->snapshot();
+      append("<watch-cell #" + std::to_string(snapshot.cell_id) + " r" + std::to_string(snapshot.revision) + " ");
+      value(snapshot.value, mode, depth + 1); append(">");
+    } else if (v.is_list() || v.is_tuple() || v.is_set()) {
+      const std::vector<Value> *items = nullptr;
+      std::string lifecycle;
+      if (v.is_list() && v.as_list()) { items = &v.as_list()->items; lifecycle = lifecycle_debug_label(v.as_list()->header); }
+      if (v.is_tuple() && v.as_tuple()) { items = &v.as_tuple()->items; lifecycle = lifecycle_debug_label(v.as_tuple()->header); }
+      if (v.is_set() && v.as_set()) { items = &v.as_set()->items; lifecycle = lifecycle_debug_label(v.as_set()->header); }
+      if (!items || !lifecycle.empty()) { append("<unavailable container>"); return; }
+      sequence(v.is_list() ? "[" : v.is_tuple() ? "(" : items->empty() ? "Set{" : "{",
+               v.is_list() ? "]" : v.is_tuple() ? ")" : "}", items->size(), mode, depth,
+               [&](auto i) { value((*items)[i], mode, depth + 1); }, v.is_set());
+    } else if (v.is_map()) {
+      const auto map = v.as_map();
+      if (!map || !lifecycle_debug_label(map->header).empty()) { append("<unavailable map>"); return; }
+      sequence("{", "}", map->entries.size(), mode, depth, [&](auto i) {
+        value(map->entries[i].key, mode, depth + 1); append(": ");
+        value(map->entries[i].value, mode, depth + 1);
+      });
+    } else if (v.is_big_int() && v.as_big_int() && v.as_big_int()->magnitude.size() > 128) {
+      append("<BigInt: " + std::to_string(v.as_big_int()->magnitude.size()) + " limbs>");
+      result.truncated = true;
+    } else if (v.is_error_instance() && v.as_error_instance()) {
+      append(runtime_error_name(v.as_error_instance()->error_id)); append(": "); append(v.as_error_instance()->message);
+    } else if (v.is_native_error_namespace() && v.as_native_error_namespace()) {
+      append("<error namespace "); append(v.as_native_error_namespace()->path); append(">");
+    } else if (v.is_foreign_handle() && v.as_foreign_handle()) {
+      append("#<native "); append(v.as_foreign_handle()->tag); append(v.as_foreign_handle()->live ? ">" : " destroyed>");
+    } else if (v.is_regexp_pattern() && v.as_regexp_pattern()) {
+      append("/"); append(v.as_regexp_pattern()->source); append("/");
+    } else if (v.is_regexp_match() && v.as_regexp_match()) {
+      const auto match = v.as_regexp_match();
+      if (!match->captures.empty()) {
+        const auto &range = match->captures[0];
+        if (range.matched && range.start <= range.end && range.end <= match->source.size())
+          append(std::string_view(match->source).substr(range.start, range.end - range.start));
+      }
+    } else if (v.is_class_object() || v.is_instance_object()) {
+      const auto instance = v.is_instance_object() ? v.as_instance_object() : IntrusivePtr<InstanceValue>{};
+      if (v.is_instance_object() && (!instance || !lifecycle_debug_label(instance->header).empty())) {
+        append("<instance unavailable>"); return;
+      }
+      const auto index = instance ? instance->class_index : v.as_class_object().class_index;
+      append(instance ? "<instance " : "<class ");
+      if (instance && instance_is_native_range(instance)) append("Range");
+      else if (context.module && index < context.module->classes.size()) symbol(context.module->classes[index].class_name_sym_id);
+      else append("#" + std::to_string(index));
+      append(">");
+    } else if (v.is_time_zone() && v.as_time_zone()) {
+      append(v.as_time_zone()->name);
+    } else if (v.is_text_writer()) {
+      append(!v.as_text_writer() ? "<io.TextWriter null>" : v.as_text_writer()->buffered() ? "<io.Buffer>" : "<io.TextWriter>");
+    } else {
+      // All remaining built-in atoms have bounded representations, and no
+      // arbitrary user-defined inspect/to_s is dispatched here.
+      append(runtime_stringify_value(v, mode, context.module,
+                                     context.runtime_strings, context.runtime_symbols));
+    }
+  }
+};
+
 } // namespace
+
+RuntimeValuePreview runtime_preview_value(
+    const Value &value, RuntimeStringifyMode mode, const BcModule *module,
+    const std::vector<std::string> *strings, const std::vector<std::string> *symbols,
+    RuntimeValuePreviewOptions options) {
+  PreviewWriter writer;
+  writer.context.module = module;
+  writer.context.runtime_strings = strings;
+  writer.context.runtime_symbols = symbols;
+  writer.limits = options;
+  // Depth is bounded independently of caller configuration (stack safety).
+  writer.limits.max_depth = std::min<std::size_t>(options.max_depth, 64);
+  writer.value(value, mode);
+  if (writer.stopped && options.max_bytes >= 3) {
+    auto &text = writer.result.text;
+    auto end = std::min(text.size(), options.max_bytes - 3);
+    while (end && end < text.size() && (static_cast<unsigned char>(text[end]) & 0xc0U) == 0x80U) --end;
+    text.resize(end); text += "…";
+  }
+  return std::move(writer.result);
+}
 
 std::string
 runtime_stringify_value(const Value &value, RuntimeStringifyMode mode,

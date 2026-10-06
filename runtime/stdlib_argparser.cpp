@@ -1,4 +1,5 @@
 #include "runtime/context.h"
+#include "runtime/stdlib_bool.h"
 #include "runtime/stdlib_registry.h"
 
 #include <algorithm>
@@ -38,15 +39,6 @@ struct ParseResult {
 bool starts_with(const std::string &text, const std::string &prefix) {
   return text.size() >= prefix.size() &&
          text.compare(0, prefix.size(), prefix) == 0;
-}
-
-std::string lower_ascii(std::string text) {
-  for (char &ch : text) {
-    if (ch >= 'A' && ch <= 'Z') {
-      ch = static_cast<char>(ch - 'A' + 'a');
-    }
-  }
-  return text;
 }
 
 std::string derive_name_from_spelling(const std::string &spelling) {
@@ -417,21 +409,6 @@ bool parse_float(const std::string &text, double *out) {
   return true;
 }
 
-bool parse_bool_text(const std::string &text, bool *out) {
-  const std::string lowered = lower_ascii(text);
-  if (lowered == "true" || lowered == "1" || lowered == "yes" ||
-      lowered == "on") {
-    *out = true;
-    return true;
-  }
-  if (lowered == "false" || lowered == "0" || lowered == "no" ||
-      lowered == "off") {
-    *out = false;
-    return true;
-  }
-  return false;
-}
-
 bool convert_text(NativeStdlibCall &call, const std::string &text,
                   RuntimeNativeTypeKind type, Value *out) {
   switch (type) {
@@ -619,7 +596,9 @@ ParseResult parse_with_cmdline(NativeStdlibCall &call, const Parser &parser,
       std::string spelling = token;
       std::string attached_value;
       const std::size_t equals = token.find('=');
-      if (equals != std::string::npos && starts_with(token, "--")) {
+      const bool has_attached_value =
+          equals != std::string::npos && starts_with(token, "--");
+      if (has_attached_value) {
         spelling = token.substr(0, equals);
         attached_value = token.substr(equals + 1);
       }
@@ -638,7 +617,7 @@ ParseResult parse_with_cmdline(NativeStdlibCall &call, const Parser &parser,
 
       if (spec->kind == SpecKind::Flag) {
         Value value = Value::boolean(!negated);
-        if (!attached_value.empty()) {
+        if (has_attached_value) {
           bool parsed = false;
           if (!parse_bool_text(attached_value, &parsed)) {
             ParseResult result;
@@ -656,7 +635,7 @@ ParseResult parse_with_cmdline(NativeStdlibCall &call, const Parser &parser,
       }
 
       std::string raw_value = attached_value;
-      if (raw_value.empty()) {
+      if (!has_attached_value) {
         if (i + 1 >= cmdline.size()) {
           ParseResult result;
           result.status = ParseResult::Status::Error;

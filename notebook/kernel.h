@@ -47,6 +47,7 @@ struct CellExecutionResult {
   // heap pins protecting staged values). NotebookKernel keeps the execution
   // result alive through validation and the atomic publication transaction.
   std::shared_ptr<void> keepalive;
+  std::optional<std::set<std::string>> input_dependencies;
 };
 
 using CellExecutor =
@@ -242,6 +243,8 @@ public:
   // ambient-name configuration.  Changing that configuration requires a new
   // NotebookKernel/world generation.
   void reset();
+  // Project-scoped external input events, with normal Watch/Manual barriers.
+  std::vector<EvaluationStep> plan_input_changes(const std::set<std::string> &keys);
 
 private:
   std::vector<BindingKey> expected_writes(CellId id) const;
@@ -269,6 +272,10 @@ private:
   std::map<RuntimeDependencySourceKey, std::set<CellId>>
       runtime_dependency_consumers_;
   std::optional<runtime::RuntimeWatchStreamIdentity> runtime_watch_source_;
+  std::map<CellId, std::set<std::string>> input_dependencies_;
+  // Failed attempts may have read a new branch. Retry conservatively without
+  // replacing the last successful dependency snapshot on a failed transaction.
+  std::set<CellId> input_retry_consumers_;
 };
 
 } // namespace amber::notebook

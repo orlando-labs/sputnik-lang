@@ -20,6 +20,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -2555,13 +2556,108 @@ void test_quick_result_nullary_sends() {
 void test_bare_non_nullary_member_rejected() {
   const amber::bytecode::EmitResult emit_result =
       emit_ok("class Box:\n"
-              "  def format(mode = 1): mode\n"
+              "  def format(mode): mode\n"
               "Box().format\n");
   const amber::runtime::ExecutionResult exec = amber::runtime::execute_code(
       emit_result.module, emit_result.module.init.entry_code_id);
   expect(!exec.ok() && exec.fault.has_value() &&
              exec.fault->error_name == "ArgumentError",
-         "bare access to non-nullary method should raise ArgumentError");
+         "bare access to method requiring arguments should raise ArgumentError");
+}
+
+void test_bare_default_and_rest_member_calls() {
+  const auto captured_literals = execute_emitted_init(
+      "bias = 35\n"
+      "def helper(x): x + bias\n"
+      "def captured(value: 7): helper(value)\n"
+      "def evaluated(value: helper(7)): value\n"
+      "def fresh_captured(xs: []):\n"
+      "  xs.push!(helper(7))\n"
+      "  xs\n"
+      "[captured(), captured(value: 8), fresh_captured(), fresh_captured(), evaluated()]\n");
+  expect(captured_literals.ok() && captured_literals.value.is_list(),
+         "literal defaults with inherited unused captures should execute");
+  const auto &captured_values = captured_literals.value.as_list()->items;
+  expect(captured_values[0].as_integer() == 42 &&
+             captured_values[1].as_integer() == 43 &&
+             captured_values[2].as_list()->items.size() == 1U &&
+             captured_values[3].as_list()->items.size() == 1U &&
+             captured_values[2].as_list() != captured_values[3].as_list() &&
+             captured_values[4].as_integer() == 42,
+         "unused default captures preserve body bindings and fresh mutable defaults");
+  const auto literals = execute_emitted_init(
+      "class Box:\n"
+      "  def values(a = null, b: false, c: 7, d: 0.125, e: :yes, f: \"same\"):\n"
+      "    [a, b, c, d, e, f]\n"
+      "  def fresh(xs = []):\n"
+      "    xs.push!(1)\n"
+      "    xs\n"
+      "box = Box()\n"
+      "[box.values == [null, false, 7, 0.125, :yes, \"same\"] and "
+      "box.values() == [null, false, 7, 0.125, :yes, \"same\"], "
+      "box.fresh, box.fresh]\n");
+  expect(literals.ok() && literals.value.is_list(),
+         "literal and allocating default arguments should execute");
+  const auto &literal_values = literals.value.as_list()->items;
+  expect(literal_values[0].as_bool() &&
+             literal_values[1].as_list()->items.size() == 1U &&
+             literal_values[2].as_list()->items.size() == 1U,
+         "literal defaults agree with explicit calls and mutable defaults stay fresh");
+
+  const auto exec = execute_emitted_init(
+      "class Base:\n"
+      "  def value(x = 20, scale: 2): x * scale\n"
+      "  def increment!(amount: 1): @count += amount\n"
+      "  def rest(*xs, **kw, &block): xs.count + kw.count + (if block == null then 1 else 0)\n"
+      "class Box < Base:\n"
+      "  attr count\n"
+      "  def init(): @count = 0\n"
+      "  def via_self(): value\n"
+      "  class_method def answer(value: 42): value\n"
+      "box = Box()\n"
+      "values = []\n"
+      "8.times:\n"
+      "  box.increment!\n"
+      "  values.push!(box.value)\n"
+      "[values.sum, box.via_self, Box.answer, box.rest, box.count, box.?.value]\n");
+  expect(exec.ok(), "bare defaults/rest/block calls should execute");
+  expect(exec.value.is_list(), "bare default calls return test values");
+  const auto &values = exec.value.as_list()->items;
+  expect(values.size() == 6 && values[0].as_integer() == 320 &&
+             values[1].as_integer() == 40 && values[2].as_integer() == 42 &&
+             values[3].as_integer() == 1 && values[4].as_integer() == 8 &&
+             values[5].as_integer() == 40,
+         "bare defaults and cached sends bind the same values as explicit calls");
+
+  const auto defaults = execute_emitted_init(
+      "class Counter:\n"
+      "  attr count\n"
+      "  def init(): @count = 0\n"
+      "  def tick!():\n"
+      "    @count += 1\n"
+      "    @count\n"
+      "  def value(x = tick!, y: x + 1): x + y\n"
+      "  def rest_defaults(x = 1, *xs, y = 2): x + xs.count + y\n"
+      "counter = Counter()\n"
+      "a = counter.value\n"
+      "b = counter.value()\n"
+      "[a, b, counter.count, counter.rest_defaults]\n");
+  expect(defaults.ok() && defaults.value.is_list(),
+         "bare defaults with effects and dependencies should execute");
+  const auto &bound = defaults.value.as_list()->items;
+  expect(bound[0].as_integer() == 3 && bound[1].as_integer() == 5 &&
+             bound[2].as_integer() == 2 && bound[3].as_integer() == 3,
+         "defaults evaluate exactly once per invocation, in parameter order");
+
+  for (const auto &signature : {"required:", "x = 1, required:",
+                                "*xs, required", "&required:"}) {
+    const auto missing = execute_emitted_init(
+        std::string("class Box:\n  def value(") + signature +
+        "): 42\nBox().value\n");
+    expect(!missing.ok() && missing.fault.has_value() &&
+               missing.fault->error_name == "ArgumentError",
+           "bare methods must still reject required keyword/rest-tail/callable parameters");
+  }
 }
 
 void test_implicit_self_bare_identifier_dispatch() {
@@ -3375,6 +3471,49 @@ void test_execute_emitted_constructor_auto_assign() {
   expect(exec.ok(), "constructor auto-assign execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 7,
          "constructor auto-assign should materialize ivar");
+}
+
+void test_after_init_and_instance_fields() {
+  std::ifstream source_file("corpus/run/instance_fields_after_init/source.am");
+  expect(source_file.good(), "object lifecycle corpus source exists");
+  const std::string source((std::istreambuf_iterator<char>(source_file)),
+                           std::istreambuf_iterator<char>());
+  const auto emitted = emit_ok(source);
+  const auto *probe = method_by_name(emitted.module, "probe");
+  expect(probe != nullptr, "object lifecycle probe exists");
+  const auto result = amber::runtime::execute_code(emitted.module,
+                                                  probe->entry_code_id);
+  expect(result.ok(), result.fault.has_value() ? result.fault->message
+                                             : "object lifecycle execution");
+  expect(result.value.is_bool() && result.value.as_bool(),
+         "object lifecycle and field snapshots pass");
+
+  const auto parked = emit_ok(
+      "import task\n"
+      "class Parked:\n"
+      "  attr ready\n"
+      "  def init():\n"
+      "    @ready = 0\n"
+      "    task.sleep(1)\n"
+      "    @ready = 1\n"
+      "  def after_init!():\n"
+      "    task.sleep(1)\n"
+      "    @ready += 1\n"
+      "def probe():\n"
+      "  worker = task.spawn: Parked().ready\n"
+      "  worker.wait() == 2\n");
+  const auto *parked_probe = method_by_name(parked.module, "probe");
+  expect(parked_probe != nullptr, "suspending constructor probe exists");
+  const auto parks_before =
+      amber::runtime::runtime_cooperative_task_park_count();
+  const auto parked_result = amber::runtime::execute_code(
+      parked.module, parked_probe->entry_code_id);
+  expect(parked_result.ok() && parked_result.value.is_bool() &&
+             parked_result.value.as_bool(),
+         "constructor waits for suspended init and after_init!");
+  expect(amber::runtime::runtime_cooperative_task_park_count() - parks_before ==
+             2U,
+         "both init and after_init! park and resume cooperatively");
 }
 
 void test_execute_bodyless_class_and_null_equality() {
@@ -6306,6 +6445,251 @@ void test_manual_multi_segment_lookup_const() {
          "multi-segment LOOKUP_CONST should resolve class leaf");
 }
 
+std::function<void()> lookup_const_probe_mutation;
+
+amber::runtime::SendStatus
+lookup_const_probe_handler(amber::runtime::NativeStdlibCall &call) {
+  expect(call.selector == "mutate", "lookup probe calls its mutation boundary");
+  lookup_const_probe_mutation();
+  *call.out = amber::runtime::Value::null();
+  return amber::runtime::SendStatus::Matched;
+}
+
+amber::runtime::ExecutionResult execute_lookup_const_probe(
+    const std::vector<std::string> &path,
+    amber::runtime::RuntimeVmExecutionContext context,
+    std::function<void()> mutation, bool add_class = false) {
+  using namespace amber::bytecode;
+  using namespace amber::runtime;
+  BcModule module;
+  module.symbols = path;
+  module.symbols.push_back("mutate");
+  Constant constant;
+  constant.kind = ConstantKind::Path;
+  for (std::uint32_t i = 0; i < path.size(); ++i) {
+    constant.items.push_back(i);
+  }
+  module.const_pool.push_back(constant);
+  if (add_class) {
+    BcClass klass;
+    klass.class_name_sym_id = 0;
+    module.classes.push_back(klass);
+  }
+  BcCode code;
+  code.code_id = 1;
+  code.kind = CodeKind::Method;
+  code.reg_count = 5;
+  code.instructions = {
+      {Opcode::LookupConst, {{1, false}, {0, false}}},
+      {Opcode::Send, {{4, false}, {0, false},
+                     {static_cast<std::int64_t>(path.size()), false},
+                     {0, false}, {0, false}, {-1, true}, {0, false}}},
+      {Opcode::LookupConst, {{2, false}, {0, false}}},
+      {Opcode::LookupConst, {{3, false}, {0, false}}},
+      {Opcode::MakeTuple, {{4, false}, {1, false}, {3, false}}},
+      {Opcode::Return, {{4, false}}}};
+  module.code_objects.push_back(code);
+  RuntimeDispatchRegistry dispatch;
+  dispatch.register_native_handler(RuntimeNativeTypeKind::Math,
+                                    lookup_const_probe_handler);
+  context.dispatch_registry = &dispatch;
+  lookup_const_probe_mutation = std::move(mutation);
+  auto result = execute_runtime_vm(
+      module, std::move(context), 1, {Value::native_type(RuntimeNativeTypeKind::Math)},
+      Value::null(), Value::null());
+  lookup_const_probe_mutation = {};
+  return result;
+}
+
+void test_lookup_const_keeps_live_binding_and_captures() {
+  using namespace amber::runtime;
+  auto state = std::make_shared<RuntimeState>();
+  auto first = make_intrusive<ClosureValue>();
+  first->code_id = 17;
+  first->captures = {Value::integer(7)};
+  auto next = make_intrusive<ClosureValue>();
+  next->code_id = 17;
+  next->captures = {Value::integer(42)};
+  state->module_bindings["probe.nested:answer"] = Value::closure(first);
+  RuntimeVmExecutionContext context;
+  context.state = state;
+  const auto result = execute_lookup_const_probe(
+      {"probe", "nested", "answer"}, context, [&] {
+        // Rehash does not invalidate cached storage addresses. A replacement
+        // Value at that address must be read without taking a closure snapshot.
+        for (int i = 0; i < 2000; ++i) {
+          state->module_bindings["other:" + std::to_string(i)] = Value::integer(i);
+        }
+        state->module_bindings["probe.nested:answer"] = Value::closure(next);
+      });
+  expect(result.ok() && result.value.is_tuple(), "live binding lookup executes");
+  const auto &values = result.value.as_tuple()->items;
+  expect(values.size() == 3 && values[0].as_closure() == first &&
+             values[1].as_closure() == next && values[2].as_closure() == next &&
+             values[2].as_closure()->captures[0].as_integer() == 42,
+         "warmed qualified lookup reads replacements with their real captures");
+
+  auto cell = std::make_shared<RuntimeWatchCell>(Value::integer(7));
+  state->module_bindings["probe.nested:answer"] = Value::watch_cell(cell);
+  const auto watched = execute_lookup_const_probe(
+      {"probe", "nested", "answer"}, context,
+      [&] { cell->write(Value::integer(42)); });
+  expect(watched.ok() && watched.value.as_tuple()->items[0].as_integer() == 7 &&
+             watched.value.as_tuple()->items[1].as_integer() == 42 &&
+             watched.value.as_tuple()->items[2].as_integer() == 42,
+         "warmed lookup unwraps the current watched value");
+
+  const auto cleared = execute_lookup_const_probe(
+      {"probe", "nested", "answer"}, context, [&] {
+        state->module_bindings.clear();
+        ++state->module_bindings_revision;
+        state->module_bindings["probe.nested:answer"] = Value::integer(99);
+      });
+  expect(cleared.ok() && cleared.value.as_tuple()->items[1].as_integer() == 99 &&
+             cleared.value.as_tuple()->items[2].as_integer() == 99,
+         "binding generation change discards addresses into the cleared map");
+
+  const auto removed = execute_lookup_const_probe(
+      {"probe", "nested", "answer"}, context, [&] {
+        state->module_bindings.clear();
+        ++state->module_bindings_revision;
+      });
+  expect(!removed.ok() && removed.fault &&
+             removed.fault->message == "class path ref target is unknown",
+         "removed binding faults instead of returning a dangling cached value");
+}
+
+void test_lookup_const_registry_mutation_and_precedence() {
+  using namespace amber::runtime;
+  RuntimeErrorRegistry errors;
+  RuntimeModuleRegistry modules;
+  auto state = std::make_shared<RuntimeState>();
+  state->module_bindings["Probe:Value"] = Value::integer(7);
+  RuntimeVmExecutionContext context;
+  context.state = state;
+  context.error_registry = &errors;
+  context.module_registry = &modules;
+
+  const auto namespaced = execute_lookup_const_probe(
+      {"Probe", "Value"}, context,
+      [&] { errors.register_error("Probe.Value.Failure", "Exception"); });
+  expect(namespaced.ok(), "new namespace lookup executes");
+  const auto &namespace_values = namespaced.value.as_tuple()->items;
+  expect(namespace_values[0].is_integer() &&
+             namespace_values[1].is_native_error_namespace() &&
+             namespace_values[1].as_native_error_namespace()->path == "Probe.Value" &&
+             namespace_values[2].is_native_error_namespace() &&
+             namespace_values[1].as_native_error_namespace() !=
+                 namespace_values[2].as_native_error_namespace(),
+         "new error namespaces supersede bindings and keep fresh-object semantics");
+
+  modules.register_native_type_path("Probe.Value", RuntimeNativeTypeKind::Math);
+  const auto exact_error = execute_lookup_const_probe(
+      {"Probe", "Value"}, context,
+      [&] { errors.register_error("Probe.Value", "Exception"); });
+  const auto id = errors.error_id("Probe.Value");
+  expect(exact_error.ok() && id &&
+             exact_error.value.as_tuple()->items[0].is_native_type() &&
+             exact_error.value.as_tuple()->items[1].is_native_error_class() &&
+             exact_error.value.as_tuple()->items[2].as_native_error_class().error_id == *id,
+         "exact builtin outranks namespaces, newly registered exact error outranks builtin");
+
+  modules.register_native_type_path("Mutable", RuntimeNativeTypeKind::Math);
+  const auto replaced = execute_lookup_const_probe(
+      {"Mutable"}, context, [&] {
+        modules.register_native_function_path("Mutable", RuntimeNativeFunctionKind::P);
+      });
+  expect(replaced.ok() && replaced.value.as_tuple()->items[0].is_native_type() &&
+             replaced.value.as_tuple()->items[1].is_native_function() &&
+             replaced.value.as_tuple()->items[2].as_native_function().kind ==
+                 RuntimeNativeFunctionKind::P,
+         "replacement builtin path invalidates warmed lookup category");
+
+  RuntimeModuleRegistry replacement_modules;
+  replacement_modules.register_task_module_path("UnusedOne");
+  replacement_modules.register_task_module_path("UnusedTwo");
+  replacement_modules.register_native_type_path("Mutable", RuntimeNativeTypeKind::Json);
+  expect(replacement_modules.revision() == modules.revision(),
+         "image swap probe uses equal-revision registries");
+  const auto image_swap = execute_lookup_const_probe(
+      {"Mutable"}, context, [&] {
+        modules = replacement_modules;
+        ++state->world_epoch;
+      });
+  expect(image_swap.ok() && image_swap.value.as_tuple()->items[0].is_native_function() &&
+             image_swap.value.as_tuple()->items[2].as_native_type().kind ==
+                 RuntimeNativeTypeKind::Json,
+         "world generation also guards replacement registry contents");
+
+  modules.register_native_type_path("LocalClass", RuntimeNativeTypeKind::Math);
+  errors.register_error("LocalClass", "Exception");
+  auto class_context = context;
+  class_context.state = std::make_shared<RuntimeState>();
+  const auto klass = execute_lookup_const_probe(
+      {"LocalClass"}, class_context, [] {}, true);
+  expect(klass.ok() && klass.value.as_tuple()->items[0].is_class_object() &&
+             klass.value.as_tuple()->items[2].as_class_object().class_index == 0,
+         "Amber class keeps precedence over native errors and bindings");
+
+  modules.register_flow_module_path("FlowProbe");
+  const auto flow = execute_lookup_const_probe({"FlowProbe"}, context, [] {});
+  expect(flow.ok() && flow.value.as_tuple()->items[0].is_flow_module() &&
+             flow.value.as_tuple()->items[0].as_flow_module() !=
+                 flow.value.as_tuple()->items[1].as_flow_module() &&
+             flow.value.as_tuple()->items[1].as_flow_module() !=
+                 flow.value.as_tuple()->items[2].as_flow_module(),
+         "warmed flow lookup keeps fresh module instances");
+  modules.register_task_module_path("TaskProbe");
+  const auto task = execute_lookup_const_probe({"TaskProbe"}, context, [] {});
+  expect(task.ok() && task.value.as_tuple()->items[0].is_task_module() &&
+             task.value.as_tuple()->items[0].as_task_module() ==
+                 task.value.as_tuple()->items[2].as_task_module(),
+         "task lookup keeps the VM's owning task module");
+}
+
+void test_lookup_const_quick_path_preserves_faults() {
+  using namespace amber::bytecode;
+  const auto check = [](BcModule module, const std::string &message,
+                        std::int64_t ref = 0) {
+    BcCode code;
+    code.code_id = 1;
+    code.kind = CodeKind::Method;
+    code.reg_count = 1;
+    code.instructions = {
+        {Opcode::LookupConst, {{0, false}, {ref, ref < 0}}},
+        {Opcode::Return, {{0, false}}}};
+    module.code_objects = {code};
+    const auto result = amber::runtime::execute_code(module, 1);
+    expect(!result.ok() && result.fault && result.fault->message == message,
+           "LOOKUP_CONST preserves fault: " + message);
+  };
+  check({}, "constant ref out of range");
+  BcModule module;
+  module.symbols = {"Unknown"};
+  Constant constant;
+  constant.kind = ConstantKind::Integer;
+  module.const_pool = {constant};
+  check(module, "LOOKUP_CONST expects path constant in current runtime");
+  constant.kind = ConstantKind::Path;
+  module.const_pool = {constant};
+  check(module, "path constant is empty");
+  constant.items = {1};
+  module.const_pool = {constant};
+  check(module, "path symbol ref is out of range");
+  constant.items = {0};
+  module.const_pool = {constant};
+  check(module, "class path ref target is unknown");
+  check(module, "negative operand in unsigned slot", -1);
+  module.symbols.push_back("First.Unknown");
+  module.symbols.push_back("Second.Unknown");
+  BcClass first;
+  first.class_name_sym_id = 1;
+  BcClass second;
+  second.class_name_sym_id = 2;
+  module.classes = {first, second};
+  check(module, "class path ref is ambiguous");
+}
+
 void test_manual_multi_segment_superclass_dispatch() {
   using namespace amber::bytecode;
 
@@ -6498,6 +6882,154 @@ void test_manual_send_cache_receiver_class_guard() {
   expect(exec.ok(), "send cache receiver-class guard execution failed");
   expect(exec.value.is_integer() && exec.value.as_integer() == 2,
          "send cache should miss when receiver class changes");
+}
+
+void test_runtime_polymorphic_call_cache_and_invalidation() {
+  using namespace amber::bytecode;
+  BcModule module;
+  const std::uint32_t selector = ensure_symbol_id(&module, "value");
+  append_path_const(&module, {});
+  BcCode caller;
+  caller.code_id = 1;
+  caller.kind = CodeKind::Method;
+  caller.reg_count = 2;
+  caller.instructions.push_back(send_instr(1, 0, selector, {}, -1, 0));
+  caller.instructions.push_back({Opcode::Return, {{1, false}}});
+  module.code_objects.push_back(caller);
+  std::vector<amber::runtime::Value> instances;
+  // More than the cache bound also exercises eviction without stale dispatch.
+  for (std::uint32_t i = 0; i < 10; ++i) {
+    BcClass klass;
+    klass.class_name_sym_id = ensure_symbol_id(&module, "Layer" + std::to_string(i));
+    klass.method_range_start = i;
+    klass.method_range_count = 1;
+    module.classes.push_back(klass);
+    BcMethod method;
+    method.selector_sym_id = selector;
+    method.owner_dispatch_ref = i;
+    method.entry_code_id = i + 2;
+    method.flags = 1;
+    module.methods.push_back(method);
+    BcCode body;
+    body.code_id = i + 2;
+    body.kind = CodeKind::Method;
+    body.reg_count = 1;
+    const auto constant = append_integer_const(&module, i);
+    body.instructions.push_back({Opcode::LoadK, {{0, false}, {constant, false}}});
+    body.instructions.push_back({Opcode::Return, {{0, false}}});
+    module.code_objects.push_back(body);
+    auto instance = amber::runtime::make_intrusive<amber::runtime::InstanceValue>();
+    instance->class_index = i;
+    instance->header.class_index = i;
+    instances.push_back(amber::runtime::Value::instance(instance));
+  }
+  amber::runtime::RuntimeWorld world(module);
+  const auto invoke = [&](std::uint32_t i, std::int64_t expected) {
+    const auto result = world.execute(1, {instances[i]});
+    expect(result.ok() && result.value.is_integer() &&
+               result.value.as_integer() == expected,
+           "polymorphic cache must select the receiver's current method");
+  };
+  for (int repeat = 0; repeat < 10; ++repeat) {
+    for (std::uint32_t i = 0; i < 6; ++i) invoke(i, i);
+  }
+  auto stats = world.dispatch_cache_stats();
+  expect(stats.call_cache_entries == 1 && stats.call_cache_misses == 6 &&
+             stats.call_cache_updates == 6 && stats.call_cache_hits == 54,
+         "six receiver classes should warm once at one bytecode site");
+  BcMethod replacement = module.methods[0];
+  replacement.entry_code_id = module.methods[9].entry_code_id;
+  expect(world.define_instance_method(0, replacement).ok(),
+         "polymorphic cache method replacement should succeed");
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    for (std::uint32_t i = 0; i < 6; ++i) invoke(i, i == 0 ? 9 : i);
+  }
+  stats = world.dispatch_cache_stats();
+  expect(stats.call_cache_misses == 12 && stats.call_cache_hits == 60,
+         "world mutation should invalidate every alternative before rewarming");
+  for (int repeat = 0; repeat < 3; ++repeat) {
+    for (std::uint32_t i = 0; i < 10; ++i) invoke(i, i == 0 ? 9 : i);
+  }
+  stats = world.dispatch_cache_stats();
+  expect(stats.call_cache_misses == 20 && stats.call_cache_hits == 82 &&
+             stats.call_cache_updates == 14,
+         "overflow shapes must preserve hits for admitted classes without churning the cache");
+  invoke(0, 9);
+  invoke(9, 9);
+  invoke(9, 9);
+  invoke(9, 9);
+  stats = world.dispatch_cache_stats();
+  expect(stats.call_cache_misses == 22 && stats.call_cache_hits == 84 &&
+             stats.call_cache_updates == 15,
+         "a full cache must still adapt when an overflow shape becomes the hot receiver");
+}
+
+void test_constructor_call_cache_and_invalidation() {
+  using namespace amber::bytecode;
+  BcModule module;
+  const auto init_symbol = ensure_symbol_id(&module, "init");
+  const auto tag_symbol = ensure_symbol_id(&module, "tag");
+  append_path_const(&module, {});
+  BcCode caller;
+  caller.code_id = 1;
+  caller.kind = CodeKind::Method;
+  caller.reg_count = 2;
+  caller.instructions.push_back({Opcode::Call,
+      {{1, false}, {0, false}, {0, false}, {0, false}, {-1, true}, {0, false}}});
+  caller.instructions.push_back({Opcode::Return, {{1, false}}});
+  module.code_objects.push_back(caller);
+  for (std::uint32_t i = 0; i < 3; ++i) {
+    if (i < 2) {
+      BcClass klass;
+      klass.class_name_sym_id = ensure_symbol_id(&module, "Box" + std::to_string(i));
+      klass.method_range_start = i;
+      klass.method_range_count = 1;
+      module.classes.push_back(klass);
+      BcMethod method;
+      method.selector_sym_id = init_symbol;
+      method.owner_dispatch_ref = i;
+      method.entry_code_id = i + 2;
+      method.flags = kMethodFlagInstance;
+      module.methods.push_back(method);
+    }
+    BcCode body;
+    body.code_id = i + 2;
+    body.kind = CodeKind::Method;
+    body.reg_count = 2;
+    const auto constant = append_integer_const(&module, (i + 1) * 11);
+    body.instructions.push_back({Opcode::LoadSelf, {{0, false}}});
+    body.instructions.push_back({Opcode::LoadK, {{1, false}, {constant, false}}});
+    body.instructions.push_back({Opcode::StoreIvar,
+                                  {{0, false}, {tag_symbol, false}, {1, false}, {0, false}}});
+    body.instructions.push_back({Opcode::Return, {{1, false}}});
+    module.code_objects.push_back(body);
+  }
+  amber::runtime::RuntimeWorld world(module);
+  const auto construct = [&](std::uint32_t index, std::int64_t tag) {
+    const auto result = world.execute(1, {amber::runtime::Value::class_object(index)});
+    expect(result.ok() && result.value.is_instance_object(),
+           "cached constructor must return a fresh instance");
+    const auto instance = result.value.as_instance_object();
+    expect(instance->class_index == index && instance->ivars.at("tag").as_integer() == tag,
+           "constructor cache must select the receiver's current init");
+    return instance;
+  };
+  const auto first = construct(0, 11);
+  for (int repeat = 0; repeat < 4; ++repeat) {
+    construct(1, 22);
+    expect(construct(0, 11) != first, "constructor cache must not reuse instances");
+  }
+  auto stats = world.dispatch_cache_stats();
+  expect(stats.call_cache_misses == 2 && stats.call_cache_hits == 7,
+         "constructor classes should resolve once at a shared CALL site");
+  auto replacement = module.methods[0];
+  replacement.entry_code_id = 4;
+  expect(world.define_instance_method(0, replacement).ok(), "constructor replacement failed");
+  construct(0, 33);
+  construct(0, 33);
+  stats = world.dispatch_cache_stats();
+  expect(stats.call_cache_misses == 3 && stats.call_cache_hits == 8,
+         "constructor replacement must invalidate the cache");
 }
 
 void test_manual_ivar_cache_shape_guard() {
@@ -10621,6 +11153,20 @@ void test_source_try_rescue_ensure_execution() {
 }
 
 void test_native_error_inherited_rescue_execution() {
+  for (const auto &constructor : {"NotImplementedError", "NotImplementedError.new"}) {
+    const std::string source =
+        "try:\n"
+        "  raise " + std::string(constructor) + "(\"pending\")\n"
+        "rescue Exception |e|:\n"
+        "  if NotImplementedError === e and e.message == \"pending\":\n"
+        "    7\n"
+        "  else:\n"
+        "    0\n";
+    const auto result = execute_emitted_init(source);
+    expect(result.ok() && result.value.is_integer() && result.value.as_integer() == 7,
+           "NotImplementedError constructors preserve message and inherit Exception");
+  }
+
   amber::runtime::ExecutionResult inherited =
       execute_emitted_init("try:\n"
                            "  raise JsonParseError(\"bad json\")\n"
@@ -12358,6 +12904,7 @@ int main() {
   test_manual_closure_call_and_capture();
   test_runtime_uninitialized_register_read_raises_name_error();
   test_manual_call_invokes_object_call_method();
+  test_constructor_call_cache_and_invalidation();
   test_execute_emitted_send_method();
   test_execute_emitted_class_matcher();
   test_execute_emitted_implicit_receiver_method_call();
@@ -12376,6 +12923,7 @@ int main() {
   test_bare_nullary_member_implicit_call();
   test_quick_result_nullary_sends();
   test_bare_non_nullary_member_rejected();
+  test_bare_default_and_rest_member_calls();
   test_implicit_self_bare_identifier_dispatch();
   test_property_called_as_method_rejected();
   test_dot_call_invokes_member_result();
@@ -12391,6 +12939,7 @@ int main() {
   test_execute_emitted_class_method_send();
   test_execute_emitted_constructor_call();
   test_execute_emitted_constructor_auto_assign();
+  test_after_init_and_instance_fields();
   test_execute_bodyless_class_and_null_equality();
   test_execute_emitted_constructor_default();
   test_execute_emitted_cvar_store_and_load();
@@ -12459,8 +13008,12 @@ int main() {
   test_manual_store_and_load_ivar();
   test_manual_store_and_load_cvar();
   test_manual_multi_segment_lookup_const();
+  test_lookup_const_keeps_live_binding_and_captures();
+  test_lookup_const_registry_mutation_and_precedence();
+  test_lookup_const_quick_path_preserves_faults();
   test_manual_multi_segment_superclass_dispatch();
   test_manual_send_cache_receiver_class_guard();
+  test_runtime_polymorphic_call_cache_and_invalidation();
   test_manual_ivar_cache_shape_guard();
   test_runtime_ivar_shape_slot_transition_stability();
   test_runtime_dead_shape_rejects_ivar_access();

@@ -1,4 +1,5 @@
 #include "notebook/kernel.h"
+#include "runtime/context.h"
 
 #include <algorithm>
 #include <exception>
@@ -336,6 +337,12 @@ bool NotebookKernel::commit_update_cells(PreparedCellUpdate &update) noexcept {
     }
     sources_.swap(update.sources_);
     graph_.swap(update.graph_);
+    for (auto it = input_dependencies_.begin(); it != input_dependencies_.end();) {
+      if (!graph_.analysis(it->first)) it = input_dependencies_.erase(it); else ++it;
+    }
+    for (auto it = input_retry_consumers_.begin(); it != input_retry_consumers_.end();) {
+      if (!graph_.analysis(*it)) it = input_retry_consumers_.erase(it); else ++it;
+    }
     dynamic_dependencies_.swap(update.dynamic_dependencies_);
     runtime_dependencies_.swap(update.runtime_dependencies_);
     runtime_dependency_consumers_.swap(
@@ -374,6 +381,7 @@ CellRunResult NotebookKernel::run_cell(CellId id,
       result.error = "notebook cell is not present in the current graph";
       return result;
     }
+    input_retry_consumers_.insert(id);
     if (!analysis->ok()) {
       result.error = "notebook cell has frontend diagnostics";
       return result;
@@ -480,6 +488,8 @@ CellRunResult NotebookKernel::run_cell(CellId id,
     std::map<CellId, std::vector<BindingKey>> next_dependencies =
         dynamic_dependencies_;
     next_dependencies[id] = execution.dynamic_dependencies;
+    auto next_inputs = input_dependencies_;
+    if (execution.input_dependencies) next_inputs[id] = *execution.input_dependencies;
     std::optional<
         std::map<CellId, runtime::RuntimeDependencySet>> next_runtime_dependencies;
     std::optional<std::map<RuntimeDependencySourceKey, std::set<CellId>>>
@@ -524,9 +534,15 @@ CellRunResult NotebookKernel::run_cell(CellId id,
         transaction.stage(write.key, write.value);
       }
     }
+    if (runtime::runtime_run_cancel_requested()) {
+      result.error = "CancelledError: execution cancelled before publication";
+      return result;
+    }
     result.publication = transaction.commit();
     if (result.publication.committed) {
       dynamic_dependencies_.swap(next_dependencies);
+      input_dependencies_.swap(next_inputs);
+      input_retry_consumers_.erase(id);
       if (next_runtime_dependencies.has_value()) {
         runtime_dependencies_.swap(*next_runtime_dependencies);
         runtime_dependency_consumers_.swap(*next_runtime_dependency_consumers);
@@ -719,9 +735,27 @@ void NotebookKernel::reset() {
   graph_.rebuild({}, ambient_names_);
   slots_.clear();
   dynamic_dependencies_.clear();
+  input_dependencies_.clear();
+  input_retry_consumers_.clear();
   runtime_dependencies_.clear();
   runtime_dependency_consumers_.clear();
   runtime_watch_source_.reset();
+}
+
+std::vector<EvaluationStep> NotebookKernel::plan_input_changes(const std::set<std::string> &keys) {
+  std::lock_guard<std::mutex> execution_lock(execution_mutex_);
+  std::lock_guard<std::mutex> state_lock(state_mutex_);
+  if (keys.empty()) return {};
+  std::set<CellId> roots;
+  for (const auto id : graph_.cell_order()) {
+    const auto found = input_dependencies_.find(id);
+    if (found == input_dependencies_.end() || input_retry_consumers_.count(id) ||
+        std::any_of(keys.begin(), keys.end(), [&](const auto &key) { return found->second.count(key); }))
+      roots.insert(id);
+  }
+  auto plan = plan_automatic_evaluation(graph_, sources_, roots);
+  mark_plan_outputs_stale(nullptr, graph_, plan);
+  return plan;
 }
 
 std::vector<BindingKey> NotebookKernel::expected_writes(CellId id) const {

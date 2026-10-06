@@ -14,22 +14,33 @@ native class Box from "box.Box" owned:
   def value() -> Int            from "box.box_value"
   def destroy!()                from "box.box_free"
 
+# Ordinary init ignores its result, even when the last ivar assignment stores
+# a native handle. Only Box's native constructor may return the handle itself.
+class Wrapper:
+  def init(inner):
+    @inner = inner
+
+  def value(): @inner.value
+  def close!(): @inner.destroy!
+
 def main():
   b = Box(10)
   b.bump!(5)
   b.bump!(7)
-  total = b.value()
+  total = Wrapper(b).value
   # A thunk that calls amber_fault raises a rescuable error (bump! by 0).
   caught_value = 0
   try:
     b.bump!(0)
   rescue ValueError |e|:
     caught_value = 1
-  b.destroy!()
+  wrapper = Wrapper(b)
+  if not wrapper.close! or wrapper.close!:
+    raise ValueError("native destroy must be idempotent")
   # Use-after-destroy! is a rescuable LifetimeError.
   caught_lifetime = 0
   try:
-    b.value()
+    b.value
   rescue LifetimeError |e|:
     caught_lifetime = 1
   total + caught_value + caught_lifetime

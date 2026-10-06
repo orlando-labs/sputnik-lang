@@ -1,0 +1,9 @@
+def ping():
+  try:
+    notebook.progress(id: "x", current: 0, total: null, desc: "", done: false)
+  rescue NoMethodError:
+    1
+  2
+
+def main():
+  ping()

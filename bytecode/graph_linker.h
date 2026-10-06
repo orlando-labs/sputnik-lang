@@ -23,7 +23,7 @@ struct GraphModule {
 // Bump when merged-image semantics or the linker-visible bytecode ABI changes.
 // Consumers use this to invalidate cached linked graphs independently of the
 // source-module artifact cache.
-inline constexpr std::uint32_t kGraphLinkerAbiVersion = 2U;
+inline constexpr std::uint32_t kGraphLinkerAbiVersion = 3U;
 
 struct GraphExport {
   std::string provider;

@@ -109,21 +109,28 @@ native_system_from_value(const NativeValue &value) {
     const auto strand = amber::runtime::current_runtime_strand_id();
     const auto task_id = amber::runtime::tls_runtime_task_id;
     const auto cancel = amber::runtime::tls_runtime_task_cancel_flag;
+    const auto cancel_owner = amber::runtime::current_runtime_task_cancel_owner();
+    const auto run = amber::runtime::current_runtime_run_cancellation();
+    const bool cleanup = amber::runtime::runtime_run_cancel_requested() &&
+                         !amber::runtime::runtime_run_cancel_checkpoint_requested();
     const auto sync_owner = amber::runtime::tls_runtime_sync_owner_id;
     const auto context = amber::runtime::tls_runtime_task_context;
     const auto scheduler = amber::runtime::tls_runtime_scheduler_identity;
     const auto stdout_writer = amber::runtime::current_runtime_stdout(),
                stderr_writer = amber::runtime::current_runtime_stderr();
-    result.callback = [value, strand, task_id, cancel, sync_owner, context,
+    result.callback = [value, strand, task_id, cancel, cancel_owner, run, cleanup, sync_owner, context,
                        scheduler, stdout_writer,
                        stderr_writer](const std::vector<S> &args) {
       amber::runtime::RuntimeStrandScope strand_scope(strand);
+      const auto activity = run ? run->register_task() : nullptr;
+      amber::runtime::RuntimeRunCancellationScope run_scope(run);
+      amber::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
       amber::runtime::RuntimeTaskScope task_scope(
           task_id,
           amber::runtime::system_callback_cancel_flag()
               ? amber::runtime::system_callback_cancel_flag()
               : cancel,
-          sync_owner, context, scheduler);
+          sync_owner, context, scheduler, cancel_owner);
       amber::runtime::RuntimeOutputScope output_scope(stdout_writer,
                                                       stderr_writer);
       NativeCycleScope cycle_scope;
@@ -169,8 +176,12 @@ static NativeValue native_system_send(const NativeValue &receiver,
             "capability is not granted: " + capability + "=" + target);
       native_commit_effect();
     };
-    const auto cancel = amber::runtime::tls_runtime_task_cancel_flag;
-    call.cancelled = [cancel] { return cancel && cancel->load(); };
+    const auto cancel = amber::runtime::runtime_wait_cancel_flag();
+    call.cancelled = [cancel, owner = amber::runtime::current_runtime_task_cancel_owner(),
+                      run = amber::runtime::current_runtime_run_cancellation()] {
+      (void)owner; (void)run;
+      return cancel && cancel->load();
+    };
     amber::runtime::SystemValue result;
     if (amber::runtime::system_blocking_selector(selector)) {
       native_require_suspendable("system");

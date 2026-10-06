@@ -1,6 +1,6 @@
 # Amber RFC: Bare-call для nullary-методов и chained callable-call `expr.()`
 
-**Статус:** принято как проектное решение  
+**Статус:** принято как проектное решение; правило расширено 2026-10-03
 **Область:** surface syntax, postfix expressions, properties, callable values, dispatch/lowering, diagnostics  
 **Ключевые формы:** `obj.member`, `obj.member()`, `obj.member.()`, `obj.member.call()`, `obj.?.member`, `obj.?.member.?.()`
 
@@ -8,7 +8,7 @@
 
 ## 0. Краткое резюме
 
-Amber принимает ограниченный **bare-call** для nullary-методов: member access вида `receiver.name` может выполнять implicit zero-argument send, если `name` резолвится в метод с синтаксически пустой сигнатурой.
+Amber принимает ограниченный **bare-call** для nullary-методов: member access вида `receiver.name` может выполнять implicit zero-argument send, если `name` резолвится в метод, принимающий ноль аргументов, в том числе с default-параметрами.
 
 Одновременно вводится postfix callable-call segment:
 
@@ -184,7 +184,7 @@ Member access:
 receiver.name
 ```
 
-разрешает implicit invocation, если `name` резолвится в nullary method.
+разрешает implicit invocation, если `name` резолвится в метод, принимающий ноль аргументов.
 
 ```amber
 class Collection:
@@ -195,24 +195,30 @@ collection.size    # implicit nullary send: collection.size()
 collection.size()  # explicit nullary send
 ```
 
-Nullary method — это метод с **синтаксически пустой сигнатурой**:
-
-```amber
-def name():
- ...
-```
-
-Методы с optional/default/rest/keyword/block параметрами не считаются bare-callable, даже если их можно вызвать без аргументов:
+Bare-callable method — метод, которому можно передать ноль аргументов.
+Это включает пустую сигнатуру, default positional/keyword параметры,
+`*args`, `**kwargs` и optional `&block`. Rest-параметры получают пустые
+коллекции, block получает `null`; defaults вычисляются обычным binder'ом
+при каждом вызове, в том же порядке и с теми же проверками, что при `name()`.
 
 ```amber
 def format(mode = :short):
  ...
 
-value.format       # invalid or ordinary member resolution failure; not implicit call
+value.format       # valid: same invocation and defaults as value.format()
 value.format()     # valid explicit call
 ```
 
-Причина: bare-call должен означать field-like query, а не скрытый вызов операции с параметризуемой сигнатурой.
+Обязательный positional/keyword/named-callable параметр без default
+по-прежнему делает bare-вызов ошибкой `AMB_BARE_NON_NULLARY` / `ArgumentError`.
+Ошибки defaults, type hooks и тела метода распространяются как при explicit call.
+Требующий block typed `&block as Fn[...]` сохраняет обычную entry-проверку:
+без block оба написания дают `ArgumentError` (`AMB_BLOCK_REQUIRED`).
+
+Изменение 2026-10-03 снимает ограничение на синтаксически пустую сигнатуру:
+оно не предотвращало побочные эффекты (`!`-методы уже разрешены bare),
+но заставляло добавление необязательного параметра ломать call sites.
+Bare-форма теперь отражает допустимую арность вызова, а не форму декларации.
 
 ### 3.2. Explicit method call остаётся explicit method call
 
@@ -493,7 +499,7 @@ receiver.name
 resolution proceeds conceptually as:
 
 1. If `name` resolves to a readable property, perform property get.
-2. Else if `name` resolves to a syntactically nullary method, perform implicit zero-argument send.
+2. Else if `name` resolves to a zero-argument-callable method, perform implicit zero-argument send.
 3. Else if `name` resolves to another readable member kind supported by the object model, perform ordinary read.
 4. Else use static diagnostic or dynamic missing-member/method path depending on receiver knowledge.
 
@@ -696,7 +702,7 @@ E_DOT_CALL_TARGET_REQUIRED
 
 ### 9.2. Recommended warnings
 
-Bare calls of syntactically nullary `!` methods are ordinary sends and do not
+Bare calls of zero-argument-callable `!` methods are ordinary sends and do not
 produce a dedicated warning. The suffix communicates mutation convention, not
 an alternate call grammar.
 
@@ -727,10 +733,10 @@ For:
 obj.format
 ```
 
-when `format` has default parameters:
+when `format` has a required parameter without a default:
 
 ```text
-Method `format` is not bare-callable because its signature is not syntactically nullary. Use `obj.format()`.
+Method `format` is not bare-callable because it requires arguments. Use `obj.format(...)`.
 ```
 
 For:
@@ -739,7 +745,7 @@ For:
 cache.clear!
 ```
 
-when `clear!` is syntactically nullary, the expression is an ordinary send and
+when `clear!` is zero-argument-callable, the expression is an ordinary send and
 produces no diagnostic.
 
 ---
@@ -777,7 +783,7 @@ collection.size
 collection.size()
 ```
 
-Both are valid when `size` is nullary method.
+Both are valid when `size` accepts zero arguments, including via defaults.
 
 The first is query/read syntax; the second is explicit invocation syntax.
 
@@ -991,29 +997,14 @@ expr.call() -> HSend(expr, :call, [])
 
 This matters for closures, native callable references, class objects and any value callable through the runtime callable protocol without exposing ordinary public method `call`.
 
-### 13.3. Why only syntactically nullary methods?
+### 13.3. Why include methods with defaults?
 
-Because this keeps bare-call from becoming hidden argument binding.
-
-Allowed:
-
-```amber
-def size():
- ...
-
-obj.size
-```
-
-Not allowed:
-
-```amber
-def size(scale = 1):
- ...
-
-obj.size  # not bare-callable
-```
-
-A method with defaults is still an operation with a parameterized contract. It should require explicit call syntax.
+Bare member access already invokes ordinary methods, including mutating `!`
+methods. Requiring a syntactically empty signature adds no effect guarantee.
+Accepting every zero-argument-callable signature preserves call sites when
+an API adds optional parameters. `obj.format` and `obj.format()` use identical
+argument binding and default evaluation; `&obj.format` remains reference syntax.
+Methods that require caller arguments still diagnose instead of returning a method.
 
 ### 13.4. Why allow explicit `obj.size()` too?
 
@@ -1034,7 +1025,7 @@ invoked implicitly.
 
 Only when no such binding exists and the current procedure has an object
 receiver does bare `f` become the member read `self.f`. It therefore invokes a
-syntactically nullary method (or reads a property) through ordinary dynamic
+zero-argument-callable method (or reads a property) through ordinary dynamic
 linearization. Without an object receiver, an unresolved bare identifier is
 an error. This preserves first-class lexical functions while allowing
 controllers and mixin-heavy DSLs to use inherited APIs without repetitive
@@ -1066,7 +1057,7 @@ random.next
 clock.now
 ```
 
-For a syntactically nullary member, the bare form is idiomatic even when the
+For a zero-argument-callable member, the bare form is idiomatic even when the
 operation is:
 
 1. mutating;
@@ -1108,7 +1099,7 @@ obj.name
 
 would not call ordinary method `name`.
 
-After this RFC, it may call `name()` if the method is syntactically nullary.
+After this RFC, it may call `name()` if the method is zero-argument-callable.
 
 ### 15.2. Property call-result change
 
@@ -1218,11 +1209,16 @@ maybe_provider = null
 assert maybe_provider.?.() == null
 ```
 
+The positive suite also covers all-default positional/keyword signatures,
+rest/keyword-rest and optional block parameters, inherited and implicit-self
+members, class-side calls, safe navigation, repeated cache hits, defaults
+with effects evaluated exactly once, and dependencies on earlier defaults.
+
 ### 16.2. Negative tests
 
 ```amber
 class Box:
- def format(mode = :short):
+ def format(mode):
   "x"
 
 box = Box()
@@ -1270,7 +1266,7 @@ class Box:
 3. Whether effect annotations should influence bare-call diagnostics.
 4. Whether formatter should normalize query-like explicit calls `obj.empty?()` to `obj.empty?`.
 5. Whether top-level nullary functions should ever receive bare-call syntax. This RFC says no.
-6. Resolved: a syntactically nullary `!` method accepts ordinary bare-call
+6. Resolved: a zero-argument-callable `!` method accepts ordinary bare-call
    syntax without a dedicated warning or strict-profile error.
 7. Whether `expr.()` should support block suffix directly:
 
@@ -1313,3 +1309,5 @@ Callable references:
 never perform actual invocation.
 
 `prop` remains the descriptor mechanism for assignability, validation, getter/setter behavior, property reflection and future descriptor-level features.
+
+The accepted bare-call rule includes all-default, rest and optional-block signatures; required arguments remain an error.

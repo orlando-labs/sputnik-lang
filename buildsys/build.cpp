@@ -1019,6 +1019,9 @@ bool read_native_extensions(
     read_string_array_member(item, "defines", &extension.defines);
     read_string_array_member(item, "cxxflags", &extension.cxxflags);
     read_string_array_member(item, "link_libraries", &extension.link_libraries);
+    read_string_array_member(item, "library_dirs", &extension.library_dirs);
+    read_string_array_member(item, "runtime_library_dirs",
+                             &extension.runtime_library_dirs);
     read_string_array_member(item, "blocking_symbols",
                              &extension.blocking_symbols);
     if (member(item, "capabilities") != nullptr) {

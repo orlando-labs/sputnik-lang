@@ -1,4 +1,5 @@
 BUILD_DIR ?= build
+.DEFAULT_GOAL := all
 
 ifeq ($(origin CXX),default)
 CXX := clang++
@@ -23,6 +24,18 @@ LDFLAGS += -L$(OPENSSL_LIB_DIR)
 CPPFLAGS += '-DAMBER_OPENSSL_LIB_DIR="$(OPENSSL_LIB_DIR)"'
 endif
 LDFLAGS += -lssl -lcrypto
+
+# GOST R 34.10-2012 needs Nettle's supported TC26 curves. Other signature
+# algorithms remain available when this optional backend is not installed.
+NETTLE_GOST_LIBS := $(shell pkg-config --libs hogweed nettle gmp 2>/dev/null)
+ifneq ($(strip $(NETTLE_GOST_LIBS)),)
+CPPFLAGS += $(shell pkg-config --cflags hogweed nettle gmp 2>/dev/null) -DAMBER_HAVE_NETTLE_GOST
+CPPFLAGS += '-DAMBER_NETTLE_INCLUDE_DIR="$(shell pkg-config --variable=includedir hogweed)"'
+CPPFLAGS += '-DAMBER_NETTLE_LIB_DIR="$(shell pkg-config --variable=libdir hogweed)"'
+CPPFLAGS += '-DAMBER_GMP_INCLUDE_DIR="$(shell pkg-config --variable=includedir gmp)"'
+CPPFLAGS += '-DAMBER_GMP_LIB_DIR="$(shell pkg-config --variable=libdir gmp)"'
+LDFLAGS += $(NETTLE_GOST_LIBS)
+endif
 
 # --- Allocator selection -----------------------------------------------------
 # MALLOC selects the C/C++ allocator the binaries link against (RESEARCH heap
@@ -138,29 +151,95 @@ BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp bytecode/graph_linker.
 IO_SRCS := runtime/io.cpp runtime/reactor.cpp runtime/tls.cpp
 DIGEST_SRCS := runtime/digest.cpp
 HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_server.cpp runtime/net_http_transport.cpp
-STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
+STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_bool.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_signature.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
 RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/system.cpp runtime/vm.cpp $(STDLIB_SRCS) runtime/amber_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
 FROZEN_RUNTIME_SRCS := runtime/frozen_image.cpp
 PACKAGE_SRCS := package/package.cpp
 FRONTEND_SRCS := $(LEXER_SRCS) $(AST_SRCS) $(PARSER_SRCS) $(PATTERN_SRCS) $(BINDER_SRCS) $(CHECKER_SRCS) $(HIR_SRCS)
 NOTEBOOK_GRAPH_SRCS := notebook/model.cpp notebook/analysis.cpp notebook/dependency_graph.cpp notebook/scheduler.cpp
-NOTEBOOK_SRCS := $(NOTEBOOK_GRAPH_SRCS) notebook/slot_table.cpp notebook/kernel.cpp notebook/vm_cell_executor.cpp notebook/compiler.cpp
+NOTEBOOK_SRCS := $(NOTEBOOK_GRAPH_SRCS) notebook/slot_table.cpp notebook/kernel.cpp notebook/vm_cell_executor.cpp notebook/compiler.cpp notebook/renderers.cpp
 NOTEBOOK_PROJECT_SRCS := notebook/project.cpp notebook/project_json.cpp
 NOTEBOOK_PROJECT_TEST_SRCS := tests/notebook_project_tests.cpp notebook/model.cpp $(NOTEBOOK_PROJECT_SRCS)
 CORE_SRCS := $(PROFILE_SRCS) $(BUILD_SRCS) $(FRONTEND_SRCS) $(MIR_SRCS) $(NATIVE_SRCS) $(BYTECODE_SRCS)
 NOTEBOOK_SLOT_TEST_SRCS := tests/notebook_slot_tests.cpp notebook/slot_table.cpp notebook/model.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 AMBERC_SRCS := tools/amberc/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS)
 AMBERTEST_SRCS := tools/ambertest/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
-IAMBER_ENVIRONMENT_SRCS := tools/iamber/environment.cpp
+IAMBER_ENVIRONMENT_SRCS := tools/iamber/environment.cpp tools/iamber/dependencies.cpp
 IAMBER_SRCS := tools/iamber/main.cpp tools/iamber/session.cpp tools/iamber/project_session.cpp tools/iamber/tabs.cpp $(IAMBER_ENVIRONMENT_SRCS) tools/iamber/activity.cpp tools/iamber/dispatch.cpp tools/iamber/terminal_wait.cpp $(NOTEBOOK_PROJECT_SRCS) $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
 IAMBER_LDLIBS ?= -lncurses
 IAMBER_TEST_SRCS := tests/iamber_tests.cpp tools/iamber/session.cpp tools/iamber/project_session.cpp $(IAMBER_ENVIRONMENT_SRCS) tools/iamber/activity.cpp $(NOTEBOOK_PROJECT_SRCS) $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS)
 IAMBER_PROJECT_TEST_SRCS := tests/iamber_project_tests.cpp $(filter-out tests/iamber_tests.cpp,$(IAMBER_TEST_SRCS))
 IAMBER_TABS_TEST_SRCS := tests/iamber_tabs_tests.cpp tools/iamber/tabs.cpp tools/iamber/dispatch.cpp $(filter-out tests/iamber_tests.cpp,$(IAMBER_TEST_SRCS))
+NOTEBOOK_DEPENDENCY_TEST_SRCS := tests/notebook_dependency_tests.cpp $(filter-out tests/iamber_tabs_tests.cpp,$(IAMBER_TABS_TEST_SRCS))
 IAMBER_ACTIVITY_TEST_SRCS := tests/iamber_activity_tests.cpp tools/iamber/activity.cpp
 IAMBER_POLL_TEST_SRCS := tests/iamber_poll_tests.cpp tools/iamber/activity.cpp
 IAMBER_DISPATCH_TEST_SRCS := tests/iamber_dispatch_tests.cpp tools/iamber/dispatch.cpp
 IAMBER_TERMINAL_WAIT_TEST_SRCS := tests/iamber_terminal_wait_tests.cpp tools/iamber/terminal_wait.cpp
+MAC_NOTEBOOK_SRCS := tools/notebook-macos/NotebookBridge.cpp tools/notebook-macos/NotebookExecution.cpp tools/notebook-worker/protocol.cpp tools/notebook-worker/process.cpp tools/notebook-worker/presentation.cpp $(filter-out tools/iamber/main.cpp tools/iamber/terminal_wait.cpp,$(IAMBER_SRCS))
+MAC_NOTEBOOK_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/notebook-macos/obj/%.o,$(MAC_NOTEBOOK_SRCS))
+AMBER_PLOT_DIR ?= ../amber-plot
+ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
+MAC_NOTEBOOK_OBJS += $(BUILD_DIR)/notebook-macos/plot_png.o
+$(BUILD_DIR)/notebook-macos/obj/notebook/renderers.o: CPPFLAGS += -DAMBER_NOTEBOOK_PLOT
+endif
+MAC_NOTEBOOK_SWIFT := $(wildcard tools/notebook-macos/*.swift)
+MAC_NOTEBOOK_TARGET ?= $(shell uname -m)-apple-macosx14.0
+NOTEBOOK_WORKER_TRANSPORT := tools/notebook-worker/protocol.cpp tools/notebook-worker/process.cpp tools/notebook-worker/presentation.cpp
+NOTEBOOK_WORKER_HEADERS := tools/notebook-worker/protocol.h tools/notebook-worker/process.h tools/notebook-worker/presentation.h runtime/context.h tools/iamber/session.h tools/iamber/project_session.h
+ifeq ($(UNAME_S),Darwin)
+NOTEBOOK_WORKER_BACKEND := $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
+ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
+NOTEBOOK_WORKER_PLOT_TEST := "$(abspath $(AMBER_PLOT_DIR)/src/plot.am)"
+endif
+else
+NOTEBOOK_WORKER_BACKEND := $(filter-out tools/iamber/main.cpp tools/iamber/terminal_wait.cpp,$(IAMBER_SRCS))
+endif
+
+$(BUILD_DIR)/amber-notebook-worker: tools/notebook-worker/main.cpp tools/notebook-worker/protocol.cpp tools/notebook-worker/presentation.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
+	@mkdir -p "$(@D)"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) $(AMBERC_DYNAMIC_EXPORT_FLAGS) $(AMBERC_DYNAMIC_LOADER_LIBS) -o $@
+
+$(BUILD_DIR)/notebook_worker_tests: tests/notebook_worker_tests.cpp $(NOTEBOOK_WORKER_TRANSPORT) $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS) | $(BUILD_DIR)/amber-notebook-worker
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook-mnist: tools/notebook-mnist/main.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_progress_tests: tests/notebook_progress_tests.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_live_tests: tests/notebook_live_tests.cpp runtime/notebook_live.h runtime/notebook_display.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(LDFLAGS) -o $@
+
+.PHONY: test-notebook-progress
+test-notebook-progress: $(BUILD_DIR)/notebook_progress_tests $(BUILD_DIR)/notebook_live_tests
+	$(BUILD_DIR)/notebook_progress_tests
+	$(BUILD_DIR)/notebook_live_tests
+
+$(BUILD_DIR)/notebook_cancellation_tests: tests/notebook_cancellation_tests.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS)
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_run_tasks_tests: tests/notebook_run_tasks_tests.cpp $(NOTEBOOK_WORKER_BACKEND) $(NOTEBOOK_WORKER_HEADERS) runtime/system_native_task.inc
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(filter %.cpp %.a,$^) $(LDFLAGS) -o $@
+
+.PHONY: test-notebook-worker
+test-notebook-worker: $(BUILD_DIR)/notebook_worker_tests $(BUILD_DIR)/notebook_cancellation_tests $(BUILD_DIR)/notebook_run_tasks_tests
+	$(BUILD_DIR)/notebook_worker_tests "$(abspath $(BUILD_DIR)/amber-notebook-worker)" $(NOTEBOOK_WORKER_PLOT_TEST)
+	$(BUILD_DIR)/notebook_cancellation_tests
+	$(BUILD_DIR)/notebook_run_tasks_tests
+ifeq ($(UNAME_S),Darwin)
+test-notebook-worker: test-notebook-worker-host
+.PHONY: test-notebook-worker-host
+test-notebook-worker-host: $(BUILD_DIR)/notebook-macos/notebook_worker_host_tests $(BUILD_DIR)/amber-notebook-worker
+	$(BUILD_DIR)/notebook-macos/notebook_worker_host_tests "$(abspath $(BUILD_DIR)/amber-notebook-worker)"
+.PHONY: test-notebook-worker-ui
+test-notebook-worker-ui: notebook-macos $(BUILD_DIR)/notebook_macos_model_tests
+	$(BUILD_DIR)/notebook_macos_model_tests "$(abspath $(BUILD_DIR)/amber-notebook-worker)"
+	python3 tests/notebook_macos_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook" --isolated-worker
+ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
+	python3 tests/notebook_macos_plot_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook" "$(AMBER_PLOT_DIR)/src/plot.am" --isolated-worker
+endif
+endif
 NOTEBOOK_CORE_TEST_SRCS := tests/notebook_core_tests.cpp $(NOTEBOOK_GRAPH_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
 NOTEBOOK_COMPILER_TEST_SRCS := tests/notebook_compiler_tests.cpp $(NOTEBOOK_GRAPH_SRCS) notebook/compiler.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 NOTEBOOK_KERNEL_TEST_SRCS := tests/notebook_kernel_tests.cpp $(NOTEBOOK_SRCS) $(CORE_SRCS) $(RUNTIME_SRCS)
@@ -186,8 +265,10 @@ STDLIB_REGISTRY_TEST_SRCS := tests/stdlib_registry_tests.cpp $(CORE_SRCS) $(RUNT
 STDLIB_JSON_TEST_SRCS := tests/stdlib_json_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_CODECS_TEST_SRCS := tests/stdlib_codecs_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_DIGEST_TEST_SRCS := tests/stdlib_digest_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
+STDLIB_SIGNATURE_TEST_SRCS := tests/stdlib_signature_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_BENCHMARK_TEST_SRCS := tests/stdlib_benchmark_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_SECURE_RANDOM_TEST_SRCS := tests/stdlib_secure_random_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
+STDLIB_BOOL_TEST_SRCS := tests/stdlib_bool_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_ARGPARSER_TEST_SRCS := tests/stdlib_argparser_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_REGEXP_TEST_SRCS := tests/stdlib_regexp_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
 STDLIB_UUID_TEST_SRCS := tests/stdlib_uuid_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS)
@@ -266,6 +347,7 @@ FORMAT_FILES := \
 	runtime/net_http_client_native.inc \
 	runtime/digest.cpp \
 	runtime/digest.h \
+	runtime/signature.h \
 	runtime/text.cpp \
 	runtime/value.cpp \
 	runtime/value.h \
@@ -298,8 +380,11 @@ FORMAT_FILES := \
 	runtime/stdlib_json.cpp \
 	runtime/stdlib_codecs.cpp \
 	runtime/stdlib_digest.cpp \
+	runtime/stdlib_signature.cpp \
 	runtime/stdlib_benchmark.cpp \
 	runtime/stdlib_secure_random.cpp \
+	runtime/stdlib_bool.cpp \
+	runtime/stdlib_bool.h \
 	runtime/stdlib_argparser.cpp \
 	runtime/stdlib_regexp.h \
 	runtime/stdlib_regexp.cpp \
@@ -381,8 +466,10 @@ FORMAT_FILES := \
 	tests/stdlib_json_tests.cpp \
 	tests/stdlib_codecs_tests.cpp \
 	tests/stdlib_digest_tests.cpp \
+	tests/stdlib_signature_tests.cpp \
 	tests/stdlib_benchmark_tests.cpp \
 	tests/stdlib_secure_random_tests.cpp \
+	tests/stdlib_bool_tests.cpp \
 	tests/stdlib_argparser_tests.cpp \
 	tests/stdlib_regexp_tests.cpp \
 	tests/stdlib_uuid_tests.cpp \
@@ -395,6 +482,88 @@ FORMAT_FILES := \
 
 .PHONY: all build test test-iamber-tui conformance backend-equivalence spec-sync-check fmt clean
 
+# The native UI is opt-in and never adds Swift/AppKit dependencies to CLI or
+# Linux builds. Its C++ backend shares exactly the iamber Sessions, no curses.
+.PHONY: notebook-macos test-notebook-macos
+ifeq ($(UNAME_S),Darwin)
+ifneq ($(wildcard $(AMBER_PLOT_DIR)/native/plot_png.c),)
+.PHONY: test-notebook-plots
+test-notebook-macos: test-notebook-plots
+test-notebook-plots: notebook-macos $(BUILD_DIR)/notebook_plot_tests $(BUILD_DIR)/notebook_macos_plot_tests
+	$(BUILD_DIR)/notebook_plot_tests "$(AMBER_PLOT_DIR)/src/plot.am" "$(BUILD_DIR)/notebook-plot-view-snapshot.json"
+	$(BUILD_DIR)/notebook_macos_plot_tests "$(BUILD_DIR)/notebook-plot-view-snapshot.json"
+	python3 tests/notebook_macos_plot_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook" "$(AMBER_PLOT_DIR)/src/plot.am"
+endif
+$(BUILD_DIR)/notebook-macos/obj/%.o: %.cpp
+	@mkdir -p "$(@D)"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -mmacosx-version-min=14.0 -MMD -MP -c $< -o $@
+
+-include $(MAC_NOTEBOOK_OBJS:.o=.d)
+
+$(BUILD_DIR)/notebook-macos/plot_png.o: $(AMBER_PLOT_DIR)/native/plot_png.c runtime/amber_ext.h
+	@mkdir -p "$(@D)"
+	$(CC) -I. -std=c11 -O2 -mmacosx-version-min=14.0 -c $< -o $@
+
+$(BUILD_DIR)/notebook-macos/libNotebookBackend.a: $(MAC_NOTEBOOK_OBJS)
+	xcrun libtool -static -o $@ $^
+
+$(BUILD_DIR)/notebook-macos/AmberNotebook: $(MAC_NOTEBOOK_SWIFT) tools/notebook-macos/NotebookBridge.h $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
+	xcrun swiftc -swift-version 5 -O -g -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache -import-objc-header tools/notebook-macos/NotebookBridge.h $(MAC_NOTEBOOK_SWIFT) $(BUILD_DIR)/notebook-macos/libNotebookBackend.a -framework AppKit -framework SwiftUI -lc++ $(LDFLAGS) -Xlinker -rpath -Xlinker @executable_path/../Frameworks -o $@
+
+notebook-macos: $(BUILD_DIR)/notebook-macos/AmberNotebook $(BUILD_DIR)/amber-notebook-worker tools/notebook-macos/Info.plist tools/notebook-macos/package-app.sh
+	bash tools/notebook-macos/package-app.sh "$(BUILD_DIR)/notebook-macos/AmberNotebook" "$(BUILD_DIR)/Amber Notebook.app" "$(OPENSSL_LIB_DIR)" "$(BUILD_DIR)/amber-notebook-worker"
+
+$(BUILD_DIR)/notebook_macos_bridge_tests: tests/notebook_macos_bridge_tests.cpp $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(BUILD_DIR)/notebook-macos/libNotebookBackend.a $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_plot_tests: tests/notebook_plot_tests.cpp $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(BUILD_DIR)/notebook-macos/libNotebookBackend.a $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_macos_model_tests: tests/notebook_macos_model_tests.swift tools/notebook-macos/NotebookModel.swift tools/notebook-macos/NotebookBoard.swift tools/notebook-macos/NotebookTextVariable.swift tools/notebook-macos/NotebookFigure.swift tools/notebook-macos/NotebookBridge.h $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
+	xcrun swiftc -swift-version 5 -O -g -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache -import-objc-header tools/notebook-macos/NotebookBridge.h tests/notebook_macos_model_tests.swift tools/notebook-macos/NotebookModel.swift tools/notebook-macos/NotebookBoard.swift tools/notebook-macos/NotebookTextVariable.swift tools/notebook-macos/NotebookFigure.swift $(BUILD_DIR)/notebook-macos/libNotebookBackend.a -framework AppKit -lc++ $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/notebook_macos_syntax_tests: tests/notebook_macos_syntax_tests.swift tools/notebook-macos/AmberSyntax.swift tools/notebook-macos/CodeEditor.swift
+	xcrun swiftc -swift-version 5 -O -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
+
+$(BUILD_DIR)/notebook_macos_result_tests: tests/notebook_macos_result_tests.swift tools/notebook-macos/NotebookResultView.swift tools/notebook-macos/NotebookObjectMenu.swift
+	xcrun swiftc -swift-version 5 -O -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
+
+$(BUILD_DIR)/notebook_macos_plot_tests: tests/notebook_macos_plot_tests.swift tools/notebook-macos/NotebookPlotScene.swift tools/notebook-macos/NotebookPlotView.swift tools/notebook-macos/NotebookFigure.swift tools/notebook-macos/NotebookFigureView.swift tools/notebook-macos/NotebookObjectMenu.swift
+	xcrun swiftc -swift-version 5 -O -g -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
+
+test-notebook-results: $(BUILD_DIR)/notebook_macos_result_tests $(BUILD_DIR)/notebook-macos/notebook_result_tests
+	$(BUILD_DIR)/notebook_macos_result_tests
+	$(BUILD_DIR)/notebook-macos/notebook_result_tests
+
+$(BUILD_DIR)/notebook_macos_richtext_tests: tests/notebook_macos_richtext_tests.swift tools/notebook-macos/RichTextEditor.swift tools/notebook-macos/RichTextStructure.swift tools/notebook-macos/RichTextEditing.swift tools/notebook-macos/RichTextInterpolation.swift tools/notebook-macos/NotebookTextVariable.swift
+	xcrun swiftc -swift-version 5 -O -target $(MAC_NOTEBOOK_TARGET) -module-cache-path $(BUILD_DIR)/notebook-macos/swift-cache $^ -framework AppKit -framework SwiftUI -o $@
+
+# Reuse the same backend archive for cross-host regressions instead of
+# recompiling the VM separately for each Session/project test executable.
+$(BUILD_DIR)/notebook-macos/%_tests: tests/%_tests.cpp $(BUILD_DIR)/notebook-macos/libNotebookBackend.a
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< $(BUILD_DIR)/notebook-macos/libNotebookBackend.a $(LDFLAGS) -o $@
+
+test-notebook-macos: notebook-macos $(BUILD_DIR)/notebook_macos_bridge_tests $(BUILD_DIR)/notebook_macos_model_tests $(BUILD_DIR)/notebook_macos_syntax_tests $(BUILD_DIR)/notebook_macos_richtext_tests $(BUILD_DIR)/notebook-macos/iamber_tests $(BUILD_DIR)/notebook-macos/iamber_project_tests $(BUILD_DIR)/notebook-macos/iamber_tabs_tests $(BUILD_DIR)/notebook_project_tests
+	$(BUILD_DIR)/notebook_macos_bridge_tests
+	$(BUILD_DIR)/notebook_macos_model_tests
+	$(BUILD_DIR)/notebook_macos_syntax_tests
+	$(BUILD_DIR)/notebook_macos_richtext_tests
+	$(BUILD_DIR)/notebook_project_tests
+	$(BUILD_DIR)/notebook-macos/iamber_tests
+	$(BUILD_DIR)/notebook-macos/iamber_project_tests
+	$(BUILD_DIR)/notebook-macos/iamber_tabs_tests
+	$(BUILD_DIR)/notebook-macos/notebook_board_tests
+	$(BUILD_DIR)/notebook-macos/notebook_dependency_tests
+	python3 tests/notebook_macos_ui_smoke.py "$(BUILD_DIR)/Amber Notebook.app/Contents/MacOS/AmberNotebook"
+test-notebook-macos: $(BUILD_DIR)/notebook-macos/notebook_board_tests
+test-notebook-macos: $(BUILD_DIR)/notebook-macos/notebook_dependency_tests
+test-notebook-macos: test-notebook-results
+else
+notebook-macos test-notebook-macos:
+	@echo "The native notebook requires macOS 14+ and Xcode Command Line Tools."
+	@exit 1
+endif
+
 all: build
 
 build: $(BUILD_DIR)/system_tests $(BUILD_DIR)/stdlib_system_tests
@@ -405,15 +574,16 @@ $(BUILD_DIR)/system_tests: tests/system_tests.cpp runtime/system.cpp runtime/sys
 $(BUILD_DIR)/stdlib_system_tests: tests/stdlib_system_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) runtime/system_vm.inc | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/stdlib_system_tests.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(LDFLAGS) -o $@
 
-build: $(BUILD_DIR)/amberc $(BUILD_DIR)/ambertest $(BUILD_DIR)/iamber $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/amber_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/notebook_core_tests $(BUILD_DIR)/notebook_slot_tests $(BUILD_DIR)/notebook_kernel_tests $(BUILD_DIR)/notebook_vm_integration_tests $(BUILD_DIR)/notebook_compiler_tests $(BUILD_DIR)/iamber_tests
+build: $(BUILD_DIR)/amberc $(BUILD_DIR)/ambertest $(BUILD_DIR)/iamber $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_signature_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/amber_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/notebook_core_tests $(BUILD_DIR)/notebook_slot_tests $(BUILD_DIR)/notebook_kernel_tests $(BUILD_DIR)/notebook_vm_integration_tests $(BUILD_DIR)/notebook_compiler_tests $(BUILD_DIR)/iamber_tests
 
 build: $(BUILD_DIR)/iamber_activity_tests $(BUILD_DIR)/iamber_poll_tests $(BUILD_DIR)/iamber_dispatch_tests $(BUILD_DIR)/iamber_terminal_wait_tests
 build: $(BUILD_DIR)/notebook_project_tests $(BUILD_DIR)/iamber_project_tests $(BUILD_DIR)/iamber_tabs_tests
+build: $(BUILD_DIR)/notebook_dependency_tests
 build: $(BUILD_DIR)/graph_linker_tests
 
 # These adapters are included from the VM rather than compiled separately.
 # Keep all runtime consumers current when their implementation changes.
-$(addprefix $(BUILD_DIR)/,amberc ambertest iamber vm_tests native_tests frozen_image_tests stdlib_system_tests stdlib_collections_tests stdlib_task_tests stdlib_registry_tests stdlib_json_tests stdlib_codecs_tests stdlib_digest_tests stdlib_benchmark_tests stdlib_secure_random_tests stdlib_argparser_tests stdlib_regexp_tests stdlib_uuid_tests stdlib_time_tests stdlib_url_tests stdlib_yaml_tests amber_ext_tests module_loader_tests notebook_core_tests notebook_compiler_tests notebook_slot_tests notebook_kernel_tests notebook_vm_integration_tests iamber_tests): runtime/system_vm.inc runtime/system.h
+$(addprefix $(BUILD_DIR)/,amberc ambertest iamber vm_tests native_tests frozen_image_tests stdlib_system_tests stdlib_collections_tests stdlib_task_tests stdlib_registry_tests stdlib_json_tests stdlib_codecs_tests stdlib_digest_tests stdlib_signature_tests stdlib_benchmark_tests stdlib_secure_random_tests stdlib_bool_tests stdlib_argparser_tests stdlib_regexp_tests stdlib_uuid_tests stdlib_time_tests stdlib_url_tests stdlib_yaml_tests amber_ext_tests module_loader_tests notebook_core_tests notebook_compiler_tests notebook_slot_tests notebook_kernel_tests notebook_vm_integration_tests iamber_tests iamber_project_tests iamber_tabs_tests): runtime/system_vm.inc runtime/system.h runtime/vm_notebook.inc runtime/notebook_display.h runtime/notebook_inputs.h runtime/stdlib_bool.h
 
 $(BUILD_DIR)/.dir:
 	mkdir -p $(BUILD_DIR)
@@ -442,6 +612,9 @@ $(BUILD_DIR)/iamber_project_tests: $(IAMBER_PROJECT_TEST_SRCS) tools/iamber/proj
 $(BUILD_DIR)/iamber_tabs_tests: $(IAMBER_TABS_TEST_SRCS) tools/iamber/tabs.h tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h tools/iamber/activity.h tools/iamber/dispatch.h | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_TABS_TEST_SRCS) $(LDFLAGS) -o $@
 
+$(BUILD_DIR)/notebook_dependency_tests: $(NOTEBOOK_DEPENDENCY_TEST_SRCS) tools/iamber/dependencies.h tools/iamber/tabs.h tools/iamber/project_session.h tools/iamber/session.h notebook/project.h notebook/model.h runtime/vm_notebook.inc runtime/notebook_display.h runtime/notebook_inputs.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_DEPENDENCY_TEST_SRCS) $(LDFLAGS) -o $@
+
 $(BUILD_DIR)/iamber_activity_tests: $(IAMBER_ACTIVITY_TEST_SRCS) tools/iamber/activity.h | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IAMBER_ACTIVITY_TEST_SRCS) $(LDFLAGS) -o $@
 
@@ -459,6 +632,7 @@ test-iamber-tui: $(BUILD_DIR)/iamber
 	python3 tests/iamber_tui_smoke.py $(BUILD_DIR)/iamber
 	python3 tests/iamber_project_tui_smoke.py $(BUILD_DIR)/iamber
 	python3 tests/iamber_tabs_tui_smoke.py $(BUILD_DIR)/iamber
+	python3 tests/iamber_project_commands_tui_smoke.py $(BUILD_DIR)/iamber
 
 $(BUILD_DIR)/notebook_core_tests: $(NOTEBOOK_CORE_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(NOTEBOOK_CORE_TEST_SRCS) $(LDFLAGS) -o $@
@@ -517,7 +691,7 @@ $(BUILD_DIR)/graph_linker_tests: $(GRAPH_LINKER_TEST_SRCS) bytecode/graph_linker
 $(BUILD_DIR)/emitter_tests: $(EMITTER_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(EMITTER_TEST_SRCS) $(LDFLAGS) -o $@
 
-$(BUILD_DIR)/vm_tests: $(VM_TEST_SRCS) | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/vm_tests: $(VM_TEST_SRCS) spec/registries/runtime_errors.def | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(VM_TEST_SRCS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/stdlib_collections_tests: $(STDLIB_COLLECTIONS_TEST_SRCS) | $(BUILD_DIR)/.dir
@@ -538,11 +712,17 @@ $(BUILD_DIR)/stdlib_codecs_tests: $(STDLIB_CODECS_TEST_SRCS) | $(BUILD_DIR)/.dir
 $(BUILD_DIR)/stdlib_digest_tests: $(STDLIB_DIGEST_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_DIGEST_TEST_SRCS) $(LDFLAGS) -o $@
 
+$(BUILD_DIR)/stdlib_signature_tests: $(STDLIB_SIGNATURE_TEST_SRCS) | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_SIGNATURE_TEST_SRCS) $(LDFLAGS) -o $@
+
 $(BUILD_DIR)/stdlib_benchmark_tests: $(STDLIB_BENCHMARK_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_BENCHMARK_TEST_SRCS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/stdlib_secure_random_tests: $(STDLIB_SECURE_RANDOM_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_SECURE_RANDOM_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/stdlib_bool_tests: $(STDLIB_BOOL_TEST_SRCS) runtime/stdlib_bool.h | $(BUILD_DIR)/.dir
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_BOOL_TEST_SRCS) $(LDFLAGS) -o $@
 
 $(BUILD_DIR)/stdlib_argparser_tests: $(STDLIB_ARGPARSER_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(STDLIB_ARGPARSER_TEST_SRCS) $(LDFLAGS) -o $@
@@ -564,6 +744,8 @@ $(BUILD_DIR)/stdlib_yaml_tests: $(STDLIB_YAML_TEST_SRCS) | $(BUILD_DIR)/.dir
 
 $(BUILD_DIR)/amber_ext_tests: $(AMBER_EXT_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(AMBER_EXT_TEST_SRCS) $(LDFLAGS) -o $@
+
+$(BUILD_DIR)/amberc $(BUILD_DIR)/amber_ext_tests: runtime/native_call_buffer.h
 
 $(BUILD_DIR)/io_tests: $(IO_TEST_SRCS) | $(BUILD_DIR)/.dir
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(IO_TEST_SRCS) $(LDFLAGS) -o $@
@@ -613,8 +795,10 @@ test: build
 	$(BUILD_DIR)/stdlib_json_tests
 	$(BUILD_DIR)/stdlib_codecs_tests
 	$(BUILD_DIR)/stdlib_digest_tests
+	$(BUILD_DIR)/stdlib_signature_tests
 	$(BUILD_DIR)/stdlib_benchmark_tests
 	$(BUILD_DIR)/stdlib_secure_random_tests
+	$(BUILD_DIR)/stdlib_bool_tests
 	$(BUILD_DIR)/stdlib_argparser_tests
 	$(BUILD_DIR)/stdlib_regexp_tests
 	$(BUILD_DIR)/stdlib_uuid_tests
@@ -637,6 +821,7 @@ test: build
 	python3 tests/iamber_system_test.py $(BUILD_DIR)/iamber
 	$(BUILD_DIR)/notebook_project_tests
 	$(BUILD_DIR)/iamber_project_tests
+	$(BUILD_DIR)/notebook_dependency_tests
 	$(BUILD_DIR)/iamber_tabs_tests
 	$(BUILD_DIR)/iamber_activity_tests
 	$(BUILD_DIR)/iamber_poll_tests
@@ -874,6 +1059,10 @@ test: build
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/digest-native-build.json
 	$(BUILD_DIR)/digest-native > $(BUILD_DIR)/digest-native.out
 	grep -q '^42$$' $(BUILD_DIR)/digest-native.out
+	$(BUILD_DIR)/amberc build tests/fixtures/signature_native/main.am --entry main-only --grant random.secure --require-full-native -o $(BUILD_DIR)/signature-native > $(BUILD_DIR)/signature-native-build.json
+	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_full_coverage"] and result["native_body_coverage_full"] and result["native_vm_independent"] and not result["native_runtime_bridge"] and result["vm_fallback_code_count"] == 0 and result["native_fallback_code_count"] == 0 and not result["bytecode_fallback"], result' $(BUILD_DIR)/signature-native-build.json
+	$(BUILD_DIR)/signature-native > $(BUILD_DIR)/signature-native.out
+	grep -q '^42$$' $(BUILD_DIR)/signature-native.out
 	$(BUILD_DIR)/amberc build tests/fixtures/url_native/source.am -o $(BUILD_DIR)/url-native > $(BUILD_DIR)/url-native-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["native_entry"] and result["native_code_count"] == result["bytecode_code_count"], result' $(BUILD_DIR)/url-native-build.json
 	$(BUILD_DIR)/url-native > $(BUILD_DIR)/url-native.out
@@ -900,6 +1089,7 @@ test: build
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_vm_fallback_code_count"] == 0, result' $(BUILD_DIR)/native-graph-pure-build.json
 	$(BUILD_DIR)/native_graph_pure/out/nat.graph.main > $(BUILD_DIR)/native-graph-pure.out
 	grep -q '^42$$' $(BUILD_DIR)/native-graph-pure.out
+	$(MAKE) test-object-lifecycle
 	rm -rf $(BUILD_DIR)/native_implicit_self_cli
 	$(BUILD_DIR)/amberc build tests/fixtures/native_implicit_self_cli/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_implicit_self_cli/out --cache-dir $(BUILD_DIR)/native_implicit_self_cli/cache > $(BUILD_DIR)/native-implicit-self-cli-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_native_code_count"] == result["native_graph_code_count"] and result["native_graph_vm_fallback_code_count"] == 0 and not result["native_bytecode_fallback"], result' $(BUILD_DIR)/native-implicit-self-cli-build.json
@@ -918,7 +1108,84 @@ test: build
 	grep -q '^24$$' $(BUILD_DIR)/native-class-demo-native.out
 	! $(BUILD_DIR)/amberc tests/fixtures/native_class_demo/src/main.am > $(BUILD_DIR)/native-class-demo-bytecode.out 2>&1
 	grep -q 'NativeRequiredError' $(BUILD_DIR)/native-class-demo-bytecode.out
+	$(BUILD_DIR)/amberc build tests/fixtures/not_implemented_error/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/not_implemented_error/out --cache-dir $(BUILD_DIR)/not_implemented_error/cache > $(BUILD_DIR)/not-implemented-error-build.json
+	grep -q '"status": "ok"' $(BUILD_DIR)/not-implemented-error-build.json
+	$(BUILD_DIR)/not_implemented_error/out/errors.not_implemented > $(BUILD_DIR)/not-implemented-error-native.out
+	grep -q '^2$$' $(BUILD_DIR)/not-implemented-error-native.out
+	$(BUILD_DIR)/amberc run tests/fixtures/not_implemented_error/amber.build.json --grant ffi > $(BUILD_DIR)/not-implemented-error-vm.out
+	grep -q '^2$$' $(BUILD_DIR)/not-implemented-error-vm.out
 	$(BUILD_DIR)/ambertest run corpus
+
+.PHONY: test-object-lifecycle
+test-object-lifecycle: $(BUILD_DIR)/amberc
+	$(BUILD_DIR)/amberc run tests/fixtures/instance_fields_after_init/amber.build.json > $(BUILD_DIR)/object-lifecycle-vm.out
+	grep -q '^PASS after_init! + instance_fields$$' $(BUILD_DIR)/object-lifecycle-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/instance_fields_after_init/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/object-lifecycle > $(BUILD_DIR)/object-lifecycle-build.json
+	PATH=/nonexistent $(BUILD_DIR)/object-lifecycle/conformance.run > $(BUILD_DIR)/object-lifecycle-native.out
+	grep -q '^PASS after_init! + instance_fields$$' $(BUILD_DIR)/object-lifecycle-native.out
+
+.PHONY: test-bool-parse
+test: test-bool-parse
+test-bool-parse: $(BUILD_DIR)/amberc $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests
+	$(BUILD_DIR)/stdlib_bool_tests
+	$(BUILD_DIR)/stdlib_argparser_tests
+	$(BUILD_DIR)/amberc tests/fixtures/bool_parse_native/main.am > $(BUILD_DIR)/bool-parse-vm.out
+	grep -q '^PASS Bool.parse$$' $(BUILD_DIR)/bool-parse-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/bool_parse_native/main.am --entry main --require-full-native -o $(BUILD_DIR)/bool-parse-native > $(BUILD_DIR)/bool-parse-native-build.json
+	python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); assert r["native_full_coverage"] and r["native_vm_independent"] and not r["native_runtime_bridge"] and r["vm_fallback_code_count"] == 0, r' $(BUILD_DIR)/bool-parse-native-build.json
+	$(BUILD_DIR)/bool-parse-native > $(BUILD_DIR)/bool-parse-native.out
+	grep -q '^PASS Bool.parse$$' $(BUILD_DIR)/bool-parse-native.out
+	$(BUILD_DIR)/amberc build tests/fixtures/bool_parse_native/invalid_flag.am --entry main --require-full-native -o $(BUILD_DIR)/bool-parse-invalid-flag > $(BUILD_DIR)/bool-parse-invalid-flag-build.json
+	! $(BUILD_DIR)/bool-parse-invalid-flag > $(BUILD_DIR)/bool-parse-invalid-flag.out 2>&1
+	grep -q 'ArgParser.InvalidValue' $(BUILD_DIR)/bool-parse-invalid-flag.out
+
+.PHONY: test-native-language-idioms
+test: test-native-language-idioms test-native-call-buffers
+
+.PHONY: test-native-call-buffers
+test-native-call-buffers: $(BUILD_DIR)/amberc
+	mkdir -p $(BUILD_DIR)/native_call_buffers
+	$(BUILD_DIR)/amberc run tests/fixtures/native_call_buffers/amber.build.json --grant ffi > $(BUILD_DIR)/native_call_buffers/vm.out
+	grep -q '^PASS native call buffers$$' $(BUILD_DIR)/native_call_buffers/vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_call_buffers/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_call_buffers/native > $(BUILD_DIR)/native_call_buffers/build.json
+	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native_call_buffers/build.json
+	$(BUILD_DIR)/native_call_buffers/native/test.call_buffers > $(BUILD_DIR)/native_call_buffers/native.out
+	grep -q '^PASS native call buffers$$' $(BUILD_DIR)/native_call_buffers/native.out
+
+test-native-language-idioms: $(BUILD_DIR)/amberc
+	mkdir -p $(BUILD_DIR)/native_language_idioms
+	$(BUILD_DIR)/amberc run tests/fixtures/native_class_demo/amber.build.json --grant ffi > $(BUILD_DIR)/native_language_idioms/lifecycle-vm.out
+	grep -q '^24$$' $(BUILD_DIR)/native_language_idioms/lifecycle-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_class_demo/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_language_idioms/lifecycle > $(BUILD_DIR)/native_language_idioms/lifecycle-build.json
+	$(BUILD_DIR)/native_language_idioms/lifecycle/nat.box > $(BUILD_DIR)/native_language_idioms/lifecycle-native.out
+	grep -q '^24$$' $(BUILD_DIR)/native_language_idioms/lifecycle-native.out
+	$(BUILD_DIR)/amberc tests/fixtures/native_conversion_properties/main.am > $(BUILD_DIR)/native_language_idioms/conversions-vm.out
+	grep -q '^PASS native conversion properties$$' $(BUILD_DIR)/native_language_idioms/conversions-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_conversion_properties/main.am --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/conversions > $(BUILD_DIR)/native_language_idioms/conversions-build.json
+	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native_language_idioms/conversions-build.json
+	$(BUILD_DIR)/native_language_idioms/conversions > $(BUILD_DIR)/native_language_idioms/conversions-native.out
+	grep -q '^PASS native conversion properties$$' $(BUILD_DIR)/native_language_idioms/conversions-native.out
+	! $(BUILD_DIR)/amberc tests/fixtures/native_conversion_properties/invalid_set_spread.am > $(BUILD_DIR)/native_language_idioms/spread-vm.out 2>&1
+	grep -q 'TypeError' $(BUILD_DIR)/native_language_idioms/spread-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_conversion_properties/invalid_set_spread.am --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/invalid-spread > $(BUILD_DIR)/native_language_idioms/spread-build.json
+	! $(BUILD_DIR)/native_language_idioms/invalid-spread > $(BUILD_DIR)/native_language_idioms/spread-native.out 2>&1
+	grep -q 'TypeError' $(BUILD_DIR)/native_language_idioms/spread-native.out
+	$(BUILD_DIR)/amberc run tests/fixtures/native_private_classes/amber.build.json > $(BUILD_DIR)/native_language_idioms/classes-vm.out
+	grep -q '^PASS native private classes$$' $(BUILD_DIR)/native_language_idioms/classes-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_private_classes/amber.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_language_idioms/private > $(BUILD_DIR)/native_language_idioms/classes-build.json
+	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native_language_idioms/classes-build.json
+	$(BUILD_DIR)/native_language_idioms/private/native_private_classes > $(BUILD_DIR)/native_language_idioms/classes-native.out
+	grep -q '^PASS native private classes$$' $(BUILD_DIR)/native_language_idioms/classes-native.out
+	$(BUILD_DIR)/amberc run tests/fixtures/native_fs_read_bytes/main.am --grant fs.read=./tests/fixtures/native_fs_read_bytes > $(BUILD_DIR)/native_language_idioms/fs-vm.out
+	grep -q '^PASS native binary file read$$' $(BUILD_DIR)/native_language_idioms/fs-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_read_bytes/main.am --entry main --grant fs.read=./tests/fixtures/native_fs_read_bytes --require-full-native -o $(BUILD_DIR)/native_language_idioms/fs > $(BUILD_DIR)/native_language_idioms/fs-build.json
+	$(BUILD_DIR)/native_language_idioms/fs > $(BUILD_DIR)/native_language_idioms/fs-native.out
+	grep -q '^PASS native binary file read$$' $(BUILD_DIR)/native_language_idioms/fs-native.out
+	! $(BUILD_DIR)/amberc run tests/fixtures/native_fs_read_bytes/denied.am > $(BUILD_DIR)/native_language_idioms/fs-denied-vm.out 2>&1
+	grep -q 'CapabilityError' $(BUILD_DIR)/native_language_idioms/fs-denied-vm.out
+	$(BUILD_DIR)/amberc build tests/fixtures/native_fs_read_bytes/denied.am --entry main --require-full-native -o $(BUILD_DIR)/native_language_idioms/fs-denied > $(BUILD_DIR)/native_language_idioms/fs-denied-build.json
+	! $(BUILD_DIR)/native_language_idioms/fs-denied > $(BUILD_DIR)/native_language_idioms/fs-denied-native.out 2>&1
+	grep -q 'CapabilityError' $(BUILD_DIR)/native_language_idioms/fs-denied-native.out
 
 conformance: $(BUILD_DIR)/ambertest
 	$(BUILD_DIR)/ambertest run corpus --bundle M11

@@ -429,6 +429,11 @@ void test_path_resolution(const NativeRegistry &registry) {
       registry.kind_for_path("Digest");
   expect(digest.has_value() && *digest == RuntimeNativeTypeKind::Digest,
          "kind_for_path(\"Digest\") resolves to Digest");
+  const std::optional<RuntimeNativeTypeKind> signature =
+      registry.kind_for_path("Signature");
+  expect(signature.has_value() &&
+             *signature == RuntimeNativeTypeKind::Signature,
+         "kind_for_path(\"Signature\") resolves to Signature");
   const std::optional<RuntimeNativeTypeKind> url =
       registry.kind_for_path("Url");
   expect(url.has_value() && *url == RuntimeNativeTypeKind::Url,
@@ -511,6 +516,8 @@ void test_module_registry_imports_native_paths(const NativeRegistry &registry) {
 }
 
 void test_handler_table(const NativeRegistry &registry) {
+  expect(registry.handler_for(RuntimeNativeTypeKind::Bool) != nullptr,
+         "Bool handler is registered");
   expect(registry.handler_for(RuntimeNativeTypeKind::Math) != nullptr,
          "Math handler is registered");
   expect(registry.handler_for(RuntimeNativeTypeKind::Base64) != nullptr,
@@ -602,6 +609,7 @@ void test_builtin_runtime_module_descriptors() {
            "builtin descriptor registers " + name + " IO value handler");
   };
 
+  expect_path("Bool", RuntimeNativeTypeKind::Bool);
   expect_path("Math", RuntimeNativeTypeKind::Math);
   expect_path("io", RuntimeNativeTypeKind::Io);
   expect_path("Bytes", RuntimeNativeTypeKind::Bytes);
@@ -648,6 +656,7 @@ void test_builtin_runtime_module_descriptors() {
   expect_path("Json", RuntimeNativeTypeKind::Json);
   expect_path("Base64Url", RuntimeNativeTypeKind::Base64Url);
   expect_path("Digest", RuntimeNativeTypeKind::Digest);
+  expect_path("Signature", RuntimeNativeTypeKind::Signature);
   expect_path("SecureRandom", RuntimeNativeTypeKind::SecureRandom);
   expect_path("ArgParser", RuntimeNativeTypeKind::ArgParser);
   expect_path("UUID", RuntimeNativeTypeKind::Uuid);
@@ -656,10 +665,12 @@ void test_builtin_runtime_module_descriptors() {
   expect_path("TimeZone", RuntimeNativeTypeKind::TimeZone);
   expect_path("Url", RuntimeNativeTypeKind::Url);
 
+  expect_handler(RuntimeNativeTypeKind::Bool, "Bool");
   expect_handler(RuntimeNativeTypeKind::Math, "Math");
   expect_handler(RuntimeNativeTypeKind::Json, "Json");
   expect_handler(RuntimeNativeTypeKind::Base64, "Base64");
   expect_handler(RuntimeNativeTypeKind::Digest, "Digest");
+  expect_handler(RuntimeNativeTypeKind::Signature, "Signature");
   expect_handler(RuntimeNativeTypeKind::SecureRandom, "SecureRandom");
   expect_handler(RuntimeNativeTypeKind::ArgParser, "ArgParser");
   expect_handler(RuntimeNativeTypeKind::Uuid, "Uuid");
@@ -1106,6 +1117,40 @@ void test_runtime_error_registry() {
          "existing native error family keeps inherited matching");
   expect(type_error.has_value() && errors.error_is_a(*type_error, *exception),
          "existing native errors inherit Exception");
+  expect(errors.has_error_namespace("ArgParser") &&
+             !errors.has_error_namespace("ArgParse") &&
+             !errors.has_error_namespace("ArgParser.InvalidValue") &&
+             !errors.has_error_namespace(""),
+         "bootstrap error namespaces use exact nonempty prefixes");
+
+  const std::uint64_t revision = errors.revision();
+  const auto nested = errors.register_error("Probe.Errors.Nested.Failure",
+                                            "Exception");
+  expect(nested.has_value() && errors.revision() > revision &&
+             errors.has_error_namespace("Probe") &&
+             errors.has_error_namespace("Probe.Errors") &&
+             errors.has_error_namespace("Probe.Errors.Nested") &&
+             !errors.has_error_namespace("Probe.Errors.Nest") &&
+             !errors.has_error_namespace("Probe.Errors.Nested.Failure"),
+         "new errors index every dotted prefix and advance the lookup revision");
+  const std::uint64_t registered_revision = errors.revision();
+  expect(errors.register_error("Probe.Errors.Nested.Failure", "Exception") ==
+             nested && errors.revision() == registered_revision,
+         "identical error registration preserves the lookup revision");
+  expect(!errors.register_error("Probe.Errors.Nested.Failure", "TypeError") &&
+             !errors.register_error("") &&
+             errors.revision() == registered_revision,
+         "rejected registration preserves namespaces and revision");
+
+  RuntimeErrorRegistry empty(RuntimeErrorRegistry::Seed::Empty);
+  expect(!empty.has_error_namespace("Probe"), "empty registry has no prefixes");
+  expect(empty.register_error("Probe.Errors.").has_value() &&
+             empty.has_error_namespace("Probe.Errors"),
+         "namespace indexing preserves prefix semantics for trailing dots");
+  expect(empty.register_error(".Leading.Error").has_value() &&
+             empty.has_error_namespace(".Leading") &&
+             !empty.has_error_namespace(""),
+         "namespace indexing preserves leading dots without an empty namespace");
 }
 
 void test_runtime_module_error_descriptors() {
@@ -1147,6 +1192,7 @@ void test_runtime_module_error_descriptors() {
   const auto codec_error = errors.error_id("CodecError");
   const auto codec_decode = errors.error_id("CodecDecodeError");
   const auto entropy = errors.error_id("EntropyError");
+  const auto signature_error = errors.error_id("SignatureError");
   const auto uuid_parse = errors.error_id("UuidParseError");
   const auto time_parse = errors.error_id("TimeParseError");
   const auto time_zone_lookup = errors.error_id("TimeZoneLookupError");
@@ -1154,7 +1200,8 @@ void test_runtime_module_error_descriptors() {
   const auto url_build = errors.error_id("UrlBuildError");
   expect(json_error.has_value() && json_parse.has_value() &&
              codec_error.has_value() && codec_decode.has_value() &&
-             entropy.has_value() && uuid_parse.has_value() &&
+             entropy.has_value() && signature_error.has_value() &&
+             uuid_parse.has_value() &&
              time_parse.has_value() && time_zone_lookup.has_value() &&
              url_parse.has_value() && url_build.has_value(),
          "stdlib descriptors register non-http module error families");

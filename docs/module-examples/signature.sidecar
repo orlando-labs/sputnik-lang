@@ -1,0 +1,45 @@
+id: signature
+path: signature.html
+title: Signature
+icon: ◈
+source: runtime/stdlib_signature.cpp
+description.ru: Цифровые подписи EdDSA, ECDSA, RSA-PSS, ML-DSA и ГОСТ Р 34.10-2012.
+description.en: EdDSA, ECDSA, RSA-PSS, ML-DSA, and GOST R 34.10-2012 digital signatures.
+note.ru: Ключи и сообщения передаются как Bytes; ГОСТ требует Nettle и GMP.
+note.en: Keys and messages use Bytes; GOST requires Nettle and GMP.
+drift_ignore:
+
+method: Signature.generate(algorithm)
+ru: Создать пару ключей; возвращает Map с private_key и public_key.
+en: Generate a key pair in a Map with private_key and public_key.
+example:
+keys = Signature.generate(:ed25519)
+.end
+
+method: Signature.public_key(algorithm, private_key)
+ru: Получить открытый ключ из закрытого.
+en: Derive a public key from a private key.
+example:
+public = Signature.public_key(:ed25519, keys["private_key"])
+.end
+
+method: Signature.sign(algorithm, private_key, message)
+ru: Подписать бинарное сообщение.
+en: Sign a binary message.
+example:
+signature = Signature.sign(:ed25519, keys["private_key"], Bytes.new("amber"))
+.end
+
+method: Signature.verify(algorithm, public_key, message, signature)
+ru: Проверить подпись; изменённое сообщение возвращает false.
+en: Verify a signature; a changed message returns false.
+example:
+valid = Signature.verify(:ed25519, keys["public_key"], Bytes.new("amber"), signature)
+.end
+
+method: Signature.available?(algorithm)
+ru: Проверить, доступен ли алгоритм в данной сборке.
+en: Check whether an algorithm is available in this build.
+example:
+gost_enabled = Signature.available?(:gost2012_256)
+.end

@@ -1,0 +1,255 @@
+{
+  "schema": "amber.guide.manifest.v1",
+  "show_spec_refs": true,
+  "categories": [
+    {
+      "id": "intro",
+      "title": {
+        "ru": "Введение",
+        "en": "Introduction"
+      },
+      "order": 10
+    },
+    {
+      "id": "toolchain",
+      "title": {
+        "ru": "Инструменты",
+        "en": "Toolchain"
+      },
+      "order": 15
+    },
+    {
+      "id": "language-core",
+      "title": {
+        "ru": "Ядро языка",
+        "en": "Language core"
+      },
+      "order": 20
+    },
+    {
+      "id": "semantics",
+      "title": {
+        "ru": "Семантика",
+        "en": "Semantics"
+      },
+      "order": 30
+    }
+  ],
+  "nodes": [
+    {
+      "id": "overview",
+      "category": "intro",
+      "order": 10,
+      "status": "draft",
+      "prerequisites": [],
+      "related": [
+        "blocks",
+        "functions"
+      ],
+      "spec_refs": [
+        {
+          "anchor": "1-дизайн-якоря-языка",
+          "label": "Spec §1"
+        }
+      ],
+      "titles": {
+        "ru": "Обзор языка",
+        "en": "Language overview"
+      },
+      "summaries": {
+        "ru": "Что такое Amber, как читать этот Гид и как устроен граф знаний.",
+        "en": "What Amber is, how to read this Guide, and how the knowledge graph works."
+      },
+      "paths": {
+        "ru": "guide/content/01-intro/overview.ru.md",
+        "en": "guide/content/01-intro/overview.en.md"
+      }
+    },
+    {
+      "id": "running",
+      "category": "toolchain",
+      "order": 15,
+      "status": "draft",
+      "prerequisites": [],
+      "related": [
+        "overview",
+        "functions"
+      ],
+      "spec_refs": [],
+      "titles": {
+        "ru": "Запуск и сборка с amberc",
+        "en": "Running and building with amberc"
+      },
+      "summaries": {
+        "ru": "Как запустить, собрать в нативный бинарник и заглянуть в стадии компиляции.",
+        "en": "How to run a program, build a native binary, and inspect the compilation stages."
+      },
+      "paths": {
+        "ru": "guide/content/01b-toolchain/running.ru.md",
+        "en": "guide/content/01b-toolchain/running.en.md"
+      }
+    },
+    {
+      "id": "blocks",
+      "category": "language-core",
+      "order": 20,
+      "status": "draft",
+      "prerequisites": [
+        "overview"
+      ],
+      "related": [
+        "functions",
+        "pattern-matching"
+      ],
+      "spec_refs": [
+        {
+          "anchor": "4-postfix-выражения-чейнинг-и-block-suffix",
+          "label": "Spec §4"
+        },
+        {
+          "anchor": "5-блоки-лямбда-аргументы-и-placeholders",
+          "label": "Spec §5"
+        }
+      ],
+      "titles": {
+        "ru": "Блоки, лямбды и block suffix",
+        "en": "Blocks, lambdas and block suffix"
+      },
+      "summaries": {
+        "ru": "Блок передаётся вызову отдельным каналом и становится явным замыканием.",
+        "en": "A block travels through a dedicated call channel and becomes an explicit closure."
+      },
+      "paths": {
+        "ru": "guide/content/02-language-core/blocks.ru.md",
+        "en": "guide/content/02-language-core/blocks.en.md"
+      }
+    },
+    {
+      "id": "functions",
+      "category": "language-core",
+      "order": 30,
+      "status": "draft",
+      "prerequisites": [
+        "overview"
+      ],
+      "related": [
+        "blocks",
+        "pattern-matching"
+      ],
+      "spec_refs": [
+        {
+          "anchor": "8-функции-методы-классы-и-объектная-модель",
+          "label": "Spec §8"
+        }
+      ],
+      "titles": {
+        "ru": "Функции, методы и классы",
+        "en": "Functions, methods and classes"
+      },
+      "summaries": {
+        "ru": "def, one-liner-форма, поля конструктора @attr, методы класса и bare-nullary send.",
+        "en": "def, one-liner form, @attr constructor fields, class methods and bare-nullary send."
+      },
+      "paths": {
+        "ru": "guide/content/02-language-core/functions.ru.md",
+        "en": "guide/content/02-language-core/functions.en.md"
+      }
+    },
+    {
+      "id": "pattern-matching",
+      "category": "semantics",
+      "order": 40,
+      "status": "draft",
+      "prerequisites": [
+        "functions"
+      ],
+      "related": [
+        "blocks"
+      ],
+      "spec_refs": [
+        {
+          "anchor": "9-pattern-matching-v1",
+          "label": "Spec §9"
+        },
+        {
+          "anchor": "10-multi-clause-def",
+          "label": "Spec §10"
+        }
+      ],
+      "titles": {
+        "ru": "Pattern matching",
+        "en": "Pattern matching"
+      },
+      "summaries": {
+        "ru": "case/when по типам, литералам, диапазонам и деструктуризация map.",
+        "en": "case/when on types, literals, ranges and map destructuring."
+      },
+      "paths": {
+        "ru": "guide/content/03-semantics/pattern-matching.ru.md",
+        "en": "guide/content/03-semantics/pattern-matching.en.md"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "overview",
+      "to": "blocks",
+      "kind": "related"
+    },
+    {
+      "from": "overview",
+      "to": "functions",
+      "kind": "related"
+    },
+    {
+      "from": "running",
+      "to": "overview",
+      "kind": "related"
+    },
+    {
+      "from": "running",
+      "to": "functions",
+      "kind": "related"
+    },
+    {
+      "from": "overview",
+      "to": "blocks",
+      "kind": "prereq"
+    },
+    {
+      "from": "blocks",
+      "to": "functions",
+      "kind": "related"
+    },
+    {
+      "from": "blocks",
+      "to": "pattern-matching",
+      "kind": "related"
+    },
+    {
+      "from": "overview",
+      "to": "functions",
+      "kind": "prereq"
+    },
+    {
+      "from": "functions",
+      "to": "blocks",
+      "kind": "related"
+    },
+    {
+      "from": "functions",
+      "to": "pattern-matching",
+      "kind": "related"
+    },
+    {
+      "from": "functions",
+      "to": "pattern-matching",
+      "kind": "prereq"
+    },
+    {
+      "from": "pattern-matching",
+      "to": "blocks",
+      "kind": "related"
+    }
+  ]
+}

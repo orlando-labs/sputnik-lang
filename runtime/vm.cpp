@@ -1376,7 +1376,8 @@ public:
   ExecutionResult
   execute(std::uint32_t code_id, const std::vector<Value> &args,
           const std::vector<std::pair<std::uint32_t, Value>> &kw_args,
-          Value self, Value block) {
+          Value self, Value block,
+          const std::vector<Value> *inherited_captures = nullptr) {
     if (current_runtime_task_context() == nullptr &&
         root_task_context_ == nullptr) {
       root_task_context_ = RuntimeTaskContext::create();
@@ -1403,8 +1404,10 @@ public:
           "notebook execution requires notebook cell code", code_id, 0));
     }
     std::vector<Value> entry_captures;
-    if (!prepare_direct_entry_captures(*entry, code_id, &entry_captures,
-                                       &self)) {
+    if (inherited_captures != nullptr) {
+      entry_captures = *inherited_captures;
+    } else if (!prepare_direct_entry_captures(*entry, code_id, &entry_captures,
+                                             &self)) {
       state_->heap.drain_remote_frees();
       return with_runtime_names({Value::null(), fault_});
     }
@@ -1497,6 +1500,7 @@ public:
     // extension calls. Fault/unwind state belongs to one call and must never
     // poison the next invocation.
     fault_.reset();
+    run_cancellation_unwinding_ = false;
     escaped_exception_.reset();
     escaped_throw_.reset();
     escaped_nonlocal_return_.reset();
@@ -1539,6 +1543,7 @@ public:
     // sends. Fault/unwind state belongs to one send and must never poison the
     // next invocation.
     fault_.reset();
+    run_cancellation_unwinding_ = false;
     escaped_exception_.reset();
     escaped_throw_.reset();
     escaped_nonlocal_return_.reset();
@@ -1771,6 +1776,7 @@ private:
           prefix.empty() ? name : (prefix + ":" + name);
       state_->module_bindings[storage_name] = regs[entry.slot];
     }
+    ++state_->module_bindings_revision;
     state_->module_init_completed = true;
   }
 
@@ -3121,6 +3127,7 @@ private:
       vm->unwind_all_frame_scopes();
       vm->frames_.clear();
       vm->fault_ = std::nullopt;
+      vm->run_cancellation_unwinding_ = false;
       vm->escaped_exception_ = std::nullopt;
       vm->escaped_throw_ = std::nullopt;
       vm->escaped_nonlocal_return_ = std::nullopt;
@@ -3548,6 +3555,12 @@ private:
 
   void set_fault(const Frame &frame, const std::string &error_name,
                  const std::string &message) {
+    if (error_name == "CancelledError" && runtime_run_cancel_requested() &&
+        !run_cancellation_unwinding_) {
+      run_cancellation_unwinding_ = true;
+      raise_runtime_error(frame, error_name, message);
+      return;
+    }
     fault_ = make_fault(frame, error_name, message);
   }
 
@@ -4123,6 +4136,11 @@ private:
     case Opcode::LoadK:
       if (quick_operand_u32(insn, 0, &a) && quick_operand_u32(insn, 1, &b)) {
         out.quick_opcode = QuickOpcode::LoadK;
+      }
+      break;
+    case Opcode::LookupConst:
+      if (quick_operand_u32(insn, 0, &a) && quick_operand_u32(insn, 1, &b)) {
+        out.quick_opcode = QuickOpcode::LookupConst;
       }
       break;
     case Opcode::LoadNull:
@@ -5413,6 +5431,7 @@ private:
     frame.direct_return_frame_sink = nullptr;
     frame.active_call_pc.reset();
     frame.return_override.reset();
+    frame.after_init_pending = false;
     frame.merge_registers_to_caller = false;
     frame.pending_exception_on_return.reset();
     frame.pending_throw_on_return.reset();
@@ -5460,6 +5479,7 @@ private:
     frame->direct_return_frame_sink = nullptr;
     frame->active_call_pc.reset();
     frame->return_override.reset();
+    frame->after_init_pending = false;
     frame->merge_registers_to_caller = false;
     frame->pending_exception_on_return.reset();
     frame->pending_throw_on_return.reset();
@@ -6498,40 +6518,6 @@ private:
     return out;
   }
 
-  std::optional<Value>
-  lookup_native_prelude_constant(const std::vector<std::string> &segments) {
-    const std::string path = join_path_segments(segments);
-    if (const std::optional<std::uint16_t> error_id =
-            error_registry().error_id(path)) {
-      return Value::native_error_class(*error_id);
-    }
-    // Registered prelude/module paths resolve through the world-owned module
-    // registry. During migration the binding can still point at a legacy
-    // RuntimeNativeTypeKind.
-    if (const std::optional<RuntimeBindingRef> binding =
-            module_registry().binding_for_path(path)) {
-      switch (binding->kind) {
-      case RuntimeBindingKind::NativeType:
-        return Value::native_type(binding->native_type);
-      case RuntimeBindingKind::NativeFunction:
-        return Value::native_function(binding->native_function);
-      case RuntimeBindingKind::TaskModule:
-        return Value::task_module(task_runtime_module());
-      case RuntimeBindingKind::FlowModule:
-        return Value::flow_module(std::make_shared<RuntimeFlowModule>());
-      }
-    }
-    // Error namespaces are a fallback for prefixes such as `ArgParser` in
-    // `ArgParser.InvalidValue`; exact native type/module bindings must keep
-    // precedence so callable builtin types such as `ArgParser(...)` work.
-    if (error_registry().has_error_namespace(path)) {
-      auto value = std::make_shared<NativeErrorNamespaceValue>();
-      value->path = path;
-      return Value::native_error_namespace(std::move(value));
-    }
-    return std::nullopt;
-  }
-
   std::optional<std::uint32_t> lookup_class_by_path_segments_no_fault(
       const std::vector<std::string> &segments, bool *ambiguous) const {
     if (ambiguous != nullptr) {
@@ -6576,29 +6562,6 @@ private:
     return match;
   }
 
-  bool find_class_by_path_segments(const Frame &frame,
-                                   const std::vector<std::string> &segments,
-                                   std::uint32_t *out_class_index) {
-    if (segments.empty()) {
-      set_fault(frame, "VMError", "class path is empty");
-      return false;
-    }
-
-    bool ambiguous = false;
-    const std::optional<std::uint32_t> match =
-        lookup_class_by_path_segments_no_fault(segments, &ambiguous);
-    if (match.has_value()) {
-      *out_class_index = *match;
-      return true;
-    }
-    if (ambiguous) {
-      set_fault(frame, "VMError", "class path ref is ambiguous");
-      return false;
-    }
-    set_fault(frame, "VMError", "class path ref target is unknown");
-    return false;
-  }
-
   Value lookup_constant(const Frame &frame, std::uint32_t const_id) {
     if (const_id >= module_.const_pool.size()) {
       set_fault(frame, "VMError", "constant ref out of range");
@@ -6620,40 +6583,146 @@ private:
         return Value::class_object(resolved);
       }
     }
-    std::vector<std::string> segments;
-    if (!path_segments_from_constant(frame, constant, &segments)) {
-      return Value::null();
-    }
-    std::uint32_t class_index = 0;
-    if (std::optional<Value> native_value =
-            lookup_native_prelude_constant(segments)) {
-      return *native_value;
-    }
-    // A `<module>.<name>` path may also name an exported module-level binding
-    // (a function/closure) rather than a class. The exporting module's init
-    // persists it under `<module>:<name>`; recover the live value (with its
-    // captures) so a cross-module `from M import f` / `M.f` resolves to the
-    // real closure. Only the trailing segment is the binding name; everything
-    // before it is the (possibly dotted) module id. Checked before the faulting
-    // class lookup below (real classes were already matched no-fault above).
-    if (segments.size() >= 2U) {
-      std::string module_name;
-      for (std::size_t i = 0; i + 1U < segments.size(); ++i) {
-        if (i != 0U) {
-          module_name += ".";
+    // These caches belong to this Vm, not the shared RuntimeState: scheduler
+    // strands can warm the same constant independently without a cache lock.
+    // A registry mutation can change even a previously missing name's category.
+    // A world/image change also guards equal-revision replacement registries.
+    const std::uint64_t modules_revision = module_registry().revision();
+    const std::uint64_t errors_revision = error_registry().revision();
+    if (constant_lookup_world_epoch_ != state_->world_epoch ||
+        constant_lookup_bindings_revision_ != state_->module_bindings_revision ||
+        constant_lookup_modules_revision_ != modules_revision ||
+        constant_lookup_errors_revision_ != errors_revision) {
+      for (const auto &entry : constant_lookup_caches_) {
+        if (entry != nullptr) {
+          entry->kind = ConstantLookupKind::Unresolved;
+          entry->binding = nullptr;
         }
-        module_name += segments[i];
       }
-      const std::string key = module_name + ":" + segments.back();
-      const auto binding = state_->module_bindings.find(key);
-      if (binding != state_->module_bindings.end()) {
-        return unwrap_watch_value(binding->second);
+      constant_lookup_world_epoch_ = state_->world_epoch;
+      constant_lookup_bindings_revision_ = state_->module_bindings_revision;
+      constant_lookup_modules_revision_ = modules_revision;
+      constant_lookup_errors_revision_ = errors_revision;
+    }
+    if (constant_lookup_caches_.empty()) {
+      constant_lookup_caches_.resize(module_.const_pool.size());
+    }
+    auto &slot = constant_lookup_caches_[const_id];
+    if (slot == nullptr) {
+      std::vector<std::string> segments;
+      if (!path_segments_from_constant(frame, constant, &segments)) {
+        return Value::null();
+      }
+      auto entry = std::make_unique<ConstantLookupCache>();
+      entry->path = join_path_segments(segments);
+      if (segments.size() >= 2U) {
+        for (std::size_t i = 0; i + 1U < segments.size(); ++i) {
+          if (i != 0U) {
+            entry->binding_key += '.';
+          }
+          entry->binding_key += segments[i];
+        }
+        entry->binding_key += ':';
+        entry->binding_key += segments.back();
+      }
+      slot = std::move(entry);
+    }
+    ConstantLookupCache &entry = *slot;
+    if (entry.kind == ConstantLookupKind::Unresolved) {
+      resolve_constant_lookup(frame, constant, entry);
+      if (fault_.has_value()) {
+        return Value::null();
       }
     }
-    if (find_class_by_path_segments(frame, segments, &class_index)) {
-      return Value::class_object(class_index);
+    switch (entry.kind) {
+    case ConstantLookupKind::Class:
+      return Value::class_object(entry.target);
+    case ConstantLookupKind::ErrorClass:
+      return Value::native_error_class(static_cast<std::uint16_t>(entry.target));
+    case ConstantLookupKind::NativeType:
+      return Value::native_type(static_cast<RuntimeNativeTypeKind>(entry.target));
+    case ConstantLookupKind::NativeFunction:
+      return Value::native_function(
+          static_cast<RuntimeNativeFunctionKind>(entry.target));
+    case ConstantLookupKind::TaskModule:
+      return Value::task_module(task_runtime_module());
+    case ConstantLookupKind::FlowModule:
+      return Value::flow_module(std::make_shared<RuntimeFlowModule>());
+    case ConstantLookupKind::ErrorNamespace: {
+      auto value = std::make_shared<NativeErrorNamespaceValue>();
+      value->path = entry.path;
+      return Value::native_error_namespace(std::move(value));
+    }
+    case ConstantLookupKind::ModuleBinding:
+      return unwrap_watch_value(*entry.binding);
+    case ConstantLookupKind::Ambiguous:
+      set_fault(frame, "VMError", "class path ref is ambiguous");
+      return Value::null();
+    case ConstantLookupKind::Missing:
+      set_fault(frame, "VMError", "class path ref target is unknown");
+      return Value::null();
+    case ConstantLookupKind::Unresolved:
+      break;
     }
     return Value::null();
+  }
+
+  void resolve_constant_lookup(const Frame &frame, const Constant &constant,
+                               ConstantLookupCache &entry) {
+    // Preserve the existing precedence: Amber classes (above), exact native
+    // error, exact builtin, error namespace, live module binding, class fallback.
+    // In particular ArgParser is both a callable builtin and an error prefix.
+    if (const auto error_id = error_registry().error_id(entry.path)) {
+      entry.kind = ConstantLookupKind::ErrorClass;
+      entry.target = *error_id;
+      return;
+    }
+    if (const auto binding = module_registry().binding_for_path(entry.path)) {
+      switch (binding->kind) {
+      case RuntimeBindingKind::NativeType:
+        entry.kind = ConstantLookupKind::NativeType;
+        entry.target = static_cast<std::uint32_t>(binding->native_type);
+        break;
+      case RuntimeBindingKind::NativeFunction:
+        entry.kind = ConstantLookupKind::NativeFunction;
+        entry.target = static_cast<std::uint32_t>(binding->native_function);
+        break;
+      case RuntimeBindingKind::TaskModule:
+        entry.kind = ConstantLookupKind::TaskModule;
+        break;
+      case RuntimeBindingKind::FlowModule:
+        entry.kind = ConstantLookupKind::FlowModule;
+        break;
+      }
+      return;
+    }
+    if (error_registry().has_error_namespace(entry.path)) {
+      entry.kind = ConstantLookupKind::ErrorNamespace;
+      return;
+    }
+    if (!entry.binding_key.empty()) {
+      const auto binding = state_->module_bindings.find(entry.binding_key);
+      if (binding != state_->module_bindings.end()) {
+        entry.kind = ConstantLookupKind::ModuleBinding;
+        entry.binding = &binding->second;
+        return;
+      }
+    }
+    // Compatibility fallback for hand-built images/runtime symbol tables.
+    // Normal image classes have already been resolved by resolved_class_refs.
+    std::vector<std::string> segments;
+    if (!path_segments_from_constant(frame, constant, &segments)) {
+      return;
+    }
+    bool ambiguous = false;
+    if (const auto klass =
+            lookup_class_by_path_segments_no_fault(segments, &ambiguous)) {
+      entry.kind = ConstantLookupKind::Class;
+      entry.target = *klass;
+    } else {
+      entry.kind = ambiguous ? ConstantLookupKind::Ambiguous
+                             : ConstantLookupKind::Missing;
+    }
   }
 
   Value read_reg(Frame &frame, std::uint32_t reg) {
@@ -10864,16 +10933,84 @@ private:
     return sites[site_id].get();
   }
 
-  void store_call_cache_entry(const Frame &frame, std::uint32_t site_id,
+  bool store_call_cache_entry(const Frame &frame, std::uint32_t site_id,
                               CallCacheEntry entry) {
+    constexpr std::size_t kMaxCallCacheEntries = 8;
+    if (const CallCacheEntry *cached = call_cache_entry(frame, site_id);
+        cached != nullptr && cached->world_epoch == entry.world_epoch) {
+      const auto live = [&](const CallCacheEntry &prior) {
+        return prior.valid && prior.world_epoch == entry.world_epoch &&
+               prior.receiver_class_index < state_->classes.size() &&
+               prior.method_version ==
+                   state_->classes[prior.receiver_class_index].method_version;
+      };
+      const auto same_shape = [&](const CallCacheEntry &prior) {
+        return prior.receiver_class_index == entry.receiver_class_index &&
+               prior.dispatch_flags == entry.dispatch_flags &&
+               prior.selector_symbol_id == entry.selector_symbol_id &&
+               prior.positional_count == entry.positional_count &&
+               prior.keyword_shape == entry.keyword_shape &&
+               prior.has_block == entry.has_block;
+      };
+      // A cyclic call site with one more type than the bound must not evict
+      // all of its warm shapes on every pass. Keep the admitted shapes stable;
+      // overflow uses ordinary resolution without polluting this small cache.
+      if (cached->alternatives.size() + 1U == kMaxCallCacheEntries &&
+          live(*cached) && !same_shape(*cached) &&
+          std::all_of(cached->alternatives.begin(), cached->alternatives.end(),
+                      [&](const CallCacheEntry &prior) {
+                        return live(prior) && !same_shape(prior);
+                      })) {
+        std::uint64_t shape = 1469598103934665603ULL;
+        const auto mix = [&](std::uint64_t value) {
+          shape = (shape ^ value) * 1099511628211ULL;
+        };
+        mix(entry.receiver_class_index);
+        mix(entry.dispatch_flags);
+        mix(entry.selector_symbol_id);
+        mix(entry.positional_count);
+        mix(entry.has_block);
+        for (const auto keyword : entry.keyword_shape) mix(keyword);
+        // Hits clear the hint. A cyclic overflow with intervening warm hits
+        // stays on ordinary resolution; a new monomorphic hot phase is
+        // admitted on its second consecutive miss. Hash collisions affect
+        // admission only: dispatch still checks the complete key and versions.
+        if (cached->pending_overflow_shape != shape) {
+          cached->pending_overflow_shape = shape;
+          return false;
+        }
+      }
+      entry.alternatives.reserve(std::min(kMaxCallCacheEntries - 1U,
+                                          cached->alternatives.size() + 1U));
+      const auto remember = [&](const CallCacheEntry &prior) {
+        if (entry.alternatives.size() == kMaxCallCacheEntries - 1U ||
+            !live(prior)) {
+          return;
+        }
+        if (same_shape(prior)) {
+          return;
+        }
+        // Copy the flat entry, never the root's entire alternative vector.
+        entry.alternatives.push_back({
+            prior.valid, prior.receiver_class_index, prior.dispatch_flags,
+            prior.selector_symbol_id, prior.positional_count,
+            prior.keyword_shape, prior.has_block, prior.method_version,
+            prior.world_epoch, prior.attr_reader_ivar_symbol_id, prior.method,
+            {}, {}});
+      };
+      remember(*cached);
+      for (const CallCacheEntry &prior : cached->alternatives) {
+        remember(prior);
+      }
+    }
     if (isolate_inline_caches_) {
       isolated_call_caches_[inline_cache_key(frame, site_id)] =
           std::move(entry);
-      return;
+      return true;
     }
     if (frame.code == nullptr ||
         frame.code->code_id >= state_->call_caches.size()) {
-      return;
+      return false;
     }
     auto &sites = state_->call_caches[frame.code->code_id];
     if (site_id >= sites.size()) {
@@ -10887,6 +11024,7 @@ private:
       ++state_->call_cache_entry_count;
     }
     sites[site_id] = std::make_shared<CallCacheEntry>(std::move(entry));
+    return true;
   }
 
   IvarCacheEntry *ivar_cache_entry(const Frame &frame, std::uint32_t site_id) {
@@ -10953,22 +11091,33 @@ private:
       record_call_cache_miss();
       return nullptr;
     }
-    const CallCacheEntry &entry = *cached;
-    if (!entry.valid || entry.receiver_class_index != receiver_class_index ||
-        entry.dispatch_flags != dispatch_flags ||
-        entry.selector_symbol_id != selector_symbol_id ||
-        entry.positional_count != positional_count ||
-        entry.keyword_shape != canonical_keyword_shape(kw_args) ||
-        entry.has_block != !block.is_null() ||
-        entry.world_epoch != state_->world_epoch ||
-        receiver_class_index >= state_->classes.size() ||
-        entry.method_version !=
-            state_->classes[receiver_class_index].method_version) {
-      record_call_cache_miss();
-      return nullptr;
+    const auto keyword_shape = canonical_keyword_shape(kw_args);
+    const auto matches = [&](const CallCacheEntry &entry) {
+      return entry.valid && entry.receiver_class_index == receiver_class_index &&
+             entry.dispatch_flags == dispatch_flags &&
+             entry.selector_symbol_id == selector_symbol_id &&
+             entry.positional_count == positional_count &&
+             entry.keyword_shape == keyword_shape &&
+             entry.has_block == !block.is_null() &&
+             entry.world_epoch == state_->world_epoch &&
+             receiver_class_index < state_->classes.size() &&
+             entry.method_version ==
+                 state_->classes[receiver_class_index].method_version;
+    };
+    if (matches(*cached)) {
+      cached->pending_overflow_shape.reset();
+      record_call_cache_hit();
+      return cached;
     }
-    record_call_cache_hit();
-    return &entry;
+    for (const CallCacheEntry &entry : cached->alternatives) {
+      if (matches(entry)) {
+        cached->pending_overflow_shape.reset();
+        record_call_cache_hit();
+        return &entry;
+      }
+    }
+    record_call_cache_miss();
+    return nullptr;
   }
 
   // Quickened ordinary sends have neither keywords nor a block. Avoid
@@ -10983,21 +11132,31 @@ private:
       record_call_cache_miss();
       return nullptr;
     }
-    const CallCacheEntry &entry = *cached;
-    if (!entry.valid || entry.receiver_class_index != receiver_class_index ||
-        entry.dispatch_flags != dispatch_flags ||
-        entry.selector_symbol_id != selector_symbol_id ||
-        entry.positional_count != positional_count ||
-        !entry.keyword_shape.empty() || entry.has_block ||
-        entry.world_epoch != state_->world_epoch ||
-        receiver_class_index >= state_->classes.size() ||
-        entry.method_version !=
-            state_->classes[receiver_class_index].method_version) {
-      record_call_cache_miss();
-      return nullptr;
+    const auto matches = [&](const CallCacheEntry &entry) {
+      return entry.valid && entry.receiver_class_index == receiver_class_index &&
+             entry.dispatch_flags == dispatch_flags &&
+             entry.selector_symbol_id == selector_symbol_id &&
+             entry.positional_count == positional_count &&
+             entry.keyword_shape.empty() && !entry.has_block &&
+             entry.world_epoch == state_->world_epoch &&
+             receiver_class_index < state_->classes.size() &&
+             entry.method_version ==
+                 state_->classes[receiver_class_index].method_version;
+    };
+    if (matches(*cached)) {
+      cached->pending_overflow_shape.reset();
+      record_call_cache_hit();
+      return cached;
     }
-    record_call_cache_hit();
-    return &entry;
+    for (const CallCacheEntry &entry : cached->alternatives) {
+      if (matches(entry)) {
+        cached->pending_overflow_shape.reset();
+        record_call_cache_hit();
+        return &entry;
+      }
+    }
+    record_call_cache_miss();
+    return nullptr;
   }
 
   const bytecode::BcMethod *probe_call_cache(
@@ -11064,8 +11223,9 @@ private:
     entry.world_epoch = state_->world_epoch;
     entry.method = method;
     entry.attr_reader_ivar_symbol_id = attr_reader_ivar_symbol_id(method);
-    store_call_cache_entry(frame, site_id, std::move(entry));
-    record_call_cache_update();
+    if (store_call_cache_entry(frame, site_id, std::move(entry))) {
+      record_call_cache_update();
+    }
   }
 
   std::optional<std::uint32_t> probe_ivar_cache(const Frame &frame,
@@ -11430,6 +11590,26 @@ private:
     return true;
   }
 
+  bool method_accepts_zero_arguments(const Frame &frame,
+                                     const bytecode::BcMethod &method) {
+    // Defaults, rest collections and the optional block channel all bind
+    // without caller arguments. Inspect descriptors without evaluating defaults.
+    const auto accepts = [](const auto &params) {
+      constexpr auto optional = bytecode::kMethodParamFlagHasDefault |
+                                bytecode::kMethodParamFlagRest |
+                                bytecode::kMethodParamFlagKwRest |
+                                bytecode::kMethodParamFlagBlock;
+      return std::all_of(params.begin(), params.end(), [](const auto &param) {
+        return (param.flags & optional) != 0U;
+      });
+    };
+    if (!method.params.empty()) {
+      return accepts(method.params);
+    }
+    std::vector<bytecode::MethodParamEntry> params;
+    return load_method_params(frame, method, &params) && accepts(params);
+  }
+
   std::optional<std::uint32_t>
   local_slot_for_name(const Frame &frame, const BcCode &code,
                       std::uint32_t local_name_str_id) {
@@ -11556,6 +11736,12 @@ private:
         set_fault(frame, "TypeError", "too many positional arguments");
         return false;
       }
+    } else if (pos_args.empty()) {
+      // Empty calls leave fixed slots for defaults/required-argument checks.
+      // Rest must not prevent an all-default signature from binding zero args.
+      auto &rest = (*out_slots)[positional_slots[*rest_ordinal]];
+      rest.present = true;
+      rest.value = make_tuple_value({});
     } else {
       const std::size_t before = *rest_ordinal;
       const std::size_t after = positional_slots.size() - before - 1;
@@ -11751,6 +11937,55 @@ private:
     return true;
   }
 
+  std::optional<Value> literal_default_value(std::uint32_t code_id) const {
+    const BcCode *code = lookup_code(code_id);
+    if (code == nullptr || code->kind != CodeKind::DefaultThunk ||
+        !code->handler_table.empty() ||
+        code->flags != 0U || code->instructions.size() != 3U) {
+      return std::nullopt;
+    }
+    const Instruction &load = code->instructions[0];
+    const Instruction &close = code->instructions[1];
+    const Instruction &ret = code->instructions[2];
+    std::uint32_t reg = 0;
+    if (!quick_operand_u32(load, 0, &reg) || reg >= code->reg_count ||
+        close.opcode != Opcode::CloseUpvalues ||
+        close.operands.size() != 1U || !quick_operand_reg_equals(close, 0, 0U) ||
+        ret.opcode != Opcode::Return || ret.operands.size() != 1U ||
+        !quick_operand_reg_equals(ret, 0, reg)) {
+      return std::nullopt;
+    }
+    if (load.opcode == Opcode::LoadNull && load.operands.size() == 1U) {
+      return Value::null();
+    }
+    std::uint32_t operand = 0;
+    if (load.operands.size() != 2U || !quick_operand_u32(load, 1, &operand)) {
+      return std::nullopt;
+    }
+    if (load.opcode == Opcode::LoadBool && operand <= 1U) {
+      return Value::boolean(operand != 0U);
+    }
+    if (load.opcode != Opcode::LoadK || operand >= module_.const_pool.size()) {
+      return std::nullopt;
+    }
+    // Embedded defaults inherit their enclosing procedure's capture layout,
+    // including imports used only by the body. The proven three-instruction
+    // literal never reads those captures, so it must not lease a child VM or
+    // search all module bindings merely to recover unused captures.
+    // Immutable scalar literals have no bindings, effects or per-call object
+    // identity. All other defaults retain their ordinary thunk execution.
+    const Constant &value = module_.const_pool[operand];
+    switch (value.kind) {
+    case ConstantKind::Null: return Value::null();
+    case ConstantKind::Bool: return Value::boolean(value.bool_value);
+    case ConstantKind::Integer: return Value::integer(value.int_value);
+    case ConstantKind::Float: return Value::floating(value.float_value);
+    case ConstantKind::SymbolRef: return Value::symbol(value.ref_id);
+    case ConstantKind::StringRef: return Value::string(value.ref_id);
+    default: return std::nullopt;
+    }
+  }
+
   bool
   materialize_defaults(Frame &frame, const bytecode::BcMethod &method,
                        const std::vector<bytecode::MethodParamEntry> &params,
@@ -11799,16 +12034,25 @@ private:
                     "missing default thunk for parameter slot");
           return false;
         }
-        BlockVmLease lease = acquire_block_vm();
-        Vm &nested = *lease.vm;
-        const ExecutionResult result =
-            nested.execute(method.default_thunk_ids[thunk_index], frame.regs,
-                           frame.self, frame.block);
-        if (!result.ok()) {
-          fault_ = result.fault;
-          return false;
+        const std::uint32_t thunk = method.default_thunk_ids[thunk_index];
+        const std::optional<Value> literal = literal_default_value(thunk);
+        if (literal.has_value()) {
+          frame.regs[slot] = *literal;
+        } else {
+          BlockVmLease lease = acquire_block_vm();
+          Vm &nested = *lease.vm;
+          // Default thunks share the callee's capture layout. They are not
+          // independently stored module closures; recovering them by code id
+          // can rerun module initialization while that module is still active.
+          const ExecutionResult result =
+              nested.execute(thunk, frame.regs, {}, frame.self, frame.block,
+                             &frame.captures);
+          if (!result.ok()) {
+            fault_ = result.fault;
+            return false;
+          }
+          frame.regs[slot] = result.value;
         }
-        frame.regs[slot] = result.value;
         if (frame.initialized.size() < frame.regs.size()) {
           frame.initialized.resize(frame.regs.size(), 0U);
         }
@@ -12031,6 +12275,10 @@ private:
     const std::uint64_t task_id = tls_runtime_task_id;
     const std::uint64_t sync_owner_id = tls_runtime_sync_owner_id;
     const std::atomic<bool> *cancel_flag = tls_runtime_task_cancel_flag;
+    const auto cancel_owner = current_runtime_task_cancel_owner();
+    const auto run_cancellation = current_runtime_run_cancellation();
+    const bool run_cancellation_masked = runtime_run_cancel_requested() &&
+        !runtime_run_cancel_checkpoint_requested();
     const std::shared_ptr<RuntimeTaskContext> task_context =
         tls_runtime_task_context;
     const void *scheduler_identity = tls_runtime_scheduler_identity;
@@ -12043,18 +12291,22 @@ private:
     park.kind = ParkRequest::Kind::Ffi;
     park.ffi_start =
         [pending, caller_ptr, fn, method, pos_args, self, strand_id, task_id,
-         sync_owner_id, cancel_flag, task_context, scheduler_identity,
+         sync_owner_id, cancel_flag, cancel_owner, run_cancellation, run_cancellation_masked,
+         task_context, scheduler_identity,
          stdout_writer, stderr_writer,
          task](std::shared_ptr<Vm> vm_owner) mutable {
           RuntimeBlockingFfiExecutor::instance().submit(
               [pending, caller_ptr, fn, method,
                pos_args = std::move(pos_args), self = std::move(self),
-               strand_id, task_id, sync_owner_id, cancel_flag, task_context,
+               strand_id, task_id, sync_owner_id, cancel_flag, cancel_owner, run_cancellation,
+               run_cancellation_masked, task_context,
                scheduler_identity, stdout_writer, stderr_writer, task,
                vm_owner = std::move(vm_owner)]() mutable {
                 RuntimeStrandScope strand_scope(strand_id);
+                RuntimeRunCancellationScope run_scope(run_cancellation);
+                RuntimeRunCancellationMask cleanup_mask(run_cancellation_masked);
                 RuntimeTaskScope task_scope(task_id, cancel_flag, sync_owner_id,
-                                            task_context, scheduler_identity);
+                                            task_context, scheduler_identity, cancel_owner);
                 RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
                 IoParkGuard io_park_guard(false);
                 bool ok = false;
@@ -12145,9 +12397,8 @@ private:
     if (fn == nullptr) {
       return false; // bytecode build: fall back to the Amber body.
     }
-    const bool blocking =
-        dispatch_registry().native_package_thunk_is_blocking(binding->logical);
-    if (blocking && allow_park && parkable_ && task_module_ != nullptr) {
+    if (allow_park && parkable_ && task_module_ != nullptr &&
+        dispatch_registry().native_package_thunk_is_blocking(binding->logical)) {
       bool ignored_parked = false;
       return try_dispatch_blocking_native_extension(
           caller, binding->logical, fn, binding->method, pos_args, self, out,
@@ -12709,14 +12960,10 @@ private:
                     "class call without init does not accept block");
           return false;
         }
-        if (!write_reg(frame, dst, instance_value)) {
-          return false;
-        }
-        ++frame.pc;
-        return true;
+        return complete_constructor(frame, instance_value, dst);
       }
       return invoke_method(frame, *init, pos_args, kw_args, instance_value,
-                           block, dst, instance_value);
+                           block, dst, instance_value, {}, true);
     }
 
     if (callee.is_instance_object()) {
@@ -12769,12 +13016,42 @@ private:
     return true;
   }
 
+  bool complete_constructor(Frame &caller, const Value &instance,
+                            std::optional<std::uint32_t> caller_result_reg) {
+    const bytecode::BcMethod *hook = find_method_for_dispatch(
+        caller, instance.as_instance_object()->class_index, "after_init!",
+        kMethodFlagInstance);
+    if (fault_.has_value()) {
+      return false;
+    }
+    if (hook == nullptr) {
+      caller.active_call_pc.reset();
+      return complete_invoke_result(caller, caller_result_reg, instance);
+    }
+    if ((hook->flags & (kMethodFlagPropertyGetter |
+                        kMethodFlagPropertySetter)) != 0U) {
+      raise_runtime_error(caller, "TypeError", "after_init! must be a method");
+      return false;
+    }
+    if (!method_accepts_zero_arguments(caller, *hook)) {
+      if (!fault_.has_value()) {
+        raise_runtime_error(caller, "TypeError",
+                            "after_init! must accept zero arguments");
+      }
+      return false;
+    }
+    // Ignore the hook's result, just as construction ignores init's result.
+    // This activation is not another constructor, so it cannot re-run the hook.
+    return invoke_method(caller, *hook, {}, {}, instance, Value::null(),
+                         caller_result_reg, instance);
+  }
+
   bool execute_clause_method(
       Frame &caller, const bytecode::BcMethod &method, const BcCode &entry_code,
       const std::vector<bytecode::MethodParamEntry> &params,
       const std::vector<BoundMethodArg> &slots, const Value &self,
       const Value &block, std::optional<std::uint32_t> caller_result_reg,
-      const std::optional<Value> &return_override) {
+      const std::optional<Value> &return_override, bool after_init_pending) {
     Frame callee;
     callee.code = &entry_code;
     initialize_frame_register_file(callee, entry_code);
@@ -12832,6 +13109,9 @@ private:
       }
 
       Value value = return_override.has_value() ? *return_override : body.value;
+      if (after_init_pending) {
+        return complete_constructor(caller, value, caller_result_reg);
+      }
       return complete_invoke_result(caller, caller_result_reg,
                                     std::move(value));
     }
@@ -12849,6 +13129,9 @@ private:
     }
     Value value =
         return_override.has_value() ? *return_override : fallback.value;
+    if (after_init_pending) {
+      return complete_constructor(caller, value, caller_result_reg);
+    }
     return complete_invoke_result(caller, caller_result_reg, std::move(value));
   }
 
@@ -12857,7 +13140,7 @@ private:
       const Value *pos_args, std::size_t pos_count, Value &self, Value &block,
       std::optional<std::uint32_t> caller_result_reg,
       std::optional<Value> &return_override,
-      const std::string &no_suspend_label) {
+      const std::string &no_suspend_label, bool after_init_pending = false) {
     // The overwhelmingly common method shape is an exact positional call with
     // no defaults, rest/keyword/block parameters, or clauses. Bind this
     // proven-simple case straight into its pooled frame. Calls with a
@@ -12884,6 +13167,7 @@ private:
                              caller_result_reg);
         Frame &callee = frames_.back();
         callee.return_override = std::move(return_override);
+        callee.after_init_pending = after_init_pending;
         if (!no_suspend_label.empty()) {
           callee.no_suspend_extent = true;
           callee.no_suspend_label = no_suspend_label;
@@ -12906,7 +13190,8 @@ private:
                 Value self, Value block,
                 std::optional<std::uint32_t> caller_result_reg,
                 std::optional<Value> return_override = std::nullopt,
-                const std::string &no_suspend_label = {}) {
+                const std::string &no_suspend_label = {},
+                bool after_init_pending = false) {
     {
       Value native_out = Value::null();
       bool native_faulted = false;
@@ -12919,6 +13204,13 @@ private:
         }
         if (native_faulted) {
           return false;
+        }
+        if (after_init_pending) {
+          return complete_constructor(caller, *return_override,
+                                      caller_result_reg);
+        }
+        if (return_override.has_value()) {
+          native_out = *return_override;
         }
         if (caller_result_reg.has_value() &&
             !write_reg(caller, *caller_result_reg, std::move(native_out))) {
@@ -12937,7 +13229,8 @@ private:
     if (kw_args.empty()) {
       const FastSendStatus simple_status = invoke_simple_method_from_args(
           caller, method, *code, pos_args.data(), pos_args.size(), self, block,
-          caller_result_reg, return_override, no_suspend_label);
+          caller_result_reg, return_override, no_suspend_label,
+          after_init_pending);
       if (simple_status != FastSendStatus::NotHandled) {
         return simple_status == FastSendStatus::Matched;
       }
@@ -12951,7 +13244,8 @@ private:
     }
     if (!method.clause_table.empty()) {
       return execute_clause_method(caller, method, *code, params, slots, self,
-                                   block, caller_result_reg, return_override);
+                                   block, caller_result_reg, return_override,
+                                   after_init_pending);
     }
     const std::uint32_t call_pc = static_cast<std::uint32_t>(caller.pc);
     ++caller.pc;
@@ -12960,6 +13254,7 @@ private:
                caller_result_reg);
     Frame &callee = frames_.back();
     callee.return_override = std::move(return_override);
+    callee.after_init_pending = after_init_pending;
     if (!no_suspend_label.empty()) {
       callee.no_suspend_extent = true;
       callee.no_suspend_label = no_suspend_label;
@@ -13231,7 +13526,7 @@ private:
                          block, dst);
   }
 
-  enum class UnwindReason { Exception, Throw, NonlocalReturn };
+  enum class UnwindReason { Exception, Throw, NonlocalReturn, RunCancellation };
 
   static std::uint32_t handler_entry_kind(const bytecode::HandlerEntry &entry) {
     return entry.flags == 0U ? kHandlerKindLegacyRescue
@@ -13245,7 +13540,8 @@ private:
       return kind == kHandlerKindLegacyRescue || kind == kHandlerKindRescue ||
              kind == kHandlerKindEnsure;
     }
-    if (reason == UnwindReason::NonlocalReturn) {
+    if (reason == UnwindReason::NonlocalReturn ||
+        reason == UnwindReason::RunCancellation) {
       return kind == kHandlerKindEnsure;
     }
     return kind == kHandlerKindCatch || kind == kHandlerKindEnsure;
@@ -13500,6 +13796,7 @@ private:
         (frames_.size() == 1U ||
          (frame.code != nullptr && frame.code->kind == CodeKind::Module));
     const bool merge_registers = frame.merge_registers_to_caller;
+    const bool after_init_pending = frame.after_init_pending;
     if (capture_completed_frame || merge_registers) {
       materialize_integer_regs(frame);
     }
@@ -13558,7 +13855,7 @@ private:
     }
 
     Frame &caller = frames_.back();
-    if (direct_return_sink == nullptr) {
+    if (direct_return_sink == nullptr && !after_init_pending) {
       caller.active_call_pc.reset();
     }
     if (merge_registers && !merge_frame_registers(caller, completed_frame)) {
@@ -13581,6 +13878,15 @@ private:
       PendingNonlocalReturn pending = *pending_nonlocal_return;
       recycle_frame(std::move(completed_owner));
       nonlocal_return_value(caller, pending.target, pending.value);
+      return;
+    }
+    if (after_init_pending) {
+      recycle_frame(std::move(completed_owner));
+      // invoke_method advanced the constructor's caller when it pushed init.
+      // Resume the original call site while scheduling the hook, preserving
+      // its exception-handler coverage and advancing it exactly once.
+      --caller.pc;
+      (void)complete_constructor(caller, value, caller_reg);
       return;
     }
     if (direct_return_sink != nullptr) {
@@ -13685,6 +13991,12 @@ private:
 
   bool raise_value(const Frame &raising_frame, const Value &exception) {
     Value active_exception = exception;
+    // Host Stop is not an ordinary rescuable program exception. Propagate it
+    // through ensure (including child VM rethrows), without a rescue swallowing
+    // it and publishing a successful result.
+    const bool run_cancel = runtime_run_cancel_requested() &&
+        exception_error_name(exception) == "CancelledError";
+    if (run_cancel) run_cancellation_unwinding_ = true;
     if (raising_frame.pending_exception_on_return.has_value()) {
       append_suppressed_exception(active_exception,
                                   *raising_frame.pending_exception_on_return);
@@ -13692,7 +14004,9 @@ private:
 
     std::size_t target_index = 0;
     const bytecode::HandlerEntry *handler = nullptr;
-    if (!find_unwind_target(UnwindReason::Exception, &target_index, &handler)) {
+    if (!find_unwind_target(run_cancel ? UnwindReason::RunCancellation
+                                      : UnwindReason::Exception,
+                            &target_index, &handler)) {
       // No rescue in this Vm: remember the structured exception so a block's
       // child Vm can re-raise it into the parent (call_block_to_value).
       escaped_exception_ = active_exception;
@@ -13890,6 +14204,8 @@ private:
     }
 
     return [this, &frame, block](const std::vector<Value> &args) -> Value {
+      RuntimeTextSourceLocationProviderScope source_scope(
+          [](const void *ctx) { return static_cast<const Vm *>(ctx)->current_text_source_location(); }, this);
       std::optional<Value> value = call_block_to_value(frame, block, args);
       if (!value.has_value()) {
         throw NativeBlockUnwind();
@@ -13929,10 +14245,19 @@ private:
     const RuntimeCapabilityResolution *capabilities = capabilities_;
     const RuntimeEffectValidation *effects = effects_;
     RuntimeNotebookCellContext notebook_cell_context = notebook_cell_context_;
+    // A detached callback is not part of the synchronous cell publication,
+    // even if a scheduler happens to invoke it on the same OS thread.
+    notebook_cell_context.display_collector.reset();
+    notebook_cell_context.live_store.reset();
+    notebook_cell_context.live_generation = 0;
+    notebook_cell_context.input_capture.reset();
     std::function<void(RuntimeTraceEvent)> trace_recorder = trace_recorder_;
     const std::uint32_t code_id = closure->code_id;
     std::vector<Value> captures = closure->captures;
     Value self = closure->self;
+    const auto run_cancellation = current_runtime_run_cancellation();
+    const bool run_cleanup = runtime_run_cancel_requested() &&
+                             !runtime_run_cancel_checkpoint_requested();
     return
         [module = std::move(module),
          runtime_strings = std::move(runtime_strings),
@@ -13941,10 +14266,15 @@ private:
          runtime_state = std::move(runtime_state),
          module_id = std::move(module_id), code_id,
          captures = std::move(captures), self = std::move(self), world_options,
-         capabilities, effects,
+         capabilities, effects, run_cancellation, run_cleanup,
          notebook_cell_context = std::move(notebook_cell_context),
          trace_recorder = std::move(trace_recorder)](
             const std::vector<Value> &args) mutable {
+          // Foreign callbacks are not necessarily dispatched by a scheduler.
+          // Count the invocation itself and reject callbacks after root drain.
+          const auto run_activity = run_cancellation ? run_cancellation->register_task() : nullptr;
+          RuntimeRunCancellationScope run_scope(run_cancellation);
+          RuntimeRunCancellationMask cleanup_mask(run_cleanup);
           const BcCode *code = find_code(*module, code_id);
           if (code == nullptr) {
             throw RuntimeTaskFailure("VMError", "closure code id is unknown");
@@ -13953,6 +14283,8 @@ private:
                     capabilities, effects, trace_recorder, nullptr, nullptr,
                     nullptr, nullptr, nullptr, {}, true, runtime_names,
                     {}, notebook_cell_context, false);
+          RuntimeTextSourceLocationProviderScope source_scope(
+              [](const void *ctx) { return static_cast<const Vm *>(ctx)->current_text_source_location(); }, &nested);
           if (runtime_names == nullptr) {
             nested.synchronize_runtime_names(runtime_strings, runtime_symbols);
           }
@@ -13999,6 +14331,7 @@ private:
     std::shared_ptr<RuntimeTaskModule> task;
     std::shared_ptr<RuntimeTextWriter> inherited_stdout;
     std::shared_ptr<RuntimeTextWriter> inherited_stderr;
+    RuntimeRunCancellation run_cancellation;
     const NativeRegistry *child_registry = nullptr;
     const RuntimeModuleRegistry *child_modules = nullptr;
     const RuntimeTypeRegistry *child_types = nullptr;
@@ -14057,6 +14390,11 @@ private:
     mutable_template->capabilities = capabilities_;
     mutable_template->effects = effects_;
     mutable_template->notebook_cell_context = notebook_cell_context_;
+    mutable_template->notebook_cell_context.display_collector.reset();
+    mutable_template->notebook_cell_context.live_store.reset();
+    mutable_template->notebook_cell_context.live_generation = 0;
+    mutable_template->notebook_cell_context.input_capture.reset();
+    mutable_template->run_cancellation = current_runtime_run_cancellation();
     mutable_template->trace_recorder = trace_recorder_;
     mutable_template->code_id = closure->code_id;
     mutable_template->captures = closure->captures;
@@ -14114,6 +14452,7 @@ private:
             completed->escaped_exception_ = std::nullopt;
             completed->escaped_throw_ = std::nullopt;
             completed->escaped_nonlocal_return_ = std::nullopt;
+            completed->run_cancellation_unwinding_ = false;
             completed->final_value_ = Value::null();
             completed->last_completed_regs_.clear();
             completed->last_completed_initialized_.clear();
@@ -14151,9 +14490,15 @@ private:
                      template_state->self, Value::null(), std::nullopt);
 
       return [vm, task, inherited_stdout = template_state->inherited_stdout,
+              run_cancellation = template_state->run_cancellation,
               inherited_stderr =
                   template_state->inherited_stderr]() mutable -> Value {
+        RuntimeRunCancellationScope run_scope(run_cancellation);
         RuntimeOutputScope output_scope(inherited_stdout, inherited_stderr);
+        // Resumable VMs bypass run(). Install on every dispatch, since a
+        // suspended task can migrate to another scheduler thread.
+        RuntimeTextSourceLocationProviderScope source_scope(
+            [](const void *ctx) { return static_cast<const Vm *>(ctx)->current_text_source_location(); }, vm.get());
         vm->park_request_.reset();
         if (vm->blocking_ffi_call_ != nullptr) {
           bool ready = false;
@@ -14162,7 +14507,10 @@ private:
             ready = vm->blocking_ffi_call_->ready;
           }
           if (!ready) {
-            if (task->scheduler().park_current(std::nullopt)) {
+            // Cancellation cannot retire the VM while foreign code owns its
+            // frame. Wait for the FFI completion wake (or host Force Stop),
+            // without repeatedly rescheduling a permanently cancelled task.
+            if (task->scheduler().park_current(std::nullopt, false)) {
               runtime_mark_task_parked();
             }
             return Value::null();
@@ -14174,9 +14522,12 @@ private:
         }
         if (vm->fault_.has_value()) {
           vm->unwind_all_frame_scopes();
+          if (runtime_run_cancel_requested() && vm->fault_->error_name == "CancelledError")
+            throw RuntimeTaskCancelled();
           throw RuntimeTaskFailure(vm->fault_->error_name, vm->fault_->message);
         }
         if (vm->park_request_.has_value()) {
+          RuntimeRunCancellationMask cleanup_mask(vm->run_cancellation_unwinding_);
           const ParkRequest req = *vm->park_request_;
           vm->park_request_.reset();
           if (req.kind == ParkRequest::Kind::Timer) {
@@ -14194,8 +14545,10 @@ private:
               runtime_mark_task_parked();
               RuntimeReactor::instance().wait_async(
                   req.fd, req.interest, req.deadline,
-                  tls_runtime_task_cancel_flag,
-                  [task, self_id](ReactorOutcome) {
+                  runtime_wait_cancel_flag(),
+                  [task, self_id, cancel_owner = current_runtime_task_cancel_owner(),
+                   run_owner = current_runtime_run_cancellation()](ReactorOutcome) {
+                    (void)cancel_owner; (void)run_owner;
                     task->scheduler().wake_strand(self_id);
                 });
             }
@@ -14267,8 +14620,10 @@ private:
     RuntimeReactor::instance().wait_async(
         request.fd,
         request.want_write ? ReactorInterest::Write : ReactorInterest::Read,
-        request.deadline, tls_runtime_task_cancel_flag,
-        [task, self_id](ReactorOutcome) {
+        request.deadline, runtime_wait_cancel_flag(),
+        [task, self_id, cancel_owner = current_runtime_task_cancel_owner(),
+         run_owner = current_runtime_run_cancellation()](ReactorOutcome) {
+          (void)cancel_owner; (void)run_owner;
           task->scheduler().wake_strand(self_id);
         });
     return true;
@@ -24651,6 +25006,8 @@ private:
         json_args, Value::null(), no_keywords, out);
   }
 
+#include "runtime/vm_notebook.inc"
+
   SendStatus try_apply_scalar_send(
       Frame &frame, const Value &receiver, const std::string &selector_text,
       const std::vector<Value> &args, const Value &block,
@@ -24659,6 +25016,8 @@ private:
     if (!ensure_lifecycle_access(frame, receiver)) {
       return SendStatus::Faulted;
     }
+    if (receiver.is_native_type() && receiver.as_native_type().kind == RuntimeNativeTypeKind::Notebook)
+      return apply_notebook_show(frame, selector_text, args, block, kw_args, out);
 
     // The native-stdlib dispatcher serves module/IO/task/tail values. Core
     // scalars and ordinary collections cannot match it (apart from the
@@ -25977,6 +26336,32 @@ private:
     const bool receiver_is_sequence_like =
         receiver.is_list() || receiver.is_tuple() || receiver.is_set() ||
         receiver_is_range || receiver_is_lazy_seq;
+    // Optional collection adapter. The implementation and policy live in the
+    // imported Amber package, not in the VM; constructing it never enumerates
+    // a lazy/infinite sequence. No class is loaded or installed implicitly.
+    if (receiver_is_sequence_like && selector == "with_progress") {
+      if (!args.empty() || !block.is_null()) {
+        set_fault(frame, "TypeError", "with_progress accepts keyword settings; attach the block to .each");
+        return SendStatus::Faulted;
+      }
+      std::optional<std::uint32_t> wrapper;
+      for (std::uint32_t i = 0; i < module_.classes.size(); ++i)
+        if (class_name_for_index(i).value_or("") == "progressbar.ProgressEnumerable") { wrapper = i; break; }
+      if (!wrapper) {
+        set_fault(frame, "NoMethodError", "with_progress requires importing the progressbar package");
+        return SendStatus::Faulted;
+      }
+      const auto *init = find_method_for_dispatch(frame, *wrapper, "init", kMethodFlagInstance);
+      if (fault_) return SendStatus::Faulted;
+      if (!init) { set_fault(frame, "TypeError", "progressbar adapter has no init"); return SendStatus::Faulted; }
+      auto instance = make_instance_value(*wrapper);
+      if (!ensure_instance_layout(frame, instance)) return SendStatus::Faulted;
+      const Value value = Value::instance(instance);
+      if (!execute_method_to_value(frame, *init, {receiver}, kw_args, value, Value::null()))
+        return SendStatus::Faulted;
+      *out = value;
+      return SendStatus::Matched;
+    }
     const bool sequence_set_operation_selector =
         receiver_is_sequence_like &&
         collection_selector_in({"contains?",
@@ -30160,7 +30545,7 @@ private:
       // dotted native error name used as a method constructs the error even
       // with zero arguments, while property access returns its class object.
       // Scalar dispatch alone cannot recover that call-site distinction.
-      if (receiver.is_native_type()) {
+      if (receiver.is_native_type() || receiver.is_foreign_handle()) {
         return FastSendStatus::NotHandled;
       }
       // Bare conversion aliases have precedence over same-named collection
@@ -30225,11 +30610,11 @@ private:
                    ? FastSendStatus::Matched
                    : FastSendStatus::Faulted;
       }
-      if (!method.params.empty() || !method.default_thunk_ids.empty()) {
+      if (!method_accepts_zero_arguments(frame, method)) {
+        if (fault_.has_value()) return FastSendStatus::Faulted;
         set_fault(frame, "ArgumentError",
                   "method `" + selector +
-                      "` is not bare-callable: its signature is not "
-                      "syntactically nullary; use `" +
+                      "` is not bare-callable: it requires arguments; use `" +
                       selector + "(...)`");
         return FastSendStatus::Faulted;
       }
@@ -30602,8 +30987,11 @@ private:
       };
       return true;
     }
-    if (!property_access && !property_assignment &&
-        selector_key == "destroy!") {
+    // A bare native destructor is a nullary call, but its thunk has the
+    // destructor ABI rather than AmberMethodFn. Route both spellings through
+    // teardown so ownership, context and the tombstone stay identical.
+    if (!property_assignment && selector_key == "destroy!" &&
+        (!property_access || receiver.is_foreign_handle())) {
       if (!args.empty() || !kw_args.empty() || !block.is_null()) {
         set_fault(frame, "TypeError", "destroy! accepts no arguments");
         return false;
@@ -30980,10 +31368,10 @@ private:
 
     // Bare member access (`obj.member`) resolves the member through the
     // single linearized lookup and dispatches on its kind: readable property
-    // -> getter; write-only property -> error; syntactically nullary method
+    // -> getter; write-only property -> error; zero-argument-callable method
     // -> implicit zero-argument send; any other method -> error.
-    auto method_is_syntactically_nullary = [](const bytecode::BcMethod &m) {
-      return m.params.empty() && m.default_thunk_ids.empty();
+    auto method_is_bare_callable = [&](const bytecode::BcMethod &m) {
+      return method_accepts_zero_arguments(frame, m);
     };
 
     auto invoke_bare_member = [&](const bytecode::BcMethod &member) -> bool {
@@ -30997,14 +31385,14 @@ private:
                   "cannot read write-only property `" + *selector + "`");
         return false;
       }
-      if (method_is_syntactically_nullary(member)) {
+      if (method_is_bare_callable(member)) {
         return invoke_method(frame, member, {}, {}, receiver, Value::null(),
                              dst);
       }
+      if (fault_.has_value()) return false;
       set_fault(frame, "ArgumentError",
                 "method `" + *selector +
-                    "` is not bare-callable: its signature is not "
-                    "syntactically nullary; use `" +
+                    "` is not bare-callable: it requires arguments; use `" +
                     *selector + "(...)`");
       return false;
     };
@@ -31177,6 +31565,65 @@ private:
       return false;
     }
     if (method == nullptr) {
+      if (selector_key == "new" && receiver.is_class_object() &&
+          !property_access && !property_assignment) {
+        const auto index = receiver.as_class_object().class_index;
+        const bytecode::BcMethod *init = find_method_for_dispatch(
+            frame, index, "init", kMethodFlagInstance);
+        if (fault_.has_value()) {
+          return false;
+        }
+        if (init != nullptr) {
+          bool ok = true;
+          if (try_construct_native_handle(frame, *init, args, dst, &ok)) {
+            return ok;
+          }
+        }
+        auto instance = make_instance_value(index);
+        if (!ensure_instance_layout(frame, instance)) {
+          return false;
+        }
+        const Value constructed = Value::instance(instance);
+        if (init == nullptr) {
+          if (!args.empty() || !kw_args.empty() || !block.is_null()) {
+            set_fault(frame, "TypeError",
+                      "constructor does not accept arguments");
+            return false;
+          }
+          return complete_constructor(frame, constructed, dst);
+        }
+        return invoke_method(frame, *init, args, kw_args, constructed, block,
+                             dst, constructed, {}, true);
+      }
+      if (selector_key == "instance_fields" && receiver.is_instance_object() &&
+          !property_assignment) {
+        if (!args.empty() || !kw_args.empty() || !block.is_null()) {
+          set_fault(frame, "TypeError",
+                    "instance_fields accepts no arguments or block");
+          return false;
+        }
+        const auto instance = receiver.as_instance_object();
+        if (!ensure_instance_layout(frame, instance)) {
+          return false;
+        }
+        // Snapshot actual storage, never properties. Sorting makes the public
+        // order independent of hash iteration and native inline/overflow slots.
+        const std::map<std::string, Value> fields(instance->ivars.begin(),
+                                                  instance->ivars.end());
+        std::vector<MapEntry> entries;
+        entries.reserve(fields.size());
+        for (const auto &[name, value] : fields) {
+          MapEntry entry;
+          entry.key = runtime_string_value(name);
+          entry.value = record_watch_ivar_read(instance, name, value);
+          entries.push_back(std::move(entry));
+        }
+        if (!write_reg(frame, dst, make_symbol_map_value(std::move(entries)))) {
+          return false;
+        }
+        ++frame.pc;
+        return true;
+      }
       if ((selector_key == "copy" || selector_key == "deep_copy") &&
           receiver.is_instance_object() && !property_assignment) {
         if (!args.empty()) {
@@ -31353,7 +31800,7 @@ private:
           ((method->flags & kMethodFlagPropertyGetter) != 0U ||
            ((method->flags &
              (kMethodFlagPropertyGetter | kMethodFlagPropertySetter)) == 0U &&
-            method_is_syntactically_nullary(*method)))) {
+            method_is_bare_callable(*method)))) {
         update_call_cache(frame, *site_id, class_index, dispatch_flags,
                           *selector_symbol_id_for_cache, 0, {}, Value::null(),
                           *method);
@@ -31378,6 +31825,12 @@ private:
   }
 
   void step() {
+    if (!run_cancellation_unwinding_ && runtime_run_cancel_checkpoint_requested()) {
+      run_cancellation_unwinding_ = true;
+      raise_runtime_error(frames_.back(), "CancelledError", "execution cancelled");
+      return;
+    }
+    RuntimeRunCancellationMask cancellation_cleanup(run_cancellation_unwinding_);
     // Compile-time step budget (macro expander sandbox): normally disabled,
     // one predictable branch. Exhaustion is a terminal fault — a `rescue`
     // cannot make progress without stepping, so it re-faults immediately.
@@ -31428,6 +31881,13 @@ private:
         ++frame.pc;
         return;
       }
+      case QuickOpcode::LookupConst:
+        if (!write_reg(frame, quick->a, lookup_constant(frame, quick->b)) ||
+            fault_.has_value()) {
+          return;
+        }
+        ++frame.pc;
+        return;
       case QuickOpcode::LoadNull:
         if (!write_reg(frame, quick->a, Value::null())) {
           return;
@@ -32826,10 +33286,28 @@ private:
           ++frame.pc;
           return;
         }
-        const bytecode::BcMethod *native_init = find_method_for_dispatch(
-            frame, class_index, "init", kMethodFlagInstance);
-        if (fault_.has_value()) {
-          return;
+        const std::optional<std::uint32_t> init_symbol =
+            symbol_id_for_text("init");
+        const bytecode::BcMethod *native_init = nullptr;
+        if (packet.site_id.has_value() && init_symbol.has_value()) {
+          native_init = probe_call_cache(
+              frame, *packet.site_id, class_index, kMethodFlagInstance,
+              *init_symbol, static_cast<std::uint32_t>(packet.pos_args.size()),
+              packet.kw_args, packet.block);
+        }
+        if (native_init == nullptr) {
+          native_init = find_method_for_dispatch(
+              frame, class_index, "init", kMethodFlagInstance);
+          if (fault_.has_value()) {
+            return;
+          }
+          if (native_init != nullptr && packet.site_id.has_value() &&
+              init_symbol.has_value()) {
+            update_call_cache(
+                frame, *packet.site_id, class_index, kMethodFlagInstance,
+                *init_symbol, static_cast<std::uint32_t>(packet.pos_args.size()),
+                packet.kw_args, packet.block, *native_init);
+          }
         }
         // A `native class` constructs via its init thunk, which returns the
         // foreign handle directly -- no InstanceValue is allocated (5c-ii).
@@ -32864,15 +33342,12 @@ private:
                       "class call without init does not accept block");
             return;
           }
-          if (!write_reg(frame, packet.dst, instance_value)) {
-            return;
-          }
-          ++frame.pc;
+          (void)complete_constructor(frame, instance_value, packet.dst);
           return;
         }
         if (!invoke_method(frame, *init, packet.pos_args, packet.kw_args,
                            instance_value, packet.block, packet.dst,
-                           instance_value)) {
+                           instance_value, {}, true)) {
           return;
         }
         return;
@@ -32887,16 +33362,6 @@ private:
         }
         const std::optional<std::uint32_t> call_symbol =
             symbol_id_for_text("call");
-        const bytecode::BcMethod *method = find_method_for_dispatch(
-            frame, instance->class_index, "call", kMethodFlagInstance);
-        if (fault_.has_value()) {
-          return;
-        }
-        if (method == nullptr) {
-          set_fault(frame, "TypeError",
-                    "CALL expects closure, class, or object with call method");
-          return;
-        }
         if (packet.site_id.has_value() && call_symbol.has_value()) {
           const bytecode::BcMethod *cached = probe_call_cache(
               frame, *packet.site_id, instance->class_index,
@@ -32910,6 +33375,18 @@ private:
             }
             return;
           }
+        }
+        const bytecode::BcMethod *method = find_method_for_dispatch(
+            frame, instance->class_index, "call", kMethodFlagInstance);
+        if (fault_.has_value()) {
+          return;
+        }
+        if (method == nullptr) {
+          set_fault(frame, "TypeError",
+                    "CALL expects closure, class, or object with call method");
+          return;
+        }
+        if (packet.site_id.has_value() && call_symbol.has_value()) {
           update_call_cache(frame, *packet.site_id, instance->class_index,
                             kMethodFlagInstance, *call_symbol,
                             static_cast<std::uint32_t>(packet.pos_args.size()),
@@ -33561,6 +34038,11 @@ private:
   const RuntimeEffectValidation *effects_ = nullptr;
   std::function<void(RuntimeTraceEvent)> trace_recorder_;
   std::unordered_map<std::uint32_t, QuickCode> quick_codes_;
+  std::vector<std::unique_ptr<ConstantLookupCache>> constant_lookup_caches_;
+  std::uint64_t constant_lookup_world_epoch_ = 0;
+  std::uint64_t constant_lookup_bindings_revision_ = 0;
+  std::uint64_t constant_lookup_modules_revision_ = 0;
+  std::uint64_t constant_lookup_errors_revision_ = 0;
   std::unordered_map<std::uint32_t, DirectClosureKind> direct_closure_kinds_;
   std::unordered_map<std::uint32_t, std::vector<std::unique_ptr<Frame>>>
       frame_pool_;
@@ -33585,6 +34067,7 @@ private:
   // executions inherit the non-suspendable dynamic extent).
   std::optional<std::string> inherited_no_suspend_label_;
   std::optional<Fault> fault_;
+  bool run_cancellation_unwinding_ = false;
   // Control flow that unwound out of every frame of this Vm with no in-Vm
   // handler. Block bodies run on a pooled child Vm (see call_block_to_value);
   // these let an exception/throw that escapes the block re-propagate into the

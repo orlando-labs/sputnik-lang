@@ -1,6 +1,6 @@
 # Design closures for the bare-nullary + `.()` RFC
 
-Status: **implemented and specced 2026-06-12.** The RFC lives at
+Status: **implemented and specced 2026-06-12; zero-argument-callable amendment 2026-10-03.** The RFC lives at
 `docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`; the unified spec
 carries the integrated section `Bare-nullary member access and dot-call
 "expr.()"` plus the contradiction patch set below. Conformance:
@@ -62,7 +62,7 @@ Mechanisms:
    subsumes and retires the existing `AMB_PROP_CALL_ARGS_FORBIDDEN`.
 2. Normative formatter rule: `x.name?()` with zero arguments is rewritten to
    `x.name?`. Other explicit nullary calls may remain unchanged, but the bare
-   form is legal for every syntactically nullary method, including `!` methods.
+   form is legal for every zero-argument-callable method, including `!` methods.
 3. Style guide (§14 amendment): paren-calling a documented query member is a
    style deviation that a later `def → prop` migration is permitted to break.
 
@@ -83,7 +83,7 @@ Normative algorithm for `receiver.name` (read):
    a. readable property            -> property get (getter arm)
    b. write-only property          -> AMB_PROP_MISSING_GETTER /
                                       WriteOnlyPropertyError
-   c. syntactically nullary method -> implicit zero-argument send
+   c. zero-argument-callable method -> implicit zero-argument send
    d. any other method             -> AMB_BARE_NON_NULLARY / ArgumentError
    e. field accessor / readable binding -> ordinary read
 3. No owner declares `name`: dynamic receivers take the zero-argument
@@ -121,7 +121,7 @@ example.**
 
 - `Owner.name` is member access regardless of whether `Owner` is an object,
   class, or module namespace, and follows the Gap-2 kind dispatch. For module
-  namespaces: nullary module function → implicit call; non-nullary →
+  namespaces: nullary module function → implicit call; requires arguments →
   `AMB_BARE_NON_NULLARY`; plain value export → binding read.
 - `&Owner.name` remains the only extraction spelling. Consequence to state
   with an example: `fn = Math.answer` now binds the **result** of `answer`;
@@ -134,7 +134,7 @@ Migration: audit the corpus for `= Namespace.fn`-shaped bindings when the
 spec patch lands; each is either intended extraction (rewrite with `&`) or
 already wants the new call semantics.
 
-Conformance tests: nullary module fn (invokes), non-nullary module fn
+Conformance tests: nullary module fn (invokes), module fn requiring arguments
 (diagnoses), value export (plain read), `&` extraction (never invokes).
 
 ---
@@ -147,8 +147,7 @@ pattern (`AMB_PROP_MISSING_SETTER` / `ReadOnlyPropertyError`). Deterministic
 message, golden-testable:
 
 ```
-ArgumentError: method `format` is not bare-callable: its signature is not
-syntactically nullary; use format(...)
+ArgumentError: method `format` is not bare-callable: it requires arguments; use `format(...)`
 ```
 
 Related rulings in the same family:
@@ -218,8 +217,8 @@ there is no object receiver, the unresolved identifier is an error.**
 The dynamic read uses exactly the existing bare-member rules:
 
 - readable property → getter;
-- syntactically nullary method → zero-argument send;
-- non-nullary method → `AMB_BARE_NON_NULLARY` / `ArgumentError`;
+- zero-argument-callable method → zero-argument send;
+- method requiring arguments → `AMB_BARE_NON_NULLARY` / `ArgumentError`;
 - missing member → ordinary missing-member handling.
 
 Lookup uses runtime class linearization, so inherited and `include`d members
@@ -261,7 +260,7 @@ method-kind.**
 
    | code | phase | condition |
    |---|---|---|
-   | `AMB_BARE_NON_NULLARY` | binder | bare member access resolves to a method whose signature is not syntactically nullary |
+   | `AMB_BARE_NON_NULLARY` | binder | bare member access resolves to a method requiring arguments |
    | `AMB_PROP_CALLED_AS_METHOD` | binder | call punctuation applied to a property member (any argc; replaces `AMB_PROP_CALL_ARGS_FORBIDDEN`) |
    | `AMB_PROP_BLOCK_SUFFIX` | binder | block suffix attached to a property member access |
    | `AMB_NOT_CALLABLE` | binder | dot-call target statically known not to be callable |

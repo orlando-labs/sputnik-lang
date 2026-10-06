@@ -1,6 +1,7 @@
 #include "notebook/vm_cell_executor.h"
 
 #include "runtime/objects.h"
+#include "runtime/context.h"
 
 #include <algorithm>
 #include <exception>
@@ -371,6 +372,9 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
   const std::shared_ptr<NotebookVmExecutionState> state =
       std::make_shared<NotebookVmExecutionState>(&*world_);
   runtime::RuntimeNotebookCellContext context;
+  context.live_store = runtime::NotebookLiveScope::current();
+  context.live_cell_id = consumer_cell_id_;
+  context.project_inputs = project_inputs_;
   context.load_slot =
       [&input_values,
        this](std::uint32_t descriptor) -> std::optional<runtime::Value> {
@@ -439,6 +443,8 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
     return result;
   }
 
+  if (report) for (const auto &event : runtime_result.live_events)
+    if (event.kind == runtime::NotebookLiveEventKind::Progress) report->progress.push_back(event);
   if (!runtime_result.ok()) {
     if (runtime_result.fault.has_value()) {
       result.error = runtime_result.fault->error_name;
@@ -451,6 +457,11 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
     }
     // The RuntimeWorld callback may have observed STOREs before a later
     // fault.  Never expose that partial batch to the kernel.
+    return result;
+  }
+
+  if (runtime::runtime_run_cancel_requested()) {
+    result.error = "CancelledError: execution cancelled before publication";
     return result;
   }
 
@@ -482,11 +493,13 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
     return result;
   }
   result.dynamic_dependencies = state->dependency_snapshot();
+  result.input_dependencies = std::move(runtime_result.input_dependencies);
   if (consumer_cell_id_ != 0U) {
     result.runtime_dependencies = runtime_result.dependency_capture;
   }
   if (report != nullptr) {
     report->value = runtime_result.value;
+    report->displays = std::move(runtime_result.displays);
     report->locals = runtime_result.locals;
     report->watch_epoch = runtime_result.watch_epoch;
     report->watch_event_count = runtime_result.watch_events.size();

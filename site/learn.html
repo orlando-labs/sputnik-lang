@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="Amber language Guide: a bilingual, example-led knowledge graph rendered from Markdown."
+    />
+    <meta name="theme-color" content="#f7f0e2" />
+    <title>Amber — Гид</title>
+    <link rel="icon" href="./assets/amber-logo.jpg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Source+Code+Pro:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="docs-page guide-page">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="Amber home">
+        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
+        <span>Amber</span>
+      </a>
+      <nav class="main-nav" aria-label="Primary navigation">
+        <a href="./index.html#features" data-i18n="nav.features">Возможности</a>
+        <a href="./learn.html" class="active" data-i18n="nav.guide">Гид</a>
+        <a href="./modules.html" data-i18n="nav.modules">Модули VM</a>
+        <a href="./spec.html" data-i18n="nav.spec">Спека</a>
+      </nav>
+      <div class="header-actions">
+        <div class="language-switch" role="group" aria-label="Language">
+          <button type="button" data-lang="ru" aria-pressed="true">RU</button>
+          <button type="button" data-lang="en" aria-pressed="false">EN</button>
+        </div>
+        <a class="header-cta" href="./spec.html">
+          <span data-i18n="nav.spec">Спека</span>
+          <span aria-hidden="true">↗</span>
+        </a>
+      </div>
+    </header>
+
+    <main class="docs-main guide-main">
+      <div class="guide-layout">
+        <aside class="guide-sidebar">
+          <div class="spec-sidebar-head">
+            <span data-i18n="guide.contents">Содержание</span>
+            <small><span id="guide-node-count">0</span> <span data-i18n="guide.pages">страниц</span></small>
+          </div>
+          <nav id="guide-nav" class="guide-nav" aria-label="Guide navigation"></nav>
+        </aside>
+
+        <article id="guide-content" class="spec-content guide-content" aria-live="polite">
+          <div class="spec-loading">
+            <span></span>
+            <p data-i18n="guide.loading">Загружаю Гид…</p>
+          </div>
+        </article>
+
+        <aside id="guide-rail" class="guide-rail" aria-label="Related topics"></aside>
+      </div>
+    </main>
+
+    <footer>
+      <a class="brand" href="./index.html">
+        <span class="brand-gem"><img src="./assets/amber-logo.jpg" alt="" /></span>
+        <span>Amber</span>
+      </a>
+      <p data-i18n="footer.text">No-GIL runtime. Expressive surface. Native path.</p>
+      <span>site/guide/content</span>
+    </footer>
+
+    <script src="./app.js"></script>
+    <script src="./md-render.js"></script>
+    <script src="./guide-page.js"></script>
+  </body>
+</html>

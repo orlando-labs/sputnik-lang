@@ -21,7 +21,9 @@ native_system_task_driver(
         std::rethrow_exception(failure);
       return amber::runtime::Value::null();
     }
-    if (!runtime.scheduler().park_current()) {
+    // The host stack still owns the native operation. Stop must not repeatedly
+    // resume this driver before that stack returns (or Force Stop kills it).
+    if (!runtime.scheduler().park_current(std::nullopt, false)) {
       lock.unlock();
       return function();
     }
@@ -32,22 +34,37 @@ native_system_task_driver(
     const auto strand = amber::runtime::current_runtime_strand_id();
     const auto task_id = amber::runtime::tls_runtime_task_id;
     const auto cancel = amber::runtime::tls_runtime_task_cancel_flag;
+    const auto cancel_owner = amber::runtime::current_runtime_task_cancel_owner();
+    const auto run = amber::runtime::current_runtime_run_cancellation();
+    const bool cleanup = amber::runtime::runtime_run_cancel_requested() &&
+                         !amber::runtime::runtime_run_cancel_checkpoint_requested();
     const auto sync_owner = amber::runtime::tls_runtime_sync_owner_id;
     const auto context = amber::runtime::tls_runtime_task_context;
     const auto scheduler = amber::runtime::tls_runtime_scheduler_identity;
     const auto stdout_writer = amber::runtime::current_runtime_stdout(),
                stderr_writer = amber::runtime::current_runtime_stderr();
     try {
-      std::thread([state, function, strand, task_id, cancel, sync_owner,
+      // Publishing `done` can resume/retire the scheduler closure before this
+      // thread releases its own captures. Account for that last host-stack
+      // lifetime as well, with the executable destroyed before membership.
+      struct HostWork {
+        std::shared_ptr<amber::runtime::RuntimeRunState::Task> activity;
+        amber::runtime::RuntimeTaskModule::TaskFunction function;
+      };
+      auto work = std::make_shared<HostWork>(HostWork{
+          run ? run->register_task() : nullptr, function});
+      std::thread([state, work, strand, task_id, cancel, cancel_owner, run, cleanup, sync_owner,
                    context, scheduler, stdout_writer, stderr_writer]() mutable {
         amber::runtime::RuntimeStrandScope strand_scope(strand);
+        amber::runtime::RuntimeRunCancellationScope run_scope(run);
+        amber::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
         amber::runtime::RuntimeTaskScope task_scope(task_id, cancel, sync_owner,
-                                                    context, scheduler);
+                                                    context, scheduler, cancel_owner);
         amber::runtime::RuntimeOutputScope output_scope(stdout_writer,
                                                         stderr_writer);
         std::exception_ptr failure;
         try {
-          function();
+          work->function();
         } catch (...) {
           failure = std::current_exception();
         }

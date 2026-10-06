@@ -51,7 +51,7 @@ diagnostics:
   - { code: AMB_PROP_REF_UNSUPPORTED, severity: error, phase: binder, condition: unsupported callable reference to local or module property }
   - { code: AMB_PROP_CALLED_AS_METHOD, severity: error, phase: binder, condition: call punctuation applied to a property member; use bare access or dot-call of the property value }
   - { code: AMB_PROP_SETTER_UNDEFINED, severity: error, phase: binder, condition: assignment to property with no setter support }
-  - { code: AMB_BARE_NON_NULLARY, severity: error, phase: runtime, condition: bare member access resolves to a method whose signature is not syntactically nullary }
+  - { code: AMB_BARE_NON_NULLARY, severity: error, phase: runtime, condition: bare member access resolves to a method requiring caller arguments }
   - { code: AMB_DOT_CALL_TARGET, severity: error, phase: parser, condition: dot-call segment without a preceding postfix expression }
   - { code: AMB_PROP_SUSPEND, severity: error, phase: runtime, condition: suspension attempted inside a non-suspendable property arm }
   - { code: AMB_PROP_IMPORT_CONFLICT, severity: error, phase: binder, condition: imported property conflicts with local binding }

@@ -4,6 +4,7 @@
 #include "notebook/notebook.h"
 #include "runtime/module_loader.h"
 #include "runtime/text.h"
+#include "runtime/notebook_live.h"
 #include "tools/iamber/activity.h"
 
 #include <cstddef>
@@ -24,6 +25,9 @@ struct LocalView {
   std::string role;
   std::string binding_kind;
   std::string value;
+  // Plain display for notebook prose; strings have no debug quotation marks.
+  // Materialized with the successful execution, never evaluated by the UI.
+  std::string text_value;
   bool initialized = false;
   bool watched = false;
   std::uint64_t watch_cell_id = 0;
@@ -61,6 +65,13 @@ struct CellErrorView {
   bool has_range = false;
 };
 
+struct ResultFormat {
+  std::string pretty;
+  bool is_container = false;
+  bool truncated = false;
+  bool pretty_truncated = false;
+};
+
 struct Cell {
   amber::notebook::CellId id = 0;
   // Non-code project cells are opaque, read-only placeholders in iamber.
@@ -75,6 +86,7 @@ struct Cell {
   bool running = false;
   bool ok = false;
   std::string result = "not evaluated";
+  ResultFormat result_format;
   std::string error;
   std::vector<LocalView> locals;
   std::vector<amber::runtime::RuntimeTextOutputEvent> output_events;
@@ -83,6 +95,10 @@ struct Cell {
   std::vector<CodeErrorRange> error_ranges;
   std::vector<CellErrorView> errors;
   std::size_t selected_error = 0;
+  // Inert rich-text payload for kind == "text"; empty means plain text.
+  std::string formatting;
+  std::vector<amber::runtime::NotebookDisplay> displays;
+  std::vector<amber::runtime::NotebookLiveEvent> progress;
 };
 
 // Exact bundled sources selected by a project's ordered auto_imports list.
@@ -95,6 +111,8 @@ struct BundledModuleSource {
   // Dependency-only modules are available to explicit imports but do not
   // contribute names to the sheet's implicit environment.
   bool auto_import = true;
+  // Read failures are inert on project open, but diagnosed by explicit Apply.
+  std::string load_error = {};
 };
 
 struct BundledEnvironmentDiagnostic {
@@ -129,12 +147,21 @@ struct BundledEnvironmentPreparation {
   std::map<std::string, std::string> ambient_constant_paths;
   std::vector<BundledEnvironmentDiagnostic> diagnostics;
   std::shared_ptr<const amber::bytecode::BcModule> image;
+  std::map<std::string, std::map<std::string, std::string>> import_paths;
 };
 
 // Opaque persistent backend owned by one Session.  Keeping this out of the
 // public UI model lets curses continue to treat Session as its state bag while
 // the VM/kernel/image lifetimes remain explicit in session.cpp.
 struct SessionBackend;
+
+// Owner-thread hook invoked before execution, not from an output-writing
+// thread. A host may retain these thread-safe sinks until a run drains. Cell 0
+// denotes environment initialization. The callback must not mutate Session.
+using SessionOutputObserver = std::function<void(
+    amber::notebook::CellId,
+    std::shared_ptr<amber::runtime::RuntimeTextWriter>,
+    std::shared_ptr<amber::runtime::RuntimeTextWriter>)>;
 
 struct Session {
 private:
@@ -144,6 +171,7 @@ private:
   SessionActivityNotifier activity_wakeup_;
 
 public:
+  std::shared_ptr<const amber::runtime::NotebookInputSnapshot> project_inputs;
   Session();
   ~Session();
   Session(const Session &) = delete;
@@ -175,6 +203,9 @@ public:
   std::size_t runtime_watch_event_capacity = 65536U;
   // Explicit host grants used when creating the persistent notebook world.
   std::vector<amber::runtime::RuntimeCapabilityGrant> runtime_capability_grants;
+  // Execution-time host hook, never called on document open. Isolated workers
+  // use this to register explicitly trusted, prepared native dependencies.
+  std::function<void(const amber::bytecode::BcModule &)> prepare_runtime;
   std::string status = "iamber ready";
   std::string project_sheet_id;
   std::string project_label;
@@ -186,6 +217,7 @@ public:
   std::vector<BundledModuleSource> bundled_modules;
   std::string environment_error;
   std::vector<amber::runtime::RuntimeTextOutputEvent> environment_output;
+  SessionOutputObserver output_observer;
   // Owner-thread guard: progress callbacks may pump the UI reentrantly.
   // Callbacks may inspect state/pump events, but must not directly replace
   // the Session, its cells or its backend while an evaluation is active.
@@ -203,6 +235,10 @@ public:
   std::unique_ptr<SessionBackend> backend;
 };
 
+// Called by the project owner after publishing one validated input batch.
+// Never starts a sheet that has not been run; never runs unsaved code edits.
+void apply_project_input_changes(Session *session, const std::set<std::string> &keys);
+
 struct CompileResult {
   bool ok = false;
   amber::bytecode::BcModule module;
@@ -212,14 +248,17 @@ struct CompileResult {
 };
 
 struct EvalView {
+  std::vector<amber::runtime::NotebookLiveEvent> progress;
   bool ok = false;
   std::string result;
+  ResultFormat result_format;
   std::string error;
   std::vector<LocalView> locals;
   std::vector<amber::runtime::RuntimeTextOutputEvent> output_events;
   std::uint64_t watch_epoch = 0;
   std::size_t watch_event_count = 0;
   std::vector<CellErrorRange> error_ranges;
+  std::vector<amber::runtime::NotebookDisplay> displays;
 };
 
 CompileResult compile_source_text(const std::string &source,
@@ -227,7 +266,8 @@ CompileResult compile_source_text(const std::string &source,
                                   const std::string &module_name_override = {});
 
 BundledEnvironmentPreparation prepare_bundled_environment(
-    const std::vector<BundledModuleSource> &sources);
+    const std::vector<BundledModuleSource> &sources,
+    const std::vector<std::string> &explicit_imports = {});
 
 // Cross the same bytecode serialization boundary used by persisted modules
 // before an immutable notebook image is handed to RuntimeWorld.  The

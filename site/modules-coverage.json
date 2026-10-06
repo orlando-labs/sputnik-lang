@@ -1,0 +1,131 @@
+{
+  "schema": "amber.modules.coverage.v1",
+  "totals": {
+    "modules": 12,
+    "methods": 133
+  },
+  "modules": [
+    {
+      "id": "argparser",
+      "methods": 10,
+      "pending": [],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 10,
+      "corpus": 0
+    },
+    {
+      "id": "base64",
+      "methods": 2,
+      "pending": [],
+      "verified": 2,
+      "failed": 0,
+      "unverified": 0,
+      "corpus": 0
+    },
+    {
+      "id": "base64url",
+      "methods": 2,
+      "pending": [],
+      "verified": 2,
+      "failed": 0,
+      "unverified": 0,
+      "corpus": 0
+    },
+    {
+      "id": "digest",
+      "methods": 13,
+      "pending": [],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 13,
+      "corpus": 0
+    },
+    {
+      "id": "hex",
+      "methods": 2,
+      "pending": [],
+      "verified": 2,
+      "failed": 0,
+      "unverified": 0,
+      "corpus": 0
+    },
+    {
+      "id": "json",
+      "methods": 11,
+      "pending": [],
+      "verified": 2,
+      "failed": 0,
+      "unverified": 9,
+      "corpus": 1
+    },
+    {
+      "id": "math",
+      "methods": 26,
+      "pending": [],
+      "verified": 1,
+      "failed": 0,
+      "unverified": 25,
+      "corpus": 1
+    },
+    {
+      "id": "secure-random",
+      "methods": 6,
+      "pending": [],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 6,
+      "corpus": 0
+    },
+    {
+      "id": "time-period",
+      "methods": 17,
+      "pending": [],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 17,
+      "corpus": 0
+    },
+    {
+      "id": "time",
+      "methods": 31,
+      "pending": [
+        "abbreviation_at",
+        "as_time_zone",
+        "as_tz",
+        "find",
+        "in_time_zone",
+        "in_tz",
+        "local",
+        "name",
+        "offset",
+        "offset_at",
+        "offset_seconds",
+        "time_zone"
+      ],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 31,
+      "corpus": 0
+    },
+    {
+      "id": "url",
+      "methods": 6,
+      "pending": [],
+      "verified": 3,
+      "failed": 0,
+      "unverified": 3,
+      "corpus": 0
+    },
+    {
+      "id": "uuid",
+      "methods": 7,
+      "pending": [],
+      "verified": 0,
+      "failed": 0,
+      "unverified": 7,
+      "corpus": 0
+    }
+  ],
+  "drift": {}
+}

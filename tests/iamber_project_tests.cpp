@@ -1,5 +1,6 @@
 #include "tools/iamber/project_session.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -150,6 +151,8 @@ void expect_documents_equal(const amber::notebook::ProjectDocument &left,
       expect(left_cell.id == right_cell.id, message + ": cell id");
       expect(left_cell.kind == right_cell.kind, message + ": cell kind");
       expect(left_cell.source == right_cell.source, message + ": cell source");
+      expect(left_cell.formatting == right_cell.formatting,
+             message + ": cell formatting");
       expect(left_cell.mode == right_cell.mode, message + ": cell mode");
       expect(left_cell.extra == right_cell.extra, message + ": cell metadata");
     }
@@ -260,6 +263,109 @@ void test_opaque_cells_are_read_only_and_block_evaluation() {
   expect_documents_equal(original, roundtrip, "opaque-cell metadata roundtrip");
 }
 
+void test_text_cells_roundtrip_and_project_edits() {
+  amber::notebook::ProjectDocument original = project_document();
+  amber::notebook::ProjectCell text;
+  text.id = amber::notebook::allocate_cell_id();
+  text.kind = "text";
+  text.source = "🙂note";
+  text.formatting =
+      R"({"version":1,"runs":[{"start":0,"length":2,"bold":true}]})";
+  text.extra["native"] = R"({"selection":2})";
+  original.sheets[0].cells.push_back(text);
+
+  amber::notebook::LoadedProject project;
+  project.document = original;
+  Session session;
+  load_project_into_session(&session, project);
+  expect(session.cells.back().kind == "text" &&
+             session.cells.back().source == text.source &&
+             session.cells.back().formatting == text.formatting &&
+             !session.cells.back().dirty,
+         "text cells should load as inert read-only session cells");
+
+  session.cells.back().source = "edited 🙂";
+  session.cells.back().formatting =
+      R"({"version":1,"runs":[{"start":0,"length":6,"italic":true}]})";
+  auto edited = project_document_from_session(session, project);
+  expect(edited.sheets[0].cells.back().source == "edited 🙂" &&
+             edited.sheets[0].cells.back().formatting.find("italic") !=
+                 std::string::npos &&
+             edited.sheets[0].cells.back().extra == text.extra,
+         "text source/formatting edits should persist with unknown metadata");
+
+  session.cells.pop_back();
+  edited = project_document_from_session(session, project);
+  expect(edited.sheets[0].cells.size() + 1U ==
+             original.sheets[0].cells.size(),
+         "text deletion should be representable in project sessions");
+
+  Cell added;
+  added.id = amber::notebook::allocate_cell_id();
+  added.kind = "text";
+  added.source = "new note";
+  added.formatting = R"({"version":1,"runs":[]})";
+  session.cells.push_back(added);
+  edited = project_document_from_session(session, project);
+  expect(edited.sheets[0].cells.back().kind == "text" &&
+             edited.sheets[0].cells.back().source == added.source,
+         "new text cells should be serializable by the shared session layer");
+}
+
+void test_mixed_text_execution_and_diagnostic_identity() {
+  amber::notebook::LoadedProject project;
+  project.document = project_document();
+  auto &cells = project.document.sheets.front().cells;
+  cells[0].source = "x = 21\nx\n";
+  cells[1].source = "x * 2\n";
+  amber::notebook::ProjectCell note;
+  note.id = amber::notebook::allocate_cell_id();
+  note.kind = "text";
+  note.source = "x = 999\nclass ThisIsNotCode:\n  ((\n";
+  cells.insert(cells.begin(), note);
+  note.id = amber::notebook::allocate_cell_id();
+  cells.insert(cells.begin() + 2, note);
+  Session session;
+  load_project_into_session(&session, project);
+  evaluate_from(&session, 0, true, false, false);
+  expect(session.cells[1].ok && session.cells[1].result == "21" &&
+             session.cells[3].ok && session.cells[3].result == "42",
+         "leading and interspersed text must not compile or hide code outputs");
+  const auto *backend = session.backend.get();
+  const auto sources = notebook_sources(session.cells);
+  expect(sources.size() == 2, "the dependency graph must exclude inert text");
+  evaluate_from(&session, 0, true, false, false);
+  expect(session.backend.get() == backend && session.cells[3].result == "42",
+         "Run All from leading text must reuse the backend and run Manual code");
+  session.cells[0].source = "a different note\nwith more lines\n";
+  std::swap(session.cells[0], session.cells[1]);
+  const auto after_move = notebook_sources(session.cells);
+  expect(after_move.size() == sources.size(), "moving text cannot add graph inputs");
+  for (std::size_t i = 0; i < sources.size(); ++i) {
+    expect(after_move[i].id == sources[i].id && after_move[i].source == sources[i].source &&
+               after_move[i].file == sources[i].file && after_move[i].mode == sources[i].mode,
+           "text edits/moves must leave exact compiler inputs stable");
+  }
+  expect(pump_runtime_events_detailed(&session, false).disposition !=
+             RuntimeEventPumpDisposition::DeferredByEdits,
+         "text edits must not suspend runtime event processing");
+  evaluate_from(&session, 3, false, false, false);
+  expect(session.backend.get() == backend && session.cells[3].result == "42",
+         "selected Manual code must run by CellId, not filtered source position");
+
+  // A compiler failure after leading/interspersed notes belongs to the code
+  // cell, never to the text that occupied its filtered compiler index.
+  load_project_into_session(&session, project);
+  session.cells[3].source = "broken = (\n";
+  evaluate_from(&session, 3, false, false, false);
+  expect(!session.cells[3].ok && !session.cells[3].error.empty() &&
+             !session.cells[3].error_ranges.empty(),
+         "mixed-sheet diagnostics must target the failing display code cell");
+  expect(session.cells[0].error.empty() && session.cells[2].error.empty() &&
+             session.cells[0].error_ranges.empty() && session.cells[2].error_ranges.empty(),
+         "compiler ranges must never land on an inert text block");
+}
+
 struct BundledModuleFixture {
   std::string id;
   std::string path;
@@ -285,6 +391,34 @@ amber::notebook::LoadedProject make_bundled_project(
   manifest.auto_imports = auto_imports;
   amber::notebook::save_project(&project, manifest);
   return project;
+}
+
+void test_text_edits_preserve_bundled_environment() {
+  TempDirectory temporary;
+  auto project = make_bundled_project(temporary.path / "text-environment",
+      {{"maths", "lib/maths.am", "package maths\ndef twice(x):\n  x * 2\nexport twice\n"}},
+      {"maths"});
+  auto &cells = project.document.sheets.front().cells;
+  cells[0].source = "x = 21\nx\n";
+  cells[1].source = "twice(x)\n";
+  amber::notebook::ProjectCell note;
+  note.id = amber::notebook::allocate_cell_id();
+  note.kind = "text";
+  note.source = "A bundled notebook";
+  cells.insert(cells.begin(), note);
+  amber::notebook::save_project(&project, project.document);
+  Session session;
+  load_project_into_session(&session, project);
+  expect(apply_project_environment(&session, project, true, false, {}),
+         "Apply must support a leading text block");
+  expect(session.cells[2].ok && session.cells[2].result == "42",
+         "bundled exports must remain available past inert text");
+  const auto *backend = session.backend.get();
+  session.cells[0].source = "Edited note";
+  std::swap(session.cells[0], session.cells[1]);
+  evaluate_from(&session, 0, true, false, false);
+  expect(session.backend.get() == backend && session.cells[2].result == "42",
+         "text-only edits/moves must not rebuild or reinitialize bundled code");
 }
 
 void test_bundled_environment_runs_exports_and_reachable_dependencies() {
@@ -987,6 +1121,9 @@ int main() {
   test_load_is_document_only_and_roundtrip_preserves_unrelated_sheets();
   test_code_edit_reorder_delete_and_new_ids_are_persisted();
   test_opaque_cells_are_read_only_and_block_evaluation();
+  test_text_cells_roundtrip_and_project_edits();
+  test_mixed_text_execution_and_diagnostic_identity();
+  test_text_edits_preserve_bundled_environment();
   test_bundled_environment_runs_exports_and_reachable_dependencies();
   test_bundled_environment_failures_preserve_previous_backend_and_results();
   test_bundled_aliases_and_same_named_classes_share_one_world();

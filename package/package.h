@@ -64,6 +64,9 @@ struct PackageNativeExtension {
   std::vector<std::string> defines;
   std::vector<std::string> cxxflags;
   std::vector<std::string> link_libraries;
+  // Manifest-relative library search paths and runtime loader paths.
+  std::vector<std::string> library_dirs;
+  std::vector<std::string> runtime_library_dirs;
   // Logical thunk names whose implementation may block the calling OS thread.
   // The VM parks its strand and dispatches these calls through the blocking
   // FFI executor; generated native code invokes them outside the world bridge

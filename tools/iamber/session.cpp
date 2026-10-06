@@ -9,6 +9,7 @@
 #include "frontend/ast/expr.h"
 #include "runtime/macro_expander.h"
 #include "runtime/value_display.h"
+#include "runtime/context.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -37,6 +38,7 @@ struct SessionBackend {
   std::uint64_t generation = 0;
   std::shared_ptr<const amber::bytecode::BcModule> environment_image;
   std::map<std::string, std::string> ambient_constant_paths;
+  std::map<std::string, std::map<std::string, std::string>> import_paths;
   std::vector<BundledModuleSource> bundled_sources;
   // The curses session and its progress callbacks run on the UI thread.
   // These flags prevent recursive pumping there; they are not a cross-thread
@@ -56,6 +58,8 @@ public:
     for (Cell &cell : session_->cells)
       cell.running = false;
     session_->evaluation_active = false;
+    if (amber::runtime::runtime_run_cancel_requested())
+      session_->status = "execution cancelled";
   }
   SessionExecutionScope(const SessionExecutionScope &) = delete;
   SessionExecutionScope &operator=(const SessionExecutionScope &) = delete;
@@ -244,13 +248,18 @@ std::string loader_result_to_summary(
 
 std::string session_header_source() { return "package iamber.session\n\n"; }
 
+std::string evaluable_source(const Cell &cell) {
+  return cell.kind == "code" ? cell.source : std::string{};
+}
+
 std::string session_source_until(const std::vector<Cell> &cells,
                                  std::size_t end_index) {
   std::ostringstream out;
   out << session_header_source();
   for (std::size_t i = 0; i <= end_index && i < cells.size(); ++i) {
-    out << cells[i].source;
-    if (cells[i].source.empty() || cells[i].source.back() != '\n') {
+    const std::string source = evaluable_source(cells[i]);
+    out << source;
+    if (source.empty() || source.back() != '\n') {
       out << "\n";
     }
     out << "\n";
@@ -281,15 +290,17 @@ std::string session_source_for_cell_only(const std::vector<Cell> &cells,
   std::ostringstream out;
   out << session_header_source();
   for (std::size_t i = 0; i < index && i < cells.size(); ++i) {
+    const std::string source = evaluable_source(cells[i]);
     const std::size_t blank_lines =
-        generated_cell_source_line_count(cells[i].source) + 1U;
+        generated_cell_source_line_count(source) + 1U;
     for (std::size_t line = 0; line < blank_lines; ++line) {
       out << "\n";
     }
   }
   if (index < cells.size()) {
-    out << cells[index].source;
-    if (cells[index].source.empty() || cells[index].source.back() != '\n') {
+    const std::string source = evaluable_source(cells[index]);
+    out << source;
+    if (source.empty() || source.back() != '\n') {
       out << "\n";
     }
     out << "\n";
@@ -305,11 +316,12 @@ cell_source_maps_until(const std::vector<Cell> &cells, std::size_t end_index) {
                               std::count(header.begin(), header.end(), '\n'));
   std::size_t offset = header.size();
   for (std::size_t i = 0; i <= end_index && i < cells.size(); ++i) {
+    const std::string source = evaluable_source(cells[i]);
     const std::size_t source_line_count =
-        generated_cell_source_line_count(cells[i].source);
-    const std::size_t source_size = generated_cell_source_size(cells[i].source);
+        generated_cell_source_line_count(source);
+    const std::size_t source_size = generated_cell_source_size(source);
     maps.push_back(
-        {i, line, source_line_count, offset, offset + cells[i].source.size()});
+        {i, line, source_line_count, offset, offset + source.size()});
     line += source_line_count + 1U;
     offset += source_size + 1U;
   }
@@ -560,7 +572,11 @@ std::vector<amber::runtime::RuntimeTextOutputEvent> output_events_for_cell(
 }
 
 bool should_show_local(const LocalView &local) {
-  return !local.name.empty() && local.role != "temp";
+  // Imports lower to constants, not initialized VM locals. In particular the
+  // namespace desugaring's __amber_ns__ aliases are compiler implementation
+  // details and must not appear as broken variables in either notebook host.
+  return !local.name.empty() && local.role != "temp" &&
+         local.binding_kind != "import_alias";
 }
 
 bool same_cell_source(const amber::notebook::CellSource &left,
@@ -660,7 +676,9 @@ build_backend(const std::vector<amber::notebook::CellSource> &sources,
               const SessionBackend *previous, std::size_t watch_event_capacity,
               SessionActivityNotifier activity_notifier,
               const std::vector<amber::runtime::RuntimeCapabilityGrant> &grants,
-              const BundledEnvironmentPreparation *environment = nullptr) {
+              const BundledEnvironmentPreparation *environment = nullptr,
+              const SessionOutputObserver &output_observer = {},
+              const std::function<void(const amber::bytecode::BcModule &)> &prepare_runtime = {}) {
   BackendBuildResult result;
   auto candidate = std::make_unique<SessionBackend>();
   candidate->sources = sources;
@@ -676,6 +694,7 @@ build_backend(const std::vector<amber::notebook::CellSource> &sources,
   if (environment != nullptr) {
     candidate->environment_image = environment->image;
     candidate->ambient_constant_paths = environment->ambient_constant_paths;
+    candidate->import_paths = environment->import_paths;
     for (const auto &entry : candidate->ambient_constant_paths)
       ambient_names.insert(entry.first);
   }
@@ -711,6 +730,7 @@ build_backend(const std::vector<amber::notebook::CellSource> &sources,
           &candidate->code_ids, &candidate->next_code_id, source.id);
     }
     options.module_name = "iamber.notebook";
+    options.import_paths = candidate->import_paths;
     options.ambient_constant_paths.insert(
         candidate->ambient_constant_paths.begin(),
         candidate->ambient_constant_paths.end());
@@ -752,6 +772,10 @@ build_backend(const std::vector<amber::notebook::CellSource> &sources,
   }
   candidate->manifest = std::move(*manifest);
   if (previous == nullptr) {
+    if (prepare_runtime) {
+      try { prepare_runtime(*candidate->module); }
+      catch (const std::exception &error) { result.error_view.error = error.what(); return result; }
+    }
     candidate->kernel =
         std::make_shared<amber::notebook::NotebookKernel>(sources, ambient_names);
     amber::runtime::RuntimeWorldOptions options;
@@ -773,6 +797,7 @@ build_backend(const std::vector<amber::notebook::CellSource> &sources,
           amber::runtime::RuntimeTextWriter::cell_stream("stdout");
       const auto stderr_sink =
           amber::runtime::RuntimeTextWriter::cell_stream("stderr");
+      if (output_observer) output_observer(0, stdout_sink, stderr_sink);
       amber::runtime::ExecutionResult initialized;
       {
         amber::runtime::RuntimeOutputScope output_scope(stdout_sink, stderr_sink);
@@ -811,7 +836,9 @@ std::size_t cell_index_for_id(const std::vector<Cell> &cells,
 }
 
 EvalView evaluate_backend_cell(SessionBackend *backend,
-                               amber::notebook::CellId id) {
+                               amber::notebook::CellId id,
+                               std::shared_ptr<const amber::runtime::NotebookInputSnapshot> project_inputs,
+                               const SessionOutputObserver &output_observer) {
   EvalView view;
   if (backend == nullptr || backend->kernel == nullptr ||
       backend->world == nullptr) {
@@ -830,11 +857,13 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
   amber::notebook::NotebookVmCellExecutor adapter(
       backend->world.get(), manifest->code_id, manifest->descriptors,
       manifest->cell_id);
+  adapter.set_project_inputs(std::move(project_inputs));
   amber::notebook::VmCellExecutionReport report;
   const std::shared_ptr<amber::runtime::RuntimeTextWriter> stdout_sink =
       amber::runtime::RuntimeTextWriter::cell_stream("stdout");
   const std::shared_ptr<amber::runtime::RuntimeTextWriter> stderr_sink =
       amber::runtime::RuntimeTextWriter::cell_stream("stderr");
+  if (output_observer) output_observer(id, stdout_sink, stderr_sink);
   amber::notebook::CellRunResult run;
   {
     amber::runtime::RuntimeOutputScope output_scope(stdout_sink, stderr_sink);
@@ -845,15 +874,28 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
     }
   }
   view.output_events = merge_output_events(stdout_sink, stderr_sink);
+  view.progress = std::move(report.progress);
   if (!run.ok) {
     view.error = run.error.empty() ? "notebook cell failed" : run.error;
     return view;
   }
 
   view.ok = true;
-  view.result = amber::runtime::value_to_debug_string(
-      report.value, backend->module.get(), &report.runtime_strings,
-      &report.runtime_symbols);
+  auto preview = amber::runtime::runtime_preview_value(
+      report.value, amber::runtime::RuntimeStringifyMode::Inspect,
+      backend->module.get(), &report.runtime_strings, &report.runtime_symbols);
+  view.result = std::move(preview.text);
+  view.result_format.truncated = preview.truncated;
+  view.result_format.is_container = report.value.is_list() || report.value.is_map() ||
+      report.value.is_tuple() || report.value.is_set();
+  if (view.result_format.is_container) {
+    auto pretty = amber::runtime::runtime_preview_value(
+        report.value, amber::runtime::RuntimeStringifyMode::Pretty,
+        backend->module.get(), &report.runtime_strings, &report.runtime_symbols);
+    view.result_format.pretty = std::move(pretty.text);
+    view.result_format.pretty_truncated = pretty.truncated;
+  }
+  view.displays = std::move(report.displays);
   view.watch_epoch = report.watch_epoch;
   view.watch_event_count = report.watch_event_count;
   for (const amber::runtime::ExecutionLocal &local : report.locals) {
@@ -867,10 +909,16 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
     local_view.watch_revision = local.watch_revision;
     local_view.value =
         local.initialized
-            ? amber::runtime::value_to_debug_string(
-                  local.value, backend->module.get(), &report.runtime_strings,
-                  &report.runtime_symbols)
+            ? amber::runtime::runtime_preview_value(
+                  local.value, amber::runtime::RuntimeStringifyMode::Inspect,
+                  backend->module.get(), &report.runtime_strings,
+                  &report.runtime_symbols).text
             : "<uninitialized>";
+    local_view.text_value = local.initialized && local.value.is_string()
+        ? amber::runtime::runtime_preview_value(
+              local.value, amber::runtime::RuntimeStringifyMode::Display,
+              backend->module.get(), &report.runtime_strings, &report.runtime_symbols).text
+        : local_view.value;
     if (should_show_local(local_view)) {
       view.locals.push_back(std::move(local_view));
     }
@@ -891,6 +939,7 @@ void mark_blocked_cell(Session *session, std::size_t index,
   cell.running = false;
   cell.ok = false;
   cell.result = "error";
+  cell.result_format = {};
   cell.error = message;
   cell.error_ranges.clear();
   cell.errors.clear();
@@ -931,8 +980,24 @@ execute_automatic_plan(Session *session, SessionBackend *backend,
   std::set<amber::notebook::CellId> unavailable;
   for (const amber::notebook::EvaluationStep &step : plan) {
     const std::size_t index = cell_index_for_id(session->cells, step.id);
+    if (amber::runtime::runtime_run_cancel_requested()) {
+      if (index < session->cells.size())
+        mark_blocked_cell(session, index, "execution cancelled before cell ran");
+      execution.complete = false;
+      continue;
+    }
     if (index >= session->cells.size()) {
       execution.complete = false;
+      continue;
+    }
+    // The scheduler sees only code sources (notebook_sources intentionally
+    // filters text), but tolerate a stale/legacy plan containing a text ID.
+    // It must never become a runtime root or an error barrier.
+    if (session->cells[index].kind == "text") {
+      session->cells[index].dirty = false;
+      session->cells[index].running = false;
+      session->cells[index].ok = false;
+      session->cells[index].result = "preserved (read-only text)";
       continue;
     }
     if (step.action == amber::notebook::EvaluationAction::KeepManualStale) {
@@ -968,7 +1033,7 @@ execute_automatic_plan(Session *session, SessionBackend *backend,
         progress(session, index);
       }
     }
-    EvalView view = evaluate_backend_cell(backend, step.id);
+    EvalView view = evaluate_backend_cell(backend, step.id, session->project_inputs, session->output_observer);
     const bool ok = view.ok;
     apply_eval(session, index, std::move(view));
     if (!ok) {
@@ -990,9 +1055,23 @@ void evaluate_rebuilt_backend(
   const SessionBackend *previous = session->backend.get();
   BackendBuildResult built =
       build_backend(sources, previous, session->runtime_watch_event_capacity,
-                    session->activity_notifier(), session->runtime_capability_grants);
+                    session->activity_notifier(), session->runtime_capability_grants,
+                    nullptr, session->output_observer, session->prepare_runtime);
   if (!built.ok) {
-    apply_eval(session, built.error_index, std::move(built.error_view));
+    // Compiler diagnostics are initially indexed in the filtered source
+    // vector. Translate them back to display-cell indices before publishing;
+    // rich-text cells may precede or sit between code cells.
+    for (CellErrorRange &range : built.error_view.error_ranges) {
+      if (range.cell_index < sources.size()) {
+        range.cell_index =
+            cell_index_for_id(session->cells, sources[range.cell_index].id);
+      }
+    }
+    const std::size_t error_cell_index =
+        built.error_index < sources.size()
+            ? cell_index_for_id(session->cells, sources[built.error_index].id)
+            : session->cells.size();
+    apply_eval(session, error_cell_index, std::move(built.error_view));
     std::set<amber::notebook::CellId> unavailable;
     const amber::notebook::DependencyGraph graph(sources);
     if (built.error_index < sources.size()) {
@@ -1027,7 +1106,7 @@ void evaluate_rebuilt_backend(
     }
     for (const amber::notebook::CellId id : graph.execution_order()) {
       const std::size_t index = cell_index_for_id(session->cells, id);
-      if (index >= session->cells.size() || index == built.error_index) {
+      if (index >= session->cells.size() || index == error_cell_index) {
         continue;
       }
       if (waits_for_unavailable(graph, id, unavailable)) {
@@ -1041,10 +1120,25 @@ void evaluate_rebuilt_backend(
   }
 
   const amber::notebook::DependencyGraph graph(sources);
+  const amber::notebook::CellId changed_id =
+      start < session->cells.size() && session->cells[start].kind == "code"
+          ? session->cells[start].id
+          : 0U;
   const std::set<amber::notebook::CellId> changed =
-      (start < sources.size())
-          ? std::set<amber::notebook::CellId>{sources[start].id}
-          : std::set<amber::notebook::CellId>{};
+      changed_id != 0U ? std::set<amber::notebook::CellId>{changed_id}
+                       : std::set<amber::notebook::CellId>{};
+  const std::size_t evaluation_error_index =
+      changed_id != 0U
+          ? cell_index_for_id(session->cells, changed_id)
+          : [&] {
+              const auto first_code = std::find_if(
+                  session->cells.begin(), session->cells.end(),
+                  [](const Cell &cell) { return cell.kind == "code"; });
+              return first_code == session->cells.end()
+                         ? session->cells.size()
+                         : static_cast<std::size_t>(
+                               std::distance(session->cells.begin(), first_code));
+            }();
   SessionBackend *active = nullptr;
   std::vector<amber::notebook::EvaluationStep> plan;
   if (previous != nullptr) {
@@ -1070,20 +1164,20 @@ void evaluate_rebuilt_backend(
       if (install_error.error.empty()) {
         install_error.error = "notebook image install failed";
       }
-      apply_eval(session, start, std::move(install_error));
+      apply_eval(session, evaluation_error_index, std::move(install_error));
       std::set<amber::notebook::CellId> unavailable;
-      if (start < sources.size()) {
-        unavailable.insert(sources[start].id);
+      if (changed_id != 0U) {
+        unavailable.insert(changed_id);
       }
       // Keep the old image/kernel active, but expose the same failure barrier
       // that a successful graph transition would have exposed. Include old
       // dependents as well because a rename/removal may erase the current
       // graph edge entirely.
-      if (previous != nullptr && start < sources.size()) {
+      if (previous != nullptr && changed_id != 0U) {
         const amber::notebook::DependencyGraph old_graph(previous->sources);
-        previous->kernel->mark_failure_barrier(sources[start].id);
+        previous->kernel->mark_failure_barrier(changed_id);
         const std::vector<amber::notebook::CellId> old_dependents =
-            old_graph.dependents_of(sources[start].id);
+            old_graph.dependents_of(changed_id);
         for (const amber::notebook::CellId id : old_dependents) {
           const std::size_t index = cell_index_for_id(session->cells, id);
           if (index < session->cells.size() && index != start) {
@@ -1121,9 +1215,9 @@ void evaluate_rebuilt_backend(
                                ? "notebook kernel generation commit failed"
                                : "notebook kernel generation commit and image "
                                  "rollback failed";
-      apply_eval(session, start, std::move(commit_error));
-      if (rolled_back.ok && start < sources.size()) {
-        live->kernel->mark_failure_barrier(sources[start].id);
+      apply_eval(session, evaluation_error_index, std::move(commit_error));
+      if (rolled_back.ok && changed_id != 0U) {
+        live->kernel->mark_failure_barrier(changed_id);
       } else if (!rolled_back.ok) {
         // Never retain a backend whose image and metadata generations are no
         // longer provably aligned.  The next evaluation will build afresh.
@@ -1144,7 +1238,19 @@ void evaluate_rebuilt_backend(
   views.reserve(plan.size());
   for (const amber::notebook::EvaluationStep &step : plan) {
     const std::size_t index = cell_index_for_id(session->cells, step.id);
+    if (amber::runtime::runtime_run_cancel_requested()) {
+      if (index < session->cells.size())
+        mark_blocked_cell(session, index, "execution cancelled before cell ran");
+      continue;
+    }
     if (index >= session->cells.size()) {
+      continue;
+    }
+    if (session->cells[index].kind == "text") {
+      session->cells[index].dirty = false;
+      session->cells[index].running = false;
+      session->cells[index].ok = false;
+      session->cells[index].result = "preserved (read-only text)";
       continue;
     }
     if (step.action == amber::notebook::EvaluationAction::KeepManualStale) {
@@ -1178,7 +1284,7 @@ void evaluate_rebuilt_backend(
         progress(session, index);
       }
     }
-    EvalView view = evaluate_backend_cell(active, step.id);
+    EvalView view = evaluate_backend_cell(active, step.id, session->project_inputs, session->output_observer);
     if (!view.ok) {
       unavailable.insert(step.id);
     }
@@ -1273,9 +1379,20 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
   }
 
   view.ok = true;
-  view.result = amber::runtime::value_to_debug_string(
-      initialized.value, &compiled.module, &initialized.runtime_strings,
-      &initialized.runtime_symbols);
+  auto preview = amber::runtime::runtime_preview_value(
+      initialized.value, amber::runtime::RuntimeStringifyMode::Inspect,
+      &compiled.module, &initialized.runtime_strings, &initialized.runtime_symbols);
+  view.result = std::move(preview.text);
+  view.result_format.truncated = preview.truncated;
+  view.result_format.is_container = initialized.value.is_list() || initialized.value.is_map() ||
+      initialized.value.is_tuple() || initialized.value.is_set();
+  if (view.result_format.is_container) {
+    auto pretty = amber::runtime::runtime_preview_value(
+        initialized.value, amber::runtime::RuntimeStringifyMode::Pretty,
+        &compiled.module, &initialized.runtime_strings, &initialized.runtime_symbols);
+    view.result_format.pretty = std::move(pretty.text);
+    view.result_format.pretty_truncated = pretty.truncated;
+  }
   view.watch_epoch = initialized.watch_epoch;
   view.watch_event_count = initialized.watch_events.size();
   for (const amber::runtime::ExecutionLocal &local : initialized.locals) {
@@ -1289,10 +1406,16 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
     local_view.watch_revision = local.watch_revision;
     local_view.value =
         local.initialized
-            ? amber::runtime::value_to_debug_string(
-                  local.value, &compiled.module, &initialized.runtime_strings,
-                  &initialized.runtime_symbols)
+            ? amber::runtime::runtime_preview_value(
+                  local.value, amber::runtime::RuntimeStringifyMode::Inspect,
+                  &compiled.module, &initialized.runtime_strings,
+                  &initialized.runtime_symbols).text
             : "<uninitialized>";
+    local_view.text_value = local.initialized && local.value.is_string()
+        ? amber::runtime::runtime_preview_value(
+              local.value, amber::runtime::RuntimeStringifyMode::Display,
+              &compiled.module, &initialized.runtime_strings, &initialized.runtime_symbols).text
+        : local_view.value;
     if (should_show_local(local_view)) {
       view.locals.push_back(std::move(local_view));
     }
@@ -1471,13 +1594,19 @@ notebook_sources(const std::vector<Cell> &cells) {
   std::vector<amber::notebook::CellSource> sources;
   sources.reserve(cells.size());
   for (const Cell &cell : cells) {
+    // Rich-text cells are display-only inputs to this backend.  Omitting them
+    // entirely keeps the installed graph/image byte-for-byte stable when text
+    // is edited, moved, or reformatted; stable CellIds preserve every code
+    // cell's runtime identity and output association.
+    if (cell.kind != "code") {
+      continue;
+    }
     amber::notebook::CellSource source;
     source.id = cell.id;
-    source.source = cell.kind == "code" ? cell.source : "";
-    source.file = "<iamber-cell>";
-    source.mode = cell.kind == "code" && cell.watch
-                      ? amber::notebook::CellMode::Watch
-                      : amber::notebook::CellMode::Manual;
+    source.source = cell.source;
+    source.file = "<iamber-cell-" + std::to_string(cell.id) + ">";
+    source.mode = cell.watch ? amber::notebook::CellMode::Watch
+                             : amber::notebook::CellMode::Manual;
     sources.push_back(std::move(source));
   }
   return sources;
@@ -1651,11 +1780,14 @@ void apply_eval(Session *session, std::size_t index, EvalView view) {
   cell->dirty = false;
   cell->running = false;
   cell->ok = view.ok;
+  cell->result_format = view.ok ? std::move(view.result_format) : ResultFormat{};
   cell->locals = std::move(view.locals);
   cell->output_events = std::move(view.output_events);
+  cell->progress = std::move(view.progress);
   cell->watch_epoch = view.watch_epoch;
   cell->watch_event_count = view.watch_event_count;
   if (view.ok) {
+    cell->displays = std::move(view.displays);
     cell->result = std::move(view.result);
     cell->error.clear();
   } else {
@@ -1705,10 +1837,21 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
     session->status = "evaluation blocked: " + session->execution_block_reason;
     return;
   }
+  if (start < session->cells.size() && session->cells[start].kind == "text" &&
+      !force_all) {
+    // A direct Run on a rich-text cell is a no-op. In particular, do not
+    // construct/apply a bundled environment merely because this is the first
+    // action taken on a text-only sheet.
+    session->cells[start].dirty = false;
+    session->cells[start].running = false;
+    session->cells[start].result = "preserved (read-only text)";
+    session->status = "text cell is inert; nothing to run";
+    return;
+  }
   // An unknown kind could be an executable provider (UI inputs, module cell,
   // etc.). Silently skipping it would give downstream code a false context.
   for (const auto &cell : session->cells) {
-    if (cell.kind != "code") {
+    if (cell.kind != "code" && cell.kind != "text") {
       session->status =
           "evaluation blocked: unsupported cell kind " + cell.kind;
       return;
@@ -1750,9 +1893,27 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
     return;
   }
 
+  if (sources.empty()) {
+    session->dependency_snapshot = sources;
+    session->status = force_all ? "all cells evaluated"
+                                : "text cell is inert; nothing to run";
+    return;
+  }
+  amber::notebook::CellId evaluation_root = session->cells[start].id;
+  if (session->cells[start].kind == "text") {
+    const auto first_code = std::find_if(
+        session->cells.begin(), session->cells.end(),
+        [](const Cell &cell) { return cell.kind == "code"; });
+    if (first_code == session->cells.end()) {
+      session->status = force_all ? "all cells evaluated"
+                                  : "text cell is inert; nothing to run";
+      return;
+    }
+    evaluation_root = first_code->id;
+  }
   const amber::notebook::DependencyGraph graph(sources);
   const std::vector<amber::notebook::EvaluationStep> plan =
-      session->backend->kernel->update_cells(sources, session->cells[start].id,
+      session->backend->kernel->update_cells(sources, evaluation_root,
                                              force_all);
   session->dependency_snapshot = sources;
   std::set<amber::notebook::CellId> unavailable;
@@ -1766,6 +1927,10 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
     }
     const std::size_t i =
         static_cast<std::size_t>(std::distance(session->cells.begin(), found));
+    if (amber::runtime::runtime_run_cancel_requested()) {
+      mark_blocked_cell(session, i, "execution cancelled before cell ran");
+      continue;
+    }
     if (step.action == amber::notebook::EvaluationAction::KeepManualStale) {
       mark_blocked_cell(session, i, "manual cell is stale");
       unavailable.insert(id);
@@ -1797,7 +1962,7 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
         progress(session, i);
       }
     }
-    EvalView view = evaluate_backend_cell(session->backend.get(), id);
+    EvalView view = evaluate_backend_cell(session->backend.get(), id, session->project_inputs, session->output_observer);
     const bool ok = view.ok;
     apply_eval(session, i, std::move(view));
     if (!ok) {
@@ -1827,7 +1992,9 @@ bool apply_bundled_environment(
   }
   if (!session->execution_block_reason.empty() ||
       std::any_of(session->cells.begin(), session->cells.end(),
-                  [](const Cell &cell) { return cell.kind != "code"; })) {
+                  [](const Cell &cell) {
+                    return cell.kind != "code" && cell.kind != "text";
+                  })) {
     session->status = "environment Apply blocked by unsupported sheet content";
     return false;
   }
@@ -1854,12 +2021,35 @@ bool apply_bundled_environment(
     for (Cell &cell : next_cells) {
       if (cell.id == 0U)
         cell.id = amber::notebook::allocate_cell_id();
+      if (cell.kind == "text") {
+        // Text is inert and read-only in iamber. Applying the code
+        // environment must not make it look unevaluated or dirty.
+        cell.ok = false;
+        cell.running = false;
+        cell.dirty = false;
+        cell.result = "preserved (read-only text)";
+        cell.error.clear();
+        cell.locals.clear();
+        cell.displays.clear();
+        cell.output_events.clear();
+        cell.error_ranges.clear();
+        cell.errors.clear();
+        cell.selected_error = 0U;
+        cell.watch_epoch = 0U;
+        cell.watch_event_count = 0U;
+        continue;
+      }
       cell.ok = false;
       cell.running = false;
       cell.dirty = true;
       cell.result = "not evaluated";
+      cell.result_format = {};
       cell.error.clear();
       cell.locals.clear();
+      // Figure bytes are immutable host output, not handles into the old
+      // world. Retain the last complete batch until a successful cell replaces
+      // it, including when a source edit requires rebuilding bundled modules.
+      // `ok = false` / dirty above makes the UI label this snapshot stale.
       cell.output_events.clear();
       cell.error_ranges.clear();
       cell.errors.clear();
@@ -1868,8 +2058,20 @@ bool apply_bundled_environment(
       cell.watch_event_count = 0U;
     }
     next_sources = notebook_sources(next_cells);
+    std::vector<std::string> explicit_imports;
+    // Imports are compile-time, cell-local declarations. Native imports keep
+    // their existing behavior; source modules become roots of this generation.
+    for (const auto &source : next_sources) {
+      const auto analysis = amber::notebook::analyze_cell(source);
+      for (const auto &item : analysis.items) {
+        if (item && item->kind == "AstImportStmt") {
+          for (const auto &field : item->string_fields)
+            if (field.name == "module_path") explicit_imports.push_back(field.value);
+        }
+      }
+    }
     const BundledEnvironmentPreparation prepared =
-        prepare_bundled_environment(next_bundled);
+        prepare_bundled_environment(next_bundled, explicit_imports);
     if (!prepared.ok) {
       std::string message;
       for (const auto &error : prepared.diagnostics) {
@@ -1886,7 +2088,8 @@ bool apply_bundled_environment(
     }
     BackendBuildResult built = build_backend(
         next_sources, nullptr, session->runtime_watch_event_capacity,
-        session->activity_notifier(), session->runtime_capability_grants, &prepared);
+        session->activity_notifier(), session->runtime_capability_grants, &prepared,
+        session->output_observer, session->prepare_runtime);
     if (!built.ok) {
       session->environment_error = std::move(built.error_view.error);
       session->environment_output = std::move(built.environment_output);
@@ -1951,6 +2154,21 @@ void evaluate_from(Session *session, std::size_t start, bool force_all,
   evaluate_from_with_progress(session, start, force_all, show_running, {});
 }
 
+void apply_project_input_changes(Session *session, const std::set<std::string> &keys) {
+  if (!session || session->module_editor || keys.empty() || !session->backend) return;
+  if (session->evaluation_active) throw std::runtime_error("cannot change inputs during evaluation");
+  SessionExecutionScope execution_scope(session);
+  const auto plan = session->backend->kernel->plan_input_changes(keys);
+  if (session->environment_stale || !session->execution_block_reason.empty() ||
+      !same_cell_sources(session->backend->sources, notebook_sources(session->cells))) {
+    for (auto &cell : session->cells) if (cell.kind == "code") cell.dirty = true;
+    session->status = "inputs changed; run edited sources explicitly";
+    return;
+  }
+  const auto executed = execute_automatic_plan(session, session->backend.get(), plan, false, {});
+  session->status = executed.complete ? "project inputs updated; Watch consumers evaluated" : "project input evaluation failed";
+}
+
 RuntimeEventPumpResult
 pump_runtime_events_detailed(Session *session, bool show_running,
                              const EvaluationProgress &progress) {
@@ -1969,7 +2187,9 @@ pump_runtime_events_detailed(Session *session, bool show_running,
   }
   if (session->environment_stale || !session->execution_block_reason.empty() ||
       std::any_of(session->cells.begin(), session->cells.end(),
-                  [](const Cell &cell) { return cell.kind != "code"; })) {
+                  [](const Cell &cell) {
+                    return cell.kind != "code" && cell.kind != "text";
+                  })) {
     result.disposition = RuntimeEventPumpDisposition::DeferredByEdits;
     return result;
   }

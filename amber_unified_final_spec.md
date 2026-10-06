@@ -1003,10 +1003,68 @@ p = factory(10, 20)
 
 То есть `HCall` / `CALL` по class object выполняет constructor path через selector `:new` с теми же positional/keyword-аргументами и optional block. `.new(...)` не удаляется: он остаётся частью явного MOP/reflection story и может использоваться через ordinary send, `send(Point,:new,...)` или callable reference `&Point.new`.
 
+#### 8.4.1. Завершение создания объекта: `after_init!`
+
+`after_init!` — необязательный instance-метод протокола создания обычного
+Amber-объекта. Это правило языка; оно не зависит от конкретной библиотеки.
+Для стандартного constructor path — `Class(args...)`, `Class.new(args...)`
+и вызова динамически полученного class object — нормативен следующий порядок:
+
+1. Выделяется экземпляр и обычным наследуемым method lookup выбирается `init`.
+2. Если `init` существует, выполняются binding аргументов, defaults, auto-assign
+   и выбранное тело `init`, включая multi-clause dispatch. Runtime дожидается
+   успешного возврата и завершения всех применимых `ensure`.
+3. Обычным наследуемым method lookup для runtime-класса экземпляра выбирается
+   `after_init!`. Если метод существует, он вызывается на созданном экземпляре
+   без аргументов и блока. Если метод отсутствует, этот шаг пропускается.
+4. После успешного завершения hook конструктор возвращает исходный экземпляр.
+   Возвращаемые значения `init` и `after_init!` игнорируются.
+
+Hook вызывается ровно один раз на создание объекта, а не для каждого предка.
+Переопределение `init` не отключает унаследованный `after_init!`.
+Переопределение `after_init!` заменяет унаследованный hook по обычным правилам
+dispatch; runtime не вызывает автоматически все реализации в ancestry.
+Классы без `init` также получают вызов hook. Ранний `return` из `init` считается
+успешным завершением и не пропускает hook.
+
+При исключении из `init` hook не вызывается. При исключении из `after_init!`
+создание объекта завершается ошибкой; исключение можно перехватить в исходном
+месте вызова конструктора. Hook должен быть методом, допускающим вызов без
+аргументов; нарушение этого требования поднимает `TypeError` при создании.
+`init` и `after_init!` могут приостанавливать task по обычным правилам выполнения
+методов; конструктор возвращает экземпляр только после их завершения.
+
+Обычный явный вызов `init` или `after_init!` не запускает дополнительный
+constructor hook. Копирование, включая `init_copy(source)`, также не запускает
+`after_init!`. Foreign-handle constructors и runtime-native values исключены
+из этого протокола. VM и native обязаны сохранять одинаковую семантику.
+
+```amber
+class Initialized:
+ def after_init!():
+  @ready = true
+
+class Item < Initialized:
+ def init(@name)
+
+item = Item("amber")
+item.instance_fields["ready"] # true: inherited hook runs after Item.init
+```
+
 ### 8.5. Поля `@` и `@@`
 
 - `@name` — поле экземпляра;
 - `@@name` — поле класса / class storage.
+
+#### 8.5.1. Снимок полей: `instance_fields`
+
+`obj.instance_fields` возвращает свежий shallow snapshot — обычный Map со Str
+ключами без `@`, упорядоченными лексикографически. Включаются все реально
+присвоенные поля экземпляра, в том числе присвоенные методами предков и
+содержащие `null`; `@@` и computed properties исключены. Getter'ы не вызываются.
+Изменение Map не меняет поля объекта, но значения-ссылки остаются разделяемыми.
+Пользовательский member `instance_fields` имеет приоритет над builtin fallback.
+VM и native обязаны сохранять одинаковую семантику.
 
 ### 8.6. Auto-assign в параметрах
 
@@ -4803,6 +4861,22 @@ Examples:
 "false".to_bool() # false
 ```
 
+###### `Bool.parse`
+
+`Bool.parse(value) -> Bool` accepts a `Str`, ignores ASCII letter case and
+surrounding ASCII whitespace, and parses only these spellings:
+
+| Result | Strings |
+|---|---|
+| `true` | `"true"`, `"t"`, `"1"`, `"yes"`, `"on"` |
+| `false` | `"false"`, `"f"`, `"0"`, `"no"`, `"off"`, `"null"` |
+
+Other strings, including empty strings, raise `ValueError`. Other argument
+types, including the value `null`, raise `TypeError`. The method accepts one
+positional argument and no keywords or block. It does not use truthiness or
+provide an implicit default. Existing casts and `to_bool()` retain their
+conversion contract. ArgParser uses this text parser for boolean input.
+
 ###### `to_symbol`
 
 Recommended builtin behavior:
@@ -5365,7 +5439,7 @@ A property descriptor is a named language-level member that may contain:
 The patch preserves the following existing design decisions (as amended by the accepted bare-nullary + dot-call RFC, 2026-06-12):
 
 1. Ordinary callable values are invoked with `fn(args...)` or with the chain-preserving dot-call `expr.(args...)`.
-2. Bare identifiers resolve lexical/import/module bindings first. If none exists and the current procedure has an object receiver, the identifier resolves as bare member access on `self`; without an object receiver it is an undefined-name error. Bare *member access* `receiver.name` may perform property get or an implicit zero-argument send when `name` is a syntactically nullary method (see the bare-nullary member access section).
+2. Bare identifiers resolve lexical/import/module bindings first. If none exists and the current procedure has an object receiver, the identifier resolves as bare member access on `self`; without an object receiver it is an undefined-name error. Bare *member access* `receiver.name` may perform property get or an implicit zero-argument send when `name` is a zero-argument-callable method (see the bare-nullary member access section).
 3. `&target` creates an immutable callable reference object, not a raw machine address, and never invokes the target.
 4. `Class(args...)` remains ordinary `HCall` / `CALL` over a callable class object and follows the constructor path.
 5. Parser output remains syntax-faithful. A property declaration must not be erased into an ordinary method declaration at AST level.
@@ -5496,8 +5570,8 @@ For object members the read surface is uniform across member kinds:
 
 ```amber
 obj.g # property get if `g` is a readable property;
- # implicit zero-argument send if `g` is a syntactically
- # nullary method
+ # implicit zero-argument send if `g` accepts no arguments
+ # (including through defaults)
 obj.g = x # property set if `g` is a writable property
 obj.g() # explicit method send; AMB_PROP_CALLED_AS_METHOD if `g`
  # is a property
@@ -6326,7 +6400,7 @@ This section is source-compatible with existing Amber code unless that code alre
 
 `get` and `set` remain ordinary identifiers outside property arm-label position.
 
-Lexically resolved bare identifiers never become implicit call sites. A bare identifier unresolved after lexical/import/module lookup falls back to member access on `self` only in a procedure with an object receiver; otherwise it is an undefined-name error. Under the accepted bare-nullary RFC, this implicit-self access and explicit `receiver.name` both perform an implicit zero-argument send when `name` resolves to a syntactically nullary method; methods with any declared parameters (including defaults, rest, keyword or block parameters) are not bare-callable and diagnose `AMB_BARE_NON_NULLARY` / `ArgumentError`.
+Lexically resolved bare identifiers never become implicit call sites. A bare identifier unresolved after lexical/import/module lookup falls back to member access on `self` only in a procedure with an object receiver; otherwise it is an undefined-name error. Under the accepted bare-nullary RFC, this implicit-self access and explicit `receiver.name` both perform an implicit zero-argument send when `name` resolves to a zero-argument-callable method; methods with required parameters without defaults are not bare-callable and diagnose `AMB_BARE_NON_NULLARY` / `ArgumentError`.
 
 Existing callable reference syntax remains unchanged:
 
@@ -6568,7 +6642,7 @@ prop f:
  get:...
 ```
 
-Property get and property set are explicit descriptor semantics, with syntax-faithful AST, deterministic binder validation, explicit HIR lowering and assignment behavior that returns the original RHS value. Together with the accepted bare-nullary RFC, the member read surface is uniform: `prop` and syntactically nullary `def` are read with the same bare spelling, while `prop` remains the only mechanism for assignability, validation on assignment, descriptor metadata/reflection and protocol participation (see the bare-nullary member access section).
+Property get and property set are explicit descriptor semantics, with syntax-faithful AST, deterministic binder validation, explicit HIR lowering and assignment behavior that returns the original RHS value. Together with the accepted bare-nullary RFC, the member read surface is uniform: `prop` and zero-argument-callable `def` are read with the same bare spelling, while `prop` remains the only mechanism for assignability, validation on assignment, descriptor metadata/reflection and protocol participation (see the bare-nullary member access section).
 
 ## Attribute property sugar
 
@@ -7312,12 +7386,12 @@ Resolution for `receiver.name` is a single linearized lookup; the kind of the ne
 2. The nearest owner declaring external member `name` fixes the member; farther owners are never consulted. Dispatch on its kind:
  - readable property → property get (getter arm);
  - write-only property → `AMB_PROP_MISSING_GETTER` / `WriteOnlyPropertyError`;
- - syntactically nullary method → implicit zero-argument send;
+ - zero-argument-callable method → implicit zero-argument send;
  - any other method → `AMB_BARE_NON_NULLARY` (static) / `ArgumentError` (dynamic);
  - field accessor / readable binding → ordinary read.
 3. If no owner declares `name`, dynamic receivers take the ordinary zero-argument missing-member path (`method_missing(:name)`); otherwise `NoMethodError`. Statically known receivers should diagnose before runtime.
 
-A method is **syntactically nullary** when its declared signature is empty: no positional, default, rest, keyword or block parameters. Methods that merely *can* be called with zero arguments (e.g. all-defaults) are not bare-callable.
+A method is **zero-argument-callable** when ordinary argument binding accepts no caller arguments. This includes empty signatures, all-default positional/keyword parameters, rest/keyword-rest parameters (empty collections) and optional block parameters (`null`). Required positional/keyword/named-callable parameters without defaults reject bare access with `AMB_BARE_NON_NULLARY` / `ArgumentError`. Defaults, type hooks and body execution use the same binding order and checks as an explicit empty call. A required typed block retains its ordinary entry check and raises `ArgumentError` (`AMB_BLOCK_REQUIRED`) when absent, just as for an explicit empty call. This amendment (2026-10-03) supersedes the original syntactically-empty-signature restriction.
 
 Property assignment `receiver.name = value` uses the same single lookup: the nearest member must be a writable property; a read-only property diagnoses `AMB_PROP_MISSING_SETTER` / `ReadOnlyPropertyError`; assignment to a missing member is `NoMethodError` (no `name=` selector family exists, and `method_missing` does not participate in property set in v1).
 
@@ -7340,8 +7414,8 @@ Block suffix is call syntax and follows the same rule: a property member cannot 
 
 Dotted access is member access regardless of receiver kind ("dot is a message; identifier is a value"):
 
-- `Build.version` where `version` is a syntactically nullary class-side method performs an implicit call; `Build.version()` is the explicit spelling.
-- Module-namespace access follows the same dispatch: a nullary module function invokes; a non-nullary one diagnoses `AMB_BARE_NON_NULLARY`; a value export is a plain read.
+- `Build.version` where `version` is a zero-argument-callable class-side method performs an implicit call; `Build.version()` is the explicit spelling.
+- Module-namespace access follows the same dispatch: a nullary module function invokes; one requiring arguments diagnoses `AMB_BARE_NON_NULLARY`; a value export is a plain read.
 - Consequence: `fn = Math.answer` binds the *result* of `answer`; extraction is spelled `fn = &Math.answer`.
 - Import-created local bindings (bare `c` after `import a.b.c`) are identifier reads and never invoke.
 
@@ -7349,7 +7423,7 @@ Dotted access is member access regardless of receiver kind ("dot is a message; i
 
 > The bare read form `x.name` is stable across `prop` ↔ nullary-`def` refactors. The explicit form `x.name()` is method-call syntax only and is stable only while `name` is method-shaped. Public APIs should document query members in bare form.
 
-The formatter normatively rewrites zero-argument explicit calls of `?`-suffixed predicates (`x.empty?()` → `x.empty?`). Other explicit nullary calls are left untouched: explicit parentheses remain a legitimate spelling. Bare access to a syntactically nullary `!`-suffixed method is an ordinary implicit zero-argument send and produces no diagnostic; `!` communicates API convention, not different call syntax.
+The formatter normatively rewrites zero-argument explicit calls of `?`-suffixed predicates (`x.empty?()` → `x.empty?`). Other explicit nullary calls are left untouched: explicit parentheses remain a legitimate spelling. Bare access to a zero-argument-callable `!`-suffixed method is an ordinary implicit zero-argument send and produces no diagnostic; `!` communicates API convention, not different call syntax.
 
 ### 7. Non-suspendable property arms
 
@@ -7379,7 +7453,7 @@ Protocol positions (keyword spread `kwargs`, and any future protocol reads) requ
 
 | Code | Phase | Situation |
 |---|---|---|
-| `AMB_BARE_NON_NULLARY` | runtime (static where provable) | bare member access resolves to a non-nullary method; dynamic twin `ArgumentError` |
+| `AMB_BARE_NON_NULLARY` | runtime (static where provable) | bare member access resolves to a method requiring arguments; dynamic twin `ArgumentError` |
 | `AMB_PROP_CALLED_AS_METHOD` | binder / runtime | call punctuation or block suffix applied to a property member; dynamic twin `TypeError` |
 | `AMB_DOT_CALL_TARGET` | parser | `.()` without a preceding postfix expression |
 | `AMB_PROP_SUSPEND` | runtime | suspension attempt inside a property arm; raises `EffectViolationError` |
@@ -7391,7 +7465,7 @@ Runtime error classes `ReadOnlyPropertyError` and `WriteOnlyPropertyError` are r
 
 ### 10. Conformance anchors
 
-Conformance coverage lives in `corpus/run/bare_nullary_member`, `corpus/run/dot_call_member_result`, `corpus/run/prop_called_as_method`, `corpus/run/prop_non_suspendable` and `corpus/run/kwargs_spread_property_only`.
+Conformance coverage lives in `corpus/run/bare_nullary_member`, `corpus/run/bare_default_member`, `corpus/run/dot_call_member_result`, `corpus/run/prop_called_as_method`, `corpus/run/prop_non_suspendable` and `corpus/run/kwargs_spread_property_only`.
 
 ## Range step, materialization, negative indexing и Int#times
 

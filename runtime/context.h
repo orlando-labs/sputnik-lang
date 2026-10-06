@@ -5,10 +5,15 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
+#include <functional>
+#include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace amber::runtime {
@@ -19,6 +24,7 @@ extern thread_local std::uint64_t tls_runtime_task_id;
 extern thread_local const void *tls_runtime_scheduler_identity;
 extern thread_local std::uint64_t tls_runtime_sync_owner_id;
 extern thread_local const std::atomic<bool> *tls_runtime_task_cancel_flag;
+std::shared_ptr<std::atomic<bool>> current_runtime_task_cancel_owner();
 extern thread_local std::shared_ptr<RuntimeTaskContext>
     tls_runtime_task_context;
 extern thread_local std::uint32_t tls_runtime_task_sync_depth;
@@ -29,6 +35,91 @@ extern thread_local std::uint64_t tls_runtime_native_thread_id;
 extern thread_local RuntimeTextSourceLocation tls_runtime_text_source_location;
 extern thread_local const RuntimeIoWaitObserver *tls_runtime_io_wait_observer;
 extern thread_local std::uint32_t tls_runtime_io_wait_depth;
+
+// Host execution cancellation is separate from a scheduler task's identity.
+// Shared ownership lets migrated tasks and blocking FFI retain the token safely.
+struct RuntimeRunTaskFailure {
+  // Run-local registration ID, unique even across different schedulers.
+  std::uint64_t task_id = 0;
+  std::string error_name, message;
+  RuntimeTextSourceLocation spawn_source;
+};
+struct RuntimeRunFailureReceipt {
+  explicit RuntimeRunFailureReceipt(RuntimeRunTaskFailure value)
+      : failure(std::move(value)) {}
+  const RuntimeRunTaskFailure failure;
+  std::atomic<bool> observed{false};
+};
+class RuntimeRunState : public std::enable_shared_from_this<RuntimeRunState> {
+public:
+  class Task {
+  public:
+    ~Task();
+    Task(const Task &) = delete;
+    Task &operator=(const Task &) = delete;
+    // Bind after releasing scheduler locks: an already-cancelled run invokes
+    // the callback immediately. The callback must not retain the scheduler.
+    void on_cancel(std::function<void()> callback);
+    std::uint64_t id() const noexcept { return id_; }
+  private:
+    friend class RuntimeRunState;
+    explicit Task(std::shared_ptr<RuntimeRunState> run) : run_(std::move(run)) {}
+    std::shared_ptr<RuntimeRunState> run_;
+    std::uint64_t id_ = 0;
+  };
+
+  bool cancelled() const noexcept { return cancelled_.load(std::memory_order_relaxed); }
+  const std::atomic<bool> *cancel_flag() const noexcept { return &cancelled_; }
+  void request_cancel();
+  std::shared_ptr<Task> register_task();
+  std::size_t active_tasks() const;
+  // Root return begins draining. Descendants may still spawn while registered
+  // work is alive; once drained the run is sealed against late callbacks.
+  void close_root();
+  bool wait_for_idle(std::chrono::milliseconds timeout);
+  // Called at scheduler terminal publication, before executable captures retire.
+  // Receipts contain no Values or scheduler/world ownership. Propagated child
+  // failures reuse their receipt so a structured failure is reported only once.
+  std::shared_ptr<RuntimeRunFailureReceipt> record_failure(RuntimeRunTaskFailure failure);
+  std::vector<RuntimeRunTaskFailure> unobserved_failures() const;
+private:
+  std::atomic<bool> cancelled_{false};
+  mutable std::mutex mutex_;
+  std::condition_variable idle_;
+  bool root_closed_ = false;
+  std::uint64_t next_task_ = 1;
+  std::map<std::uint64_t, std::function<void()>> tasks_;
+  std::map<std::uint64_t, std::shared_ptr<RuntimeRunFailureReceipt>> failures_;
+};
+using RuntimeRunCancellation = std::shared_ptr<RuntimeRunState>;
+RuntimeRunCancellation current_runtime_run_cancellation();
+bool runtime_run_cancel_requested();
+class RuntimeRunCancellationScope {
+public:
+  explicit RuntimeRunCancellationScope(RuntimeRunCancellation token);
+  ~RuntimeRunCancellationScope();
+  RuntimeRunCancellationScope(const RuntimeRunCancellationScope &) = delete;
+  RuntimeRunCancellationScope &operator=(const RuntimeRunCancellationScope &) = delete;
+private:
+  RuntimeRunCancellation previous_;
+  unsigned previous_mask_;
+};
+
+// A VM unwinding cancellation must be allowed to execute ensure bodies. This
+// masks cooperative checkpoints only, never the host's publication/Stop state.
+class RuntimeRunCancellationMask {
+public:
+  explicit RuntimeRunCancellationMask(bool enabled);
+  ~RuntimeRunCancellationMask();
+  RuntimeRunCancellationMask(const RuntimeRunCancellationMask &) = delete;
+  RuntimeRunCancellationMask &operator=(const RuntimeRunCancellationMask &) = delete;
+private:
+  bool enabled_;
+};
+bool runtime_run_cancel_checkpoint_requested();
+// Borrowed only while the current task/run scope stays alive. Cleanup masks
+// hide cancellation from new waits without clearing the permanent Stop flag.
+const std::atomic<bool> *runtime_wait_cancel_flag();
 
 // Layer B cooperative IO yield. When the VM drives a parkable task body it sets
 // tls_runtime_io_park_enabled; io.cpp's wait_fd then, instead of blocking on
@@ -97,7 +188,8 @@ public:
   RuntimeTaskScope(std::uint64_t task_id, const std::atomic<bool> *cancel_flag,
                    std::uint64_t sync_owner_id = 0,
                    std::shared_ptr<RuntimeTaskContext> task_context = nullptr,
-                   const void *scheduler_identity = nullptr);
+                   const void *scheduler_identity = nullptr,
+                   std::shared_ptr<std::atomic<bool>> cancel_owner = nullptr);
   RuntimeTaskScope(const RuntimeTaskScope &) = delete;
   RuntimeTaskScope &operator=(const RuntimeTaskScope &) = delete;
   ~RuntimeTaskScope();
@@ -107,6 +199,7 @@ private:
   const void *previous_scheduler_identity_ = nullptr;
   std::uint64_t previous_sync_owner_id_ = 0;
   const std::atomic<bool> *previous_cancel_flag_ = nullptr;
+  std::shared_ptr<std::atomic<bool>> previous_cancel_owner_;
   std::shared_ptr<RuntimeTaskContext> previous_task_context_;
 };
 

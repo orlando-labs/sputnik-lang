@@ -447,6 +447,14 @@ void test_unresolved_name_diagnostics() {
   expect(inherited_call.empty(),
          "unresolved call in object method is an implicit self send");
 
+  expect(unresolved_name_diagnostics_for(
+             "class Figure:\n  def render():\n    self\n").empty(),
+         "explicit self in an object method is a receiver expression");
+  expect(unresolved_name_diagnostics_for("self\n").size() == 1U,
+         "module-level self remains undefined");
+  expect(unresolved_name_diagnostics_for("fs\nnotebook\n").empty(),
+         "registered fs namespace and notebook builtin are prelude names");
+
   std::vector<amber::lexer::Diagnostic> module_function_bare =
       unresolved_name_diagnostics_for("def action():\n"
                                       "  params\n");
@@ -998,6 +1006,13 @@ void test_bare_nullary_diagnostics() {
 } // namespace
 
 int main() {
+  {
+    const auto result = bind_ok("class Bar:\n  def total(): 10\n  def publish(done):\n    total = 8\n    [done, total]\n");
+    const auto *scope = scope_by_kind_owner(result.graph, "function", "publish");
+    expect(scope != nullptr, "publish method scope exists");
+    const auto *local = binding_in_scope(result.graph, *scope, "total");
+    expect(local != nullptr && local->kind == "local", "assignment shadows method without aliasing parameter zero");
+  }
   test_module_class_and_unicode_bindings();
   test_top_level_assignment_predeclaration();
   test_implicit_block_placeholders();

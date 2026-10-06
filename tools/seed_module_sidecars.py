@@ -28,6 +28,7 @@ SOURCE_BY_ID = {
     "base64url": "runtime/stdlib_codecs.cpp",
     "hex": "runtime/stdlib_codecs.cpp",
     "digest": "runtime/stdlib_digest.cpp",
+    "signature": "runtime/stdlib_signature.cpp",
     "secure-random": "runtime/stdlib_secure_random.cpp",
     "argparser": "runtime/stdlib_argparser.cpp",
     "uuid": "runtime/stdlib_uuid.cpp",

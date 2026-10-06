@@ -78,6 +78,8 @@ void test_yaml_manifest_parses_and_normalizes() {
       "  - name: tiny\n"
       "    language: c\n"
       "    sources: [native/tiny.c]\n"
+      "    library_dirs: [vendor/lib]\n"
+      "    runtime_library_dirs: [\"@loader_path/lib\"]\n"
       "    blocking_symbols: [tiny.wait]\n"
       "    symbols:\n"
       "      - logical: tiny.answer\n"
@@ -101,6 +103,9 @@ void test_yaml_manifest_parses_and_normalizes() {
   expect(extension.sources.size() == 1 &&
              extension.sources[0] == "native/tiny.c",
          "YAML native sources should parse");
+  expect(extension.library_dirs == std::vector<std::string>{"vendor/lib"} &&
+             extension.runtime_library_dirs == std::vector<std::string>{"@loader_path/lib"},
+         "native link and runtime directories");
   expect(extension.symbols.size() == 1 &&
              extension.symbols[0].logical == "tiny.answer" &&
              extension.symbols[0].symbol == "tiny_answer",
@@ -166,6 +171,8 @@ void test_native_extensions_parse_and_gate() {
       "\"native_extensions\":[{"
       "\"name\":\"blake3\",\"language\":\"c\","
       "\"sources\":[\"native/blake3.c\"],"
+      "\"library_dirs\":[\"vendor/lib\"],"
+      "\"runtime_library_dirs\":[\"@loader_path/lib\"],"
       "\"blocking_symbols\":[\"blake3.wait\"],"
       "\"symbols\":[{\"logical\":\"blake3.hash\","
       "\"symbol\":\"amber_blake3_hash\"}],"
@@ -189,6 +196,9 @@ void test_native_extensions_parse_and_gate() {
   expect(extension.blocking_symbols.size() == 1 &&
              extension.blocking_symbols[0] == "blake3.wait",
          "native extension blocking symbols");
+  expect(extension.library_dirs == std::vector<std::string>{"vendor/lib"} &&
+             extension.runtime_library_dirs == std::vector<std::string>{"@loader_path/lib"},
+         "native link and runtime directories");
   expect(extension.symbols.size() == 1 &&
              extension.symbols[0].symbol == "amber_blake3_hash",
          "native extension symbol map");

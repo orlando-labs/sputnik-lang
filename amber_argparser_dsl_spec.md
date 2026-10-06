@@ -313,6 +313,13 @@ The helper form is preferred because it keeps option metadata local and avoids d
 
 `.flag` declares a boolean option.
 
+Boolean text uses the same strict parser as `Bool.parse`: `true`, `t`, `1`,
+`yes`, `on` become `true`; `false`, `f`, `0`, `no`, `off`, `null` become
+`false`. ASCII letter case and surrounding ASCII whitespace are ignored.
+All other strings, including explicit empty flag values (`--flag=`), are
+invalid and raise `ArgParser.InvalidValue` in `parse_or_raise` mode.
+The same rules apply to `type: Bool` values and environment fallbacks.
+
 ```amber
 def flag(short_or_long, long = null,
   name: null,

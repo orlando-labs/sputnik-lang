@@ -1005,11 +1005,16 @@ void test_try_rescue_ensure_emission() {
   const amber::bytecode::BcCode *code =
       code_by_id(emit_result.module, emit_result.module.init.entry_code_id);
   expect(code != nullptr, "try module init code exists");
-  expect(code->handler_table.size() == 1,
-         "try emits one protected handler entry");
+  expect(code->handler_table.size() == 2,
+         "try emits rescue plus a direct ensure for non-rescuable unwinds");
   expect(amber::bytecode::handler_kind(code->handler_table[0].flags) ==
              amber::bytecode::kHandlerKindRescue,
          "try rescue handler kind is encoded");
+  expect(amber::bytecode::handler_kind(code->handler_table[1].flags) ==
+             amber::bytecode::kHandlerKindEnsure &&
+             code->handler_table[0].protected_from == code->handler_table[1].protected_from &&
+             code->handler_table[0].protected_to == code->handler_table[1].protected_to,
+         "direct ensure covers the same region, after exception-priority rescue");
   expect(contains_opcode(*code, amber::bytecode::Opcode::Raise),
          "try body emits RAISE");
 
@@ -1134,6 +1139,19 @@ void test_unknown_integer_send_stays_dynamic() {
 } // namespace
 
 int main() {
+  {
+    const auto emitted = emit_ok("package facade\nfrom provider import Thing as Alias\nexport Alias\n");
+    const auto &module = emitted.module;
+    expect(module.exports.size() == 1, "one imported alias export");
+    const auto &entry = module.exports.front();
+    expect(entry.has_reexport_module_name &&
+           module.strings.at(entry.target_kind_str_id) == "reexport" &&
+           module.strings.at(entry.reexport_module_name_str_id) == "provider" &&
+           module.strings.at(entry.target_index) == "Thing" &&
+           module.symbols.at(entry.symbol_id) == "Alias", "re-export preserves provider and original name");
+    expect(amber::bytecode::deserialize_module(amber::bytecode::serialize_module(module)).ok(),
+           "re-export bytecode round trip");
+  }
   test_if_and_round_trip();
   test_loop_and_safepoint();
   test_closure_capture_emission();

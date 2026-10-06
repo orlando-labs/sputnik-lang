@@ -1,4 +1,5 @@
 #include "tools/iamber/project_session.h"
+#include "tools/iamber/dependencies.h"
 
 #include <algorithm>
 #include <map>
@@ -7,10 +8,8 @@
 #include <utility>
 
 std::vector<BundledModuleSource> load_project_bundled_sources(
-    const amber::notebook::LoadedProject &project) {
+    const amber::notebook::LoadedProject &project, bool defer_dependency_errors) {
   std::vector<BundledModuleSource> result;
-  if (project.document.auto_imports.empty())
-    return result;
   const std::set<std::string> selected(project.document.auto_imports.begin(),
                                         project.document.auto_imports.end());
   result.reserve(project.document.modules.size());
@@ -24,6 +23,22 @@ std::vector<BundledModuleSource> load_project_bundled_sources(
       continue;
     const auto module = amber::notebook::load_project_module(project, entry.id);
     result.push_back({module.id, module.path, module.source, false});
+  }
+  std::size_t dependency_bytes = 0;
+  std::size_t dependency_modules = 0;
+  for (const auto &dependency : project.document.dependencies) {
+    try {
+      auto modules = load_directory_dependency(project.directory, dependency);
+      for (const auto &module : modules) dependency_bytes += module.source.size();
+      dependency_modules += modules.size();
+      if (dependency_bytes > 128 * 1024 * 1024 || dependency_modules > 4096)
+        throw std::runtime_error("project dependency source budget exceeded (128 MiB / 4096 modules)");
+      result.insert(result.end(), std::make_move_iterator(modules.begin()), std::make_move_iterator(modules.end()));
+    } catch (const std::exception &error) {
+      if (!defer_dependency_errors) throw;
+      result.push_back({"", dependency.path, "", false, error.what()});
+      if (dependency_bytes > 128 * 1024 * 1024 || dependency_modules > 4096) break;
+    }
   }
   return result;
 }
@@ -44,9 +59,10 @@ void load_project_into_session(Session *session,
     throw std::runtime_error("unknown project sheet: " + id);
   }
   Session loaded;
+  loaded.project_inputs = amber::notebook::project_input_defaults(project.document);
   loaded.project_sheet_id = id;
   loaded.project_label = project.document.title + "/" + found->title;
-  loaded.bundled_modules = load_project_bundled_sources(project);
+  loaded.bundled_modules = load_project_bundled_sources(project, true);
   for (const auto &sheet : project.document.sheets) {
     for (const auto &cell : sheet.cells)
       amber::notebook::reserve_cell_id(cell.id);
@@ -56,10 +72,13 @@ void load_project_into_session(Session *session,
     Cell cell;
     cell.id = saved.id;
     cell.kind = saved.kind;
+    cell.formatting = saved.formatting;
     if (saved.kind == "code") {
       cell.source = saved.source;
       cell.watch = saved.mode == amber::notebook::CellMode::Watch;
     } else {
+      if (saved.kind == "text")
+        cell.source = saved.source;
       cell.watch = false;
       cell.dirty = false;
       cell.result = "preserved (read-only " + saved.kind + ")";
@@ -100,13 +119,20 @@ project_document_from_session(const Session &session,
     const auto previous = original.find(cell.id);
     if (previous != original.end())
       saved = previous->second;
-    if (cell.kind != saved.kind)
+    if (previous != original.end() && cell.kind != saved.kind)
       throw std::runtime_error("changing a cell kind is not supported");
     saved.id = cell.id;
     if (cell.kind == "code") {
       saved.source = cell.source;
       saved.mode = cell.watch ? amber::notebook::CellMode::Watch
                               : amber::notebook::CellMode::Manual;
+    } else if (cell.kind == "text") {
+      // The terminal keyboard editor does not expose text editing, but the
+      // shared project/session adapter is also used by the native bridge.
+      // Keep text inert while allowing that bridge to create/edit it.
+      saved.kind = "text";
+      saved.source = cell.source;
+      saved.formatting = cell.formatting;
     } else if (previous == original.end()) {
       throw std::runtime_error("cannot create an opaque cell in iamber");
     }
@@ -114,7 +140,7 @@ project_document_from_session(const Session &session,
     cells.push_back(std::move(saved));
   }
   for (const auto &[id, cell] : original) {
-    if (cell.kind != "code" && !kept.count(id)) {
+    if (cell.kind != "code" && cell.kind != "text" && !kept.count(id)) {
       throw std::runtime_error("cannot discard a read-only cell in iamber");
     }
   }

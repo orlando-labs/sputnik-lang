@@ -1,0 +1,19 @@
+# Guide category registry. The manifest generator (tools/gen_guide_manifest.py)
+# reads this to order and label the sidebar sections. Each category id is
+# referenced by the `category:` frontmatter key of the content nodes.
+- id: intro
+  order: 10
+  title.ru: Введение
+  title.en: Introduction
+- id: toolchain
+  order: 15
+  title.ru: Инструменты
+  title.en: Toolchain
+- id: language-core
+  order: 20
+  title.ru: Ядро языка
+  title.en: Language core
+- id: semantics
+  order: 30
+  title.ru: Семантика
+  title.en: Semantics

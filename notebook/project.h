@@ -1,6 +1,7 @@
 #pragma once
 
 #include "notebook/model.h"
+#include "runtime/notebook_inputs.h"
 
 #include <filesystem>
 #include <map>
@@ -13,12 +14,29 @@ namespace amber::notebook {
 // spellings. Terminal clients must not discard native-UI metadata.
 using ProjectExtraFields = std::map<std::string, std::string>;
 
+// Text cells carry plain UTF-8 source plus an optional, inert rich-text
+// formatting payload.  The formatting member is kept as validated JSON so
+// clients that do not render rich text can round-trip it without interpreting
+// or evaluating it.
+struct ProjectTextContent {
+  std::string source;
+  // Empty means plain text.  Otherwise this is a validated formatting object
+  // of the form {"version":1,"runs":[...]}.
+  std::string formatting;
+};
+
+ProjectTextContent parse_project_text_content(const std::string &json);
+std::string serialize_project_text_content(const ProjectTextContent &content);
+void validate_project_text_content(const ProjectTextContent &content);
+
 struct ProjectCell {
   CellId id = 0;
   std::string kind = "code";
   std::string source;
   CellMode mode = CellMode::Watch;
   ProjectExtraFields extra;
+  // Only meaningful for kind == "text"; empty means plain text.
+  std::string formatting;
 };
 
 struct ProjectSheet {
@@ -35,6 +53,37 @@ struct ProjectModule {
   ProjectExtraFields extra;
 };
 
+struct ProjectInput {
+  std::string id, title;
+  std::string type = "number"; // number, integer, boolean, string
+  runtime::NotebookInputValue initial = 0.0;
+  std::optional<double> minimum, maximum;
+  ProjectExtraFields extra;
+};
+
+// An explicit local package root, resolved relative to the .amberbook
+// directory (or absolute). Never copied into the project's editable modules.
+struct ProjectDependency {
+  std::string path;
+  bool auto_import = false;
+  ProjectExtraFields extra;
+};
+
+struct ProjectComponent {
+  std::string id, kind, title;
+  std::string input; // input component -> project input
+  CellId cell = 0;   // text/plot/run component -> controller sheet cell
+  std::string binding; // empty text binding -> cell expression result
+  ProjectExtraFields extra;
+};
+
+struct ProjectBoard {
+  std::string id, title, sheet;
+  unsigned columns = 2;
+  std::vector<ProjectComponent> components;
+  ProjectExtraFields extra;
+};
+
 struct ProjectDocument {
   std::string title;
   std::string active_sheet;
@@ -44,9 +93,21 @@ struct ProjectDocument {
   // them. Runtime module environments are a separate implementation layer.
   std::vector<std::string> auto_imports;
   ProjectExtraFields extra;
+  unsigned version = 1;
+  std::vector<ProjectInput> inputs;
+  std::vector<ProjectBoard> boards;
+  std::vector<ProjectDependency> dependencies;
 };
 
-// Schema v1: a single atomic project.json holds all sheet documents and the
+runtime::NotebookInputValue parse_project_input_value(const std::string &json);
+ProjectInput parse_project_input(const std::string &json);
+std::string serialize_project_input_value(const runtime::NotebookInputValue &value);
+void validate_project_input_value(const ProjectInput &input, const runtime::NotebookInputValue &value);
+std::shared_ptr<const runtime::NotebookInputSnapshot> project_input_defaults(const ProjectDocument &document);
+ProjectBoard parse_project_board(const std::string &json);
+std::string serialize_project_board(const ProjectBoard &board);
+
+// Schema v1/v2/v3: a single atomic project.json holds all sheet documents and the
 // module manifest; module sources remain ordinary .am files beside it.
 // Throws std::runtime_error on malformed/unsupported documents. IDs are JSON
 // decimal strings to avoid loss in native or browser clients using doubles.
@@ -91,5 +152,16 @@ LoadedProjectModule load_project_module(const LoadedProject &project,
 void save_project_module(const LoadedProject &project,
                          LoadedProjectModule *module,
                          const std::string &source);
+
+// Stages a new module source and its manifest entry, publishing the source
+// before the manifest. The entry must name a new modules/<id>.am path (nested
+// directories below modules/ are also accepted); source is persisted as-is
+// and is never executed or added to auto_imports. On success project and the
+// returned module carry the new baselines. If source publication succeeds but
+// the manifest cannot be committed, the source is deliberately left at its
+// path, unreferenced, and the exception identifies that recoverable state.
+LoadedProjectModule create_project_module(LoadedProject *project,
+                                          const ProjectModule &entry,
+                                          const std::string &source);
 
 } // namespace amber::notebook

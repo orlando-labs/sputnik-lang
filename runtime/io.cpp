@@ -186,7 +186,7 @@ wait_fd(int fd, short events, const Deadline &deadline, const char *operation,
   const ReactorInterest reactor_interest =
       (events & POLLOUT) != 0 ? ReactorInterest::Write : ReactorInterest::Read;
   const ReactorOutcome outcome = RuntimeReactor::instance().wait(
-      fd, reactor_interest, deadline, tls_runtime_task_cancel_flag);
+      fd, reactor_interest, deadline, runtime_wait_cancel_flag());
   switch (outcome) {
   case ReactorOutcome::Ready:
     return io_ok();

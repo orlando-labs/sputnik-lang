@@ -466,6 +466,7 @@ def compile_amberbc_runner(root: Path, build_dir: Path, cxx: str) -> Path:
         root / "runtime" / "digest.cpp",
         root / "runtime" / "vm.cpp",
         root / "runtime" / "stdlib_registry.cpp",
+        root / "runtime" / "stdlib_bool.cpp",
         root / "runtime" / "stdlib_math.cpp",
         root / "runtime" / "stdlib_json.cpp",
         root / "runtime" / "stdlib_codecs.cpp",

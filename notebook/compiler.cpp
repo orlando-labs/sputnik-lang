@@ -465,6 +465,7 @@ CellCompileResult compile_cell(const CellSource &cell,
   }
 
   hir::NotebookLoweringOptions lowering_options;
+  lowering_options.import_paths = &options.import_paths;
   lowering_options.external_read_descriptor =
       [&external_descriptors](
           const std::string &,

@@ -1,11 +1,19 @@
 # Notebook project v1 — shared document, not a runtime snapshot
 
-Implemented: a portable project document, persistent sheet/module tabs, a
-full-profile bundled module editor, and explicit application of bundled exports
-to notebook cells. The format is
+Compatible extensions: [boards and project inputs (v2)](notebook-boards-v1.md),
+[external directory dependencies (v3)](notebook-dependencies-v1.md).
+Bundled modules are project-owned code; external packages are linked separately.
+
+Implemented: a portable project document, persistent sheet/module tabs,
+interactive structure commands, a full-profile bundled module editor, and
+explicit application of bundled exports to notebook cells. The format is
 independent of curses, VM heap objects and a future native UI. Definitions
 remain outside notebook code cells. In-place migration of live module instances
 is not implemented.
+
+The first [native macOS host](notebook-macos-v1.md) opens this same format with
+SwiftUI/AppKit. `make notebook-macos` produces an actual `.app` declaring the
+package document type; the earlier iamber plist remains a declaration fragment.
 
 ## Opening and saving
 
@@ -35,8 +43,35 @@ last saved document; other tabs' unsaved buffers are not persisted or replaced.
 The tab strip marks modified buffers with `*`. Quit warns about unsaved changes
 in **any** tab, including inactive ones; uppercase Q at that prompt explicitly
 discards all of them. A save failure keeps the editor open. No implicit autosave
-or on-open evaluation occurs. Creating/removing/renaming sheets and modules is
-still a manifest operation, not a tab-bar editing command.
+or on-open evaluation occurs.
+
+**F3 Project** opens a command prompt in either navigation or edit mode:
+
+```text
+new-sheet analysis My analysis
+new-module models
+auto-import models on
+auto-import models off
+```
+
+Enter explicitly saves the requested **structure change**, without saving any
+existing tab's unsaved source. Esc cancels; Backspace edits the input and Ctrl-U
+clears it. New IDs must match `[A-Za-z_][A-Za-z0-9_]*`; sheet titles may contain
+spaces and Unicode. `new-sheet` creates and selects a sheet with one empty Watch
+cell, after other sheets and before modules. Its title defaults to the ID.
+`new-module` exclusively creates `modules/<id>.am`, initially containing only
+`package <id>`, and selects its full-profile editor at the end of that line.
+Existing files and IDs are never replaced. Creating a module does not enable
+auto-import; `auto-import <id> on` appends it to the ordered ambient roots, and
+`off` removes it. The selected module's tab strip shows the saved setting.
+
+These commands preserve other Sessions, buffers, results and runtime grants,
+and do not change the default `active_sheet` or the applied environment
+generation. New sheets start from the last applied source snapshot. Changed
+auto-import settings take effect only on **F6 Apply**; an already running sheet
+keeps its current environment until then. Quitting with Q discards unsaved
+buffer edits, not structure commands that Enter already saved. Renaming,
+removing and reordering sheets/modules remain manifest operations for now.
 
 The --module command initially selects a declared .am source as a full-profile
 editor buffer: class, def, imports and exports are accepted there. Ctrl-S/F4
@@ -53,8 +88,8 @@ class inside its module:
     A(7)
 
 The module editor's isolated Run is deliberately reported as “not installed
-in sheets”. To make `A` available in a sheet, save the module, select `models`
-in the manifest's `auto_imports`, switch to the sheet with F7/F8 and use
+in sheets”. To make `A` available in a sheet, save the module, use F3
+`auto-import models on`, switch to the sheet with F7/F8 and use
 **F6 Apply**. Save and Apply are separate actions; Apply refuses while any
 module tab has unsaved edits, including a module that is not auto-imported.
 
@@ -94,8 +129,9 @@ Minimal schema (all shown top-level fields are required):
 - Cell IDs are canonical positive decimal **strings**, globally unique across
   the project, including opaque cells. `UINT64_MAX` is reserved. IDs are never
   derived from cell position; loading reserves every ID before new allocation.
-- A code cell requires `source` and `mode` (`manual` or `watch`). A non-code
-  cell interprets only `id` and `kind`; all other fields are opaque JSON.
+- A code cell requires `source` and `mode` (`manual` or `watch`). A `text` cell
+  requires plain-text `source` and accepts optional versioned `formatting`.
+  Other kinds interpret only `id` and `kind`; their other fields are opaque JSON.
 - Unknown members at document, sheet, module and cell level retain their JSON
   values, including large numeric literals. Whitespace/member ordering can
   normalize; this is a semantic round trip, not a byte-for-byte formatter.
@@ -108,11 +144,69 @@ Minimal schema (all shown top-level fields are required):
   evaluation dirtiness are not written. Existing opaque cache/UI fields are
   preserved but not trusted or restored as runtime state.
 
-iamber displays non-code cells as read-only placeholders. It cannot edit,
-delete or reinterpret them. Since an unknown kind may supply executable
+iamber displays `text` cells as read-only plain text, preserving formatting on
+save. They never participate in compilation, dependency graphs or execution;
+inserting, editing or moving text cannot make code stale or restart modules.
+The native macOS host creates and edits these blocks. iamber displays unknown
+cell kinds as read-only placeholders. It cannot edit, delete or reinterpret
+non-code cells. Since an unknown kind may supply executable
 inputs, **the entire sheet's evaluation is blocked** until the host supports
 its semantics. Preserving an unsupported feature must not silently execute a
 different program.
+
+### Portable rich text
+
+```json
+{
+  "id": "2",
+  "kind": "text",
+  "source": "A notebook\nHello, Amber!",
+  "formatting": {
+    "version": 1,
+    "runs": [
+      {"start": 0, "length": 10, "style": "heading1"},
+      {"start": 11, "length": 5, "bold": true}
+    ]
+  }
+}
+```
+
+Offsets and lengths count UTF-16 code units, matching native editor selections,
+but cannot split a Unicode surrogate pair. Runs are sorted, non-overlapping and
+nonempty, within the source. Uncovered text uses body style; missing `style`
+defaults to `body`, and missing `bold`, `italic` and `underline` default to false.
+Supported styles are `body`, `heading1`, `heading2`, `heading3` and `code`.
+Omitting `formatting` means plain text. A formatting object requires `version`
+and `runs`; unknown formatting versions or attributes are rejected to prevent
+lossy editing. At most 20,000 runs fit within the overall 16 MiB document limit.
+Text and formatting are validated and published together. There are no embedded
+HTML/RTF blobs, attachments or persisted runtime values.
+Unknown **outer** cell fields still round-trip unchanged.
+
+Formatting version 2 retains `runs` and adds optional `paragraphs` and `tables`:
+
+```json
+{"version":2,"runs":[],
+ "paragraphs":[{"start":0,"length":8,"style":"heading1"}],
+ "tables":[{"start":8,"length":4,"columns":2,
+            "cells":[{"start":8,"length":2},{"start":10,"length":2}]}]}
+```
+
+For example the source above can be `Heading\nA\nB\n`. Paragraph ranges cover
+whole LF-delimited paragraphs and optionally carry `style` (`body`, `heading1`
+through `heading3`) and `list` (`bullet` or `numbered`). List markers remain in
+the portable source as `•\t` or `1.\t` etc.; the editor normalizes numbering and
+renders hanging indents. Table ranges cannot overlap paragraph records. Cells
+partition their table consecutively in row-major order, end with LF, and form
+a rectangle: 1–12 columns, at most 240 cells/table and 100 tables/document.
+In-cell soft line breaks use U+2028. Runs plus paragraph records are limited to
+20,000. Source and structural metadata are validated atomically. Version 1
+remains readable; plain inline-only content still uses version 1.
+
+`{{name}}` interpolation templates are ordinary source text, not saved values or
+executable expressions. Native Preview resolves published variables from earlier
+code cells; iamber preserves and displays the templates literally. Opening a
+project never evaluates code to resolve a template.
 
 ## Bundled environment: Save, Apply, Run
 
@@ -122,7 +216,8 @@ that opt into the interactive environment. Neither directory discovery nor
 loading the manifest executes these files. Listed files must exist as regular
 project members; Save Sheet only touches `project.json`, not their contents.
 
-For example, add these entries to the manifest after creating the source file:
+For example, F3 `new-module models` followed by `auto-import models on` creates
+the source file and saves these entries in the manifest:
 
 ```json
 "modules": [{"id": "models", "path": "modules/models.am"}],
@@ -238,6 +333,16 @@ module source baseline, then stages beside that module and syncs its immediate
 parent. It preserves the source file's permission bits. It never changes
 `project.json`; adding/removing a module remains a manifest transaction.
 
+New module creation holds that same lock while staging the source and updated
+manifest. It publishes the source with an atomic no-replace operation **before**
+replacing the manifest; a saved manifest never deliberately points at a missing
+new file. This is not a filesystem-wide atomic transaction: a failure or crash
+between publications can leave an unreferenced source file or newly created
+parent directories. They are retained for recovery, and a reported partial
+creation includes the source path; retry never overwrites them. The in-memory
+project baseline and new tab are published at manifest replacement, even when
+a subsequent directory-sync failure reports a durability warning.
+
 Project Save compares exact on-disk contents against the load baseline, stages
 an exclusive sibling file, syncs it, rechecks the baseline and atomically
 renames it over `project.json`.
@@ -267,3 +372,9 @@ pipeline. This fragment alone does **not** make Finder show a directory as a
 file. No machine-wide associations are installed by the project commands.
 Once the owning native app registers the type, the existing directory format
 can be presented as one Finder document without a data-format conversion.
+
+## Version 2 extension
+
+The [board/input extension](notebook-boards-v1.md) adds project-scoped typed
+parameters and inert board descriptions. It is opt-in on the first explicit
+board/input structure save; ordinary version 1 documents remain unchanged.

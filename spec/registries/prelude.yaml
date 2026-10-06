@@ -292,6 +292,11 @@ entries:
     intrinsic_id: amber.error.TypeError.v1
     dispatch: exception_class
     shadowing: local_binding_disables_intrinsic_lowering
+  - name: NotImplementedError
+    kind: error_class
+    intrinsic_id: amber.error.NotImplementedError.v1
+    dispatch: exception_class
+    shadowing: local_binding_disables_intrinsic_lowering
   - name: ValueError
     kind: error_class
     intrinsic_id: amber.error.ValueError.v1

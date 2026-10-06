@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -95,6 +96,7 @@ struct NotebookCompileOptions {
   // a notebook input slot.  A preceding notebook provider always wins over
   // this map.
   std::unordered_map<std::string, std::string> ambient_constant_paths;
+  std::map<std::string, std::map<std::string, std::string>> import_paths;
 };
 
 struct CellCompileResult {

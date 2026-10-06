@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cmath>
+#include <iomanip>
+#include <sstream>
 #include <limits>
 #include <set>
 #include <stdexcept>
@@ -14,6 +17,7 @@ namespace {
 
 constexpr std::size_t kMaxJsonBytes = 16U * 1024U * 1024U;
 constexpr std::size_t kMaxJsonDepth = 64U;
+constexpr std::size_t kMaxTextUtf16Length = 16U * 1024U * 1024U;
 
 enum class JsonKind { Null, Boolean, Number, String, Array, Object };
 
@@ -477,6 +481,8 @@ const std::vector<JsonValue> &require_array(const JsonValue &value,
   return value.array;
 }
 
+const JsonValue *find_member(const JsonValue &object, const std::string &key);
+
 std::uint64_t parse_cell_id(const JsonValue &value, const std::string &path) {
   const std::string text = require_string(value, path);
   if (text.empty() || (text.size() > 1U && text.front() == '0')) {
@@ -543,6 +549,20 @@ ProjectCell parse_cell(const JsonValue &value, const std::string &json,
                         value.begin);
     }
     cell.extra = parse_extras(value, {"id", "kind", "source", "mode"}, json);
+  } else if (cell.kind == "text") {
+    cell.source =
+        require_string(require_member(value, "source", path), path + ".source");
+    const JsonValue *formatting = find_member(value, "formatting");
+    if (formatting != nullptr) {
+      if (formatting->kind != JsonKind::Object) {
+        document_error_at(path + ".formatting", "expected an object",
+                          formatting->begin);
+      }
+      cell.formatting = raw_json(json, *formatting);
+    }
+    validate_project_text_content({cell.source, cell.formatting});
+    cell.extra =
+        parse_extras(value, {"id", "kind", "source", "formatting"}, json);
   } else {
     // Future cell kinds are opaque.  In particular, source/mode are not
     // interpreted here and remain in extra when present.
@@ -657,6 +677,526 @@ void validate_utf8(const std::string &text, const std::string &path) {
   }
 }
 
+const JsonValue *find_member(const JsonValue &object, const std::string &key) {
+  for (const auto &member : object.object) {
+    if (member.first == key) {
+      return &member.second;
+    }
+  }
+  return nullptr;
+}
+
+std::uint64_t require_format_uint(const std::string &json,
+                                  const JsonValue &value,
+                                  const std::string &path) {
+  if (value.kind != JsonKind::Number || value.begin >= value.end) {
+    document_error_at(path, "expected a non-negative integer", value.begin);
+  }
+  const std::string text = json.substr(value.begin, value.end - value.begin);
+  if (text.empty()) {
+    document_error_at(path, "expected a non-negative integer", value.begin);
+  }
+  std::uint64_t result = 0U;
+  for (char digit : text) {
+    if (digit < '0' || digit > '9') {
+      document_error_at(path, "expected a non-negative integer", value.begin);
+    }
+    const std::uint64_t digit_value =
+        static_cast<std::uint64_t>(digit - '0');
+    if (result > (std::numeric_limits<std::uint64_t>::max() - digit_value) /
+                     10U) {
+      document_error_at(path, "integer is out of range", value.begin);
+    }
+    result = result * 10U + digit_value;
+  }
+  return result;
+}
+
+// Rich-text offsets are UTF-16 code-unit offsets, while the source is UTF-8.
+// Keep the conversion table small (one entry per UTF-16 boundary) and retain
+// the LF boundary information needed by paragraph/table metadata.
+struct TextLayout {
+  std::size_t utf16_length = 0U;
+  std::vector<std::size_t> byte_offsets;
+  std::vector<bool> after_lf;
+};
+
+TextLayout make_text_layout(const std::string &source,
+                            const std::string &path) {
+  if (source.size() > kMaxTextUtf16Length * 4U) {
+    document_error(path, "text exceeds 16 MiB limit");
+  }
+
+  TextLayout layout;
+  layout.byte_offsets.reserve(source.size() + 1U);
+  layout.byte_offsets.push_back(0U);
+  layout.after_lf.push_back(false);
+  for (std::size_t position = 0U; position < source.size();) {
+    const std::size_t byte_start = position;
+    std::size_t sequence_length = 0U;
+    std::uint32_t codepoint = 0U;
+    if (!decode_utf8_sequence(source, position, &sequence_length,
+                              &codepoint)) {
+      document_error(path, "contains invalid UTF-8");
+    }
+    const std::size_t units = codepoint > 0xFFFFU ? 2U : 1U;
+    if (layout.utf16_length >
+        std::numeric_limits<std::size_t>::max() - units) {
+      document_error(path, "UTF-16 length is out of range");
+    }
+    layout.utf16_length += units;
+    if (layout.utf16_length > kMaxTextUtf16Length) {
+      document_error(path, "text exceeds 16 MiB limit");
+    }
+    // A supplementary code point has no legal offset between its two UTF-16
+    // code units. Marking it as npos makes malformed ranges easy to reject.
+    if (units == 2U) {
+      layout.byte_offsets.push_back(std::numeric_limits<std::size_t>::max());
+      layout.after_lf.push_back(false);
+    }
+    layout.byte_offsets.push_back(byte_start + sequence_length);
+    layout.after_lf.push_back(codepoint == '\n');
+    position += sequence_length;
+  }
+  return layout;
+}
+
+bool is_utf16_boundary(const TextLayout &layout, std::size_t offset) {
+  return offset < layout.byte_offsets.size() &&
+         layout.byte_offsets[offset] != std::numeric_limits<std::size_t>::max();
+}
+
+bool is_paragraph_start(const TextLayout &layout, std::size_t offset) {
+  return is_utf16_boundary(layout, offset) &&
+         (offset == 0U || layout.after_lf[offset]);
+}
+
+bool ends_after_lf(const TextLayout &layout, std::size_t offset) {
+  return is_utf16_boundary(layout, offset) && layout.after_lf[offset];
+}
+
+std::size_t checked_format_size(const std::string &json,
+                                const JsonValue &value,
+                                const std::string &path) {
+  const std::uint64_t result = require_format_uint(json, value, path);
+  if (result > std::numeric_limits<std::size_t>::max()) {
+    document_error_at(path, "integer is out of range", value.begin);
+  }
+  return static_cast<std::size_t>(result);
+}
+
+struct TextRange {
+  std::size_t start = 0U;
+  std::size_t end = 0U;
+};
+
+void validate_range_bounds(const TextLayout &layout, const TextRange &range,
+                           const std::string &path, std::size_t offset) {
+  if (range.start > layout.utf16_length || range.end < range.start ||
+      range.end > layout.utf16_length || !is_utf16_boundary(layout, range.start) ||
+      !is_utf16_boundary(layout, range.end)) {
+    document_error_at(path, "range is out of bounds or not on a UTF-16 scalar boundary",
+                      offset);
+  }
+}
+
+std::string source_slice(const std::string &source, const TextLayout &layout,
+                         const TextRange &range) {
+  const std::size_t byte_start = layout.byte_offsets[range.start];
+  const std::size_t byte_end = layout.byte_offsets[range.end];
+  return source.substr(byte_start, byte_end - byte_start);
+}
+
+void validate_metadata_range_order(const TextRange &range,
+                                   TextRange *previous, bool *have_previous,
+                                   const std::string &path, std::size_t offset) {
+  if (*have_previous &&
+      (range.start < previous->start || range.start < previous->end)) {
+    document_error_at(path, "ranges must be sorted and non-overlapping", offset);
+  }
+  *previous = range;
+  *have_previous = true;
+}
+
+void validate_text_formatting_json(const std::string &source,
+                                   const std::string &formatting,
+                                   const std::string &path) {
+  if (formatting.empty()) {
+    return;
+  }
+  JsonValue root;
+  try {
+    root = JsonParser(formatting).parse();
+  } catch (const std::runtime_error &error) {
+    document_error(path, std::string("formatting is invalid JSON: ") +
+                             error.what());
+  }
+  require_object(root, path);
+
+  const JsonValue *version = find_member(root, "version");
+  const JsonValue *runs = find_member(root, "runs");
+  if (version == nullptr) {
+    document_error_at(path + ".version", "missing required member 'version'",
+                      root.end);
+  }
+  if (runs == nullptr) {
+    document_error_at(path + ".runs", "missing required member 'runs'",
+                      root.end);
+  }
+  if (version->kind != JsonKind::Number) {
+    document_error_at(path + ".version", "version must be the number 1 or 2",
+                      version->begin);
+  }
+  const std::string version_text =
+      formatting.substr(version->begin, version->end - version->begin);
+  const bool is_v1 = version_text == "1";
+  const bool is_v2 = version_text == "2";
+  if (!is_v1 && !is_v2) {
+    document_error_at(path + ".version", "version must be the number 1 or 2",
+                      version->begin);
+  }
+  for (const auto &member : root.object) {
+    if (member.first != "version" && member.first != "runs" &&
+        !(is_v2 && (member.first == "paragraphs" || member.first == "tables"))) {
+      document_error_at(path + "." + member.first,
+                        "unknown formatting member", member.second.begin);
+    }
+  }
+  if (runs->kind != JsonKind::Array) {
+    document_error_at(path + ".runs", "expected an array", runs->begin);
+  }
+  constexpr std::size_t kMaxFormattingRuns = 20000U;
+  if (runs->array.size() > kMaxFormattingRuns) {
+    document_error(path + ".runs", "formatting run count exceeds 20000");
+  }
+
+  const TextLayout layout = make_text_layout(source, path + ".source");
+
+  std::size_t previous_start = 0U;
+  std::size_t previous_end = 0U;
+  bool have_previous = false;
+  for (std::size_t index = 0U; index < runs->array.size(); ++index) {
+    const JsonValue &run = runs->array[index];
+    const std::string run_path = path + ".runs[" + std::to_string(index) + "]";
+    require_object(run, run_path);
+    const JsonValue *start_value = find_member(run, "start");
+    const JsonValue *length_value = find_member(run, "length");
+    if (start_value == nullptr) {
+      document_error_at(run_path + ".start",
+                        "missing required member 'start'", run.end);
+    }
+    if (length_value == nullptr) {
+      document_error_at(run_path + ".length",
+                        "missing required member 'length'", run.end);
+    }
+    for (const auto &member : run.object) {
+      if (member.first != "start" && member.first != "length" &&
+          member.first != "style" && member.first != "bold" &&
+          member.first != "italic" && member.first != "underline") {
+        document_error_at(run_path + "." + member.first,
+                          "unknown formatting run member", member.second.begin);
+      }
+    }
+    const std::uint64_t start =
+        require_format_uint(formatting, *start_value, run_path + ".start");
+    const std::uint64_t length =
+        require_format_uint(formatting, *length_value, run_path + ".length");
+    if (length == 0U) {
+      document_error_at(run_path + ".length", "length must be positive",
+                        length_value->begin);
+    }
+    if (start > std::numeric_limits<std::size_t>::max() ||
+        length > std::numeric_limits<std::size_t>::max() -
+                     static_cast<std::size_t>(start)) {
+      document_error_at(run_path, "range is out of bounds", run.begin);
+    }
+    const std::size_t start_size = static_cast<std::size_t>(start);
+    const std::size_t end_size = start_size + static_cast<std::size_t>(length);
+    if (end_size > layout.utf16_length ||
+        !is_utf16_boundary(layout, start_size) ||
+        !is_utf16_boundary(layout, end_size)) {
+      document_error_at(run_path, "range is not on a UTF-16 scalar boundary",
+                        run.begin);
+    }
+    if (have_previous &&
+        (start_size < previous_start || start_size < previous_end)) {
+      document_error_at(run_path, "runs must be sorted and non-overlapping",
+                        run.begin);
+    }
+    previous_start = start_size;
+    previous_end = end_size;
+    have_previous = true;
+
+    const JsonValue *style = find_member(run, "style");
+    if (style != nullptr) {
+      const std::string value = require_string(*style, run_path + ".style");
+      if (value != "body" && value != "heading1" && value != "heading2" &&
+          value != "heading3" && value != "code") {
+        document_error_at(run_path + ".style", "unknown text style",
+                          style->begin);
+      }
+    }
+    for (const char *flag : {"bold", "italic", "underline"}) {
+      const JsonValue *member = find_member(run, flag);
+      if (member != nullptr && member->kind != JsonKind::Boolean) {
+        document_error_at(run_path + "." + flag, "expected a boolean",
+                          member->begin);
+      }
+    }
+  }
+
+  if (!is_v2) {
+    return;
+  }
+
+  const JsonValue *paragraphs = find_member(root, "paragraphs");
+  const JsonValue *tables = find_member(root, "tables");
+  const std::size_t paragraph_count =
+      paragraphs == nullptr ? 0U : paragraphs->array.size();
+  if (paragraph_count + runs->array.size() > kMaxFormattingRuns) {
+    document_error(path, "formatting run and paragraph count exceeds 20000");
+  }
+
+  std::vector<TextRange> paragraph_ranges;
+  TextRange previous_paragraph;
+  bool have_previous_paragraph = false;
+  if (paragraphs != nullptr) {
+    if (paragraphs->kind != JsonKind::Array) {
+      document_error_at(path + ".paragraphs", "expected an array",
+                        paragraphs->begin);
+    }
+    paragraph_ranges.reserve(paragraphs->array.size());
+    for (std::size_t index = 0U; index < paragraphs->array.size(); ++index) {
+      const JsonValue &paragraph = paragraphs->array[index];
+      const std::string paragraph_path =
+          path + ".paragraphs[" + std::to_string(index) + "]";
+      require_object(paragraph, paragraph_path);
+      const JsonValue *start_value = find_member(paragraph, "start");
+      const JsonValue *length_value = find_member(paragraph, "length");
+      if (start_value == nullptr) {
+        document_error_at(paragraph_path + ".start",
+                          "missing required member 'start'", paragraph.end);
+      }
+      if (length_value == nullptr) {
+        document_error_at(paragraph_path + ".length",
+                          "missing required member 'length'", paragraph.end);
+      }
+      for (const auto &member : paragraph.object) {
+        if (member.first != "start" && member.first != "length" &&
+            member.first != "style" && member.first != "list") {
+          document_error_at(paragraph_path + "." + member.first,
+                            "unknown paragraph member", member.second.begin);
+        }
+      }
+      const std::size_t start =
+          checked_format_size(formatting, *start_value, paragraph_path + ".start");
+      const std::size_t length = checked_format_size(
+          formatting, *length_value, paragraph_path + ".length");
+      if (length == 0U) {
+        document_error_at(paragraph_path + ".length", "length must be positive",
+                          length_value->begin);
+      }
+      if (length > std::numeric_limits<std::size_t>::max() - start) {
+        document_error_at(paragraph_path, "range is out of bounds",
+                          paragraph.begin);
+      }
+      const TextRange range{start, start + length};
+      validate_range_bounds(layout, range, paragraph_path, paragraph.begin);
+      if (!is_paragraph_start(layout, range.start) ||
+          (!ends_after_lf(layout, range.end) &&
+           range.end != layout.utf16_length)) {
+        document_error_at(paragraph_path,
+                          "range must cover a complete LF-delimited paragraph",
+                          paragraph.begin);
+      }
+      validate_metadata_range_order(range, &previous_paragraph,
+                                    &have_previous_paragraph, paragraph_path,
+                                    paragraph.begin);
+      paragraph_ranges.push_back(range);
+
+      const JsonValue *style = find_member(paragraph, "style");
+      if (style != nullptr) {
+        const std::string value =
+            require_string(*style, paragraph_path + ".style");
+        if (value != "body" && value != "heading1" && value != "heading2" &&
+            value != "heading3") {
+          document_error_at(paragraph_path + ".style", "unknown paragraph style",
+                            style->begin);
+        }
+      }
+      const JsonValue *list = find_member(paragraph, "list");
+      if (list != nullptr) {
+        const std::string value = require_string(*list, paragraph_path + ".list");
+        if (value != "bullet" && value != "numbered") {
+          document_error_at(paragraph_path + ".list", "unknown paragraph list",
+                            list->begin);
+        }
+        const std::string text = source_slice(source, layout, range);
+        if (value == "bullet") {
+          if (text.size() < std::string("•\t").size() ||
+              text.compare(0U, std::string("•\t").size(), "•\t") != 0) {
+            document_error_at(paragraph_path + ".list",
+                              "bullet list paragraph must start with '•\\t'",
+                              list->begin);
+          }
+        } else {
+          std::size_t position = 0U;
+          if (!text.empty() && text[position] >= '1' &&
+              text[position] <= '9') {
+            ++position;
+            while (position < text.size() && text[position] >= '0' &&
+                   text[position] <= '9') {
+              ++position;
+            }
+          }
+          if (position == 0U || position + 1U >= text.size() ||
+              text[position] != '.' || text[position + 1U] != '\t') {
+            document_error_at(
+                paragraph_path + ".list",
+                "numbered list paragraph must start with a positive decimal and '.\\t'",
+                list->begin);
+          }
+        }
+      }
+    }
+  }
+
+  TextRange previous_table;
+  bool have_previous_table = false;
+  std::vector<TextRange> table_ranges;
+  if (tables != nullptr) {
+    if (tables->kind != JsonKind::Array) {
+      document_error_at(path + ".tables", "expected an array", tables->begin);
+    }
+    if (tables->array.size() > 100U) {
+      document_error(path + ".tables", "table count exceeds 100");
+    }
+    table_ranges.reserve(tables->array.size());
+    for (std::size_t index = 0U; index < tables->array.size(); ++index) {
+      const JsonValue &table = tables->array[index];
+      const std::string table_path =
+          path + ".tables[" + std::to_string(index) + "]";
+      require_object(table, table_path);
+      const JsonValue *start_value = find_member(table, "start");
+      const JsonValue *length_value = find_member(table, "length");
+      const JsonValue *columns_value = find_member(table, "columns");
+      const JsonValue *cells_value = find_member(table, "cells");
+      for (const auto &member : table.object) {
+        if (member.first != "start" && member.first != "length" &&
+            member.first != "columns" && member.first != "cells") {
+          document_error_at(table_path + "." + member.first,
+                            "unknown table member", member.second.begin);
+        }
+      }
+      for (const auto &required :
+           {std::pair<const JsonValue *, const char *>(start_value, "start"),
+            std::pair<const JsonValue *, const char *>(length_value, "length"),
+            std::pair<const JsonValue *, const char *>(columns_value, "columns"),
+            std::pair<const JsonValue *, const char *>(cells_value, "cells")}) {
+        if (required.first == nullptr) {
+          document_error_at(table_path + "." + required.second,
+                            "missing required member '" +
+                                std::string(required.second) + "'",
+                            table.end);
+        }
+      }
+      const std::size_t start =
+          checked_format_size(formatting, *start_value, table_path + ".start");
+      const std::size_t length =
+          checked_format_size(formatting, *length_value, table_path + ".length");
+      if (length == 0U) {
+        document_error_at(table_path + ".length", "length must be positive",
+                          length_value->begin);
+      }
+      if (length > std::numeric_limits<std::size_t>::max() - start) {
+        document_error_at(table_path, "range is out of bounds", table.begin);
+      }
+      const TextRange range{start, start + length};
+      validate_range_bounds(layout, range, table_path, table.begin);
+      if (!is_paragraph_start(layout, range.start) ||
+          !ends_after_lf(layout, range.end)) {
+        document_error_at(table_path,
+                          "range must cover complete LF-delimited paragraphs",
+                          table.begin);
+      }
+      validate_metadata_range_order(range, &previous_table, &have_previous_table,
+                                    table_path, table.begin);
+      table_ranges.push_back(range);
+
+      const std::size_t columns = checked_format_size(
+          formatting, *columns_value, table_path + ".columns");
+      if (columns < 1U || columns > 12U) {
+        document_error_at(table_path + ".columns", "columns must be in [1, 12]",
+                          columns_value->begin);
+      }
+      if (cells_value->kind != JsonKind::Array) {
+        document_error_at(table_path + ".cells", "expected an array",
+                          cells_value->begin);
+      }
+      if (cells_value->array.empty() || cells_value->array.size() > 240U ||
+          cells_value->array.size() % columns != 0U) {
+        document_error_at(table_path + ".cells",
+                          "cell count must be a positive multiple of columns and at most 240",
+                          cells_value->begin);
+      }
+      std::size_t next_cell_start = range.start;
+      for (std::size_t cell_index = 0U; cell_index < cells_value->array.size();
+           ++cell_index) {
+        const JsonValue &cell = cells_value->array[cell_index];
+        const std::string cell_path = table_path + ".cells[" +
+                                      std::to_string(cell_index) + "]";
+        require_object(cell, cell_path);
+        const JsonValue *cell_start_value = find_member(cell, "start");
+        const JsonValue *cell_length_value = find_member(cell, "length");
+        for (const auto &member : cell.object) {
+          if (member.first != "start" && member.first != "length") {
+            document_error_at(cell_path + "." + member.first,
+                              "unknown table cell member", member.second.begin);
+          }
+        }
+        if (cell_start_value == nullptr) {
+          document_error_at(cell_path + ".start",
+                            "missing required member 'start'", cell.end);
+        }
+        if (cell_length_value == nullptr) {
+          document_error_at(cell_path + ".length",
+                            "missing required member 'length'", cell.end);
+        }
+        const std::size_t cell_start = checked_format_size(
+            formatting, *cell_start_value, cell_path + ".start");
+        const std::size_t cell_length = checked_format_size(
+            formatting, *cell_length_value, cell_path + ".length");
+        if (cell_length == 0U ||
+            cell_length > std::numeric_limits<std::size_t>::max() - cell_start) {
+          document_error_at(cell_path + ".length", "length must be positive and in range",
+                            cell_length_value->begin);
+        }
+        const TextRange cell_range{cell_start, cell_start + cell_length};
+        validate_range_bounds(layout, cell_range, cell_path, cell.begin);
+        if (cell_start != next_cell_start || !ends_after_lf(layout, cell_range.end)) {
+          document_error_at(cell_path,
+                            "cells must be consecutive and each must end after LF",
+                            cell.begin);
+        }
+        next_cell_start = cell_range.end;
+      }
+      if (next_cell_start != range.end) {
+        document_error_at(table_path + ".cells",
+                          "cells must partition the complete table range",
+                          cells_value->begin);
+      }
+    }
+  }
+
+  for (const TextRange &paragraph : paragraph_ranges) {
+    for (const TextRange &table : table_ranges) {
+      if (paragraph.start < table.end && table.start < paragraph.end) {
+        document_error(path, "paragraph metadata and tables must not overlap");
+      }
+    }
+  }
+}
+
 void validate_extra_fields(const ProjectExtraFields &extras,
                            const std::set<std::string> &reserved,
                            const std::string &path) {
@@ -752,6 +1292,10 @@ void validate_cell(const ProjectCell &cell, std::set<CellId> *cell_ids,
       document_error(path + ".mode", "cell mode is invalid");
     }
     validate_extra_fields(cell.extra, {"id", "kind", "source", "mode"}, path);
+  } else if (cell.kind == "text") {
+    validate_project_text_content({cell.source, cell.formatting});
+    validate_extra_fields(cell.extra, {"id", "kind", "source", "formatting"},
+                          path);
   } else {
     // Opaque future kinds may carry fields named source/mode; they are not
     // interpreted until that kind has a schema of its own.
@@ -760,6 +1304,147 @@ void validate_cell(const ProjectCell &cell, std::set<CellId> *cell_ids,
 }
 
 } // namespace
+
+runtime::NotebookInputValue parse_project_input_value(const std::string &json) {
+  const auto value = JsonParser(json).parse();
+  if (value.kind == JsonKind::String) return value.text;
+  if (value.kind == JsonKind::Boolean) return raw_json(json, value) == "true";
+  if (value.kind == JsonKind::Number) {
+    const auto number = raw_json(json, value);
+    try {
+      if (number.find_first_of(".eE") == std::string::npos)
+        return static_cast<std::int64_t>(std::stoll(number));
+      std::istringstream stream(number);
+      stream.imbue(std::locale::classic());
+      double result = 0;
+      stream >> result;
+      if (!stream.fail() && stream.eof() && std::isfinite(result)) return result;
+    } catch (const std::exception &) {}
+  }
+  throw std::runtime_error("project input must be a finite number, Int64, boolean or string");
+}
+
+std::string serialize_project_input_value(const runtime::NotebookInputValue &value) {
+  if (const auto text = std::get_if<std::string>(&value)) {
+    std::string result; write_json_string(*text, &result); return result;
+  }
+  if (const auto boolean = std::get_if<bool>(&value)) return *boolean ? "true" : "false";
+  if (const auto integer = std::get_if<std::int64_t>(&value)) return std::to_string(*integer);
+  const auto number = std::get<double>(value);
+  if (!std::isfinite(number)) throw std::runtime_error("non-finite project input");
+  std::ostringstream out; out.imbue(std::locale::classic());
+  out << std::setprecision(17) << number;
+  auto result = out.str();
+  if (result.find_first_of(".eE") == std::string::npos) result += ".0";
+  return result;
+}
+
+void validate_project_input_value(const ProjectInput &input, const runtime::NotebookInputValue &value) {
+  const bool numeric = std::holds_alternative<double>(value) || std::holds_alternative<std::int64_t>(value);
+  if ((input.type == "number" && !numeric) ||
+      (input.type == "integer" && !std::holds_alternative<std::int64_t>(value)) ||
+      (input.type == "boolean" && !std::holds_alternative<bool>(value)) ||
+      (input.type == "string" && !std::holds_alternative<std::string>(value)) ||
+      (input.type != "number" && input.type != "integer" && input.type != "boolean" && input.type != "string"))
+    throw std::runtime_error("input " + input.id + ": value does not match " + input.type);
+  if (numeric) {
+    const long double n = std::holds_alternative<double>(value) ?
+        std::get<double>(value) : static_cast<long double>(std::get<std::int64_t>(value));
+    if (!std::isfinite(n) || (input.minimum && n < *input.minimum) || (input.maximum && n > *input.maximum))
+      throw std::runtime_error("input " + input.id + ": value is outside its bounds");
+  } else if (input.minimum || input.maximum) {
+    throw std::runtime_error("non-numeric input cannot have numeric bounds");
+  }
+  if (const auto text = std::get_if<std::string>(&value)) {
+    validate_utf8(*text, "input " + input.id);
+    if (text->size() > 65536 || text->find('\0') != std::string::npos)
+      throw std::runtime_error("input string must fit 64 KiB and contain no NUL");
+  }
+}
+
+std::shared_ptr<const runtime::NotebookInputSnapshot> project_input_defaults(const ProjectDocument &document) {
+  auto result = std::make_shared<runtime::NotebookInputSnapshot>();
+  for (const auto &input : document.inputs) {
+    validate_project_input_value(input, input.initial);
+    auto value = input.initial;
+    if (input.type == "number" && std::holds_alternative<std::int64_t>(value))
+      value = static_cast<double>(std::get<std::int64_t>(value));
+    result->emplace(input.id, std::move(value));
+  }
+  return result;
+}
+
+ProjectBoard parse_project_board(const std::string &json) {
+  const auto root = JsonParser(json).parse(); require_object(root, "board");
+  ProjectBoard board;
+  board.id = require_string(require_member(root, "id", "board"), "board.id");
+  board.title = require_string(require_member(root, "title", "board"), "board.title");
+  board.sheet = require_string(require_member(root, "sheet", "board"), "board.sheet");
+  if (const auto columns = find_member(root, "columns")) {
+    const auto value = parse_project_input_value(raw_json(json, *columns));
+    const auto n = std::get_if<std::int64_t>(&value);
+    if (!n || *n < 1 || *n > 6) throw std::runtime_error("board columns must be 1..6");
+    board.columns = static_cast<unsigned>(*n);
+  }
+  for (const auto &item : require_array(require_member(root, "components", "board"), "board.components")) {
+    require_object(item, "component");
+    ProjectComponent component;
+    component.id = require_string(require_member(item, "id", "component"), "component.id");
+    component.kind = require_string(require_member(item, "kind", "component"), "component.kind");
+    component.title = require_string(require_member(item, "title", "component"), "component.title");
+    if (const auto v = find_member(item, "input")) component.input = require_string(*v, "component.input");
+    if (const auto v = find_member(item, "cell")) component.cell = parse_cell_id(*v, "component.cell");
+    if (const auto v = find_member(item, "binding")) component.binding = require_string(*v, "component.binding");
+    component.extra = parse_extras(item, {"id", "kind", "title", "input", "cell", "binding"}, json);
+    board.components.push_back(std::move(component));
+  }
+  board.extra = parse_extras(root, {"id", "title", "sheet", "columns", "components"}, json);
+  return board;
+}
+
+std::string serialize_project_board(const ProjectBoard &board) {
+  std::string out = "{";
+  const auto field = [&](const std::string &key, const std::string &value) {
+    if (out.back() != '{') out += ',';
+    write_json_string(key, &out); out += ':'; write_json_string(value, &out);
+  };
+  field("id", board.id); field("title", board.title); field("sheet", board.sheet);
+  out += ",\"columns\":" + std::to_string(board.columns) + ",\"components\":[";
+  for (std::size_t i = 0; i < board.components.size(); ++i) {
+    const auto &c = board.components[i]; if (i) out += ','; out += '{';
+    field("id", c.id); field("kind", c.kind); field("title", c.title);
+    if (!c.input.empty()) field("input", c.input);
+    if (c.cell) field("cell", std::to_string(c.cell));
+    if (!c.binding.empty()) field("binding", c.binding);
+    for (const auto &extra : c.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+    out += '}';
+  }
+  out += ']';
+  for (const auto &extra : board.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+  return out + '}';
+}
+
+ProjectInput parse_project_input(const std::string &json) {
+  const auto item = JsonParser(json).parse();
+  require_object(item, "input");
+  ProjectInput input;
+  input.id = require_string(require_member(item, "id", "input"), "input.id");
+  input.title = require_string(require_member(item, "title", "input"), "input.title");
+  input.type = require_string(require_member(item, "type", "input"), "input.type");
+  input.initial = parse_project_input_value(raw_json(json, require_member(item, "default", "input")));
+  for (const auto &name : {"minimum", "maximum"}) {
+    if (const auto v = find_member(item, name)) {
+      const auto number = parse_project_input_value(raw_json(json, *v));
+      double n;
+      if (const auto d = std::get_if<double>(&number)) n = *d;
+      else if (const auto i = std::get_if<std::int64_t>(&number)) n = static_cast<double>(*i);
+      else throw std::runtime_error("input bound must be numeric");
+      (std::string(name) == "minimum" ? input.minimum : input.maximum) = n;
+    }
+  }
+  input.extra = parse_extras(item, {"id", "title", "type", "default", "minimum", "maximum"}, json);
+  return input;
+}
 
 ProjectDocument parse_project_document(const std::string &json) {
   JsonValue root = JsonParser(json).parse();
@@ -772,12 +1457,37 @@ ProjectDocument parse_project_document(const std::string &json) {
   }
   const JsonValue &version = require_member(root, "version", "$");
   if (version.kind != JsonKind::Number ||
-      json.substr(version.begin, version.end - version.begin) != "1") {
-    document_error_at("$.version", "version must be the number 1",
+      (raw_json(json, version) != "1" && raw_json(json, version) != "2" && raw_json(json, version) != "3")) {
+    document_error_at("$.version", "version must be 1, 2 or 3",
                       version.begin);
   }
 
   ProjectDocument document;
+  document.version = static_cast<unsigned>(std::stoul(raw_json(json, version)));
+  if (document.version >= 2) {
+    for (const auto &item : require_array(require_member(root, "inputs", "$"), "inputs")) {
+      document.inputs.push_back(parse_project_input(raw_json(json, item)));
+    }
+    for (const auto &item : require_array(require_member(root, "boards", "$"), "boards"))
+      document.boards.push_back(parse_project_board(raw_json(json, item)));
+  } else if (find_member(root, "inputs") || find_member(root, "boards")) {
+    throw std::runtime_error("project inputs and boards require schema version 2");
+  }
+  if (document.version >= 3) {
+    for (const auto &item : require_array(require_member(root, "dependencies", "$"), "dependencies")) {
+      require_object(item, "dependency");
+      ProjectDependency dependency;
+      dependency.path = require_string(require_member(item, "path", "dependency"), "dependency.path");
+      if (const auto value = find_member(item, "auto_import")) {
+        if (value->kind != JsonKind::Boolean) throw std::runtime_error("dependency.auto_import must be boolean");
+        dependency.auto_import = raw_json(json, *value) == "true";
+      }
+      dependency.extra = parse_extras(item, {"path", "auto_import"}, json);
+      document.dependencies.push_back(std::move(dependency));
+    }
+  } else if (find_member(root, "dependencies")) {
+    throw std::runtime_error("external dependencies require schema version 3");
+  }
   document.title =
       require_string(require_member(root, "title", "$.title"), "$.title");
   document.active_sheet = require_string(
@@ -806,13 +1516,27 @@ ProjectDocument parse_project_document(const std::string &json) {
 
   document.extra = parse_extras(root,
                                 {"format", "version", "title", "active_sheet",
-                                 "sheets", "modules", "auto_imports"},
+                                 "sheets", "modules", "auto_imports", "inputs", "boards", "dependencies"},
                                 json);
   validate_project_document(document);
   return document;
 }
 
 void validate_project_document(const ProjectDocument &document) {
+  if ((document.version < 1 || document.version > 3) ||
+      (document.version == 1 && (!document.inputs.empty() || !document.boards.empty())))
+    throw std::runtime_error("project inputs and boards require schema version 2");
+  if (document.version < 3 && !document.dependencies.empty())
+    throw std::runtime_error("external dependencies require schema version 3");
+  if (document.dependencies.size() > 128) throw std::runtime_error("too many package dependencies");
+  std::set<std::string> dependency_paths;
+  for (const auto &dependency : document.dependencies) {
+    validate_utf8(dependency.path, "dependency.path");
+    if (dependency.path.empty() || dependency.path.size() > 4096 || dependency.path.find('\0') != std::string::npos ||
+        !dependency_paths.insert(dependency.path).second)
+      throw std::runtime_error("invalid or duplicate dependency path");
+    validate_extra_fields(dependency.extra, {"path", "auto_import"}, "dependency");
+  }
   validate_utf8(document.title, "title");
   validate_utf8(document.active_sheet, "active_sheet");
   if (document.sheets.empty()) {
@@ -873,8 +1597,42 @@ void validate_project_document(const ProjectDocument &document) {
   }
   validate_extra_fields(document.extra,
                         {"format", "version", "title", "active_sheet", "sheets",
-                         "modules", "auto_imports"},
+                         "modules", "auto_imports", "inputs", "boards", "dependencies"},
                         "document");
+  std::set<std::string> inputs, boards;
+  if (document.inputs.size() > 1024 || document.boards.size() > 128)
+    throw std::runtime_error("project exceeds 1024 inputs / 128 boards");
+  for (const auto &input : document.inputs) {
+    validate_utf8(input.id, "input.id"); validate_utf8(input.title, "input.title");
+    if (input.id.empty() || input.id.size() > 256 || input.id.find('\0') != std::string::npos || !inputs.insert(input.id).second)
+      throw std::runtime_error("invalid or duplicate project input id");
+    if ((input.minimum && !std::isfinite(*input.minimum)) || (input.maximum && !std::isfinite(*input.maximum)) ||
+        (input.minimum && input.maximum && *input.minimum > *input.maximum))
+      throw std::runtime_error("invalid input bounds");
+    validate_project_input_value(input, input.initial);
+    validate_extra_fields(input.extra, {"id", "title", "type", "default", "minimum", "maximum"}, "input");
+  }
+  for (const auto &board : document.boards) {
+    validate_module_id(board.id, "board.id"); validate_utf8(board.title, "board.title");
+    if (!boards.insert(board.id).second || !sheet_ids.count(board.sheet))
+      throw std::runtime_error("duplicate board or unknown controller sheet");
+    if (board.columns < 1 || board.columns > 6 || board.components.size() > 256)
+      throw std::runtime_error("board requires 1..6 columns and at most 256 components");
+    std::set<std::string> components;
+    for (const auto &c : board.components) {
+      validate_module_id(c.id, "component.id"); validate_utf8(c.title, "component.title");
+      validate_utf8(c.binding, "component.binding");
+      if (!components.insert(c.id).second) throw std::runtime_error("duplicate component id");
+      if (c.kind != "input" && c.kind != "text" && c.kind != "plot" && c.kind != "run")
+        throw std::runtime_error("unsupported board component kind: " + c.kind);
+      if (c.kind == "input" && !inputs.count(c.input)) throw std::runtime_error("component references unknown input");
+      // A missing output target remains an explicit broken binding in the UI;
+      // editing a sheet must not become impossible because a board references it.
+      if (c.kind != "input" && c.cell == 0) throw std::runtime_error("output component requires a cell id");
+      validate_extra_fields(c.extra, {"id", "kind", "title", "input", "cell", "binding"}, "component");
+    }
+    validate_extra_fields(board.extra, {"id", "title", "sheet", "columns", "components"}, "board");
+  }
 }
 
 std::string serialize_project_document(const ProjectDocument &document) {
@@ -893,7 +1651,7 @@ std::string serialize_project_document(const ProjectDocument &document) {
   };
 
   output =
-      "{\n  \"format\": \"amber-notebook\",\n  \"version\": 1,\n  \"title\": ";
+      "{\n  \"format\": \"amber-notebook\",\n  \"version\": " + std::to_string(document.version) + ",\n  \"title\": ";
   write_json_string(document.title, &output);
   output += ",\n  \"active_sheet\": ";
   write_json_string(document.active_sheet, &output);
@@ -924,6 +1682,13 @@ std::string serialize_project_document(const ProjectDocument &document) {
         output += ",\n          \"mode\": ";
         write_json_string(cell.mode == CellMode::Watch ? "watch" : "manual",
                           &output);
+      } else if (cell.kind == "text") {
+        output += ",\n          \"source\": ";
+        write_json_string(cell.source, &output);
+        if (!cell.formatting.empty()) {
+          output += ",\n          \"formatting\": ";
+          output += cell.formatting;
+        }
       }
       write_extra(cell.extra, 10);
       output += "\n        }";
@@ -960,6 +1725,35 @@ std::string serialize_project_document(const ProjectDocument &document) {
   if (!document.auto_imports.empty())
     output += "\n  ";
   output.push_back(']');
+  if (document.version >= 2) {
+    output += ",\n  \"inputs\": [";
+    for (std::size_t i = 0; i < document.inputs.size(); ++i) {
+      const auto &input = document.inputs[i]; if (i) output += ',';
+      output += "{\"id\":"; write_json_string(input.id, &output);
+      output += ",\"title\":"; write_json_string(input.title, &output);
+      output += ",\"type\":"; write_json_string(input.type, &output);
+      output += ",\"default\":" + serialize_project_input_value(input.initial);
+      if (input.minimum) output += ",\"minimum\":" + serialize_project_input_value(*input.minimum);
+      if (input.maximum) output += ",\"maximum\":" + serialize_project_input_value(*input.maximum);
+      write_extra(input.extra, 4); output += '}';
+    }
+    output += "],\n  \"boards\": [";
+    for (std::size_t i = 0; i < document.boards.size(); ++i) {
+      if (i) output += ',';
+      output += serialize_project_board(document.boards[i]);
+    }
+    output += ']';
+  }
+  if (document.version >= 3) {
+    output += ",\n  \"dependencies\": [";
+    for (std::size_t i = 0; i < document.dependencies.size(); ++i) {
+      const auto &dependency = document.dependencies[i]; if (i) output += ',';
+      output += "{\"path\":"; write_json_string(dependency.path, &output);
+      output += std::string(",\"auto_import\":") + (dependency.auto_import ? "true" : "false");
+      write_extra(dependency.extra, 4); output += '}';
+    }
+    output += ']';
+  }
   write_extra(document.extra, 2);
   output += "\n}\n";
   if (output.size() > kMaxJsonBytes) {
@@ -985,6 +1779,66 @@ ProjectDocument make_project_document(std::string title) {
   sheet.cells.push_back(std::move(cell));
   document.sheets.push_back(std::move(sheet));
   return document;
+}
+
+ProjectTextContent parse_project_text_content(const std::string &json) {
+  JsonValue root = JsonParser(json).parse();
+  require_object(root, "$text");
+  const JsonValue &source = require_member(root, "source", "$text");
+  ProjectTextContent content;
+  content.source = require_string(source, "$text.source");
+  if (const JsonValue *formatting = find_member(root, "formatting")) {
+    if (formatting->kind != JsonKind::Object) {
+      document_error_at("$text.formatting", "expected an object",
+                        formatting->begin);
+    }
+    content.formatting = raw_json(json, *formatting);
+  }
+  for (const auto &member : root.object) {
+    if (member.first != "source" && member.first != "formatting") {
+      document_error_at("$text." + member.first,
+                        "unknown text content member", member.second.begin);
+    }
+  }
+  validate_project_text_content(content);
+  return content;
+}
+
+std::string serialize_project_text_content(const ProjectTextContent &content) {
+  validate_project_text_content(content);
+  std::string output = "{\"source\": ";
+  write_json_string(content.source, &output);
+  if (!content.formatting.empty()) {
+    output += ", \"formatting\": ";
+    output += content.formatting;
+  }
+  output.push_back('}');
+  return output;
+}
+
+void validate_project_text_content(const ProjectTextContent &content) {
+  validate_utf8(content.source, "text.source");
+  std::size_t utf16_length = 0U;
+  for (std::size_t position = 0U; position < content.source.size();) {
+    std::size_t sequence_length = 0U;
+    std::uint32_t codepoint = 0U;
+    if (!decode_utf8_sequence(content.source, position, &sequence_length,
+                              &codepoint)) {
+      document_error("text.source", "contains invalid UTF-8");
+    }
+    utf16_length += codepoint > 0xFFFFU ? 2U : 1U;
+    if (utf16_length > kMaxTextUtf16Length) {
+      document_error("text.source", "text exceeds 16 MiB limit");
+    }
+    position += sequence_length;
+  }
+  if (!content.formatting.empty()) {
+    if (content.formatting.size() > kMaxJsonBytes) {
+      document_error("text.formatting", "formatting JSON exceeds 16 MiB limit");
+    }
+    validate_text_formatting_json(content.source, content.formatting,
+                                  "text.formatting");
+  }
 }
 
 } // namespace amber::notebook

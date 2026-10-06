@@ -213,6 +213,8 @@ void test_native_extension_manifest() {
       "sources = [\"native/blake3.c\", \"native/amber_blake3.c\"]\n"
       "include_dirs = [\"native/include\"]\n"
       "cxxflags = [\"-O3\"]\n"
+      "library_dirs = [\"vendor/lib\"]\n"
+      "runtime_library_dirs = [\"@loader_path/lib\"]\n"
       "blocking_symbols = [\"blake3.wait\"]\n"
       "\n"
       "[native.symbols]\n"
@@ -243,6 +245,9 @@ void test_native_extension_manifest() {
   expect(ext.include_dirs.size() == 1 && ext.cxxflags.size() == 1 &&
              ext.cxxflags[0] == "-O3",
          "native include_dirs/cxxflags arrays");
+  expect(ext.library_dirs == std::vector<std::string>{"vendor/lib"} &&
+             ext.runtime_library_dirs == std::vector<std::string>{"@loader_path/lib"},
+         "native library paths parsed");
   expect(ext.blocking_symbols.size() == 1 &&
              ext.blocking_symbols[0] == "blake3.wait",
          "native blocking symbols array");
@@ -301,6 +306,16 @@ void test_native_extension_manifest() {
   const amber::pkg::PackageVerifyResult verified =
       amber::pkg::verify_package_artifact(first.serialized);
   expect(verified.ok, "native package verifies");
+  const auto roundtrip = amber::pkg::parse_package_artifact(first.serialized);
+  expect(roundtrip.ok() &&
+             roundtrip.artifact.manifest.native_extensions[0].library_dirs == ext.library_dirs &&
+             roundtrip.artifact.manifest.native_extensions[0].runtime_library_dirs == ext.runtime_library_dirs,
+         "native library paths survive artifact roundtrip");
+  auto changed_manifest = parsed.manifest;
+  changed_manifest.native_extensions[0].runtime_library_dirs = {"@loader_path/other"};
+  const auto changed = amber::pkg::build_package_artifact(changed_manifest, {blob}, native_options);
+  expect(changed.ok && changed.artifact.manifest_digest != first.artifact.manifest_digest,
+         "runtime library paths contribute to manifest digest");
   const std::string inspect = amber::pkg::artifact_to_json(first.artifact);
   expect(inspect.find("\"native_blobs\"") != std::string::npos &&
              inspect.find("\"native_source_sha256\"") != std::string::npos,

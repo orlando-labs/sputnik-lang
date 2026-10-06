@@ -2756,7 +2756,8 @@ public:
     return true;
   }
 
-  bool park_current(std::optional<std::chrono::milliseconds> wake_after) {
+  bool park_current(std::optional<std::chrono::milliseconds> wake_after,
+                    bool wake_on_cancel) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (current_runtime_scheduler_identity() != this) {
       return false;
@@ -2771,6 +2772,12 @@ public:
       return false;
     }
     found->second.park_pending = true;
+    // Cancellation may arrive after the VM chose to suspend but before it
+    // publishes park_pending. Preserve that wake just like the reverse race.
+    if (wake_on_cancel && current_runtime_task_cancel_requested()) {
+      found->second.park_wake_pending = true;
+      found->second.park_wake_worker_index.reset();
+    }
     if (wake_after.has_value()) {
       found->second.park_wake_deadline =
           std::chrono::steady_clock::now() + *wake_after;
@@ -2818,7 +2825,7 @@ public:
       }
       found->second.handle_released = true;
       if (is_terminal_state(found->second.state)) {
-        retired_function = std::move(found->second.function);
+        retired_function = std::exchange(found->second.function, StrandFunction{});
         strands_.erase(found);
       }
     }
@@ -2918,6 +2925,13 @@ public:
 
     fill_join_result_locked(task_id, result);
     return result;
+  }
+
+  void observe_task_failure(std::uint64_t task_id) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = strands_.find(task_id);
+    if (found != strands_.end() && found->second.failure_receipt)
+      found->second.failure_receipt->observed.store(true);
   }
 
   bool wait_until_idle(std::chrono::milliseconds timeout) {
@@ -3029,6 +3043,10 @@ private:
     TaskError pending_error;
     TaskError error;
     std::optional<TaskError> first_child_error;
+    std::weak_ptr<RuntimeRunState> run;
+    std::uint64_t run_task_id = 0;
+    RuntimeTextSourceLocation spawn_source;
+    std::shared_ptr<RuntimeRunFailureReceipt> failure_receipt, first_child_failure;
     RuntimeSupervisorPolicy supervisor_policy =
         RuntimeSupervisorPolicy::CancelScope;
     bool resume_on_cancel = false;
@@ -3071,12 +3089,29 @@ private:
     if (!function) {
       function = []() {};
     }
+    const auto run = current_runtime_run_cancellation();
+    const auto registration = run ? run->register_task() : nullptr;
+    const auto spawn_source = registration ? resolve_runtime_text_source_location()
+                                          : RuntimeTextSourceLocation{};
+    if (registration) {
+      // The membership outlives the executable closure and every invocation
+      // copy, not just the task handle. Queued cancellation, parked VMs and
+      // handle-less children all follow the same retirement boundary.
+      struct RunTaskBody {
+        RuntimeRunCancellation run;
+        std::shared_ptr<RuntimeRunState::Task> registration;
+        StrandFunction function;
+        void invoke() { RuntimeRunCancellationScope scope(run); function(); }
+      };
+      auto body = std::make_shared<RunTaskBody>(RunTaskBody{run, registration, std::move(function)});
+      function = [body] { body->invoke(); };
+    }
     const std::shared_ptr<RuntimeTaskContext> parent_context =
         current_runtime_task_context();
     std::shared_ptr<RuntimeTaskContext> task_context =
         parent_context == nullptr ? RuntimeTaskContext::create()
                                   : parent_context->inherited_snapshot();
-    std::lock_guard<std::mutex> lock(mutex_);
+    std::unique_lock<std::mutex> lock(mutex_);
     const std::uint64_t strand_id = next_strand_id_++;
     std::uint64_t parent_task_id = current_runtime_scheduler_identity() == this
                                        ? current_runtime_task_id()
@@ -3094,6 +3129,9 @@ private:
         1U;
     strand.parent_task_id = parent_task_id;
     strand.task_context = std::move(task_context);
+    strand.run = run;
+    strand.run_task_id = registration ? registration->id() : 0;
+    strand.spawn_source = spawn_source;
     strand.function = std::move(function);
     strand.state = RuntimeStrandState::Runnable;
     strand.supervisor_policy = options.policy;
@@ -3122,6 +3160,13 @@ private:
       enqueue_runnable_locked(strand_id, std::nullopt);
     }
     worker_cv_.notify_one();
+    lock.unlock();
+    if (registration) {
+      const std::weak_ptr<Impl> weak = shared_from_this();
+      registration->on_cancel([weak, strand_id] {
+        if (auto scheduler = weak.lock()) scheduler->cancel_task(strand_id);
+      });
+    }
     return strand_id;
   }
 
@@ -3368,6 +3413,7 @@ private:
         final_state != RuntimeStrandState::Failed) {
       final_state = RuntimeStrandState::Failed;
       final_error = *task.first_child_error;
+      task.failure_receipt = task.first_child_failure;
     }
     if (final_state == RuntimeStrandState::Cancelled &&
         final_error.error_name.empty()) {
@@ -3376,6 +3422,12 @@ private:
     if (final_state == RuntimeStrandState::Failed &&
         final_error.error_name.empty()) {
       final_error = TaskError{"RuntimeError", "task failed"};
+    }
+
+    if (final_state == RuntimeStrandState::Failed && !task.failure_receipt) {
+      if (const auto run = task.run.lock())
+        task.failure_receipt = run->record_failure({task.run_task_id,
+            final_error.error_name, final_error.message, task.spawn_source});
     }
 
     task.state = final_state;
@@ -3405,7 +3457,7 @@ private:
       // A task cancelled before its first dispatch has no worker invocation
       // that can move this closure out. Terminal records keep only metadata;
       // release executable captures through the caller's after-unlock batch.
-      retired_functions.push_back(std::move(terminal->second.function));
+      retired_functions.push_back(std::exchange(terminal->second.function, StrandFunction{}));
     }
     if (terminal != strands_.end() && terminal->second.managed_handle &&
         terminal->second.handle_released) {
@@ -3429,6 +3481,7 @@ private:
     if (child->second.state == RuntimeStrandState::Failed &&
         !parent->second.first_child_error.has_value()) {
       parent->second.first_child_error = child->second.error;
+      parent->second.first_child_failure = child->second.failure_receipt;
       switch (parent->second.supervisor_policy) {
       case RuntimeSupervisorPolicy::CancelScope:
         mark_cancel_requested_locked(parent->second);
@@ -3472,6 +3525,8 @@ private:
 
     const StrandRecord &task = found->second;
     result.joined = true;
+    if (task.state == RuntimeStrandState::Failed && task.failure_receipt)
+      task.failure_receipt->observed.store(true);
     result.state = task.state;
     if (task.state == RuntimeStrandState::Done) {
       result.ok = true;
@@ -3531,7 +3586,7 @@ private:
         RuntimeStrandScope strand_scope(strand_id);
         RuntimeTaskScope task_scope(strand_id, cancellation_requested.get(),
                                     sync_owner_id, std::move(task_context),
-                                    this);
+                                    this, cancellation_requested);
         try {
           function();
         } catch (const RuntimeTaskCancelled &) {
@@ -3600,7 +3655,10 @@ private:
             // Terminal metadata and RuntimeTaskHandle::State remain available
             // to live handles.
             if (found->second.function) {
-              retired_functions.push_back(std::move(found->second.function));
+              // Moving a small std::function may leave the source callable.
+              // Explicitly empty it so live handles retain metadata, not a
+              // completed run membership/executable closure.
+              retired_functions.push_back(std::exchange(found->second.function, StrandFunction{}));
             }
           }
           if (running_count_ > 0) {
@@ -3716,8 +3774,8 @@ bool RuntimeScheduler::wake_strand_on_worker_for_test(
 }
 
 bool RuntimeScheduler::park_current(
-    std::optional<std::chrono::milliseconds> wake_after) {
-  return impl_->park_current(wake_after);
+    std::optional<std::chrono::milliseconds> wake_after, bool wake_on_cancel) {
+  return impl_->park_current(wake_after, wake_on_cancel);
 }
 
 std::uint64_t RuntimeScheduler::spawn_task(StrandFunction function) {
@@ -3764,6 +3822,10 @@ RuntimeTaskJoinResult
 RuntimeScheduler::join_task(std::uint64_t task_id,
                             std::chrono::milliseconds timeout) {
   return impl_->join_task(task_id, timeout);
+}
+
+void RuntimeScheduler::observe_task_failure(std::uint64_t task_id) const {
+  impl_->observe_task_failure(task_id);
 }
 
 bool RuntimeScheduler::wait_until_idle(std::chrono::milliseconds timeout) {
@@ -3947,6 +4009,7 @@ RuntimeTaskPublicResult RuntimeTaskHandle::result() const {
   }
 
   if (current.state == RuntimeTaskHandleState::Failed) {
+    scheduler_->observe_task_failure(task_id_);
     out.ready = true;
     out.failed = true;
     out.error_name =
@@ -3983,6 +4046,7 @@ RuntimeTaskFailureInfo RuntimeTaskHandle::failure() const {
   }
 
   if (current.state == RuntimeTaskHandleState::Failed) {
+    scheduler_->observe_task_failure(task_id_);
     out.ready = true;
     out.failed = true;
     out.error_name =
@@ -4149,8 +4213,10 @@ RuntimeTaskHandle RuntimeTaskModule::spawn_with_kind(
     SpawnKind kind, TaskFunction function, RuntimeTaskOptions options) {
   auto state = std::make_shared<RuntimeTaskHandle::State>();
   const std::string inherited_annotation = current_runtime_task_annotation();
+  const auto run_cancellation = current_runtime_run_cancellation();
   auto task_body = [state, function = std::move(function),
-                    inherited_annotation]() mutable {
+                    inherited_annotation, run_cancellation]() mutable {
+    RuntimeRunCancellationScope run_scope(run_cancellation);
     RuntimeTaskAnnotationScope annotation_scope(inherited_annotation);
     runtime_clear_task_parked();
     try {

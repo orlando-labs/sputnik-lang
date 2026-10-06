@@ -11,13 +11,16 @@
 #include <utility>
 
 BundledEnvironmentPreparation prepare_bundled_environment(
-    const std::vector<BundledModuleSource> &sources) {
+    const std::vector<BundledModuleSource> &sources,
+    const std::vector<std::string> &explicit_imports) {
   BundledEnvironmentPreparation result;
   std::map<std::string, const BundledModuleSource *> by_id;
   std::vector<std::string> roots;
   std::set<std::string> selected;
   for (const BundledModuleSource &source : sources) {
-    if (source.id.empty() || source.path.empty()) {
+    if (!source.load_error.empty()) {
+      result.diagnostics.push_back({source.id, source.path, source.load_error, {}});
+    } else if (source.id.empty() || source.path.empty()) {
       result.diagnostics.push_back(
           {source.id, source.path, "bundled module identity is incomplete", {}});
     } else if (!by_id.emplace(source.id, &source).second) {
@@ -30,10 +33,6 @@ BundledEnvironmentPreparation prepare_bundled_environment(
   }
   if (!result.diagnostics.empty())
     return result;
-  if (roots.empty()) {
-    result.ok = true;
-    return result;
-  }
 
   amber::runtime::RuntimeModuleRegistry native_modules;
   amber::runtime::RuntimeDispatchRegistry native_dispatch;
@@ -42,6 +41,16 @@ BundledEnvironmentPreparation prepare_bundled_environment(
       native_modules, native_dispatch, native_types);
   amber::runtime::register_core_prelude_bindings(native_modules);
   amber::runtime::register_legacy_native_type_paths(native_modules);
+  for (const auto &source : sources) {
+    if (native_modules.has_namespace(source.id)) {
+      result.diagnostics.push_back({source.id, source.path, "project dependency conflicts with native module: " + source.id, {}});
+    }
+  }
+  if (!result.diagnostics.empty()) return result;
+  for (const auto &id : explicit_imports) {
+    if (!native_modules.has_namespace(id) && selected.insert(id).second) roots.push_back(id);
+  }
+  if (roots.empty()) { result.ok = true; return result; }
 
   // Only compile modules reachable from the selected roots. An unfinished
   // unrelated source buffer is allowed to coexist in the same project.
@@ -53,7 +62,7 @@ BundledEnvironmentPreparation prepare_bundled_environment(
       if (native_modules.has_namespace(id))
         return true;
       result.diagnostics.push_back(
-          {id, {}, "missing bundled module dependency: " + id, {}});
+          {id, {}, "missing bundled module dependency: " + id + " (add its package directory to project dependencies)", {}});
       return false;
     }
     const BundledModuleSource &source = *found->second;
@@ -108,7 +117,11 @@ BundledEnvironmentPreparation prepare_bundled_environment(
   }
 
   std::map<std::string, BundledExportBinding> bindings;
+  for (const auto &module : result.modules) result.import_paths[module.id];
+  for (const auto &entry : linked.exports)
+    result.import_paths[entry.provider][entry.public_name] = entry.qualified_path;
   for (const std::string &root : roots) {
+    if (!by_id.at(root)->auto_import) continue;
     for (const amber::bytecode::GraphExport &entry : linked.exports) {
       if (entry.provider != root)
         continue;

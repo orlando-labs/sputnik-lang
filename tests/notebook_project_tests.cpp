@@ -137,6 +137,8 @@ void expect_documents_equal(const ProjectDocument &actual,
       expect(left_cell.id == right_cell.id, message + ": cell id");
       expect(left_cell.kind == right_cell.kind, message + ": cell kind");
       expect(left_cell.source == right_cell.source, message + ": cell source");
+      expect(left_cell.formatting == right_cell.formatting,
+             message + ": cell formatting");
       expect(left_cell.mode == right_cell.mode, message + ": cell mode");
       expect_extra_fields(left_cell.extra, right_cell.extra,
                           message + ": cell extra");
@@ -805,6 +807,254 @@ void test_module_symlink_components_and_nonblocking_project_lock() {
   expect(::close(lock_fd) == 0, "test should close the project lock");
 }
 
+void test_text_content_roundtrip_and_strict_formatting() {
+  const std::string payload =
+      R"JSON({"source":"🙂hello","formatting":{"version":1,"runs":[{"start":0,"length":2,"bold":true},{"start":2,"length":5,"style":"heading1"}]}})JSON";
+  const auto content = amber::notebook::parse_project_text_content(payload);
+  expect(content.source == "🙂hello" && !content.formatting.empty(),
+         "text content should decode source and retain formatting JSON");
+  const auto serialized =
+      amber::notebook::serialize_project_text_content(content);
+  const auto reparsed =
+      amber::notebook::parse_project_text_content(serialized);
+  expect(reparsed.source == content.source &&
+             reparsed.formatting == content.formatting,
+         "text content formatting should round-trip without loss");
+
+  ProjectDocument document = valid_document();
+  ProjectCell text;
+  text.id = std::numeric_limits<std::uint64_t>::max() - 1U;
+  text.kind = "text";
+  text.source = "🙂hello";
+  text.formatting = content.formatting;
+  text.extra["native"] = R"({"selection":2})";
+  document.sheets[0].cells.push_back(text);
+  const auto document_roundtrip = amber::notebook::parse_project_document(
+      amber::notebook::serialize_project_document(document));
+  const auto &roundtrip_text = document_roundtrip.sheets[0].cells.back();
+  expect(roundtrip_text.kind == "text" &&
+             roundtrip_text.source == text.source &&
+             roundtrip_text.formatting == text.formatting &&
+             roundtrip_text.extra == text.extra,
+         "text cells should retain source, formatting, and unknown metadata");
+
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"({"source":"🙂","formatting":{"version":3,"runs":[]}})");
+      },
+      "unknown rich-text format versions should be rejected");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"({"source":"🙂","formatting":{"version":1,"runs":[{"start":1,"length":1}]}})");
+      },
+      "rich-text ranges splitting a surrogate pair should be rejected");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"({"source":"abcd","formatting":{"version":1,"runs":[{"start":0,"length":3},{"start":2,"length":1}]}})");
+      },
+      "overlapping rich-text ranges should be rejected");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"({"source":"abcd","formatting":{"version":1,"runs":[{"start":0,"length":1,"future":true}]}})");
+      },
+      "unknown rich-text run metadata should be rejected");
+}
+
+void test_v2_rich_text_headings_lists_and_tables() {
+  const std::string source = "Title\n•\tOne\n2.\tFirst\n2.\tSecond\nA\nB\n";
+  const std::string formatting =
+      R"JSON({"version":2,"runs":[{"start":0,"length":5,"style":"heading1"},{"start":6,"length":5,"bold":true},{"start":31,"length":1,"italic":true}],"paragraphs":[{"start":0,"length":6,"style":"heading1"},{"start":6,"length":6,"list":"bullet"},{"start":12,"length":9,"list":"numbered"},{"start":21,"length":10,"list":"numbered"}],"tables":[{"start":31,"length":4,"columns":1,"cells":[{"start":31,"length":2},{"start":33,"length":2}]}]})JSON";
+  amber::notebook::ProjectTextContent input{source, formatting};
+  amber::notebook::validate_project_text_content(input);
+  const auto content = amber::notebook::parse_project_text_content(
+      amber::notebook::serialize_project_text_content(input));
+  expect(content.source == source && content.formatting == formatting,
+         "v2 rich-text metadata should validate and be retained exactly");
+  const auto reparsed = amber::notebook::parse_project_text_content(
+      amber::notebook::serialize_project_text_content(content));
+  expect(reparsed.source == source && reparsed.formatting == formatting,
+         "v2 rich-text metadata should round-trip");
+
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"a\n","formatting":{"version":2,"runs":[],"paragraphs":[{"start":0,"length":1}]}})JSON");
+      },
+      "v2 paragraph metadata must cover a complete LF-delimited paragraph");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"x\n","formatting":{"version":2,"runs":[],"paragraphs":[{"start":0,"length":2,"list":"bullet"}]}})JSON");
+      },
+      "v2 bullet metadata must match the rendered bullet prefix");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"A\nB\n","formatting":{"version":2,"runs":[],"tables":[{"start":0,"length":4,"columns":2,"cells":[{"start":0,"length":2}]}]}})JSON");
+      },
+      "v2 tables must contain a positive multiple of their columns");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"🙂\n","formatting":{"version":2,"runs":[],"paragraphs":[{"start":1,"length":2}]}})JSON");
+      },
+      "v2 metadata ranges must not split UTF-16 surrogate pairs");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"A\nB\n","formatting":{"version":2,"runs":[],"tables":[{"start":0,"length":4,"columns":1,"cells":[{"start":0,"length":1},{"start":1,"length":3}]}]}})JSON");
+      },
+      "v2 table cells must each end after LF and partition the table");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"A\n","formatting":{"version":2,"runs":[],"future":true}})JSON");
+      },
+      "v2 unknown formatting members should be rejected");
+  expect_throws(
+      [] {
+        (void)amber::notebook::parse_project_text_content(
+            R"JSON({"source":"A\n","formatting":{"version":1,"runs":[],"paragraphs":[]}})JSON");
+      },
+      "v1 must not accept v2 formatting members");
+}
+
+void test_create_project_module_publishes_source_before_manifest() {
+  TempDirectory temporary;
+  const std::filesystem::path directory = temporary.path / "create_module";
+  amber::notebook::LoadedProject project =
+      amber::notebook::create_project(directory, valid_document());
+  const std::string hostile_source =
+      std::string("value = \"do not execute\"\n") +
+      std::string(1, '\0') + std::string(1, static_cast<char>(0xff));
+  const ProjectModule entry{"new_module", "modules/new_module.am", {}};
+
+  const amber::notebook::LoadedProjectModule created =
+      amber::notebook::create_project_module(&project, entry, hostile_source);
+  expect(created.id == entry.id && created.path == entry.path &&
+             created.source == hostile_source &&
+             created.baseline == hostile_source,
+         "new module should return exact source baseline");
+  expect(read_text(directory / entry.path) == hostile_source,
+         "new module source should be published byte-for-byte");
+  expect(project.document.modules.size() == 1U &&
+             project.document.modules.front().id == entry.id &&
+             project.document.auto_imports.empty(),
+         "new module should update only the manifest module list");
+  expect(read_text(directory / "project.json") == project.baseline,
+         "new module project baseline should match persisted manifest");
+  const auto reopened = amber::notebook::load_project(directory);
+  const auto loaded =
+      amber::notebook::load_project_module(reopened, entry.id);
+  expect(loaded.source == hostile_source &&
+             !std::filesystem::exists(temporary.path / "executed.marker"),
+         "new module should load without execution");
+
+  const std::string manifest_before_duplicate =
+      read_text(directory / "project.json");
+  expect_throws(
+      [&] {
+        amber::notebook::create_project_module(
+            &project,
+            ProjectModule{"new_module", "modules/nested/new_module.am", {}},
+            "other\n");
+      },
+      "duplicate module ID should be rejected before publication");
+  expect(read_text(directory / "project.json") == manifest_before_duplicate,
+         "duplicate module ID should preserve the manifest");
+
+  write_text(directory / "modules/existing.am", "existing bytes\n");
+  expect_throws(
+      [&] {
+        amber::notebook::create_project_module(
+            &project, ProjectModule{"existing", "modules/existing.am", {}},
+            "replacement\n");
+      },
+      "existing module path should be rejected before overwrite");
+  expect(read_text(directory / entry.path) == hostile_source &&
+             read_text(directory / "modules/existing.am") == "existing bytes\n",
+         "existing module path should remain unchanged");
+
+  project.document.title = "dirty";
+  expect_throws(
+      [&] {
+        amber::notebook::create_project_module(
+            &project, ProjectModule{"dirty", "modules/dirty.am", {}},
+            "dirty\n");
+      },
+      "dirty in-memory project should reject module creation");
+  expect(!std::filesystem::exists(directory / "modules/dirty.am"),
+         "dirty project rejection should not create a source file");
+}
+
+void test_create_project_module_rejects_conflicts_and_symlinks() {
+  TempDirectory temporary;
+  const std::filesystem::path conflict_directory = temporary.path / "conflict";
+  amber::notebook::LoadedProject conflict =
+      amber::notebook::create_project(conflict_directory, valid_document());
+  ProjectDocument external = conflict.document;
+  external.title = "external";
+  write_text(conflict_directory / "project.json",
+             amber::notebook::serialize_project_document(external));
+  const std::string conflict_manifest =
+      read_text(conflict_directory / "project.json");
+  expect_throws(
+      [&] {
+        amber::notebook::create_project_module(
+            &conflict, ProjectModule{"conflict", "modules/conflict.am", {}},
+            "conflict\n");
+      },
+      "external project manifest edit should reject module creation");
+  expect(read_text(conflict_directory / "project.json") == conflict_manifest &&
+             !std::filesystem::exists(conflict_directory / "modules"),
+         "external conflict should leave manifest and module directory alone");
+
+  const std::filesystem::path symlink_directory = temporary.path / "symlink";
+  amber::notebook::LoadedProject symlink_project =
+      amber::notebook::create_project(symlink_directory, valid_document());
+  const std::filesystem::path outside = temporary.path / "outside";
+  std::error_code error;
+  std::filesystem::create_directories(outside, error);
+  expect(!error, "symlink target directory should be creatable");
+  std::filesystem::create_symlink(outside, symlink_directory / "modules",
+                                  error);
+  expect(!error, "module directory symlink should be creatable");
+  expect_throws(
+      [&] {
+        amber::notebook::create_project_module(
+            &symlink_project,
+            ProjectModule{"outside", "modules/outside.am", {}},
+            "must not follow\n");
+      },
+      "module directory symlink should be rejected");
+  expect(!std::filesystem::exists(outside / "outside.am"),
+         "module directory symlink should not mutate its target");
+
+  const std::filesystem::path leaf_directory = temporary.path / "leaf";
+  amber::notebook::LoadedProject leaf_project =
+      amber::notebook::create_project(leaf_directory, valid_document());
+  std::filesystem::create_directories(leaf_directory / "modules", error);
+  expect(!error, "module directory should be creatable");
+  write_text(outside / "leaf.am", "outside leaf\n");
+  std::filesystem::create_symlink(outside / "leaf.am",
+                                  leaf_directory / "modules/leaf.am", error);
+  expect(!error, "module leaf symlink should be creatable");
+  expect_throws(
+      [&] {
+        amber::notebook::create_project_module(
+            &leaf_project, ProjectModule{"leaf", "modules/leaf.am", {}},
+            "must not overwrite\n");
+      },
+      "module leaf symlink should be rejected");
+  expect(read_text(outside / "leaf.am") == "outside leaf\n" &&
+             read_text(leaf_directory / "project.json") == leaf_project.baseline,
+         "module leaf symlink should preserve outside and manifest bytes");
+}
+
 void test_symlink_parent_dotdot_uses_actual_filesystem_root() {
   TempDirectory temporary;
   const std::filesystem::path parent_a = temporary.path / "A";
@@ -874,6 +1124,10 @@ int main() {
   test_module_source_persistence_conflicts_and_independent_baselines();
   test_module_project_mapping_and_project_conflicts();
   test_module_symlink_components_and_nonblocking_project_lock();
+  test_create_project_module_publishes_source_before_manifest();
+  test_create_project_module_rejects_conflicts_and_symlinks();
+  test_text_content_roundtrip_and_strict_formatting();
+  test_v2_rich_text_headings_lists_and_tables();
   test_symlink_parent_dotdot_uses_actual_filesystem_root();
   std::cout << "notebook_project_tests ok\n";
   return 0;

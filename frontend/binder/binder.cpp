@@ -1224,7 +1224,11 @@ private:
       // ordinary same-named local.
       Binding *binding =
           resolve(scope_index, name, context, /*fallback=*/false);
-      if (binding == nullptr) {
+      // A class member is a send target, not lexical storage. Assignment in
+      // a method/block creates a local shadow; otherwise HIR has no slot and
+      // the emitter could accidentally overwrite parameter register zero.
+      if (binding == nullptr || ((binding->role == "method" || binding->role == "class_method") &&
+                                 binding->scope_index != scope_index)) {
         binding = declare_binding(scope_index, name, "local", "local",
                                   left.span, false, "",
                                   DuplicatePolicy::AllowExisting, context);
@@ -1404,6 +1408,7 @@ bool native_prelude_name_impl(const std::string &name) {
       "Bytes",
       "Channel",
       "Digest",
+      "Signature",
       "Err",
       "Flow",
       "Float",
@@ -1434,8 +1439,10 @@ bool native_prelude_name_impl(const std::string &name) {
       "Uuid",
       "Yaml",
       "desc",
+      "fs",
       "io",
       "net",
+      "notebook",
       "p",
       "pp",
       "print",
@@ -1795,9 +1802,14 @@ std::vector<lexer::Diagnostic> unresolved_name_diagnostics(
     if (is_native_prelude_name(ref.name)) {
       continue;
     }
+    // `self` is a VM receiver expression, not a lexical binding or an
+    // implicit method call. It is available in object scopes and their blocks.
+    if (ref.name == "self" && has_object_receiver(ref.scope_index)) {
+      continue;
+    }
     // An unresolved ordinary identifier inside an instance/class method is a
     // dynamic send candidate. The runtime performs ancestry/mixin lookup and
-    // (for bare value access) enforces a syntactically-nullary signature.
+    // (for bare value access) enforces a zero-argument-callable signature.
     // Outside an object-receiver scope it remains an undefined-name error.
     if (is_implicit_receiver_candidate(ref)) {
       continue;

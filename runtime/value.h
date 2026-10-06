@@ -273,7 +273,9 @@ enum class RuntimeNativeTypeKind {
   Uuid,
   TimeZone,
   Yaml,
-  System
+  System,
+  Signature,
+  Notebook
 };
 
 struct NativeTypeValue {

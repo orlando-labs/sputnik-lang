@@ -6,6 +6,7 @@
         examples: "Примеры",
         technology: "Технологии",
         guide: "Гид",
+        cheatsheet: "Шпаргалка",
         modules: "Библиотека",
         spec: "Спека",
         docs: "Документация"
@@ -15,6 +16,14 @@
         contents: "Содержание",
         pages: "страниц",
         loading: "Загружаю Гид…"
+      },
+      cheatsheet: {
+        eyebrow: "Technical preview · EN",
+        title: "Шпаргалка Sputnik",
+        lead: "Синтаксис и повседневные рецепты в одном документе: от первых выражений до блоков, коллекций, pattern matching и задач. Исходная шпаргалка — на английском.",
+        read: "Начать с основ",
+        source: "Скачать Markdown",
+        loading: "Загружаю шпаргалку…"
       },
       hero: {
         eyebrow: "No-GIL VM · native threads · compact syntax",
@@ -177,6 +186,7 @@
         examples: "Examples",
         technology: "Technology",
         guide: "Guide",
+        cheatsheet: "Cheat sheet",
         modules: "Library",
         spec: "Spec",
         docs: "Documentation"
@@ -186,6 +196,14 @@
         contents: "Contents",
         pages: "pages",
         loading: "Loading the Guide…"
+      },
+      cheatsheet: {
+        eyebrow: "Technical preview · EN",
+        title: "Sputnik cheat sheet",
+        lead: "Syntax and everyday recipes in one document: from your first expressions to blocks, collections, pattern matching and tasks.",
+        read: "Start with the basics",
+        source: "Download Markdown",
+        loading: "Loading the cheat sheet…"
       },
       hero: {
         eyebrow: "No-GIL VM · native threads · compact syntax",
@@ -378,7 +396,9 @@
     } else if (document.body.classList.contains("guide-page")) {
       window.renderSputnikGuidePage?.(state.lang);
     } else {
-      document.title = document.body.classList.contains("spec-page")
+      document.title = document.body.classList.contains("cheat-sheet-page")
+        ? (state.lang === "ru" ? "Sputnik — шпаргалка" : "Sputnik — cheat sheet")
+        : document.body.classList.contains("spec-page")
         ? (state.lang === "ru" ? "Sputnik — спецификация" : "Sputnik — specification")
         : document.body.classList.contains("docs-page")
         ? (state.lang === "ru" ? "Sputnik — модули VM" : "Sputnik — VM modules")

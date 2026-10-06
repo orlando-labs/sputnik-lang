@@ -51,7 +51,12 @@
 
   const inline = (value, resolveHref) => {
     let html = escapeHtml(value);
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+    // Keep literal operators (especially * and **) out of emphasis parsing.
+    const codeSpans = [];
+    html = html.replace(/`([^`]+)`/g, (_, code) => {
+      codeSpans.push(`<code>${code}</code>`);
+      return `\u0000${codeSpans.length - 1}\u0000`;
+    });
     html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     html = html.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
     html = html.replace(
@@ -68,17 +73,26 @@
         return `<a href="${safeHref}">${label}</a>`;
       }
     );
-    return html;
+    return html.replace(/\u0000(\d+)\u0000/g, (_, index) => codeSpans[Number(index)]);
   };
 
   const renderTable = (rows, resolveHref) => {
-    const cells = (line) =>
-      line
-        .trim()
-        .replace(/^\|/, "")
-        .replace(/\|$/, "")
-        .split("|")
-        .map((cell) => cell.trim());
+    const cells = (line) => {
+      const row = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+      const values = [""];
+      for (let index = 0; index < row.length; index++) {
+        const char = row[index];
+        if (char === "\\" && index + 1 < row.length) {
+          const next = row[++index];
+          values[values.length - 1] += next === "|" ? "|" : `\\${next}`;
+        } else if (char === "|") {
+          values.push("");
+        } else {
+          values[values.length - 1] += char;
+        }
+      }
+      return values.map((cell) => cell.trim());
+    };
     const head = cells(rows[0]);
     const body = rows.slice(2).map(cells);
     return `

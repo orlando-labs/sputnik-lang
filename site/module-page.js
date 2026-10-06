@@ -8,6 +8,7 @@
       <nav class="main-nav" aria-label="Primary navigation">
         <a href="../index.html#features" data-i18n="nav.features">Возможности</a>
         <a href="../index.html#inside" data-i18n="nav.technology">Технологии</a>
+        <a href="../cheat-sheet.html" data-i18n="nav.cheatsheet">Шпаргалка</a>
         <a href="../learn.html" data-i18n="nav.guide">Гид</a>
         <a href="../modules.html" class="active" data-i18n="nav.modules">Модули VM</a>
         <a href="../spec.html" data-i18n="nav.spec">Спека</a>

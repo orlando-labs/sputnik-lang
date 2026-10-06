@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="A quick introduction to Sputnik: syntax, blocks, collections, pattern matching, tasks and everyday recipes." />
+    <meta name="theme-color" content="#f4f1e9" />
+    <title>Sputnik — шпаргалка</title>
+    <link rel="icon" href="./assets/sputnik-mark.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="docs-page cheat-sheet-page">
+    <header class="site-header">
+      <a class="brand" href="./index.html" aria-label="Sputnik home">
+        <span class="brand-gem"><img src="./assets/sputnik-mark.png" alt="" /></span>
+        <span>Sputnik</span>
+      </a>
+      <nav class="main-nav" aria-label="Primary navigation">
+        <a href="./index.html#features" data-i18n="nav.features">Возможности</a>
+        <a href="./cheat-sheet.html" class="active" aria-current="page" data-i18n="nav.cheatsheet">Шпаргалка</a>
+        <a href="./learn.html" data-i18n="nav.guide">Гид</a>
+        <a href="./modules.html" data-i18n="nav.modules">Библиотека</a>
+        <a href="./spec.html" data-i18n="nav.spec">Спека</a>
+      </nav>
+      <div class="language-switch" role="group" aria-label="Language">
+        <button type="button" data-lang="ru" aria-pressed="true">RU</button>
+        <button type="button" data-lang="en" aria-pressed="false">EN</button>
+      </div>
+    </header>
+
+    <main class="docs-main">
+      <section class="docs-hero">
+        <div class="eyebrow"><span class="eyebrow-dot"></span><span data-i18n="cheatsheet.eyebrow">Technical preview · EN</span></div>
+        <h1 data-i18n="cheatsheet.title">Шпаргалка Sputnik</h1>
+        <p data-i18n="cheatsheet.lead">Синтаксис и повседневные рецепты в одном документе: от первых выражений до блоков, коллекций, pattern matching и задач. Исходная шпаргалка — на английском.</p>
+        <div class="spec-hero-actions">
+          <a class="button button-primary" href="#1-essentials"><span data-i18n="cheatsheet.read">Начать с основ</span><span aria-hidden="true">↓</span></a>
+          <a class="button button-ghost" href="./cheat-sheet.md" download><span data-i18n="cheatsheet.source">Скачать Markdown</span><span aria-hidden="true">↗</span></a>
+        </div>
+      </section>
+
+      <div class="spec-layout">
+        <aside class="spec-sidebar">
+          <div class="spec-sidebar-head">
+            <span data-i18n="spec.toc">Оглавление</span>
+            <small><span id="spec-section-count">0</span> <span data-i18n="spec.sections">разделов</span></small>
+          </div>
+          <div class="docs-search-wrap spec-search-wrap">
+            <span aria-hidden="true">⌕</span>
+            <input id="spec-search" type="search" autocomplete="off" placeholder="Найти раздел" aria-label="Найти раздел" data-i18n-placeholder="spec.search" data-i18n-aria-label="spec.search" />
+          </div>
+          <nav id="spec-toc" class="spec-toc" lang="en" aria-label="Cheat sheet table of contents"></nav>
+          <a class="spec-source-link" href="./cheat-sheet.md"><span data-i18n="spec.sourceShort">Markdown source</span> ↗</a>
+        </aside>
+        <article id="spec-content" class="spec-content" lang="en" data-source="./cheat-sheet.md" aria-live="polite">
+          <div class="spec-loading"><p data-i18n="cheatsheet.loading">Загружаю шпаргалку…</p></div>
+        </article>
+      </div>
+    </main>
+
+    <footer>
+      <a class="brand" href="./index.html"><span class="brand-gem"><img src="./assets/sputnik-mark.png" alt="" /></span><span>Sputnik</span></a>
+      <p data-i18n="footer.text">No-GIL runtime. Expressive surface. Native path.</p>
+      <span>Technical preview</span>
+    </footer>
+    <script src="./app.js"></script>
+    <script src="./md-render.js"></script>
+    <script src="./spec-page.js"></script>
+  </body>
+</html>

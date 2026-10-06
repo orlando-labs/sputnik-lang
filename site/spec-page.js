@@ -1,5 +1,4 @@
 (() => {
-  const sourcePath = "./spec/sputnik_unified_final_spec.md";
   const content = document.querySelector("#spec-content");
   const toc = document.querySelector("#spec-toc");
   const search = document.querySelector("#spec-search");
@@ -7,12 +6,24 @@
 
   if (!content || !toc) return;
 
+  const isCheatSheet = document.body.classList.contains("cheat-sheet-page");
+  const sourcePath = content.dataset.source || "./spec/sputnik_unified_final_spec.md";
+
   const escapeHtml = window.SputnikMarkdown.escapeHtml;
 
-  // Spec links use plain relative paths into ./spec/; absolute/anchor links pass
-  // through untouched.
+  // The cheat sheet keeps the canonical document's repository-relative links.
+  // Specs already published on the site stay local; other references open GitHub.
   const resolveHref = (href) => {
     if (/^(https?:|mailto:|#)/i.test(href)) return href;
+    if (isCheatSheet) {
+      const [path, anchor] = href.split("#");
+      const localSpecs = {
+        "../sputnik_unified_final_spec.md": "./spec.html",
+        "../sputnik_runtime_project_design.md": "./spec/sputnik_runtime_project_design.md"
+      };
+      const target = localSpecs[path] || new URL(path, "https://github.com/orlando-labs/amber-lang/blob/main/docs/").href;
+      return target + (anchor ? `#${anchor}` : "");
+    }
     if (href.startsWith("./") || href.startsWith("../")) return href;
     return `./spec/${href}`;
   };
@@ -68,18 +79,26 @@
     try {
       const response = await fetch(sourcePath);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const markdown = await response.text();
+      const source = await response.text();
+      // The page hero already supplies the cheat sheet's title.
+      const markdown = isCheatSheet ? source.replace(/^# [^\n]+\n/, "") : source;
       const rendered = window.SputnikMarkdown.render(markdown, { resolveHref });
       content.innerHTML = rendered.html;
       renderToc(rendered.headings);
       wireTocSearch();
       wireActiveHeadings();
+      // A direct section URL must also work after the async Markdown load.
+      const anchor = rendered.headings.find((heading) =>
+        location.hash === `#${heading.id}` || location.hash === `#${encodeURIComponent(heading.id)}`
+      );
+      if (anchor) document.getElementById(anchor.id)?.scrollIntoView();
     } catch (error) {
+      const isEnglish = document.documentElement.lang === "en";
       content.innerHTML = `
         <div class="spec-error">
-          <h2>Не удалось загрузить Markdown-копию</h2>
-          <p>Откройте сайт через локальный HTTP-сервер или перейдите прямо к исходной копии спеки.</p>
-          <a class="button button-primary" href="${sourcePath}">Открыть Markdown</a>
+          <h2 data-ru="Не удалось загрузить документ" data-en="Could not load the document">${isEnglish ? "Could not load the document" : "Не удалось загрузить документ"}</h2>
+          <p data-ru="Откройте исходный Markdown по ссылке ниже." data-en="Open the Markdown source below.">${isEnglish ? "Open the Markdown source below." : "Откройте исходный Markdown по ссылке ниже."}</p>
+          <a class="button button-primary" href="${sourcePath}">Markdown ↗</a>
         </div>
       `;
       console.error(error);

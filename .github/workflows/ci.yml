@@ -62,3 +62,5 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3
       - name: make spec-sync-check
         run: make spec-sync-check
+      - name: Check website cheat sheet
+        run: python3 tools/sync_cheat_sheet.py --check

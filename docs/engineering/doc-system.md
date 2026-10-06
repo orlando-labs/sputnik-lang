@@ -1,14 +1,17 @@
 # Documentation system
 
-Two generated documentation surfaces feed the website (`site/`):
+Three generated documentation surfaces feed the website (`site/`):
 
 1. **The Guide** — a bilingual, example-led *knowledge graph* of Markdown nodes
    that teaches the language step by step (`site/learn.html`).
 2. **The module reference** — auto/best-effort API pages for the native VM
    modules, generated from the runtime source of truth plus curated examples
    (`site/modules.html`).
+3. **The cheat sheet** — the compact syntax reference and everyday recipes from
+   `docs/cheat-sheet.md`, published at `site/cheat-sheet.html` and linked in every
+   page's main menu. The document is in English; its page navigation is bilingual.
 
-Both render client-side through the shared Markdown renderer in
+Markdown documents render client-side through the shared Markdown renderer in
 `site/md-render.js` (no build step, no third-party deps).
 
 ---
@@ -177,10 +180,31 @@ module reference depends on the spec.
 
 ---
 
+## 4. Publishing the cheat sheet
+
+Edit `docs/cheat-sheet.md`, the canonical source, then publish its byte-for-byte
+copy for the static website:
+
+```sh
+python3 tools/sync_cheat_sheet.py
+python3 tools/sync_cheat_sheet.py --check
+```
+
+CI checks that the published copy is current. The page shares `spec-page.js`
+with the specification: section anchors, a searchable table of contents, and
+active-section tracking. Links to the main spec stay on the website; references
+to other repository documents or corpus examples point to GitHub.
+
+---
+
 ## File map
 
 | Concern | File |
 | --- | --- |
+| Cheat sheet source | `docs/cheat-sheet.md` |
+| Cheat sheet page / published copy | `site/cheat-sheet.html`, `site/cheat-sheet.md` |
+| Spec and cheat sheet renderer | `site/spec-page.js` |
+| Cheat sheet publisher | `tools/sync_cheat_sheet.py` |
 | Shared Markdown renderer | `site/md-render.js` |
 | Guide page shell / renderer | `site/learn.html`, `site/guide-page.js` |
 | Guide content | `site/guide/content/**/*.{ru,en}.md` |

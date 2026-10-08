@@ -277,6 +277,11 @@ local = task.async: 20 + 1           # cooperative, same strand
 parallel = task.spawn: 21           # parallel, new strand
 local.wait() + parallel.wait()      # 42; wait rethrows child failures
 
+xs = [1, 2, 3, 4, 5, 6, 7, 8]
+serial = xs.map: $it * $it           # sequential array pass
+squares = xs.threaded(4, scatter: :chunks).map: $it * $it
+# [1, 4, 9, 16, 25, 36, 49, 64]; 4 workers, 2 consecutive items per chunk
+
 counter = Atomic.new(0)
 counter.update: $it + 1              # CAS may retry: keep block side-effect-free
 mutex = Mutex.new()
@@ -286,6 +291,8 @@ print "Hello, #{name}"              # display, newline per argument; returns nul
 p value                             # inspect; returns value (Tuple for several)
 pp value                            # pretty inspect; same return convention
 ```
+
+`.threaded(4, scatter: :chunks)` splits the array into contiguous chunks with one task per worker. `map` waits for completion and preserves input order; input elements and results must be shareable. For faster passes over large arrays with similar CPU work per element, give each chunk enough work to amortize scheduling overhead. The default `scatter: :atomic` assigns the next item dynamically and suits uneven work.
 
 Structured scopes join children. The spec's explicit root scope is `async |task|:` (see local binary note below). `task.async` can capture same-strand mutable state; `task.spawn` requires shareable captures (for example deeply frozen data). `task.sleep(seconds)` / `.yield()` cooperate; handles offer `.wait(timeout: seconds)`, `.cancel()`, `.resume()`. `Channel.new(capacity: 0)` is rendezvous; positive capacity buffers; `.send(v)` / `.recv()` communicate shareable values. Close explicitly with `.close()`; a drained closed channel raises `ChannelClosedError`. `Mutex` is non-reentrant. `task.flow` adds `scatter_map(items, workers: 4) |item|: …` and `scatter_reduce`.
 

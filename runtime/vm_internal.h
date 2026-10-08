@@ -111,6 +111,16 @@ struct CallCacheEntry {
   mutable std::optional<std::uint64_t> pending_overflow_shape;
 };
 
+// Construction resolves this optional hook after init completes. Cache a
+// missing hook as well as a method; Tensor-like value wrappers usually have
+// no hook. Entries are immutable so nested construction and world snapshots
+// can retain a resolved method while a newer entry is published.
+struct ConstructorHookCacheEntry {
+  std::uint64_t world_epoch = 0;
+  std::uint64_t method_version = 0;
+  std::optional<bytecode::BcMethod> method;
+};
+
 struct IvarCacheEntry {
   bool valid = false;
   std::uint32_t receiver_class_index = 0;
@@ -574,6 +584,8 @@ struct RuntimeState {
   std::uint64_t call_cache_misses = 0;
   std::uint64_t call_cache_updates = 0;
   std::vector<std::vector<std::shared_ptr<IvarCacheEntry>>> ivar_caches;
+  std::vector<std::shared_ptr<const ConstructorHookCacheEntry>>
+      constructor_hook_caches;
   // Path constants and the bytecode class table are immutable for the
   // lifetime of a RuntimeState. Resolve class references once when the module
   // is installed instead of rebuilding path strings and linearly scanning all
@@ -855,6 +867,7 @@ struct RuntimeState {
     }
     call_caches.clear();
     ivar_caches.clear();
+    constructor_hook_caches.clear();
     call_caches.resize(static_cast<std::size_t>(max_code_id) + 1U);
     ivar_caches.resize(static_cast<std::size_t>(max_code_id) + 1U);
     for (const bytecode::BcCode &code : module.code_objects) {

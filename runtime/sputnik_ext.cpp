@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <forward_list>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -448,6 +449,18 @@ bool sputnik_ext_destroy_direct(const SputnikExtDirectOps &ops, void *state,
 
 // ---- process-global registration ---------------------------------------
 
+void validate_native_leaf_descriptor(const SputnikLeafDescriptor *leaf,
+                                     bool blocking) {
+  if (leaf == nullptr) return;
+  if (leaf->abi_version != SPUTNIK_LEAF_ABI_VERSION ||
+      leaf->struct_size != sizeof(SputnikLeafDescriptor) ||
+      leaf->signature != SPUTNIK_LEAF_HANDLE_INT ||
+      leaf->receiver_tag == nullptr || leaf->receiver_tag[0] == '\0' ||
+      leaf->handle_int == nullptr || blocking) {
+    throw std::invalid_argument("incompatible native leaf ABI descriptor");
+  }
+}
+
 void NativeExtRegistry::register_thunk(const std::string &logical, void *fn) {
   const auto found = std::find_if(
       descriptor_.thunks.begin(), descriptor_.thunks.end(),
@@ -456,6 +469,7 @@ void NativeExtRegistry::register_thunk(const std::string &logical, void *fn) {
       });
   if (found != descriptor_.thunks.end()) {
     found->fn = fn;
+    found->leaf = nullptr;
     return;
   }
   descriptor_.thunks.push_back({logical, fn, false});
@@ -478,6 +492,7 @@ void NativeExtRegistry::register_error(NativeExtErrorDescriptor descriptor) {
 void NativeExtRegistry::register_package(
     RuntimeNativePackageDescriptor descriptor) {
   for (const RuntimeNativePackageThunkDescriptor &thunk : descriptor.thunks) {
+    validate_native_leaf_descriptor(thunk.leaf, thunk.blocking);
     const auto found = std::find_if(
         descriptor_.thunks.begin(), descriptor_.thunks.end(),
         [&](const RuntimeNativePackageThunkDescriptor &registered) {
@@ -486,6 +501,7 @@ void NativeExtRegistry::register_package(
     if (found != descriptor_.thunks.end()) {
       found->fn = thunk.fn;
       found->blocking = thunk.blocking;
+      found->leaf = thunk.leaf;
     } else {
       descriptor_.thunks.push_back(thunk);
     }
@@ -524,7 +540,7 @@ void NativeExtRegistry::register_thunks(
     RuntimeDispatchRegistry &dispatch) const {
   for (const RuntimeNativePackageThunkDescriptor &thunk : descriptor_.thunks) {
     dispatch.register_native_package_thunk(thunk.logical, thunk.fn,
-                                           thunk.blocking);
+                                           thunk.blocking, thunk.leaf);
   }
 }
 void NativeExtRegistry::register_types(RuntimeTypeRegistry &types) const {
@@ -558,7 +574,7 @@ NativeExtRegistry::resolve_thunk(const std::string &logical) const {
   if (found == descriptor_.thunks.end()) {
     return std::nullopt;
   }
-  return ResolvedThunk{found->fn, found->blocking};
+  return ResolvedThunk{found->fn, found->blocking, found->leaf};
 }
 const NativeTypeDescriptor *
 NativeExtRegistry::find_type(const std::string &tag) const {
@@ -602,7 +618,39 @@ NativeExtCallOutcome sputnik_ext_invoke_free(StdlibHost &host, const void *frame
 NativeExtCallOutcome
 sputnik_ext_invoke_method(StdlibHost &host, const void *frame,
                         const NativeTagRegistry &tags, SputnikMethodFn fn,
-                        const Value &self, const std::vector<Value> &args) {
+                        const Value &self, const std::vector<Value> &args,
+                        const SputnikLeafDescriptor *leaf) {
+  if (leaf != nullptr && args.empty()) {
+    const auto fail = [&](const char *kind, const char *message) {
+      host.stdlib_raise_runtime_error(frame, kind, message);
+      return NativeExtCallOutcome{};
+    };
+    if (!self.is_foreign_handle())
+      return fail("TypeError", "expected a native handle");
+    const auto handle = self.as_foreign_handle();
+    if (handle == nullptr) return fail("TypeError", "native handle is null");
+    if (handle->tag != leaf->receiver_tag)
+      return fail("TypeError", "native handle tag mismatch");
+    if (!handle->live)
+      return fail("LifetimeError", "native handle used after destroy!");
+    struct FaultState { StdlibHost *host; const void *frame; bool raised; };
+    FaultState state{&host, frame, false};
+    const SputnikLeafFault fault{&state, [](void *opaque, const char *kind,
+                                          const char *message) {
+      auto &state = *static_cast<FaultState *>(opaque);
+      state.raised = true;
+      state.host->stdlib_raise_runtime_error(
+          state.frame, kind == nullptr ? "RuntimeError" : kind,
+          message == nullptr ? "" : message);
+      return SPUTNIK_ERR;
+    }};
+    std::int64_t result = 0;
+    const SputnikStatus status = leaf->handle_int(handle->ptr, &result, &fault);
+    if (state.raised) return {};
+    if (status != SPUTNIK_OK)
+      return fail("RuntimeError", "native leaf call failed without a fault");
+    return {true, Value::integer(result)};
+  }
   SputnikCtx ctx;
   ctx.host = &host;
   ctx.frame = frame;

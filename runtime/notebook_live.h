@@ -1,11 +1,14 @@
 #pragma once
 
 #include "runtime/notebook_display.h"
+#include "runtime/notebook_chart.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -21,7 +24,7 @@ namespace sputnik::runtime {
 
 // Live notebook values deliberately contain no Value, heap pointer, or VM
 // object.  A host can retain a snapshot after the VM and its image have gone
-// away.  Figure bytes are already immutable PNG bytes at this boundary.
+// away. Figure payloads are immutable PNGs or scene-only board frames.
 enum class NotebookLiveEventKind { Progress, Figure };
 
 struct NotebookLiveEvent {
@@ -67,8 +70,106 @@ public:
   static constexpr std::size_t kMaxDescriptionBytes = 65536;
 
   NotebookLiveStore() = default;
+  ~NotebookLiveStore() { close(); }
   NotebookLiveStore(const NotebookLiveStore &) = delete;
   NotebookLiveStore &operator=(const NotebookLiveStore &) = delete;
+
+  std::uint64_t begin_chart(std::uint64_t cell, std::uint64_t generation, NotebookChartStyle style) {
+    if (style.id.empty() || style.id.size() > kMaxIdBytes || style.width < 160 || style.height < 160 ||
+        style.width > 8192 || style.height > 8192 || std::uint64_t(style.width) * style.height > 16000000 ||
+        style.throttle_ms > 3600000 || !std::isfinite(style.stroke_width) || style.stroke_width <= 0 || style.stroke_width > 1024)
+      throw std::invalid_argument("invalid chart style");
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!open_ || generations_[cell] != generation) throw std::invalid_argument("chart run is closed or stale");
+    if (charts_.size() >= 64) throw std::invalid_argument("chart count exceeds 64");
+    for (const auto &c : charts_) if (c.snapshot.cell_id == cell && c.snapshot.style.id == style.id)
+      throw std::invalid_argument("chart id is already active in this cell");
+    Chart chart;
+    chart.snapshot.style = std::move(style); chart.snapshot.cell_id = cell;
+    chart.snapshot.generation = generation; chart.snapshot.handle = ++next_chart_handle_;
+    chart.snapshot.revision = 1; chart.snapshot.tail.reserve(256);
+    charts_.push_back(std::move(chart));
+    if (!renderer_.joinable()) {
+      try { renderer_ = std::thread([this] { render_charts(); }); }
+      catch (...) { charts_.pop_back(); throw; }
+    }
+    wake_.notify_all();
+    return charts_.back().snapshot.handle;
+  }
+
+  // Amortized O(1): sealed chunks are shared with the renderer. A snapshot
+  // copies at most 255 points under the producer lock, never the full history.
+  void append_chart(std::uint64_t handle, NotebookChartPoint point) {
+    if (!std::isfinite(point[0]) || !std::isfinite(point[1]) ||
+        std::abs(point[0]) >= 1e100 || std::abs(point[1]) >= 1e100)
+      throw std::invalid_argument("chart points must be finite with magnitude below 1e100");
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto &c = chart_locked(handle);
+    if (c.finished) throw std::invalid_argument("chart has ended");
+    auto &s = c.snapshot;
+    // Live components keep a bounded rolling window. Long training must not
+    // fail merely because its visualization outlives the display budget.
+    if (s.count >= 65536 && !s.chunks.empty()) {
+      const auto retired = s.chunks.front()->size();
+      s.chunks.pop_front(); s.count -= retired; chart_points_ -= retired;
+    }
+    if (chart_points_ >= 524288) throw std::invalid_argument("run chart point budget exceeded");
+    if (s.count == 0) s.bounds = {point[0], point[1], point[0], point[1]};
+    else {
+      s.bounds[0] = std::min(s.bounds[0], point[0]); s.bounds[1] = std::min(s.bounds[1], point[1]);
+      s.bounds[2] = std::max(s.bounds[2], point[0]); s.bounds[3] = std::max(s.bounds[3], point[1]);
+    }
+    s.tail.push_back(point); ++s.count; ++s.total_points; ++chart_points_; ++s.revision;
+    if (s.tail.size() == 256) {
+      s.chunks.push_back(std::make_shared<const NotebookChartChunk>(std::move(s.tail)));
+      s.tail = {}; s.tail.reserve(256);
+    }
+    // The renderer wakes periodically. Per-point notifications would put the
+    // render thread in competition with a high-frequency producer.
+  }
+
+  void end_chart(std::uint64_t handle) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto &c = chart_locked(handle); c.finished = true; wake_.notify_all();
+  }
+
+  struct ChartResult { std::string id; NotebookDisplay display; NotebookDisplayOrder order; };
+  std::vector<ChartResult> finish_charts(std::uint64_t cell, std::uint64_t generation) {
+    std::unique_lock<std::mutex> lock(mutex_);
+    for (auto &c : charts_) if (c.snapshot.cell_id == cell && c.snapshot.generation == generation) c.finished = true;
+    wake_.notify_all();
+    wake_.wait(lock, [&] {
+      if (!open_) return true;
+      for (const auto &c : charts_) if (c.snapshot.cell_id == cell && c.snapshot.generation == generation &&
+          (c.busy || c.rendered_revision < c.snapshot.revision)) return false;
+      return true;
+    });
+    std::vector<ChartResult> result;
+    for (const auto &c : charts_) if (c.snapshot.cell_id == cell && c.snapshot.generation == generation) {
+      if (!c.error.empty()) throw std::runtime_error(c.error);
+      const auto *entry = find_locked(NotebookLiveEventKind::Figure, cell, c.snapshot.style.id);
+      if (entry) result.push_back({c.snapshot.style.id, entry->event.display, c.snapshot.style.order});
+    }
+    return result;
+  }
+
+  // A kind/cell delta contains all entries of that changed kind, so deletion
+  // and ordering are unambiguous while progress never copies image buffers.
+  struct Delta { std::vector<NotebookLiveEvent> events; std::vector<std::uint64_t> resets; };
+  bool changes_since(std::uint64_t *revision, Delta *result) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (*revision == sequence_) return false;
+    result->events.clear(); result->resets.clear();
+    for (const auto &r : resets_) if (r.second > *revision) result->resets.push_back(r.first);
+    std::vector<std::pair<NotebookLiveEventKind, std::uint64_t>> changed;
+    for (const auto &e : entries_) if (e.event.sequence > *revision) {
+      const auto key = std::make_pair(e.key.kind, e.key.cell_id);
+      if (std::find(changed.begin(), changed.end(), key) == changed.end()) changed.push_back(key);
+    }
+    for (const auto &e : entries_) if (std::find(changed.begin(), changed.end(),
+        std::make_pair(e.key.kind, e.key.cell_id)) != changed.end()) result->events.push_back(e.event);
+    *revision = sequence_; return true;
+  }
 
   bool active() const {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -191,6 +292,11 @@ public:
     if (!open_) return 0;
     const std::uint64_t generation = ++generations_[cell_id];
     ++sequence_;
+    resets_[cell_id] = sequence_;
+    for (auto i = charts_.begin(); i != charts_.end();) {
+      if (i->snapshot.cell_id == cell_id) { chart_points_ -= i->snapshot.count; i = charts_.erase(i); }
+      else ++i;
+    }
     auto it = entries_.begin();
     while (it != entries_.end()) {
       if (it->key.cell_id != cell_id) {
@@ -221,11 +327,14 @@ public:
   }
 
   void close() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    open_ = false;
-    entries_.clear();
-    figure_bytes_ = 0;
-    text_bytes_ = 0;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      open_ = false; entries_.clear(); charts_.clear();
+      figure_bytes_ = text_bytes_ = chart_points_ = 0;
+    }
+    wake_.notify_all();
+    std::lock_guard<std::mutex> joining(join_mutex_);
+    if (renderer_.joinable()) renderer_.join();
   }
 
   static std::uint64_t monotonic_millis() {
@@ -235,6 +344,62 @@ public:
   }
 
 private:
+  struct Chart {
+    NotebookChartSnapshot snapshot;
+    std::uint64_t rendered_revision = 0, next_render_ms = 0;
+    bool finished = false, busy = false;
+    std::string error;
+  };
+  Chart &chart_locked(std::uint64_t handle) {
+    if (!open_) throw std::invalid_argument("chart run is closed");
+    for (auto &c : charts_) if (c.snapshot.handle == handle) return c;
+    throw std::invalid_argument("unknown or stale chart handle");
+  }
+  void render_charts() noexcept {
+    std::unique_lock<std::mutex> lock(mutex_);
+    while (open_) {
+      NotebookChartSnapshot snapshot;
+      bool found = false;
+      const auto now = monotonic_millis();
+      for (auto &c : charts_) if (c.rendered_revision < c.snapshot.revision &&
+          (c.finished || now >= c.next_render_ms)) {
+        try { snapshot = c.snapshot; } catch (...) { c.error = "unable to snapshot chart"; c.rendered_revision = c.snapshot.revision; continue; }
+        c.busy = true; found = true; break;
+      }
+      if (!found) {
+        wake_.notify_all();
+        const bool active = std::any_of(charts_.begin(), charts_.end(), [](const auto &c) { return !c.finished; });
+        if (active) wake_.wait_for(lock, std::chrono::milliseconds(20));
+        else wake_.wait(lock);
+        continue;
+      }
+      lock.unlock();
+      NotebookDisplay display;
+      std::string error;
+      try { display = notebook_chart_render(snapshot); }
+      catch (...) { error = "unable to render chart scene"; }
+      lock.lock();
+      // A reset can retire an in-flight snapshot. Never publish it into a new
+      // generation even if its id is reused there.
+      auto c = std::find_if(charts_.begin(), charts_.end(), [&](const auto &v) { return v.snapshot.handle == snapshot.handle; });
+      if (c == charts_.end() || !open_) continue;
+      lock.unlock();
+      if (error.empty()) {
+        try {
+          if (publish_figure(snapshot.cell_id, snapshot.style.id, std::move(display), 0,
+                             monotonic_millis(), snapshot.generation) != NotebookLivePublishResult::Accepted)
+            error = "chart scene exceeds output limits or run is stale";
+        } catch (...) { error = "unable to publish chart scene"; }
+      }
+      lock.lock();
+      c = std::find_if(charts_.begin(), charts_.end(), [&](const auto &v) { return v.snapshot.handle == snapshot.handle; });
+      if (c != charts_.end()) {
+        c->busy = false; c->error = std::move(error); c->rendered_revision = snapshot.revision;
+        c->next_render_ms = monotonic_millis() + snapshot.style.throttle_ms;
+      }
+      wake_.notify_all();
+    }
+  }
   struct EntryKey {
     NotebookLiveEventKind kind;
     std::uint64_t cell_id;
@@ -324,6 +489,13 @@ private:
   std::size_t text_bytes_ = 0;
   std::vector<Entry> entries_;
   std::unordered_map<std::uint64_t, std::uint64_t> generations_;
+  std::unordered_map<std::uint64_t, std::uint64_t> resets_;
+  std::vector<Chart> charts_;
+  std::size_t chart_points_ = 0;
+  static inline std::atomic<std::uint64_t> next_chart_handle_{0};
+  std::thread renderer_;
+  std::condition_variable wake_;
+  std::mutex join_mutex_;
 };
 
 // A scope propagates the current run sink through ordinary native/module code

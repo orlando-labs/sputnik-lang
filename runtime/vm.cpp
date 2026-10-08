@@ -5303,7 +5303,7 @@ private:
   }
 
   void push_frame(const BcCode &code, const std::vector<Value> &args,
-                  std::vector<Value> captures, Value self, Value block,
+                  const std::vector<Value> &captures, Value self, Value block,
                   std::optional<std::uint32_t> caller_result_reg,
                   std::shared_ptr<NonlocalReturnTarget>
                       inherited_return_target = nullptr) {
@@ -5631,7 +5631,73 @@ private:
     return !fault_.has_value();
   }
 
-  FastCallStatus step_fast_closure_call(Frame &frame, const Instruction &insn) {
+  FastCallStatus step_fast_cached_constructor(
+      Frame &caller, const Value &klass, const FastCallArg *args,
+      std::uint32_t pos_count, std::uint32_t dst,
+      std::optional<std::uint32_t> site_id) {
+    if (!site_id.has_value()) {
+      return FastCallStatus::NotHandled;
+    }
+    const std::uint32_t class_index = klass.as_class_object().class_index;
+    const auto init_symbol = symbol_id_for_text("init");
+    if (!init_symbol.has_value() ||
+        native_error_id_for_class(class_index).has_value()) {
+      return FastCallStatus::NotHandled;
+    }
+    // Peek without changing counters: a declined fast path is resolved and
+    // counted once by the ordinary constructor path below.
+    const CallCacheEntry *entry = probe_plain_call_cache_entry(
+        caller, *site_id, class_index, kMethodFlagInstance, *init_symbol,
+        pos_count, false);
+    if (entry == nullptr) {
+      return FastCallStatus::NotHandled;
+    }
+    const bytecode::BcMethod &method = entry->method;
+    const BcCode *code = lookup_code(method.entry_code_id);
+    if (code == nullptr || !method.clause_table.empty() ||
+        code_needs_param_shaping(method.entry_code_id) ||
+        dispatch_registry().native_package_code_binding(method.entry_code_id) !=
+            nullptr) {
+      return FastCallStatus::NotHandled;
+    }
+    std::optional<std::size_t> param_count;
+    if (!method.params.empty()) {
+      param_count = method.params.size();
+    } else if (method.signature_blob_id < module_.const_pool.size()) {
+      const Constant &signature = module_.const_pool[method.signature_blob_id];
+      if (signature.kind == ConstantKind::Path) {
+        param_count = signature.items.size();
+      }
+    }
+    if (!param_count.has_value() || pos_count != *param_count) {
+      return FastCallStatus::NotHandled;
+    }
+    record_call_cache_hit();
+    // The common constructor now uses the same bounded argument storage as a
+    // closure CALL. Defaults, spread, native handles, keywords and blocks keep
+    // the general binder. Instance allocation and init/hook execution remain
+    // ordinary VM operations, including suspended and exceptional returns.
+    Value pos_args[8];
+    for (std::uint32_t index = 0; index < pos_count; ++index) {
+      pos_args[index] = args[index].int_valid
+                            ? Value::integer(args[index].int_value)
+                            : args[index].value;
+    }
+    auto instance = make_instance_value(class_index);
+    if (!ensure_instance_layout(caller, instance)) {
+      return FastCallStatus::Faulted;
+    }
+    Value self = Value::instance(instance);
+    Value block = Value::null();
+    std::optional<Value> return_override = self;
+    const FastSendStatus status = invoke_simple_method_from_args(
+        caller, method, *code, pos_args, pos_count, self, block, dst,
+        return_override, {}, true);
+    return status == FastSendStatus::Matched ? FastCallStatus::Matched
+                                            : FastCallStatus::Faulted;
+  }
+
+  FastCallStatus step_fast_positional_call(Frame &frame, const Instruction &insn) {
     constexpr std::uint32_t kMaxFastCallArgs = 8;
 
     std::uint32_t dst = 0;
@@ -5675,14 +5741,13 @@ private:
     if (fault_.has_value()) {
       return FastCallStatus::Faulted;
     }
-    (void)site_id;
-
     if (callee_reg >= frame.regs.size() ||
         callee_reg >= frame.initialized.size() ||
         frame.initialized[callee_reg] == 0U ||
         (callee_reg < frame.int_valid.size() &&
          frame.int_valid[callee_reg] != 0U) ||
-        !frame.regs[callee_reg].is_closure()) {
+        (!frame.regs[callee_reg].is_closure() &&
+         !frame.regs[callee_reg].is_class_object())) {
       return FastCallStatus::NotHandled;
     }
 
@@ -5708,6 +5773,10 @@ private:
     const Value callee = read_reg(frame, callee_reg);
     if (fault_.has_value()) {
       return FastCallStatus::Faulted;
+    }
+    if (callee.is_class_object()) {
+      return step_fast_cached_constructor(frame, callee, args, pos_count, dst,
+                                          site_id);
     }
     if (!callee.is_closure()) {
       return FastCallStatus::NotHandled;
@@ -11126,10 +11195,13 @@ private:
   const CallCacheEntry *probe_plain_call_cache_entry(
       const Frame &frame, std::uint32_t site_id,
       std::uint32_t receiver_class_index, std::uint32_t dispatch_flags,
-      std::uint32_t selector_symbol_id, std::uint32_t positional_count) {
+      std::uint32_t selector_symbol_id, std::uint32_t positional_count,
+      bool record_stats = true) {
     const CallCacheEntry *cached = call_cache_entry(frame, site_id);
     if (cached == nullptr) {
-      record_call_cache_miss();
+      if (record_stats) {
+        record_call_cache_miss();
+      }
       return nullptr;
     }
     const auto matches = [&](const CallCacheEntry &entry) {
@@ -11145,17 +11217,23 @@ private:
     };
     if (matches(*cached)) {
       cached->pending_overflow_shape.reset();
-      record_call_cache_hit();
+      if (record_stats) {
+        record_call_cache_hit();
+      }
       return cached;
     }
     for (const CallCacheEntry &entry : cached->alternatives) {
       if (matches(entry)) {
         cached->pending_overflow_shape.reset();
-        record_call_cache_hit();
+        if (record_stats) {
+          record_call_cache_hit();
+        }
         return &entry;
       }
     }
-    record_call_cache_miss();
+    if (record_stats) {
+      record_call_cache_miss();
+    }
     return nullptr;
   }
 
@@ -12393,7 +12471,9 @@ private:
     if (binding == nullptr) {
       return false;
     }
-    void *fn = dispatch_registry().native_package_thunk(binding->logical);
+    const auto *thunk =
+        dispatch_registry().native_package_thunk_descriptor(binding->logical);
+    void *fn = thunk == nullptr ? nullptr : thunk->fn;
     if (fn == nullptr) {
       return false; // bytecode build: fall back to the Sputnik body.
     }
@@ -12408,7 +12488,8 @@ private:
         binding->method
             ? sputnik_ext_invoke_method(
                   *this, &caller, type_registry().native_package_tags(),
-                  reinterpret_cast<SputnikMethodFn>(fn), self, pos_args)
+                  reinterpret_cast<SputnikMethodFn>(fn), self, pos_args,
+                  thunk->leaf)
             : sputnik_ext_invoke_free(
                   *this, &caller, type_registry().native_package_tags(),
                   reinterpret_cast<SputnikFreeFn>(fn), pos_args);
@@ -13016,18 +13097,52 @@ private:
     return true;
   }
 
+  std::shared_ptr<const ConstructorHookCacheEntry>
+  constructor_hook(const Frame &caller, std::uint32_t class_index) {
+    if (class_index >= state_->classes.size()) {
+      set_fault(caller, "VMError", "runtime class state is out of range");
+      return nullptr;
+    }
+    // Host calls are session-serialized; scheduler tasks use their own cache,
+    // as with SEND caches. A global epoch also guards inherited/mixin hooks.
+    auto &cache = isolate_inline_caches_ ? isolated_constructor_hook_caches_
+                                        : state_->constructor_hook_caches;
+    if (cache.size() <= class_index) {
+      cache.resize(state_->classes.size());
+    }
+    const auto &cached = cache[class_index];
+    const std::uint64_t version = state_->classes[class_index].method_version;
+    if (cached != nullptr && cached->world_epoch == state_->world_epoch &&
+        cached->method_version == version) {
+      return cached;
+    }
+    const bytecode::BcMethod *method = find_method_for_dispatch(
+        caller, class_index, "after_init!", kMethodFlagInstance);
+    if (fault_.has_value()) {
+      return nullptr;
+    }
+    auto entry = std::make_shared<ConstructorHookCacheEntry>();
+    entry->world_epoch = state_->world_epoch;
+    entry->method_version = version;
+    if (method != nullptr) {
+      entry->method = *method;
+    }
+    cache[class_index] = entry;
+    return entry;
+  }
+
   bool complete_constructor(Frame &caller, const Value &instance,
                             std::optional<std::uint32_t> caller_result_reg) {
-    const bytecode::BcMethod *hook = find_method_for_dispatch(
-        caller, instance.as_instance_object()->class_index, "after_init!",
-        kMethodFlagInstance);
-    if (fault_.has_value()) {
+    const auto entry = constructor_hook(
+        caller, instance.as_instance_object()->class_index);
+    if (entry == nullptr) {
       return false;
     }
-    if (hook == nullptr) {
+    if (!entry->method.has_value()) {
       caller.active_call_pc.reset();
       return complete_invoke_result(caller, caller_result_reg, instance);
     }
+    const bytecode::BcMethod *hook = &*entry->method;
     if ((hook->flags & (kMethodFlagPropertyGetter |
                         kMethodFlagPropertySetter)) != 0U) {
       raise_runtime_error(caller, "TypeError", "after_init! must be a method");
@@ -25007,6 +25122,7 @@ private:
   }
 
 #include "runtime/vm_notebook.inc"
+#include "runtime/vm_notebook_chart.inc"
 
   SendStatus try_apply_scalar_send(
       Frame &frame, const Value &receiver, const std::string &selector_text,
@@ -31047,10 +31163,11 @@ private:
       const std::string *native_logical =
           dispatch_registry().native_package_method_binding(handle->tag,
                                                             *selector);
-      void *fn = native_logical == nullptr
+      const auto *thunk = native_logical == nullptr
                      ? nullptr
-                     : dispatch_registry().native_package_thunk(
+                     : dispatch_registry().native_package_thunk_descriptor(
                            *native_logical);
+      void *fn = thunk == nullptr ? nullptr : thunk->fn;
       if (fn != nullptr) {
         if (!handle->live) {
           // Rescuable: a use-after-destroy! unwinds to the nearest handler.
@@ -31082,7 +31199,8 @@ private:
         }
         const NativeExtCallOutcome outcome = sputnik_ext_invoke_method(
             *this, &frame, type_registry().native_package_tags(),
-            reinterpret_cast<SputnikMethodFn>(fn), receiver, args);
+            reinterpret_cast<SputnikMethodFn>(fn), receiver, args,
+            thunk->leaf);
         if (!outcome.ok || fault_.has_value()) {
           return false;
         }
@@ -31837,7 +31955,13 @@ private:
       raise_runtime_error(frames_.back(), "CancelledError", "execution cancelled");
       return;
     }
-    RuntimeRunCancellationMask cancellation_cleanup(run_cancellation_unwinding_);
+    // A cleanup mask is needed only while cancellation unwinds ensure bodies.
+    // Constructing/destructing an inactive out-of-line guard on every ordinary
+    // opcode adds two calls even though both functions do nothing.
+    std::optional<RuntimeRunCancellationMask> cancellation_cleanup;
+    if (run_cancellation_unwinding_) {
+      cancellation_cleanup.emplace(true);
+    }
     // Compile-time step budget (macro expander sandbox): normally disabled,
     // one predictable branch. Exhaustion is a terminal fault — a `rescue`
     // cannot make progress without stepping, so it re-faults immediately.
@@ -33107,7 +33231,7 @@ private:
     case Opcode::CallSpread: {
       const bool expanded = insn.opcode == Opcode::CallSpread;
       if (!expanded) {
-        const FastCallStatus fast_status = step_fast_closure_call(frame, insn);
+        const FastCallStatus fast_status = step_fast_positional_call(frame, insn);
         if (fast_status == FastCallStatus::Faulted) {
           return;
         }
@@ -34037,6 +34161,8 @@ private:
   bool isolate_inline_caches_ = false;
   std::unordered_map<std::uint64_t, CallCacheEntry> isolated_call_caches_;
   std::unordered_map<std::uint64_t, IvarCacheEntry> isolated_ivar_caches_;
+  std::vector<std::shared_ptr<const ConstructorHookCacheEntry>>
+      isolated_constructor_hook_caches_;
   std::string module_id_;
   const RuntimeWorldOptions *world_options_ = nullptr;
   RuntimeNotebookCellContext notebook_cell_context_;

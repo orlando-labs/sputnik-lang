@@ -66,6 +66,8 @@
   SendStatus apply_notebook_show(Frame &frame, const std::string &selector,
       const std::vector<Value> &args, const Value &block,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out) {
+    if (selector == "chart_begin" || selector == "chart_point" || selector == "chart_end")
+      return apply_notebook_chart(frame, selector, args, block, kw_args, out);
     if (selector == "input") {
       if (args.size() != 1 || !args[0].is_string() || !kw_args.empty() || !block.is_null()) {
         set_fault(frame, "TypeError", "notebook.input requires one string key and no keywords or block");

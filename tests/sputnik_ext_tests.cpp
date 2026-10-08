@@ -19,9 +19,11 @@
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -991,9 +993,106 @@ void test_runtime_world_direct_native_extension_call() {
          "blocking native bridge session remains reusable");
 }
 
+int leaf_calls = 0;
+int opaque_calls = 0;
+int leaf_fault_mode = 0;
+
+SputnikStatus typed_test_leaf(const void *receiver, std::int64_t *out,
+                             const SputnikLeafFault *fault) {
+  ++leaf_calls;
+  if (leaf_fault_mode == 1)
+    return sputnik_leaf_fault(fault, "ValueError", "leaf fault message");
+  if (leaf_fault_mode == 2) return SPUTNIK_ERR;
+  if (leaf_fault_mode == 3) {
+    (void)sputnik_leaf_fault(fault, "ValueError", "leaf fault wins over OK");
+    return SPUTNIK_OK;
+  }
+  *out = *static_cast<const std::int64_t *>(receiver);
+  return SPUTNIK_OK;
+}
+
+SputnikStatus typed_test_opaque(SputnikCtx *cx, SputnikValue,
+                               const SputnikValue *, std::size_t,
+                               SputnikValue *out) {
+  ++opaque_calls;
+  *out = sputnik_make_int(cx, 42);
+  return SPUTNIK_OK;
+}
+
+void test_typed_leaf_abi() {
+  RecordingHost host;
+  NativeTagRegistry tags;
+  const SputnikLeafDescriptor leaf{SPUTNIK_LEAF_ABI_VERSION,
+      sizeof(SputnikLeafDescriptor), SPUTNIK_LEAF_HANDLE_INT,
+      "unit.typed", &typed_test_leaf};
+  auto handle = std::make_shared<RuntimeForeignHandle>();
+  std::int64_t value = std::numeric_limits<std::int64_t>::max();
+  handle->tag = "unit.typed";
+  handle->ptr = &value;
+  const Value self = Value::foreign_handle(handle);
+  const auto invoke = [&](const std::vector<Value> &args = {}) {
+    return sputnik::runtime::sputnik_ext_invoke_method(
+        host, nullptr, tags, &typed_test_opaque, self, args, &leaf);
+  };
+  leaf_calls = opaque_calls = leaf_fault_mode = 0;
+  auto result = invoke();
+  expect(result.ok && result.value.as_integer() == value && leaf_calls == 1 &&
+         opaque_calls == 0, "leaf returns full-width Int without opaque thunk");
+  value = std::numeric_limits<std::int64_t>::min();
+  result = invoke();
+  expect(result.ok && result.value.as_integer() == value,
+         "leaf preserves negative full-width Int");
+  result = invoke({Value::integer(1)});
+  expect(result.ok && result.value.as_integer() == 42 && opaque_calls == 1 &&
+         leaf_calls == 2, "non-nullary call shape uses ordinary ABI");
+  handle->tag = "unit.wrong";
+  expect(!invoke().ok && host.fault_class == "TypeError" && leaf_calls == 2,
+         "tag mismatch stops before borrowing foreign pointer");
+  handle->tag = "unit.typed";
+  handle->live = false;
+  expect(!invoke().ok && host.fault_class == "LifetimeError" && leaf_calls == 2,
+         "destroyed receiver stops before typed leaf");
+  handle->live = true;
+  leaf_fault_mode = 1;
+  expect(!invoke().ok && host.fault_class == "ValueError" &&
+         host.fault_message == "leaf fault message", "leaf preserves fault text");
+  leaf_fault_mode = 2;
+  expect(!invoke().ok && host.fault_class == "RuntimeError",
+         "leaf failure without diagnostic cannot return a scalar");
+  leaf_fault_mode = 3;
+  expect(!invoke().ok && host.fault_message == "leaf fault wins over OK",
+         "reported leaf fault wins over erroneous OK status");
+  leaf_fault_mode = 0;
+  RuntimeDispatchRegistry dispatch;
+  dispatch.register_native_package_thunk("unit.leaf", nullptr, false, &leaf);
+  expect(dispatch.native_package_leaf("unit.leaf") == &leaf,
+         "dispatch registry preserves leaf descriptor");
+  dispatch.register_native_package_thunk("unit.leaf", nullptr);
+  expect(dispatch.native_package_leaf("unit.leaf") == nullptr,
+         "ordinary replacement removes stale leaf descriptor");
+  for (int invalid = 0; invalid < 5; ++invalid) {
+    SputnikLeafDescriptor bad = leaf;
+    if (invalid == 0) ++bad.abi_version;
+    if (invalid == 1) --bad.struct_size;
+    if (invalid == 2) bad.signature = static_cast<SputnikLeafSignature>(99);
+    if (invalid == 3) bad.receiver_tag = "";
+    if (invalid == 4) bad.handle_int = nullptr;
+    bool rejected = false;
+    try { sputnik::runtime::validate_native_leaf_descriptor(&bad, false); }
+    catch (const std::invalid_argument &) { rejected = true; }
+    expect(rejected, "invalid typed leaf descriptor must be rejected");
+  }
+  bool blocking_rejected = false;
+  try { dispatch.register_native_package_thunk("unit.leaf", nullptr, true, &leaf); }
+  catch (const std::invalid_argument &) { blocking_rejected = true; }
+  expect(blocking_rejected && dispatch.native_package_leaf("unit.leaf") == nullptr,
+         "blocking thunk cannot bypass scheduler through leaf ABI");
+}
+
 } // namespace
 
 int main() {
+  test_typed_leaf_abi();
   test_call_arena_value_lifetime();
   test_sputnik_ext_scalar_round_trip();
   test_sputnik_ext_str_and_bytes_round_trip();

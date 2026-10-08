@@ -28,6 +28,53 @@ SputnikStatus call_buffers_counter_read(SputnikCtx *cx, SputnikValue self,
   return SPUTNIK_OK;
 }
 
+static SputnikStatus counter_read_leaf(const void *receiver, int64_t *out,
+                                      const SputnikLeafFault *fault) {
+  (void)fault;
+  *out = *(const int64_t *)receiver;
+  return SPUTNIK_OK;
+}
+
+const SputnikLeafDescriptor *call_buffers_counter_read_sputnik_leaf_v1(void) {
+  static const SputnikLeafDescriptor descriptor = {
+      SPUTNIK_LEAF_ABI_VERSION, sizeof(SputnikLeafDescriptor),
+      SPUTNIK_LEAF_HANDLE_INT, counter_tag, counter_read_leaf};
+  return &descriptor;
+}
+
+// This diagnostic thunk deliberately fails on the opaque path so both the
+// dlopen VM loader and the statically linked native loader must select the leaf.
+SputnikStatus call_buffers_leaf_probe(SputnikCtx *cx, SputnikValue self,
+                                    const SputnikValue *args, size_t argc,
+                                    SputnikValue *out) {
+  (void)self; (void)args; (void)argc; (void)out;
+  return sputnik_fault(cx, "ValueError", "typed leaf was not selected");
+}
+
+const SputnikLeafDescriptor *call_buffers_leaf_probe_sputnik_leaf_v1(void) {
+  return call_buffers_counter_read_sputnik_leaf_v1();
+}
+
+static SputnikStatus counter_fail_leaf(const void *receiver, int64_t *out,
+                                      const SputnikLeafFault *fault) {
+  (void)receiver; (void)out;
+  return sputnik_leaf_fault(fault, "ValueError", "typed leaf expected failure");
+}
+
+SputnikStatus call_buffers_leaf_fail(SputnikCtx *cx, SputnikValue self,
+                                   const SputnikValue *args, size_t argc,
+                                   SputnikValue *out) {
+  (void)self; (void)args; (void)argc; (void)out;
+  return sputnik_fault(cx, "ValueError", "typed leaf expected failure");
+}
+
+const SputnikLeafDescriptor *call_buffers_leaf_fail_sputnik_leaf_v1(void) {
+  static const SputnikLeafDescriptor descriptor = {
+      SPUTNIK_LEAF_ABI_VERSION, sizeof(SputnikLeafDescriptor),
+      SPUTNIK_LEAF_HANDLE_INT, counter_tag, counter_fail_leaf};
+  return &descriptor;
+}
+
 void call_buffers_counter_free(void *pointer) {
   ++counter_reclaims;
   free(pointer);
@@ -96,4 +143,13 @@ SputnikStatus call_buffers_fail(SputnikCtx *cx, const SputnikValue *args,
   (void)argc;
   (void)out;
   return sputnik_fault(cx, "ValueError", "expected failure");
+}
+
+SputnikStatus call_buffers_list_at(SputnikCtx *cx, const SputnikValue *args,
+                                 size_t argc, SputnikValue *out) {
+  int64_t index;
+  if (argc != 2 || !sputnik_as_int(cx, args[1], &index))
+    return sputnik_fault(cx, "TypeError", "expected value and Int index");
+  *out = sputnik_list_at(cx, args[0], (size_t)index);
+  return SPUTNIK_OK;
 }

@@ -1,0 +1,8 @@
+{
+  "schema": "sputnik.build.v1",
+  "name": "native_dispatch_cache",
+  "root": "native.dispatch_cache",
+  "modules": [
+    {"name": "native.dispatch_cache", "path": "main.s"}
+  ]
+}

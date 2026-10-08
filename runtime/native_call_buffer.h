@@ -32,6 +32,13 @@ public:
       ::new (static_cast<void *>(&inline_[inline_size_])) T(std::move(value));
       ++inline_size_;
     } else {
+      // A list conversion commonly exposes 32+ values after the inline slots.
+      // Starting at capacity one caused repeated reallocations in a single
+      // short call. Reserve one bounded spill batch, without constructing any
+      // additional values or moving the stable inline entries.
+      if (overflow_.capacity() == 0) {
+        overflow_.reserve(InlineCapacity * 2);
+      }
       overflow_.push_back(std::move(value));
     }
   }

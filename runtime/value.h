@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -707,7 +708,16 @@ enum class ValueTailKind : std::uint8_t {
   TimeZone,
 };
 
-struct ValueTailBox; // refcounted tail box; defined in value.cpp
+// Refcounted box for cold tail kinds. The layout is visible here so tagged
+// predicates can inspect the kind directly; typed ownership remains a
+// shared_ptr<void> whose original deleter runs on the final box release.
+struct ValueTailBox {
+  std::atomic<std::uint32_t> refcount{1};
+  ValueTailKind kind;
+  std::shared_ptr<void> ptr;
+  ValueTailBox(ValueTailKind k, std::shared_ptr<void> p)
+      : kind(k), ptr(std::move(p)) {}
+};
 
 struct Value {
   Value() noexcept : tag_(ValueTag::Null) { u_.i = 0; }
@@ -887,6 +897,214 @@ private:
   static void retain_payload(ValueTag tag, const Storage &storage) noexcept;
   static void release_payload(ValueTag tag, Storage &storage) noexcept;
 };
+
+// Hot tagged operations are visible to callers so immediate values and type
+// checks do not cross a translation-unit boundary on each VM instruction.
+// Managed payloads retain the existing atomic reference-count/lifetime paths.
+
+inline Value::Value(const Value &other) noexcept
+    : tag_(other.tag_), u_(other.u_) {
+  if (tag_ >= ValueTag::Closure) {
+    retain_payload(tag_, u_);
+  }
+}
+
+inline Value::Value(Value &&other) noexcept : tag_(other.tag_), u_(other.u_) {
+  other.tag_ = ValueTag::Null;
+  other.u_.i = 0;
+}
+
+inline Value::~Value() {
+  if (tag_ >= ValueTag::Closure) {
+    release_payload(tag_, u_);
+  }
+}
+
+inline void Value::reset() noexcept {
+  if (tag_ >= ValueTag::Closure) {
+    release_payload(tag_, u_);
+  }
+  tag_ = ValueTag::Null;
+  u_.i = 0;
+}
+
+inline Value Value::null() { return Value(); }
+
+inline Value Value::boolean(bool value) {
+  Value v;
+  v.tag_ = ValueTag::Bool;
+  v.u_.b = value;
+  return v;
+}
+
+inline Value Value::integer(std::int64_t value) {
+  Value v;
+  v.tag_ = ValueTag::Int;
+  v.u_.i = value;
+  return v;
+}
+
+inline Value Value::floating(double value) {
+  Value v;
+  v.tag_ = ValueTag::Float;
+  v.u_.d = value;
+  return v;
+}
+
+inline Value Value::symbol(std::uint32_t symbol_id) {
+  Value v;
+  v.tag_ = ValueTag::Symbol;
+  v.u_.u32 = symbol_id;
+  return v;
+}
+
+inline Value Value::string(std::uint32_t string_id) {
+  Value v;
+  v.tag_ = ValueTag::String;
+  v.u_.u32 = string_id;
+  return v;
+}
+
+inline Value Value::class_object(std::uint32_t class_index) {
+  Value v;
+  v.tag_ = ValueTag::ClassObject;
+  v.u_.u32 = class_index;
+  return v;
+}
+
+inline Value Value::native_type(RuntimeNativeTypeKind kind) {
+  Value v;
+  v.tag_ = ValueTag::NativeType;
+  v.u_.ntype = kind;
+  return v;
+}
+
+inline Value Value::native_function(RuntimeNativeFunctionKind kind) {
+  Value v;
+  v.tag_ = ValueTag::NativeFunction;
+  v.u_.nfn = kind;
+  return v;
+}
+
+inline Value Value::native_error_class(std::uint16_t error_id) {
+  Value v;
+  v.tag_ = ValueTag::NativeErrorClass;
+  v.u_.u16 = error_id;
+  return v;
+}
+
+inline bool Value::is_null() const { return tag_ == ValueTag::Null; }
+
+inline bool Value::is_bool() const { return tag_ == ValueTag::Bool; }
+
+inline bool Value::is_integer() const { return tag_ == ValueTag::Int; }
+
+inline bool Value::is_float() const { return tag_ == ValueTag::Float; }
+
+inline bool Value::is_symbol() const { return tag_ == ValueTag::Symbol; }
+
+inline bool Value::is_string() const {
+  return tag_ == ValueTag::String || is_heap_string();
+}
+
+inline bool Value::is_class_object() const {
+  return tag_ == ValueTag::ClassObject;
+}
+
+inline bool Value::is_native_type() const {
+  return tag_ == ValueTag::NativeType;
+}
+
+inline bool Value::is_native_function() const {
+  return tag_ == ValueTag::NativeFunction;
+}
+
+inline bool Value::is_native_error_class() const {
+  return tag_ == ValueTag::NativeErrorClass;
+}
+
+inline bool Value::as_bool() const { return u_.b; }
+
+inline std::int64_t Value::as_integer() const { return u_.i; }
+
+inline double Value::as_float() const { return u_.d; }
+
+inline SymbolValue Value::as_symbol() const { return SymbolValue{u_.u32}; }
+
+inline StringValue Value::as_string() const { return StringValue{u_.u32}; }
+
+inline ClassObjectValue Value::as_class_object() const {
+  return ClassObjectValue{u_.u32};
+}
+
+inline NativeTypeValue Value::as_native_type() const {
+  return NativeTypeValue{u_.ntype};
+}
+
+inline NativeFunctionValue Value::as_native_function() const {
+  return NativeFunctionValue{u_.nfn};
+}
+
+inline NativeErrorClassValue Value::as_native_error_class() const {
+  return NativeErrorClassValue{u_.u16};
+}
+
+#define X(name, is_fn, as_fn, Type, Tag)                                       \
+  inline bool Value::is_fn() const { return tag_ == ValueTag::Tag; }
+SPUTNIK_VALUE_HEAP_KINDS(X)
+#undef X
+
+#define X(name, is_fn, as_fn, Type, Tag)                                       \
+  inline bool Value::is_fn() const {                                           \
+    return tag_ == ValueTag::Tail && u_.tail != nullptr &&                     \
+           u_.tail->kind == ValueTailKind::Tag;                                \
+  }
+SPUTNIK_VALUE_TAIL_KINDS(X)
+#undef X
+
+inline Value &Value::operator=(const Value &other) noexcept {
+  if (this != &other) {
+    // Retain the source payload before releasing ours so aliasing (two Values
+    // pointing at the same object) is safe.
+    ValueTag incoming_tag = other.tag_;
+    Storage incoming = other.u_;
+    if (incoming_tag >= ValueTag::Closure) {
+      retain_payload(incoming_tag, incoming);
+    }
+    if (tag_ >= ValueTag::Closure) {
+      release_payload(tag_, u_);
+    }
+    tag_ = incoming_tag;
+    u_ = incoming;
+  }
+  return *this;
+}
+
+inline Value &Value::operator=(Value &&other) noexcept {
+  if (this != &other) {
+    if (tag_ >= ValueTag::Closure) {
+      release_payload(tag_, u_);
+    }
+    tag_ = other.tag_;
+    u_ = other.u_;
+    other.tag_ = ValueTag::Null;
+    other.u_.i = 0;
+  }
+  return *this;
+}
+
+inline const ObjHeader *Value::heap_header_if() const {
+  return tag_ >= ValueTag::Closure && tag_ <= ValueTag::Map ? u_.obj : nullptr;
+}
+
+inline ObjHeader *Value::mutable_heap_header_if() const {
+  return tag_ >= ValueTag::Closure && tag_ <= ValueTag::Map ? u_.obj : nullptr;
+}
+
+inline const std::int64_t *Value::integer_if() const {
+  return tag_ == ValueTag::Int ? &u_.i : nullptr;
+}
+
 static_assert(sizeof(Value) <= 16, "tagged Value must fit in 16 bytes");
 #endif // SPUTNIK_VALUE_REPR_TAGGED
 

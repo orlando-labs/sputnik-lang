@@ -1130,6 +1130,12 @@ ExecutionResult RuntimeWorld::execute_notebook_cell(
   ExecutionResult result = execute_runtime_vm(
       impl_->module_owner, impl_->runtime_strings, impl_->runtime_symbols,
       std::move(vm_context), code_id, args, Value::null(), Value::null());
+  try {
+    for (auto &chart : live_store->finish_charts(live_cell_id, live_generation))
+      if (result.ok()) displays->replace(std::move(chart.display), std::move(chart.order), std::move(chart.id));
+  } catch (const std::exception &e) {
+    if (result.ok()) result.fault = Fault{"NotebookCellError", e.what(), code_id, 0};
+  }
   result.live_events = live_store->snapshot_cell(live_cell_id);
   if (result.ok()) {
     result.displays = displays->take();

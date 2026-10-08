@@ -14,6 +14,7 @@
 // translation unit never has to see `Frame`, `Vm`, or their headers.
 
 #include "runtime/io.h"
+#include "runtime/sputnik_ext.h"
 #include "runtime/vm.h"
 
 #include <chrono>
@@ -749,6 +750,7 @@ struct RuntimeNativePackageThunkDescriptor {
   std::string logical;
   void *fn = nullptr;
   bool blocking = false;
+  const SputnikLeafDescriptor *leaf = nullptr;
 };
 
 struct RuntimeNativePackageErrorDescriptor {
@@ -819,8 +821,13 @@ public:
   io_value_handler(const std::string &type_name) const;
 
   void register_native_package_thunk(std::string logical, void *fn,
-                                     bool blocking = false);
+                                     bool blocking = false,
+                                     const SputnikLeafDescriptor *leaf = nullptr);
   void *native_package_thunk(const std::string &logical) const;
+  const RuntimeNativePackageThunkDescriptor *
+  native_package_thunk_descriptor(const std::string &logical) const;
+  const SputnikLeafDescriptor *
+  native_package_leaf(const std::string &logical) const;
   bool native_package_thunk_is_blocking(const std::string &logical) const;
 
   void register_native_package_code_binding(std::uint32_t code_id, bool method,
@@ -849,7 +856,8 @@ private:
       native_handlers_;
   std::unordered_map<std::string, RuntimeIoValueHandlerDescriptor>
       io_value_handlers_;
-  std::unordered_map<std::string, void *> native_package_thunks_;
+  std::unordered_map<std::string, RuntimeNativePackageThunkDescriptor>
+      native_package_thunks_;
   std::unordered_set<std::string> blocking_native_package_thunks_;
   std::unordered_map<std::uint32_t, RuntimeNativePackageCodeBindingDescriptor>
       native_package_code_bindings_;

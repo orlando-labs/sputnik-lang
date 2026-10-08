@@ -1,4 +1,5 @@
 #include "runtime/stdlib_registry.h"
+#include "runtime/sputnik_ext_runtime.h"
 
 namespace sputnik::runtime {
 
@@ -137,19 +138,34 @@ RuntimeDispatchRegistry::io_value_handler(const std::string &type_name) const {
 
 void RuntimeDispatchRegistry::register_native_package_thunk(std::string logical,
                                                             void *fn,
-                                                            bool blocking) {
+                                                            bool blocking,
+                                                            const SputnikLeafDescriptor *leaf) {
+  validate_native_leaf_descriptor(leaf, blocking);
   if (blocking) {
     blocking_native_package_thunks_.insert(logical);
   } else {
     blocking_native_package_thunks_.erase(logical);
   }
-  native_package_thunks_[std::move(logical)] = fn;
+  native_package_thunks_[logical] = {logical, fn, blocking, leaf};
+}
+
+const RuntimeNativePackageThunkDescriptor *
+RuntimeDispatchRegistry::native_package_thunk_descriptor(
+    const std::string &logical) const {
+  const auto it = native_package_thunks_.find(logical);
+  return it == native_package_thunks_.end() ? nullptr : &it->second;
+}
+
+const SputnikLeafDescriptor *RuntimeDispatchRegistry::native_package_leaf(
+    const std::string &logical) const {
+  const auto *thunk = native_package_thunk_descriptor(logical);
+  return thunk == nullptr ? nullptr : thunk->leaf;
 }
 
 void *RuntimeDispatchRegistry::native_package_thunk(
     const std::string &logical) const {
-  const auto it = native_package_thunks_.find(logical);
-  return it == native_package_thunks_.end() ? nullptr : it->second;
+  const auto *thunk = native_package_thunk_descriptor(logical);
+  return thunk == nullptr ? nullptr : thunk->fn;
 }
 
 bool RuntimeDispatchRegistry::native_package_thunk_is_blocking(
@@ -513,7 +529,7 @@ void register_runtime_native_package_descriptor(
     const RuntimeNativePackageDescriptor &descriptor) {
   for (const RuntimeNativePackageThunkDescriptor &thunk : descriptor.thunks) {
     dispatch.register_native_package_thunk(thunk.logical, thunk.fn,
-                                           thunk.blocking);
+                                           thunk.blocking, thunk.leaf);
   }
   for (const RuntimeNativePackageCodeBindingDescriptor &binding :
        descriptor.code_bindings) {

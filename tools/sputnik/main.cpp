@@ -5121,19 +5121,19 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
     case Opcode::LoadSelf: {
       std::uint32_t dst = 0;
       operand_u32_value(instruction, 0, &dst);
-      write_reg_stmt(dst, "frame.self");
+      write_reg_stmt(dst, "*frame.self");
       emit_next(pc, next_scalar_state);
       break;
     }
     case Opcode::LoadBlock: {
       std::uint32_t dst = 0;
       operand_u32_value(instruction, 0, &dst);
-      write_reg_stmt(dst, "frame.block");
+      write_reg_stmt(dst, "*frame.block");
       emit_next(pc, next_scalar_state);
       break;
     }
     case Opcode::RequireBlock:
-      out << "  if (frame.block.tag == NativeValue::Tag::Null) "
+      out << "  if (frame.block->tag == NativeValue::Tag::Null) "
              "throw NativeRaised{native_named_error(\"ArgumentError\", "
              "\"invalid block argument shape: a required block was not "
              "given\")};\n";
@@ -5653,7 +5653,7 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       out << "  {\n";
       out << "    NativeClosure *next_closure = make_native_closure();\n";
       out << "    next_closure->code_id = " << code_id << ";\n";
-      out << "    next_closure->self = frame.self;\n";
+      out << "    next_closure->self = *frame.self;\n";
       if (creates_nonlocal_block) {
         out << "    if (frame.nonlocal_return_target == nullptr) {\n";
         out << "      frame.nonlocal_return_target = "
@@ -7574,8 +7574,14 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       emit_next(pc, next_scalar_state);
       break;
     }
-    case Opcode::CloseUpvalues:
     case Opcode::Safepoint:
+      // Allocation-heavy while/until loops can outlive the outer task scope.
+      // The cheap local threshold check publishes and collects pending cycles
+      // only when due; treating this opcode as a no-op retained the whole loop.
+      out << "  native_cycle_checkpoint_if_due();\n";
+      emit_next(pc, next_scalar_state);
+      break;
+    case Opcode::CloseUpvalues:
     case Opcode::TypeCheck:
       emit_next(pc, next_scalar_state);
       break;
@@ -8707,6 +8713,32 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  static NativeValue instance(std::uint32_t class_index);\n";
   out << "  static NativeValue closure(NativeClosure *value);\n";
   out << "};\n\n";
+  out << R"SPUTNIKPP(class NativeShapedArgs {
+public:
+  explicit NativeShapedArgs(std::size_t size) : size_(size) {
+    if (size_ > inline_capacity) overflow_.resize(size_);
+  }
+  NativeShapedArgs(const NativeShapedArgs &) = delete;
+  NativeShapedArgs &operator=(const NativeShapedArgs &) = delete;
+  NativeShapedArgs(NativeShapedArgs &&) = default;
+  NativeShapedArgs &operator=(NativeShapedArgs &&) = default;
+  std::size_t size() const noexcept { return size_; }
+  bool empty() const noexcept { return size_ == 0; }
+  NativeValue *data() noexcept {
+    return size_ <= inline_capacity ? inline_.data() : overflow_.data();
+  }
+  const NativeValue *data() const noexcept {
+    return size_ <= inline_capacity ? inline_.data() : overflow_.data();
+  }
+  NativeValue &operator[](std::size_t index) { return data()[index]; }
+  const NativeValue &operator[](std::size_t index) const { return data()[index]; }
+private:
+  static constexpr std::size_t inline_capacity = 8;
+  std::array<NativeValue, inline_capacity> inline_{};
+  std::vector<NativeValue> overflow_;
+  std::size_t size_;
+};
+)SPUTNIKPP";
   out << "class NativeArgsView {\n";
   out << "public:\n";
   out << "  using const_iterator = const NativeValue *;\n";
@@ -8715,6 +8747,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "noexcept\n";
   out << "      : data_(values.begin()), size_(values.size()) {}\n";
   out << "  NativeArgsView(const std::vector<NativeValue> &values) noexcept\n";
+  out << "      : data_(values.data()), size_(values.size()) {}\n";
+  out << "  NativeArgsView(const NativeShapedArgs &values) noexcept\n";
   out << "      : data_(values.data()), size_(values.size()) {}\n";
   out << "  const NativeValue *data() const noexcept { return data_; }\n";
   out << "  std::size_t size() const noexcept { return size_; }\n";
@@ -10687,13 +10721,25 @@ static void native_collect_finished_cycles() {
   out << "  }\n";
   out << "  return *published;\n";
   out << "}\n\n";
+  out << "static const NativeValue &native_null_value() {\n";
+  out << "  static const NativeValue value = NativeValue::nullv();\n";
+  out << "  return value;\n";
+  out << "}\n\n";
+  out << "static const NativeValue &native_closure_self("
+         "const NativeClosure *closure) {\n";
+  out << "  return closure == nullptr ? native_null_value() : closure->self;\n";
+  out << "}\n\n";
   out << "struct NativeFrame {\n";
   out << "  NativeValue *regs = nullptr;\n";
   out << "  NativeCell **local_cells = nullptr;\n";
   out << "  std::size_t reg_count = 0;\n";
   out << "  NativeClosure *closure = nullptr;\n";
-  out << "  NativeValue self = NativeValue::nullv();\n";
-  out << "  NativeValue block = NativeValue::nullv();\n";
+  // Synchronous callers keep the closure Value (or a stack invocation) alive.
+  // A frame only borrows its immutable self/block slots. Register loads, handler
+  // invocations and escaping closures still copy Values and acquire ownership.
+  // This also lets a seeded handler borrow its live parent frame's slots.
+  out << "  const NativeValue *self = &native_null_value();\n";
+  out << "  const NativeValue *block = &native_null_value();\n";
   out << "  NativeValue last = NativeValue::nullv();\n";
   out << "  std::shared_ptr<NativeNonlocalReturnTarget> "
          "nonlocal_return_target;\n";
@@ -10707,8 +10753,8 @@ static void native_collect_finished_cycles() {
          "reg_count(frame_reg_count), closure(current), "
          "trace_pc(current_trace_pc) {\n";
   out << "    if (closure != nullptr) {\n";
-  out << "      self = closure->self;\n";
-  out << "      block = closure->block;\n";
+  out << "      self = &closure->self;\n";
+  out << "      block = &closure->block;\n";
   out << "    }\n";
   out << "  }\n";
   out << "  ~NativeFrame() {\n";
@@ -10839,7 +10885,6 @@ static void native_collect_finished_cycles() {
   out << "}\n";
   out << "struct NativeUserCallSiteCache {\n";
   out << "  std::atomic<std::uint64_t> packed{0};\n";
-  out << "  std::atomic<std::uint32_t> method_flags{0};\n";
   out << "};\n";
   out << "static NativeValue native_user_send(const NativeValue &receiver, "
          "const std::string &selector, "
@@ -11118,7 +11163,11 @@ static void native_require_suspendable(const char *operation) {
          "NativeBailout(); }\n";
   out << "  return value.scalar_value;\n";
   out << "}\n\n";
-  out << "static void native_materialize_list(NativeList &list);\n";
+  out << "static void native_materialize_lazy_chars(NativeList &list);\n";
+  out << "static SPUTNIK_NATIVE_ALWAYS_INLINE void native_materialize_list("
+         "NativeList &list) {\n";
+  out << "  if (list.lazy_chars) native_materialize_lazy_chars(list);\n";
+  out << "}\n";
   out << "static const NativeList &as_list(const NativeValue &value) {\n";
   out << "  if (value.tag != NativeValue::Tag::List || "
          "value.heap_value == nullptr) throw NativeBailout();\n";
@@ -12074,7 +12123,7 @@ static void native_append_keyword_call_spread(
   out << "  }\n";
   out << "  return NativeValue::heap_string(text.substr(i, j - i));\n";
   out << "}\n\n";
-  out << "static void native_materialize_list(NativeList &list) {\n";
+  out << "static void native_materialize_lazy_chars(NativeList &list) {\n";
   out << "  if (!list.lazy_chars) return;\n";
   out << "  const NativeValue source = list.lazy_char_source;\n";
   out << "  const std::string &text = native_string_text(source);\n";
@@ -20316,8 +20365,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   for (std::uint32_t code_id : plan.native_extension_code_ids) {
     out << "  case " << code_id << ": return sputnik_native_extension_call("
         << code_id
-        << ", args, current_closure == nullptr ? NativeValue::nullv() "
-           ": current_closure->self);\n";
+        << ", args, native_closure_self(current_closure));\n";
   }
   for (std::uint32_t code_id : plan.vm_callable_code_ids) {
     out << "  case " << code_id
@@ -20326,8 +20374,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
         << code_id << "\"); "
            "return sputnik_vm_fallback_call("
         << code_id
-        << ", args, current_closure == nullptr ? NativeValue::nullv() "
-           ": current_closure->self);\n";
+        << ", args, native_closure_self(current_closure));\n";
   }
   out << "  default: throw NativeBailout("
          "\"native dispatch has no code c\" + std::to_string(code_id));\n";
@@ -20349,7 +20396,31 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   };
   std::vector<EmittedNativeMethod> emitted_methods;
   std::set<std::uint32_t> emitted_method_code_ids;
+  std::map<std::uint32_t, const sputnik::bytecode::BcMethod *>
+      emitted_method_signatures;
   std::size_t next_param_offset = 1U;
+  const auto method_accepts_zero_arguments = [](const auto &method) {
+    constexpr auto optional = sputnik::bytecode::kMethodParamFlagHasDefault |
+                              sputnik::bytecode::kMethodParamFlagRest |
+                              sputnik::bytecode::kMethodParamFlagKwRest |
+                              sputnik::bytecode::kMethodParamFlagBlock;
+    return std::all_of(method.params.begin(), method.params.end(),
+                       [](const auto &param) {
+                         return (param.flags & optional) != 0U;
+                       });
+  };
+  const auto method_needs_param_shaping = [](const auto &method) {
+    constexpr auto shaped = sputnik::bytecode::kMethodParamFlagRest |
+                            sputnik::bytecode::kMethodParamFlagKwRest |
+                            sputnik::bytecode::kMethodParamFlagKeyword |
+                            sputnik::bytecode::kMethodParamFlagBlock |
+                            sputnik::bytecode::kMethodParamFlagHasDefault;
+    return !method.clause_table.empty() ||
+           std::any_of(method.params.begin(), method.params.end(),
+                       [](const auto &param) {
+                         return (param.flags & shaped) != 0U;
+                       });
+  };
   const auto code_is_callable = [&](std::uint32_t code_id) {
     return plan.native_code_ids.find(code_id) != plan.native_code_ids.end() ||
            plan.native_extension_code_ids.find(code_id) !=
@@ -20395,6 +20466,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
       ++default_index;
     }
     next_param_offset += method.params.size();
+    emitted_method_signatures.emplace(method.entry_code_id, &method);
     emitted_methods.push_back(std::move(emitted));
   }
 
@@ -20434,13 +20506,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "native_method_descriptor(std::uint32_t code_id) {\n";
   out << "  switch (code_id) {\n";
   for (const EmittedNativeMethod &emitted : emitted_methods) {
-    constexpr auto optional = sputnik::bytecode::kMethodParamFlagHasDefault |
-                              sputnik::bytecode::kMethodParamFlagRest |
-                              sputnik::bytecode::kMethodParamFlagKwRest |
-                              sputnik::bytecode::kMethodParamFlagBlock;
-    const bool accepts_zero = std::all_of(
-        emitted.method->params.begin(), emitted.method->params.end(),
-        [](const auto &param) { return (param.flags & optional) != 0U; });
+    const bool accepts_zero = method_accepts_zero_arguments(*emitted.method);
     out << "  case " << emitted.method->entry_code_id << "U: return "
         << "NativeMethodDescriptor{" << emitted.param_offset << "U, "
         << emitted.method->params.size() << "U, "
@@ -20453,19 +20519,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "std::uint32_t code_id) {\n";
   out << "  switch (code_id) {\n";
   for (const EmittedNativeMethod &emitted : emitted_methods) {
-    const bool needs_shaping =
-        !emitted.method->clause_table.empty() ||
-        std::any_of(emitted.method->params.begin(),
-                    emitted.method->params.end(),
-                    [](const sputnik::bytecode::MethodParamEntry &param) {
-                      return (param.flags &
-                              (sputnik::bytecode::kMethodParamFlagRest |
-                               sputnik::bytecode::kMethodParamFlagKwRest |
-                               sputnik::bytecode::kMethodParamFlagKeyword |
-                               sputnik::bytecode::kMethodParamFlagBlock |
-                               sputnik::bytecode::kMethodParamFlagHasDefault)) !=
-                             0U;
-                    });
+    const bool needs_shaping = method_needs_param_shaping(*emitted.method);
     if (needs_shaping) {
       out << "  case " << emitted.method->entry_code_id
           << "U: return true;\n";
@@ -20477,7 +20531,64 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "static bool native_named_callable_value(const NativeValue &value);\n";
   out << "static std::string native_named_callable_type_name("
          "const NativeValue &value);\n";
-  out << R"SPUTNIKPP(static std::vector<NativeValue> native_shape_method_args(
+  // Literal defaults inherit the enclosing capture layout, but the proven
+  // load/close/return body never reads it. Match the VM's immutable-default
+  // proof rather than copying captures and entering a frame for a scalar.
+  out << "static std::optional<NativeValue> native_literal_default_value("
+         "std::uint32_t code_id) {\n";
+  out << "  switch (code_id) {\n";
+  for (const auto &code : module.code_objects) {
+    using sputnik::bytecode::CodeKind;
+    using sputnik::bytecode::ConstantKind;
+    using sputnik::bytecode::Opcode;
+    if (code.kind != CodeKind::DefaultThunk || code.flags != 0U ||
+        !code.handler_table.empty() || code.instructions.size() != 3U ||
+        plan.native_code_ids.count(code.code_id) == 0U) {
+      continue;
+    }
+    const auto &load = code.instructions[0];
+    const auto &close = code.instructions[1];
+    const auto &ret = code.instructions[2];
+    std::uint32_t reg = 0, close_slot = 0, return_reg = 0;
+    if (!operand_u32_value(load, 0U, &reg) || reg >= code.reg_count ||
+        close.opcode != Opcode::CloseUpvalues || close.operands.size() != 1U ||
+        !operand_u32_value(close, 0U, &close_slot) || close_slot != 0U ||
+        ret.opcode != Opcode::Return || ret.operands.size() != 1U ||
+        !operand_u32_value(ret, 0U, &return_reg) || return_reg != reg) {
+      continue;
+    }
+    std::string expression;
+    std::uint32_t operand = 0;
+    if (load.opcode == Opcode::LoadNull && load.operands.size() == 1U) {
+      expression = "NativeValue::nullv()";
+    } else if (load.operands.size() == 2U &&
+               operand_u32_value(load, 1U, &operand)) {
+      if (load.opcode == Opcode::LoadBool && operand <= 1U) {
+        expression = operand == 0U ? "NativeValue::boolean(false)"
+                                  : "NativeValue::boolean(true)";
+      } else if (load.opcode == Opcode::LoadK && operand < module.const_pool.size()) {
+        const auto &constant = module.const_pool[operand];
+        switch (constant.kind) {
+        case ConstantKind::Null:
+        case ConstantKind::Bool:
+        case ConstantKind::Integer:
+        case ConstantKind::Float:
+        case ConstantKind::StringRef:
+        case ConstantKind::SymbolRef:
+          expression = native_cpp_constant_expr(constant);
+          break;
+        default: break;
+        }
+      }
+    }
+    if (!expression.empty()) {
+      out << "  case " << code.code_id << "U: return " << expression << ";\n";
+    }
+  }
+  out << "  default: return std::nullopt;\n";
+  out << "  }\n";
+  out << "}\n";
+  out << R"SPUTNIKPP(static NativeShapedArgs native_shape_method_args(
     std::uint32_t code_id,
     const NativeArgsView &positional,
     const NativeKeywordArgsView &keywords,
@@ -20487,8 +20598,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   if (!descriptor.has_value() || invocation == nullptr) throw NativeBailout();
   const NativeMethodParamDescriptor *params =
       kNativeMethodParams + descriptor->param_offset;
-  std::vector<NativeValue> shaped(descriptor->param_count,
-                                  NativeValue::nullv());
+  NativeShapedArgs shaped(descriptor->param_count);
   std::uint64_t present_bits = 0;
   std::vector<bool> present_overflow;
   if (descriptor->param_count > 64U) {
@@ -20664,10 +20774,19 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
       continue;
     }
     if (params[slot].default_thunk_id == 0U) throw NativeBailout();
-    NativeClosure thunk = *invocation;
-    thunk.code_id = params[slot].default_thunk_id;
-    shaped[slot] = sputnik_native_call_code(
-        params[slot].default_thunk_id, shaped, &thunk);
+    if (const auto literal = native_literal_default_value(params[slot].default_thunk_id);
+        literal.has_value()) {
+      shaped[slot] = *literal;
+    } else {
+      NativeClosure thunk;
+      thunk.code_id = params[slot].default_thunk_id;
+      thunk.borrowed_captures = &invocation->capture_view();
+      thunk.self = invocation->self;
+      thunk.block = invocation->block;
+      thunk.nonlocal_return_target = invocation->nonlocal_return_target;
+      shaped[slot] = sputnik_native_call_code(
+          params[slot].default_thunk_id, shaped, &thunk);
+    }
     mark_present(slot);
   }
   for (std::size_t slot = 0; slot < descriptor->param_count; ++slot) {
@@ -20749,8 +20868,8 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "std::uint32_t exception_slot, std::uint32_t result_slot) {\n";
   out << "  NativeClosure invocation;\n";
   out << "  invocation.code_id = handler_code_id;\n";
-  out << "  invocation.self = frame.self;\n";
-  out << "  invocation.block = frame.block;\n";
+  out << "  invocation.self = *frame.self;\n";
+  out << "  invocation.block = *frame.block;\n";
   out << "  invocation.nonlocal_return_target = "
          "frame.nonlocal_return_target;\n";
   out << "  if (frame.closure != nullptr) {\n";
@@ -20801,8 +20920,8 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "std::uint32_t exception_slot) {\n";
   out << "  NativeClosure invocation;\n";
   out << "  invocation.code_id = handler_code_id;\n";
-  out << "  invocation.self = frame.self;\n";
-  out << "  invocation.block = frame.block;\n";
+  out << "  invocation.self = *frame.self;\n";
+  out << "  invocation.block = *frame.block;\n";
   out << "  invocation.nonlocal_return_target = "
          "frame.nonlocal_return_target;\n";
   out << "  if (frame.closure != nullptr) {\n";
@@ -20843,7 +20962,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "native_method_needs_param_shaping(invocation.code_id)) {\n";
   out << "    if (!native_method_descriptor(invocation.code_id).has_value()) "
          "throw NativeBailout();\n";
-  out << "    std::vector<NativeValue> shaped = native_shape_method_args("
+  out << "    NativeShapedArgs shaped = native_shape_method_args("
          "invocation.code_id, args, kwargs, invocation.block, &invocation);\n";
   out << "    return sputnik_native_call_shaped_method("
          "invocation.code_id, shaped, &invocation);\n";
@@ -23203,7 +23322,48 @@ static NativeValue native_channel_send(
   out << "struct NativeUserMethod {\n";
   out << "  std::uint32_t code_id = 0;\n";
   out << "  std::uint32_t flags = 0;\n";
+  out << "  std::uint32_t cache_index = 0;\n";
+  out << "  std::uint32_t param_count = 0;\n";
+  out << "  bool needs_param_shaping = false;\n";
+  out << "  bool has_auto_assigns = false;\n";
+  out << "  bool accepts_zero_arguments = false;\n";
   out << "};\n";
+  // A site publishes only class/key + one immutable method-table index. Two
+  // separately published atomics could pair the old code with a new receiver's
+  // flags; acquire/release on the key alone does not protect future writes.
+  out << "static constexpr std::array<NativeUserMethod, "
+      << module.methods.size() << "> kNativeUserMethods{{\n";
+  std::set<std::uint32_t> native_auto_assign_code_ids;
+  for (const auto &method : module.methods) {
+    if (!method.auto_assign_desc.empty() &&
+        plan.native_code_ids.count(method.entry_code_id) != 0U) {
+      native_auto_assign_code_ids.insert(method.entry_code_id);
+    }
+  }
+  for (std::size_t index = 0; index < module.methods.size(); ++index) {
+    const auto &method = module.methods[index];
+    // Use the same canonical signature as native_method_descriptor, including
+    // aliases which share a code ID. Cache hits need no further descriptor or
+    // shaping switch; all properties belong to this immutable record.
+    const auto signature = emitted_method_signatures.find(method.entry_code_id);
+    const auto *params = signature == emitted_method_signatures.end()
+                             ? nullptr
+                             : signature->second;
+    out << "  {" << method.entry_code_id << "U, " << method.flags << "U, "
+        << index << "U, " << (params == nullptr ? 0U : params->params.size())
+        << "U, "
+        << (params != nullptr && method_needs_param_shaping(*params) ? "true"
+                                                                   : "false")
+        << ", "
+        << (native_auto_assign_code_ids.count(method.entry_code_id) != 0U
+                ? "true"
+                : "false")
+        << ", "
+        << (params != nullptr && method_accepts_zero_arguments(*params) ? "true"
+                                                                      : "false")
+        << "},\n";
+  }
+  out << "}};\n";
   out << "static std::string native_user_class_name(std::uint32_t "
          "class_index) {\n";
   out << "  switch (class_index) {\n";
@@ -23246,8 +23406,7 @@ static NativeValue native_channel_send(
       out << "    if (class_side == " << (method_class_side ? "true" : "false")
           << " && selector == native_hex_to_string(\""
           << string_to_hex_text(module.symbols[method.selector_sym_id])
-          << "\")) return NativeUserMethod{" << method.entry_code_id
-          << "U, " << method.flags << "U};\n";
+          << "\")) return kNativeUserMethods[" << method_index << "U];\n";
     }
     out << "    return std::nullopt;\n";
   }
@@ -23441,6 +23600,55 @@ static std::string native_named_callable_type_name(
   out << "  default: return;\n";
   out << "  }\n";
   out << "}\n";
+  // Only compiler-generated direct ivar readers can bypass method/frame setup.
+  // Keep user methods, computed properties, binding and property diagnostics
+  // on the ordinary path even when they happen to share an attribute name.
+  out << "static std::optional<std::uint32_t> native_attr_reader_symbol("
+         "std::uint32_t code_id) {\n";
+  out << "  switch (code_id) {\n";
+  std::set<std::uint32_t> emitted_attr_reader_codes;
+  for (const auto &method : module.methods) {
+    if ((method.flags & sputnik::bytecode::kMethodFlagAttrReader) == 0U ||
+        !method.params.empty() || !method.default_thunk_ids.empty() ||
+        !method.auto_assign_desc.empty() || !method.clause_table.empty() ||
+        method.signature_blob_id >= module.const_pool.size() ||
+        module.const_pool[method.signature_blob_id].kind !=
+            sputnik::bytecode::ConstantKind::Path ||
+        !module.const_pool[method.signature_blob_id].items.empty() ||
+        plan.native_code_ids.count(method.entry_code_id) == 0U) {
+      continue;
+    }
+    const auto found = std::find_if(module.code_objects.begin(),
+                                   module.code_objects.end(), [&](const auto &code) {
+      return code.code_id == method.entry_code_id;
+    });
+    if (found == module.code_objects.end() ||
+        !found->handler_table.empty() || !found->capture_layout.empty() ||
+        found->instructions.size() != 4U) {
+      continue;
+    }
+    const auto &load_self = found->instructions[0];
+    const auto &load_ivar = found->instructions[1];
+    const auto &close = found->instructions[2];
+    const auto &ret = found->instructions[3];
+    using sputnik::bytecode::Opcode;
+    if (load_self.opcode != Opcode::LoadSelf || load_self.operands.size() != 1U ||
+        load_ivar.opcode != Opcode::LoadIvar || load_ivar.operands.size() != 4U ||
+        close.opcode != Opcode::CloseUpvalues || close.operands.size() != 1U ||
+        ret.opcode != Opcode::Return || ret.operands.size() != 1U ||
+        load_ivar.operands[1].value != load_self.operands[0].value ||
+        ret.operands[0].value != load_ivar.operands[0].value ||
+        load_ivar.operands[2].value < 0 ||
+        static_cast<std::uint64_t>(load_ivar.operands[2].value) >= module.symbols.size() ||
+        !emitted_attr_reader_codes.insert(method.entry_code_id).second) {
+      continue;
+    }
+    out << "  case " << method.entry_code_id << "U: return "
+        << load_ivar.operands[2].value << "U;\n";
+  }
+  out << "  default: return std::nullopt;\n";
+  out << "  }\n";
+  out << "}\n";
   out << "static void native_user_init_copy_if_defined("
          "const NativeValue &copy, const NativeValue &source) {\n";
   out << "  NativeInstance *instance = as_native_instance(copy);\n";
@@ -23449,7 +23657,7 @@ static std::string native_named_callable_type_name(
   out << "  if (!method.has_value()) return;\n";
   out << "  NativeClosure invocation; invocation.code_id = method->code_id; "
          "invocation.self = copy;\n";
-  out << "  std::vector<NativeValue> args = native_shape_method_args("
+  out << "  NativeShapedArgs args = native_shape_method_args("
          "method->code_id, {source}, {}, NativeValue::nullv(), &invocation);\n";
   out << "  native_apply_auto_assigns(method->code_id, copy, args);\n";
   out << "  (void)sputnik_native_call_shaped_method(method->code_id, args, "
@@ -23495,23 +23703,22 @@ static std::string native_named_callable_type_name(
   out << "    NativeClosure invocation; invocation.code_id = method.code_id; "
          "invocation.self = self; invocation.block = block;\n";
   out << "    if (kwargs.empty() && "
-         "!native_method_needs_param_shaping(method.code_id)) {\n";
-  out << "      const auto descriptor = "
-         "native_method_descriptor(method.code_id);\n";
-  out << "      if (!descriptor.has_value()) throw NativeBailout();\n";
-  out << "      if (args.size() > descriptor->param_count) "
+         "!method.needs_param_shaping) {\n";
+  out << "      if (args.size() > method.param_count) "
          "throw NativeRaised{native_named_error("
          "\"TypeError\", \"too many positional arguments\")};\n";
-  out << "      if (args.size() < descriptor->param_count) "
+  out << "      if (args.size() < method.param_count) "
          "throw NativeRaised{native_named_error("
          "\"TypeError\", \"missing required parameter\")};\n";
-  out << "      native_apply_auto_assigns(method.code_id, self, args);\n";
+  out << "      if (method.has_auto_assigns) "
+         "native_apply_auto_assigns(method.code_id, self, args);\n";
   out << "      return sputnik_native_call_shaped_method("
          "method.code_id, args, &invocation);\n";
   out << "    }\n";
-  out << "    std::vector<NativeValue> shaped = native_shape_method_args("
+  out << "    NativeShapedArgs shaped = native_shape_method_args("
          "method.code_id, args, kwargs, block, &invocation);\n";
-  out << "    native_apply_auto_assigns(method.code_id, self, shaped);\n";
+  out << "    if (method.has_auto_assigns) "
+         "native_apply_auto_assigns(method.code_id, self, shaped);\n";
   out << "    return sputnik_native_call_shaped_method(method.code_id, shaped, "
          "&invocation);\n";
   out << "  };\n";
@@ -23548,7 +23755,7 @@ static std::string native_named_callable_type_name(
   out << ")) return initialized;\n";
   out << "    return finish_constructor();\n";
   out << "  }\n";
-  out << "  std::optional<NativeUserMethod> method;\n";
+  out << "  const NativeUserMethod *method = nullptr;\n";
   out << "  const std::uint64_t call_site_key = "
          "(static_cast<std::uint64_t>(class_index) << 1U) | "
          "(class_side ? 1U : 0U);\n";
@@ -23558,29 +23765,28 @@ static std::string native_named_callable_type_name(
   out << "    const std::uint64_t packed = "
          "call_site->packed.load(std::memory_order_acquire);\n";
   out << "    const std::uint64_t cached_key = packed >> 32U;\n";
-  out << "    const std::uint32_t cached_code = "
+  out << "    const std::uint32_t cached_method = "
          "static_cast<std::uint32_t>(packed);\n";
   out << "    if (cached_key == call_site_key + 1U && "
-         "cached_code != 0U) {\n";
-  out << "      method = NativeUserMethod{cached_code - 1U, "
-         "call_site->method_flags.load(std::memory_order_relaxed)};\n";
+         "cached_method != 0U && cached_method <= kNativeUserMethods.size()) {\n";
+  out << "      method = &kNativeUserMethods[cached_method - 1U];\n";
   out << "    }\n";
   out << "  }\n";
-  out << "  if (!method.has_value()) {\n";
-  out << "    method = native_lookup_user_method(class_index, selector, "
-         "class_side);\n";
+  out << "  if (method == nullptr) {\n";
+  out << "    const auto found = native_lookup_user_method("
+         "class_index, selector, class_side);\n";
+  out << "    if (found.has_value()) "
+         "method = &kNativeUserMethods[found->cache_index];\n";
   out << "    if (call_site != nullptr && cacheable_call_site_key && "
-         "method.has_value() && method->code_id < UINT32_MAX) {\n";
-  out << "      call_site->method_flags.store(method->flags, "
-         "std::memory_order_relaxed);\n";
+         "method != nullptr && method->cache_index < UINT32_MAX) {\n";
   out << "      const std::uint64_t packed = "
          "((call_site_key + 1U) << 32U) | "
-         "(static_cast<std::uint64_t>(method->code_id) + 1U);\n";
+         "(static_cast<std::uint64_t>(method->cache_index) + 1U);\n";
   out << "      call_site->packed.store(packed, "
          "std::memory_order_release);\n";
   out << "    }\n";
   out << "  }\n";
-  out << "  if (!method.has_value()) {\n";
+  out << "  if (method == nullptr) {\n";
   out << "    if (!class_side && receiver.tag == NativeValue::Tag::Instance "
          "&& selector == \"instance_fields\") {\n";
   out << "      if (!args.empty() || !kwargs.empty() || "
@@ -23651,12 +23857,17 @@ static std::string native_named_callable_type_name(
          "\"cannot assign to read-only property\")};\n";
   out << "  }\n";
   out << "  if (property_access) {\n";
-  out << "    const auto descriptor = native_method_descriptor(method->code_id);\n";
-  out << "    if (!descriptor.has_value()) throw NativeBailout();\n";
-  out << "    if (!descriptor->accepts_zero_arguments) "
+  out << "    if (!method->accepts_zero_arguments) "
          "throw NativeRaised{native_named_error(\"ArgumentError\", "
          "\"method `\" + selector + \"` is not bare-callable: it requires "
          "arguments; use `\" + selector + \"(...)`\")};\n";
+  out << "  }\n";
+  out << "  if (receiver.tag == NativeValue::Tag::Instance && "
+         "(method->flags & " << sputnik::bytecode::kMethodFlagAttrReader
+      << "U) != 0U && args.empty() && kwargs.empty() && "
+         "block.tag == NativeValue::Tag::Null) {\n";
+  out << "    if (const auto symbol = native_attr_reader_symbol(method->code_id); "
+         "symbol.has_value()) return native_load_ivar(receiver, *symbol);\n";
   out << "  }\n";
   out << "  NativeValue result = invoke(*method, receiver);\n";
   out << "  return property_assignment && !args.empty() ? *args.begin() "
@@ -24660,11 +24871,14 @@ static SputnikValue sputnik_native_ext_list_at(void *opaque, SputnikValue value,
                                            std::size_t index) {
   SputnikNativeExtensionState *state = sputnik_native_ext_state(opaque);
   const NativeValue &resolved = state->resolve(value);
-  if (resolved.tag != NativeValue::Tag::List ||
-      index >= as_list(resolved).items.size()) {
+  if (resolved.tag != NativeValue::Tag::List) {
     return state->push(NativeValue::nullv());
   }
-  return state->push(as_list(resolved).items[index]);
+  const auto &items = as_list(resolved).items;
+  if (index >= items.size()) {
+    return state->push(NativeValue::nullv());
+  }
+  return state->push(items[index]);
 }
 static int sputnik_native_ext_handle_ptr(void *opaque, SputnikValue value,
                                        const char *tag, void **out) {
@@ -24879,6 +25093,34 @@ static NativeValue sputnik_native_extension_destroy(const NativeValue &self) {
 static NativeValue sputnik_native_extension_invoke(
     const sputnik::runtime::NativeExtRegistry::ResolvedThunk &thunk,
     bool method, const NativeArgsView &args, const NativeValue &self) {
+  if (thunk.leaf != nullptr && method && args.empty()) {
+    const auto fail = [](const char *kind, const char *message) -> NativeValue {
+      throw NativeRaised{native_named_error(kind, message)};
+    };
+    if (self.tag != NativeValue::Tag::ForeignHandle)
+      return fail("TypeError", "expected a native handle");
+    const auto &handle = as_native_foreign_handle(self)->handle;
+    if (handle == nullptr) return fail("TypeError", "native handle is null");
+    if (handle->tag != thunk.leaf->receiver_tag)
+      return fail("TypeError", "native handle tag mismatch");
+    if (!handle->live)
+      return fail("LifetimeError", "native handle used after destroy!");
+    struct FaultState { std::optional<NativeRaised> raised; } state;
+    const SputnikLeafFault fault{&state, [](void *opaque, const char *kind,
+                                          const char *message) {
+      auto &state = *static_cast<FaultState *>(opaque);
+      state.raised = NativeRaised{native_named_error(
+          kind == nullptr ? "RuntimeError" : kind,
+          message == nullptr ? "" : message)};
+      return SPUTNIK_ERR;
+    }};
+    std::int64_t result = 0;
+    const SputnikStatus status = thunk.leaf->handle_int(handle->ptr, &result, &fault);
+    if (state.raised.has_value()) throw std::move(*state.raised);
+    if (status != SPUTNIK_OK)
+      return fail("RuntimeError", "native leaf call failed without a fault");
+    return NativeValue::integer(result);
+  }
   if (!thunk.blocking || sputnik::runtime::current_runtime_is_blocking_ffi_thread()) {
     return sputnik_native_extension_invoke_inline(thunk.fn, method, args, self);
   }
@@ -25226,6 +25468,13 @@ static NativeValue sputnik_native_extension_invoke(
       declared_symbols.push_back(symbol);
       out << "extern \"C\" SputnikStatus " << symbol
           << "(SputnikCtx *, const SputnikValue *, std::size_t, SputnikValue *);\n";
+      // A weak default definition also works for statically linked Mach-O
+      // executables, where an unresolved weak import has no dylib provider.
+      // A package's strong sidecar definition overrides this cold fallback.
+      out << "#if defined(__GNUC__)\n"
+             "extern \"C\" __attribute__((weak, noinline)) "
+             "const SputnikLeafDescriptor *" << symbol
+          << "_sputnik_leaf_v1(void) { return nullptr; }\n#endif\n";
     };
     const std::vector<std::string> direct_symbols =
         direct_native_symbols(module, native_extensions);
@@ -25242,11 +25491,17 @@ static NativeValue sputnik_native_extension_invoke(
     }
     out << "\nstatic void sputnik_register_native_extensions() {\n";
     out << "  sputnik::runtime::RuntimeNativePackageDescriptor package;\n";
+    const auto emit_leaf_sidecar = [&](const std::string &symbol) {
+      out << "#if defined(__GNUC__)\n"
+             "  package.thunks.back().leaf = " << symbol
+          << "_sputnik_leaf_v1();\n#endif\n";
+    };
     for (const std::string &symbol : direct_symbols) {
       out << "  package.thunks.push_back({\"" << cpp_string(symbol)
           << "\", reinterpret_cast<void *>(&" << symbol << "), "
           << (blocking_symbols.count(symbol) != 0U ? "true" : "false")
           << "});\n";
+      emit_leaf_sidecar(symbol);
     }
     std::unordered_map<std::string, std::string> logical_to_symbol;
     for (const sputnik::pkg::PackageNativeExtension &extension :
@@ -25258,6 +25513,7 @@ static NativeValue sputnik_native_extension_invoke(
             << (blocking_symbols.count(symbol.logical) != 0U ? "true"
                                                               : "false")
             << "});\n";
+        emit_leaf_sidecar(symbol.symbol);
       }
       for (const sputnik::pkg::PackageNativeType &type : extension.types) {
         out << "  {\n";
@@ -27620,6 +27876,17 @@ void compile_and_load_native_extensions(
       manifest_blocking_native_logicals(extensions);
   std::unordered_map<std::string, std::string> logical_to_symbol;
   std::set<std::string> registered_logicals;
+  const auto leaf_sidecar = [&](const std::string &symbol) {
+    (void)::dlerror();
+    void *address = ::dlsym(handle, (symbol + "_sputnik_leaf_v1").c_str());
+    const char *error = ::dlerror();
+    if (error != nullptr || address == nullptr)
+      return static_cast<const SputnikLeafDescriptor *>(nullptr);
+    SputnikLeafDescriptorFn query = nullptr;
+    static_assert(sizeof(query) == sizeof(address));
+    std::memcpy(&query, &address, sizeof(query));
+    return query();
+  };
   for (const sputnik::pkg::PackageNativeExtension &extension : extensions) {
     for (const sputnik::pkg::PackageNativeSymbol &symbol : extension.symbols) {
       logical_to_symbol[symbol.logical] = symbol.symbol;
@@ -27627,7 +27894,8 @@ void compile_and_load_native_extensions(
         package.thunks.push_back(
             {symbol.logical,
              dynamic_symbol(handle, symbol.symbol, library_path),
-             blocking_symbols.count(symbol.logical) != 0U});
+             blocking_symbols.count(symbol.logical) != 0U,
+             leaf_sidecar(symbol.symbol)});
       }
     }
   }
@@ -27635,7 +27903,7 @@ void compile_and_load_native_extensions(
     if (registered_logicals.insert(symbol).second) {
       package.thunks.push_back(
           {symbol, dynamic_symbol(handle, symbol, library_path),
-           blocking_symbols.count(symbol) != 0U});
+           blocking_symbols.count(symbol) != 0U, leaf_sidecar(symbol)});
     }
   }
 

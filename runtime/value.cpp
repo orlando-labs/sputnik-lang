@@ -794,18 +794,6 @@ const std::int64_t *Value::integer_if() const {
 #else // SPUTNIK_VALUE_REPR_TAGGED
 // ==== Tagged Value method bodies (default 16-byte representation) ===========
 
-// Refcounted box for the cold tail kinds. One heap allocation per tail value;
-// the concrete shared_ptr is type-erased through shared_ptr<void> so its
-// original typed deleter still runs on drop, and static_pointer_cast recovers
-// the typed handle in the accessors.
-struct ValueTailBox {
-  std::atomic<std::uint32_t> refcount{1};
-  ValueTailKind kind;
-  std::shared_ptr<void> ptr;
-  ValueTailBox(ValueTailKind k, std::shared_ptr<void> p)
-      : kind(k), ptr(std::move(p)) {}
-};
-
 void Value::retain_payload(ValueTag tag, const Storage &storage) noexcept {
   if (tag >= ValueTag::Closure && tag <= ValueTag::Map) {
     if (storage.obj != nullptr) {
@@ -831,48 +819,6 @@ void Value::release_payload(ValueTag tag, Storage &storage) noexcept {
   }
 }
 
-Value::Value(const Value &other) noexcept : tag_(other.tag_), u_(other.u_) {
-  retain_payload(tag_, u_);
-}
-
-Value::Value(Value &&other) noexcept : tag_(other.tag_), u_(other.u_) {
-  other.tag_ = ValueTag::Null;
-  other.u_.i = 0;
-}
-
-Value &Value::operator=(const Value &other) noexcept {
-  if (this != &other) {
-    // Retain the source payload before releasing ours so aliasing (two Values
-    // pointing at the same object) is safe.
-    ValueTag incoming_tag = other.tag_;
-    Storage incoming = other.u_;
-    retain_payload(incoming_tag, incoming);
-    release_payload(tag_, u_);
-    tag_ = incoming_tag;
-    u_ = incoming;
-  }
-  return *this;
-}
-
-Value &Value::operator=(Value &&other) noexcept {
-  if (this != &other) {
-    release_payload(tag_, u_);
-    tag_ = other.tag_;
-    u_ = other.u_;
-    other.tag_ = ValueTag::Null;
-    other.u_.i = 0;
-  }
-  return *this;
-}
-
-Value::~Value() { release_payload(tag_, u_); }
-
-void Value::reset() noexcept {
-  release_payload(tag_, u_);
-  tag_ = ValueTag::Null;
-  u_.i = 0;
-}
-
 Value Value::make_tail(ValueTailKind kind, std::shared_ptr<void> ptr) {
   Value v;
   v.tag_ = ValueTag::Tail;
@@ -888,106 +834,6 @@ template <class T> Value Value::make_heap(ValueTag tag, IntrusivePtr<T> value) {
   return v;
 }
 
-Value Value::null() { return Value(); }
-
-Value Value::boolean(bool value) {
-  Value v;
-  v.tag_ = ValueTag::Bool;
-  v.u_.b = value;
-  return v;
-}
-
-Value Value::integer(std::int64_t value) {
-  Value v;
-  v.tag_ = ValueTag::Int;
-  v.u_.i = value;
-  return v;
-}
-
-Value Value::floating(double value) {
-  Value v;
-  v.tag_ = ValueTag::Float;
-  v.u_.d = value;
-  return v;
-}
-
-Value Value::symbol(std::uint32_t symbol_id) {
-  Value v;
-  v.tag_ = ValueTag::Symbol;
-  v.u_.u32 = symbol_id;
-  return v;
-}
-
-Value Value::string(std::uint32_t string_id) {
-  Value v;
-  v.tag_ = ValueTag::String;
-  v.u_.u32 = string_id;
-  return v;
-}
-
-Value Value::class_object(std::uint32_t class_index) {
-  Value v;
-  v.tag_ = ValueTag::ClassObject;
-  v.u_.u32 = class_index;
-  return v;
-}
-
-Value Value::native_type(RuntimeNativeTypeKind kind) {
-  Value v;
-  v.tag_ = ValueTag::NativeType;
-  v.u_.ntype = kind;
-  return v;
-}
-
-Value Value::native_function(RuntimeNativeFunctionKind kind) {
-  Value v;
-  v.tag_ = ValueTag::NativeFunction;
-  v.u_.nfn = kind;
-  return v;
-}
-
-Value Value::native_error_class(std::uint16_t error_id) {
-  Value v;
-  v.tag_ = ValueTag::NativeErrorClass;
-  v.u_.u16 = error_id;
-  return v;
-}
-
-bool Value::is_null() const { return tag_ == ValueTag::Null; }
-bool Value::is_bool() const { return tag_ == ValueTag::Bool; }
-bool Value::is_integer() const { return tag_ == ValueTag::Int; }
-bool Value::is_float() const { return tag_ == ValueTag::Float; }
-bool Value::is_symbol() const { return tag_ == ValueTag::Symbol; }
-bool Value::is_string() const {
-  return tag_ == ValueTag::String || is_heap_string();
-}
-bool Value::is_class_object() const { return tag_ == ValueTag::ClassObject; }
-bool Value::is_native_type() const { return tag_ == ValueTag::NativeType; }
-bool Value::is_native_function() const {
-  return tag_ == ValueTag::NativeFunction;
-}
-bool Value::is_native_error_class() const {
-  return tag_ == ValueTag::NativeErrorClass;
-}
-
-bool Value::as_bool() const { return u_.b; }
-std::int64_t Value::as_integer() const { return u_.i; }
-double Value::as_float() const { return u_.d; }
-SymbolValue Value::as_symbol() const { return SymbolValue{u_.u32}; }
-StringValue Value::as_string() const { return StringValue{u_.u32}; }
-ClassObjectValue Value::as_class_object() const {
-  return ClassObjectValue{u_.u32};
-}
-NativeTypeValue Value::as_native_type() const {
-  return NativeTypeValue{u_.ntype};
-}
-NativeFunctionValue Value::as_native_function() const {
-  return NativeFunctionValue{u_.nfn};
-}
-NativeErrorClassValue Value::as_native_error_class() const {
-  return NativeErrorClassValue{u_.u16};
-}
-
 // Heap kinds: stored inline as the embedded ObjHeader*; the tag names the
 // concrete type. Factory adopts the IntrusivePtr's reference; accessor hands
 // back a fresh owning IntrusivePtr (one incref, matching the variant get-copy).
@@ -995,7 +841,6 @@ NativeErrorClassValue Value::as_native_error_class() const {
   Value Value::name(IntrusivePtr<Type> value) {                                \
     return make_heap(ValueTag::Tag, std::move(value));                         \
   }                                                                            \
-  bool Value::is_fn() const { return tag_ == ValueTag::Tag; }                  \
   IntrusivePtr<Type> Value::as_fn() const {                                    \
     if (u_.obj == nullptr) {                                                   \
       return {};                                                               \
@@ -1013,10 +858,6 @@ SPUTNIK_VALUE_HEAP_KINDS(X)
   Value Value::name(std::shared_ptr<Type> value) {                             \
     return make_tail(ValueTailKind::Tag, std::move(value));                    \
   }                                                                            \
-  bool Value::is_fn() const {                                                  \
-    return tag_ == ValueTag::Tail && u_.tail != nullptr &&                     \
-           u_.tail->kind == ValueTailKind::Tag;                                \
-  }                                                                            \
   std::shared_ptr<Type> Value::as_fn() const {                                 \
     return std::static_pointer_cast<Type>(u_.tail->ptr);                       \
   }
@@ -1030,25 +871,11 @@ const ResultValue *Value::result_ptr() const {
   return static_cast<const ResultValue *>(u_.tail->ptr.get());
 }
 
-const ObjHeader *Value::heap_header_if() const {
-  return tag_ >= ValueTag::Closure && tag_ <= ValueTag::Map ? u_.obj
-                                                            : nullptr;
-}
-
-ObjHeader *Value::mutable_heap_header_if() const {
-  return tag_ >= ValueTag::Closure && tag_ <= ValueTag::Map ? u_.obj
-                                                            : nullptr;
-}
-
 std::uint32_t Value::kind_index() const {
   if (tag_ == ValueTag::Tail && u_.tail != nullptr) {
     return 0x100u + static_cast<std::uint32_t>(u_.tail->kind);
   }
   return static_cast<std::uint32_t>(tag_);
-}
-
-const std::int64_t *Value::integer_if() const {
-  return tag_ == ValueTag::Int ? &u_.i : nullptr;
 }
 
 #endif // SPUTNIK_VALUE_REPR_TAGGED

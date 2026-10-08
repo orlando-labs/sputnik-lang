@@ -7032,6 +7032,177 @@ void test_constructor_call_cache_and_invalidation() {
          "constructor replacement must invalidate the cache");
 }
 
+void test_value_inline_operations_preserve_ownership() {
+  using namespace sputnik::runtime;
+  auto instance = make_intrusive<InstanceValue>();
+  const auto initial = instance->header.ref_count.load();
+  {
+    Value owner = Value::instance(instance);
+    const auto owned = instance->header.ref_count.load();
+    expect(owned == initial + 1, "Value instance factory retains ownership");
+    Value copy = owner;
+    expect(instance->header.ref_count.load() == owned + 1,
+           "Value copy retains exactly one heap reference");
+    Value moved = std::move(copy);
+    expect(copy.heap_header_if() == nullptr && moved.is_instance_object() &&
+               instance->header.ref_count.load() == owned + 1,
+           "Value move transfers ownership and empties the source owner");
+    moved = owner;
+    expect(instance->header.ref_count.load() == owned + 1,
+           "Value alias assignment retains before releasing");
+    Value &alias = moved;
+    moved = alias;
+    moved = std::move(alias);
+    expect(moved.is_instance_object() &&
+               instance->header.ref_count.load() == owned + 1,
+           "Value self copy/move preserves ownership");
+    moved.reset();
+    expect(moved.is_null() && instance->header.ref_count.load() == owned,
+           "Value reset releases the heap reference");
+    owner = Value::integer(42);
+    expect(owner.is_integer() && owner.as_integer() == 42 &&
+               instance->header.ref_count.load() == initial,
+           "Value assignment releases managed payload before immediate storage");
+  }
+  expect(instance->header.ref_count.load() == initial,
+         "Value scope exit preserves external instance owner");
+  auto text = std::make_shared<RuntimeHeapStringValue>();
+  std::weak_ptr<RuntimeHeapStringValue> weak = text;
+  {
+    Value owner = Value::heap_string(text);
+    text.reset();
+    Value copy = owner;
+    Value moved = std::move(copy);
+    owner = moved;
+    owner.reset();
+    const bool empty_source = copy.is_null() ||
+        (copy.is_heap_string() && copy.as_heap_string() == nullptr);
+    expect(!weak.expired() && empty_source && moved.is_heap_string() &&
+               moved.is_string() && !moved.is_list(),
+           "tail copy/move/reset preserve the shared payload and predicates");
+    moved.reset();
+    expect(weak.expired(), "last tail reference releases its original shared owner");
+  }
+  expect(Value::class_object(7).as_class_object().class_index == 7 &&
+             Value::boolean(true).as_bool() && Value::floating(1.5).as_float() == 1.5 &&
+             Value::integer(42).integer_if() != nullptr &&
+             Value::null().integer_if() == nullptr,
+         "inline immediate factories and accessors preserve their values");
+}
+
+void test_constructor_hook_cache_and_invalidation() {
+  const auto emitted = emit_ok(
+      "class Root\n"
+      "class Box < Root:\n"
+      "  def init(@value)\n"
+      "  attr value from @value\n"
+      "mixin FirstHook:\n"
+      "  def after_init!(): @value = 10\n"
+      "mixin SecondHook:\n"
+      "  def replacement!(): @value = 100\n"
+      "  def bad_hook!(required): @value = required\n"
+      "def probe(): Box(5).value\n");
+  const auto &module = emitted.module;
+  const auto class_index = [&](const std::string &name) {
+    for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
+      if (module.symbols[module.classes[index].class_name_sym_id] == name) {
+        return index;
+      }
+    }
+    expect(false, "constructor hook fixture class exists: " + name);
+    return 0U;
+  };
+  const auto *probe = method_by_name(module, "probe");
+  const auto *first = method_by_name(module, "after_init!");
+  const auto *replacement = method_by_name(module, "replacement!");
+  const auto *bad_hook = method_by_name(module, "bad_hook!");
+  expect(probe && first && replacement && bad_hook,
+         "constructor hook fixture methods exist");
+  sputnik::runtime::RuntimeWorld world(module);
+  const auto check = [&](std::int64_t expected) {
+    for (int repeat = 0; repeat < 3; ++repeat) {
+      const auto result = world.execute(probe->entry_code_id);
+      expect(result.ok() && result.value.is_integer() &&
+                 result.value.as_integer() == expected,
+             "cached hook preserves fresh initialization and dispatch");
+    }
+  };
+  check(5); // Warm the negative cache.
+  expect(world.define_instance_method(class_index("Root"), *first).ok(),
+         "install inherited hook after negative-cache warmup");
+  check(10);
+  auto second = *replacement;
+  second.selector_sym_id = first->selector_sym_id;
+  expect(world.define_instance_method(class_index("Root"), second).ok(),
+         "replace inherited hook after positive-cache warmup");
+  check(100);
+  expect(world.include_mixin(class_index("Box"), class_index("FirstHook")).ok(),
+         "include hook mixin after inherited-cache warmup");
+  check(10);
+  expect(world.define_instance_method(class_index("Box"), second).ok(),
+         "own hook takes precedence after mixin-cache warmup");
+  check(100);
+  auto bad = *bad_hook;
+  bad.selector_sym_id = first->selector_sym_id;
+  expect(world.define_instance_method(class_index("Box"), bad).ok(),
+         "install invalid hook shape after cache warmup");
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    const auto result = world.execute(probe->entry_code_id);
+    expect(!result.ok() && result.fault->error_name == "TypeError",
+           "cached hook still validates zero-argument compatibility");
+  }
+  expect(world.define_instance_method(class_index("Box"), second).ok(),
+         "replace invalid cached hook");
+  check(100);
+}
+
+void test_cached_constructor_argument_paths_and_unwind() {
+  const auto emitted = emit_ok(
+      "class Eight:\n"
+      "  def init(a, b, c, d, e, f, g, @last)\n"
+      "  attr last from @last\n"
+      "class Nine:\n"
+      "  def init(a, b, c, d, e, f, g, h, @last)\n"
+      "  attr last from @last\n"
+      "class Defaulted:\n"
+      "  def init(@last = 7)\n"
+      "  attr last from @last\n"
+      "class WithBlock:\n"
+      "  def init(&callback): @last = callback()\n"
+      "  attr last from @last\n"
+      "class Failing:\n"
+      "  def init(@value):\n"
+      "    raise ValueError(\"init\") if value < 0\n"
+      "  def after_init!():\n"
+      "    raise ValueError(\"hook\") if @value == 0\n"
+      "def eight(value): Eight(1, 2, 3, 4, 5, 6, 7, value).last\n"
+      "def nine(value): Nine(1, 2, 3, 4, 5, 6, 7, 8, value).last\n"
+      "def failing(value):\n"
+      "  try:\n"
+      "    Failing(value)\n"
+      "    false\n"
+      "  rescue ValueError:\n"
+      "    true\n"
+      "def probe():\n"
+      "  4.times |index|:\n"
+      "    raise ValueError(\"eight\") unless eight(index) == index\n"
+      "    raise ValueError(\"nine\") unless nine(index) == index\n"
+      "    raise ValueError(\"defaults\") unless Defaulted().last == 7\n"
+      "    captured = index\n"
+      "    instance = WithBlock(): captured\n"
+      "    raise ValueError(\"block\") unless instance.last == index\n"
+      "    raise ValueError(\"unwind\") unless failing(-1) and failing(0)\n"
+      "  true\n");
+  const auto *probe = method_by_name(emitted.module, "probe");
+  expect(probe != nullptr, "cached constructor path probe exists");
+  const auto result = sputnik::runtime::execute_code(emitted.module,
+                                                   probe->entry_code_id);
+  expect(result.ok(), result.fault.has_value() ? result.fault->message
+                                             : "cached constructor path execution");
+  expect(result.value.is_bool() && result.value.as_bool(),
+         "warmed constructors preserve inline/overflow arguments, blocks, defaults and unwind");
+}
+
 void test_manual_ivar_cache_shape_guard() {
   using namespace sputnik::bytecode;
 
@@ -12905,6 +13076,9 @@ int main() {
   test_runtime_uninitialized_register_read_raises_name_error();
   test_manual_call_invokes_object_call_method();
   test_constructor_call_cache_and_invalidation();
+  test_constructor_hook_cache_and_invalidation();
+  test_value_inline_operations_preserve_ownership();
+  test_cached_constructor_argument_paths_and_unwind();
   test_execute_emitted_send_method();
   test_execute_emitted_class_matcher();
   test_execute_emitted_implicit_receiver_method_call();

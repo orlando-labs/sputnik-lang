@@ -739,7 +739,14 @@ test-bool-parse: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR
 	grep -q 'ArgParser.InvalidValue' $(BUILD_DIR)/bool-parse-invalid-flag.out
 
 .PHONY: test-native-language-idioms
-test: test-native-language-idioms test-native-call-buffers
+test: test-native-language-idioms test-native-call-buffers test-native-dispatch-cache
+
+.PHONY: test-native-dispatch-cache
+test-native-dispatch-cache: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/native_dispatch_cache
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_dispatch_cache/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_dispatch_cache/native > $(BUILD_DIR)/native_dispatch_cache/build.json
+	$(BUILD_DIR)/native_dispatch_cache/native/native.dispatch_cache > $(BUILD_DIR)/native_dispatch_cache/native.out
+	grep -q '^PASS native dispatch cache$$' $(BUILD_DIR)/native_dispatch_cache/native.out
 
 .PHONY: test-native-call-buffers
 test-native-call-buffers: $(BUILD_DIR)/sputnik

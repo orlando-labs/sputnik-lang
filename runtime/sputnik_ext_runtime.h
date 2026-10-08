@@ -22,6 +22,12 @@
 
 namespace sputnik::runtime {
 
+// Validate an optional leaf sidecar once, before publishing the package.
+// Reject incompatible descriptors and blocking thunks rather than calling a
+// function with an incompatible signature/effect contract.
+void validate_native_leaf_descriptor(const SputnikLeafDescriptor *leaf,
+                                     bool blocking);
+
 using NativeExtErrorDescriptor = RuntimeNativePackageErrorDescriptor;
 
 // The host's logical-name -> thunk table, foreign-handle tag table, and package
@@ -41,6 +47,7 @@ public:
   struct ResolvedThunk {
     void *fn = nullptr;
     bool blocking = false;
+    const SputnikLeafDescriptor *leaf = nullptr;
   };
 
   void register_thunk(const std::string &logical, void *fn);
@@ -146,7 +153,8 @@ NativeExtCallOutcome sputnik_ext_invoke_free(StdlibHost &host, const void *frame
 NativeExtCallOutcome
 sputnik_ext_invoke_method(StdlibHost &host, const void *frame,
                         const NativeTagRegistry &tags, SputnikMethodFn fn,
-                        const Value &self, const std::vector<Value> &args);
+                        const Value &self, const std::vector<Value> &args,
+                        const SputnikLeafDescriptor *leaf = nullptr);
 
 // Direct SputnikCtx surface, used by the bridge helpers above and by unit tests
 // that exercise individual sputnik_ext.h functions. `import` pushes a runtime

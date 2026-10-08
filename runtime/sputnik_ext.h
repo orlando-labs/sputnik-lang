@@ -121,6 +121,45 @@ typedef SputnikStatus (*SputnikMethodFn)(SputnikCtx *cx, SputnikValue self,
                                      const SputnikValue *args, size_t argc,
                                      SputnikValue *out);
 
+/* Optional typed leaf ABI v1. A thunk may additionally export
+ * `<physical_thunk_symbol>_sputnik_leaf_v1(void)` returning a pointer to an
+ * immutable, image-lifetime SputnikLeafDescriptor. Old hosts ignore it.
+ *
+ * HANDLE_INT is a nullary method: the host validates receiver tag/liveness and
+ * borrows its pointer for this synchronous call; the result is a raw int64_t.
+ * A leaf must not retain that pointer, suspend/block, reenter Sputnik, invoke
+ * user callbacks, or let a C++ exception cross the C boundary. Fault reporting
+ * is the only permitted runtime call, on failure only. Keep the ordinary
+ * thunk as the compatible fallback for hosts/call shapes without leaf support.
+ */
+#define SPUTNIK_LEAF_ABI_VERSION 1u
+typedef struct SputnikLeafFault {
+  void *state;
+  SputnikStatus (*raise)(void *state, const char *error_class,
+                         const char *message);
+} SputnikLeafFault;
+
+static inline SputnikStatus sputnik_leaf_fault(const SputnikLeafFault *fault,
+                                               const char *error_class,
+                                               const char *message) {
+  return fault->raise(fault->state, error_class, message);
+}
+
+typedef SputnikStatus (*SputnikLeafHandleIntFn)(const void *receiver,
+                                               int64_t *out,
+                                               const SputnikLeafFault *fault);
+typedef enum SputnikLeafSignature {
+  SPUTNIK_LEAF_HANDLE_INT = 1
+} SputnikLeafSignature;
+typedef struct SputnikLeafDescriptor {
+  uint32_t abi_version;
+  uint32_t struct_size;
+  SputnikLeafSignature signature;
+  const char *receiver_tag;
+  SputnikLeafHandleIntFn handle_int;
+} SputnikLeafDescriptor;
+typedef const SputnikLeafDescriptor *(*SputnikLeafDescriptorFn)(void);
+
 /* Destructor for an `owned` handle: full runtime context permitted; invoked
  * only via deterministic destroy!/memory.dealloc, never by the GC. */
 typedef void (*SputnikOwnedDestructor)(SputnikCtx *cx, void *handle);

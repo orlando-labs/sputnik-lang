@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Highlight contextual `blocking` after a native `from "..."` binding as a
+  storage modifier, while keeping ordinary identifiers named `blocking` intact.
 - Align syntax highlighting with the current language grammar, including inline
   `if ... then ... else`, logical word operators, callable references, current
   symbolic operators, properties, symbols, special variables, tagged text blocks,

@@ -3933,6 +3933,84 @@ void test_execute_emitted_case_map_rest() {
          "map-rest case should capture remaining field");
 }
 
+void test_execute_scattered_pattern_assignment() {
+  auto emitted = emit_ok("def hold(&block): block\n"
+                         "def unpack(a, untouched, b):\n"
+                         "  getter = hold(): (a, b)\n"
+                         "  (a, b) = (b, a)\n"
+                         "  [a, untouched, b, getter()]\n"
+                         "def failure(a, untouched, b):\n"
+                         "  try:\n"
+                         "    (a, 8, b) = (30, 9, 40)\n"
+                         "  rescue MatchError:\n"
+                         "    null\n"
+                         "  [a, untouched, b]\n"
+                         "def original_rhs(a, untouched, b):\n"
+                         "  (a, b) = a\n"
+                         "def list_rest(head, untouched, tail):\n"
+                         "  [head, *tail] = [3, 4, 5]\n"
+                         "  [head, untouched, tail]\n"
+                         "def map_rest(a, untouched, rest):\n"
+                         "  {a:, **rest} = {a: 3, b: 4}\n"
+                         "  [a, untouched, rest]\n"
+                         "def after_if(a, untouched, b):\n"
+                         "  prepared = if a > 0:\n"
+                         "    (b, a)\n"
+                         "  else:\n"
+                         "    (a, b)\n"
+                         "  (a, b) = prepared\n"
+                         "  [a, untouched, b]\n");
+  const std::vector<sputnik::runtime::Value> args = {
+      sputnik::runtime::Value::integer(1), sputnik::runtime::Value::integer(2),
+      sputnik::runtime::Value::integer(3)};
+  const auto *method = method_by_name(emitted.module, "unpack");
+  const auto success = sputnik::runtime::execute_code(emitted.module, method->entry_code_id, args);
+  expect(success.ok() && success.value.is_list(), "scattered swap executes");
+  const auto result = success.value.as_list();
+  expect(result->items[0].as_integer() == 3 && result->items[1].as_integer() == 2 &&
+             result->items[2].as_integer() == 1, "scattered swap preserves unrelated parameter");
+  expect(result->items[3].is_tuple() && result->items[3].as_tuple()->items[0].as_integer() == 3 &&
+             result->items[3].as_tuple()->items[1].as_integer() == 1,
+         "scattered assignment updates captured locals");
+  method = method_by_name(emitted.module, "failure");
+  const auto failure = sputnik::runtime::execute_code(emitted.module, method->entry_code_id, args);
+  expect(failure.ok() && failure.value.is_list(),
+         "failed scattered pattern is rescuable: " +
+             (failure.fault ? failure.fault->error_name + ": " + failure.fault->message
+                            : "unexpected return value"));
+  const auto unchanged = failure.value.as_list();
+  expect(unchanged->items[0].as_integer() == 1 && unchanged->items[1].as_integer() == 2 &&
+             unchanged->items[2].as_integer() == 3, "failed pattern never partially commits destinations");
+  method = method_by_name(emitted.module, "original_rhs");
+  const auto rhs = sputnik::runtime::make_tuple_value({args[0], args[2]});
+  const auto value = sputnik::runtime::execute_code(emitted.module, method->entry_code_id, {rhs, args[1], args[2]});
+  expect(value.ok() && value.value.is_tuple() && value.value.as_tuple()->items[1].as_integer() == 3,
+         "pattern assignment returns the original RHS even when assigning to its source local");
+  method = method_by_name(emitted.module, "list_rest");
+  const auto list = sputnik::runtime::execute_code(emitted.module, method->entry_code_id, args);
+  expect(list.ok() && list.value.is_list(), "scattered list rest executes");
+  const auto &list_values = list.value.as_list()->items;
+  expect(list_values[0].as_integer() == 3 && list_values[1].as_integer() == 2 &&
+             list_values[2].is_list() && list_values[2].as_list()->items.size() == 2 &&
+             list_values[2].as_list()->items[0].as_integer() == 4 &&
+             list_values[2].as_list()->items[1].as_integer() == 5,
+         "scattered list rest materializes the committed tail");
+  method = method_by_name(emitted.module, "map_rest");
+  const auto map = sputnik::runtime::execute_code(emitted.module, method->entry_code_id, args);
+  expect(map.ok() && map.value.is_list(), "scattered map rest executes");
+  const auto &map_values = map.value.as_list()->items;
+  expect(map_values[0].as_integer() == 3 && map_values[1].as_integer() == 2 &&
+             map_values[2].is_map() && map_values[2].as_map()->entries.size() == 1 &&
+             map_values[2].as_map()->entries[0].value.as_integer() == 4,
+         "scattered map rest materializes only remaining keys");
+  method = method_by_name(emitted.module, "after_if");
+  const auto after_if = sputnik::runtime::execute_code(emitted.module, method->entry_code_id, args);
+  expect(after_if.ok() && after_if.value.is_list() &&
+             after_if.value.as_list()->items[0].as_integer() == 3 &&
+             after_if.value.as_list()->items[2].as_integer() == 1,
+         "tuple assignment after a multiline conditional starts a new statement");
+}
+
 void test_execute_emitted_case_map_strict_null() {
   sputnik::bytecode::EmitResult emit_result = emit_ok("def strict(payload):\n"
                                                     "  case payload:\n"
@@ -4491,6 +4569,105 @@ void test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables() {
       exec.value, sputnik::bytecode::BcModule{}, exec);
   expect(text == "people|posts|posts|sputnik",
          "pooled block VM keeps runtime string ids content-stable");
+}
+
+void test_pooled_block_vm_refreshes_runtime_symbols() {
+  const auto exec = execute_emitted_init(R"s(
+def discard(value = "child-only".symbol): 0
+def inspect(value, text = value.str): text
+
+# Unused default results may still intern names. Parent interning and later
+# default calls must preserve both tables across repeated child leases.
+discard()
+parent = "parent-only".symbol
+observed = inspect(parent)
+raise ValueError("stale child table") unless observed == "parent-only"
+40.times |i|:
+  expected = "dynamic-#{i}"
+  parent = expected.symbol
+  raise ValueError("stale parent symbol") unless inspect(parent) == expected
+  stable = inspect(parent)
+  raise ValueError("stale reused callback") unless stable == expected
+true
+)s");
+  expect(exec.ok() && exec.value.is_bool() && exec.value.as_bool(),
+         "pooled default names survive parent interning and reuse");
+  expect(std::find(exec.runtime_symbols.begin(), exec.runtime_symbols.end(),
+                   "child-only") != exec.runtime_symbols.end(),
+         "unused default results still export their interned names");
+}
+
+void test_default_thunks_export_runtime_names() {
+  std::ifstream source_file("corpus/run/default_runtime_names/source.s");
+  expect(source_file.good(), "default runtime names corpus source exists");
+  const std::string source((std::istreambuf_iterator<char>(source_file)),
+                           std::istreambuf_iterator<char>());
+  const auto emitted = emit_ok(source);
+  const auto *probe = method_by_name(emitted.module, "probe");
+  expect(probe != nullptr, "default runtime names probe exists");
+  const auto result = sputnik::runtime::execute_code(emitted.module,
+                                                   probe->entry_code_id);
+  expect(result.ok(), result.fault.has_value() ? result.fault->message
+                                             : "default runtime names execution");
+  expect(result.value.is_bool() && result.value.as_bool(),
+         "default names survive returns, dependencies and nesting");
+
+  sputnik::runtime::RuntimeWorld world(emitted.module);
+  const auto initialized = world.execute(emitted.module.init.entry_code_id);
+  expect(initialized.ok(), "default runtime names world initializes");
+  for (int repeat = 0; repeat < 2; ++repeat) {
+    const auto executed = world.execute(probe->entry_code_id);
+    expect(executed.ok() && executed.value.is_bool() && executed.value.as_bool(),
+           "default runtime names survive persistent world execution");
+  }
+}
+
+void test_faulting_default_exports_runtime_names() {
+  const auto emitted = emit_ok(R"s(
+def publish_then_fail(out):
+  out.push!("fault-default-#{out.count}".symbol)
+  raise ValueError("default failed")
+def failing(out, value = publish_then_fail(out)): value
+def read(out): out.last.str
+)s");
+  const auto *failing = method_by_name(emitted.module, "failing");
+  const auto *read = method_by_name(emitted.module, "read");
+  expect(failing != nullptr && read != nullptr, "faulting default methods exist");
+  sputnik::runtime::RuntimeWorld world(emitted.module);
+  expect(world.execute(emitted.module.init.entry_code_id).ok(),
+         "faulting default world initializes");
+  const auto published = sputnik::runtime::make_list_value({});
+  for (std::size_t repeat = 0; repeat < 2; ++repeat) {
+    const auto failed = world.execute(failing->entry_code_id, {published});
+    expect(!failed.ok() && failed.fault.has_value() &&
+               failed.fault->error_name == "ValueError" &&
+               failed.fault->message == "default failed",
+           "default keeps its original fault");
+    expect(published.as_list()->items.size() == repeat + 1U &&
+               published.as_list()->items.back().is_symbol(),
+           "faulting default retains the published symbol");
+    const auto observed = world.execute(read->entry_code_id, {published});
+    expect(observed.ok(), "published default names survive failed execution");
+    expect(string_value_text_or_die(observed.value, emitted.module, observed) ==
+               "fault-default-" + std::to_string(repeat),
+           "published symbol keeps its name after a default fault");
+  }
+}
+
+void test_direct_entry_initialization_exports_default_names() {
+  const auto emitted = emit_ok(R"s(
+def intern(text, symbol = text.symbol): symbol
+saved = intern("initialized-default")
+def probe(): saved.str
+)s");
+  const auto *probe = method_by_name(emitted.module, "probe");
+  expect(probe != nullptr, "initialized default probe exists");
+  const auto result = sputnik::runtime::execute_code(emitted.module,
+                                                   probe->entry_code_id);
+  expect(result.ok(), "direct entry imports names interned in initialization");
+  expect(string_value_text_or_die(result.value, emitted.module, result) ==
+             "initialized-default",
+         "default symbol captured during initialization remains readable");
 }
 
 void test_runtime_world_persists_runtime_strings_between_execute_calls() {
@@ -13131,6 +13308,7 @@ int main() {
   test_execute_emitted_case_const_class();
   test_execute_emitted_case_list_exact();
   test_execute_emitted_pattern_assign_list_rest();
+  test_execute_scattered_pattern_assignment();
   test_execute_emitted_case_map_rest();
   test_execute_emitted_case_map_strict_null();
   test_execute_emitted_clause_method_dispatch();
@@ -13148,6 +13326,10 @@ int main() {
   test_string_contains_only();
   test_synchronous_collection_block_control_flow();
   test_pooled_block_vm_refreshes_equal_sized_runtime_string_tables();
+  test_pooled_block_vm_refreshes_runtime_symbols();
+  test_default_thunks_export_runtime_names();
+  test_faulting_default_exports_runtime_names();
+  test_direct_entry_initialization_exports_default_names();
   test_runtime_world_persists_runtime_strings_between_execute_calls();
   test_runtime_world_shared_module_keeps_runtime_names_private();
   test_runtime_world_reuses_native_bridge_session_after_stdlib_fault();

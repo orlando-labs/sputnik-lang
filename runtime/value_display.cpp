@@ -286,6 +286,11 @@ std::string runtime_stringify_value_impl(RuntimeStringifyContext *context,
   if (value.is_native_error_class()) {
     return runtime_error_name(value.as_native_error_class().error_id);
   }
+  if (value.is_module_namespace()) {
+    const auto namespace_value = value.as_module_namespace();
+    return namespace_value ? "<module " + namespace_value->path + ">"
+                           : "<module null>";
+  }
   if (value.is_native_error_namespace()) {
     const std::shared_ptr<NativeErrorNamespaceValue> namespace_value =
         value.as_native_error_namespace();
@@ -722,6 +727,8 @@ public:
       result.truncated = true;
     } else if (v.is_error_instance() && v.as_error_instance()) {
       append(runtime_error_name(v.as_error_instance()->error_id)); append(": "); append(v.as_error_instance()->message);
+    } else if (v.is_module_namespace() && v.as_module_namespace()) {
+      append("<module "); append(v.as_module_namespace()->path); append(">");
     } else if (v.is_native_error_namespace() && v.as_native_error_namespace()) {
       append("<error namespace "); append(v.as_native_error_namespace()->path); append(">");
     } else if (v.is_foreign_handle() && v.as_foreign_handle()) {
@@ -880,6 +887,11 @@ value_to_debug_string(const Value &value, const bytecode::BcModule *module,
   }
   if (value.is_native_error_class()) {
     return runtime_error_name(value.as_native_error_class().error_id);
+  }
+  if (value.is_module_namespace()) {
+    const auto namespace_value = value.as_module_namespace();
+    return namespace_value ? "<module " + namespace_value->path + ">"
+                           : "<module null>";
   }
   if (value.is_native_error_namespace()) {
     const std::shared_ptr<NativeErrorNamespaceValue> namespace_value =

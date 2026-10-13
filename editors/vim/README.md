@@ -11,6 +11,9 @@ placeholders, symbols, numeric literals, operators, Unicode identifiers,
 strings, tagged text blocks, nested interpolation and macro splices. Tagged
 single-quoted strings also interpolate; raw `r` strings do not.
 
+Native `from "..." blocking` and class ownership modifiers such as `collected`
+use `StorageClass`. Elsewhere, `blocking` remains an ordinary identifier.
+
 Highlight groups link to standard Vim groups, so the active colorscheme controls
 the colors. The filetype plugin sets `comments` and `commentstring` for `#`
 comments and leaves indentation settings to your configuration.

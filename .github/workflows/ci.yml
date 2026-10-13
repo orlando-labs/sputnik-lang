@@ -31,7 +31,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential clang libssl-dev pkg-config python3
+            build-essential clang libssl-dev libncurses-dev pkg-config python3
 
       - name: Print compiler version
         run: ${{ matrix.cxx }} --version
@@ -42,6 +42,9 @@ jobs:
 
       - name: make test
         run: make test CXX=${{ matrix.cxx }}
+
+      - name: make test-isputnik-tui
+        run: make test-isputnik-tui CXX=${{ matrix.cxx }}
 
       - name: make conformance
         run: make conformance CXX=${{ matrix.cxx }}
@@ -62,5 +65,3 @@ jobs:
           sudo apt-get install -y --no-install-recommends python3
       - name: make spec-sync-check
         run: make spec-sync-check
-      - name: Check website cheat sheet
-        run: python3 tools/sync_cheat_sheet.py --check

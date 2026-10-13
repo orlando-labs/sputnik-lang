@@ -17,6 +17,8 @@
       {"logical": "buffers.counter_read", "symbol": "call_buffers_counter_read"},
       {"logical": "buffers.leaf_probe", "symbol": "call_buffers_leaf_probe"},
       {"logical": "buffers.leaf_fail", "symbol": "call_buffers_leaf_fail"},
+      {"logical": "buffers.counter_value", "symbol": "call_buffers_counter_value"},
+      {"logical": "buffers.resource_probe", "symbol": "call_buffers_resource_probe"},
       {"logical": "buffers.counter_free", "symbol": "call_buffers_counter_free"},
       {"logical": "buffers.counter_reclaims", "symbol": "call_buffers_counter_reclaims"}
     ],

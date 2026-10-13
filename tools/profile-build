@@ -1,0 +1,137 @@
+#!/bin/sh
+# Build Clang PGO artifacts in fresh directories; never mix object-file flags.
+set -eu
+
+usage() {
+  cat <<'EOF'
+usage: tools/profile-build vm-instrument DIRECTORY
+       tools/profile-build vm-optimize DIRECTORY PROFILE.profdata
+       tools/profile-build native-instrument DIRECTORY
+       tools/profile-build native-optimize DIRECTORY PROFILE.profdata
+
+DIRECTORY must not exist. CXX (one executable) defaults to clang++; JOBS to 3.
+VM builds use a fresh BUILD_DIR. Optimized VM builds also run VM/FFI tests.
+Native modes create a compiler wrapper for SPUTNIK_NATIVE_CXX, not a target.
+Run the instrumented program on representative inputs, merge its *.profraw
+with the matching llvm-profdata, then optimize using the same source checkout.
+No Python is used. See docs/engineering/profile-builds.md.
+EOF
+}
+
+fail() { printf '%s\n' "$*" >&2; exit 1; }
+quote() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+
+case ${1:-} in
+  --help|-h) usage; exit 0 ;;
+  vm-instrument|native-instrument) [ "$#" -eq 2 ] || { usage >&2; exit 2; } ;;
+  vm-optimize|native-optimize) [ "$#" -eq 3 ] || { usage >&2; exit 2; } ;;
+  *) usage >&2; exit 2 ;;
+esac
+mode=$1
+repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+compiler=$(command -v "${CXX:-clang++}") || fail 'CXX must name an installed Clang executable'
+case $compiler in /*) ;; *) compiler="$(pwd -P)/$compiler" ;; esac
+compiler_version=$("$compiler" --version)
+case $compiler_version in *clang*) ;; *) fail 'This workflow requires Clang and matching llvm-profdata' ;; esac
+archiver=${AR:-}
+if [ -z "$archiver" ]; then
+  # Apple's ar can misidentify newer Homebrew LLVM bitcode as a fat archive.
+  # Prefer the archiver distributed with the selected compiler for ThinLTO.
+  if [ -x "$(dirname -- "$compiler")/llvm-ar" ]; then
+    archiver="$(dirname -- "$compiler")/llvm-ar"
+  else
+    archiver=ar
+  fi
+fi
+case ${JOBS:-3} in ''|*[!0-9]*|0) fail 'JOBS must be a positive integer' ;; esac
+[ "${JOBS:-3}" -gt 0 ] || fail 'JOBS must be a positive integer'
+
+profile_input=
+case $mode in
+  *-optimize)
+    [ -f "$3" ] && [ -r "$3" ] || fail "Cannot read profile: $3"
+    profile_input=$(CDPATH= cd -- "$(dirname -- "$3")" && pwd -P)/$(basename -- "$3")
+    ;;
+esac
+destination=$2
+[ ! -e "$destination" ] && [ ! -L "$destination" ] || fail "Refusing to reuse build directory: $destination"
+mkdir -p -- "$(dirname -- "$destination")"
+mkdir -- "$destination"
+destination=$(CDPATH= cd -- "$destination" && pwd -P)
+# GNU make's target/prerequisite syntax cannot represent arbitrary path names.
+# Native wrapper arguments are shell-quoted and do not have that restriction.
+case $mode in
+  vm-*)
+    case $destination in *[!a-zA-Z0-9_./-]*) fail 'VM build directory must contain only letters, digits, _, ., / and -' ;; esac
+    ;;
+esac
+printf '%s\n' "$compiler_version" > "$destination/compiler.txt"
+printf '%s\n' "$repository" > "$destination/source-root.txt"
+printf '%s\n' "$mode" > "$destination/mode.txt"
+
+case $mode in
+  *-instrument)
+    mkdir -- "$destination/raw"
+    profile_flag="-fprofile-instr-generate=$destination/raw/%m-%p.profraw"
+    optimization_flags='-O2'
+    ;;
+  *-optimize)
+    cp -- "$profile_input" "$destination/profile.profdata"
+    chmod a-w "$destination/profile.profdata"
+    profile_flag="-fprofile-instr-use=$destination/profile.profdata"
+    optimization_flags='-O3 -flto=thin'
+    ;;
+esac
+
+case $mode in
+  native-*)
+    # Native extension units already request O3; preserve their generation
+    # flags while the generated launcher/runtime continue to request O2.
+    [ "$mode" != native-instrument ] || optimization_flags=
+    # The absolute wrapper path participates in Sputnik's native runtime cache
+    # key. A new, immutable directory per profile also separates archive flags.
+    {
+      printf '#!/bin/sh\nset -eu\nexec '
+      quote "$compiler"
+      printf ' "$@" %s ' "$optimization_flags"
+      quote "$profile_flag"
+      printf ' -Werror=profile-instr-out-of-date\n'
+    } > "$destination/cxx"
+    chmod a=rx "$destination/cxx"
+    printf 'SPUTNIK_NATIVE_CXX=%s\n' "$(quote "$destination/cxx")"
+    ;;
+  vm-*)
+    flags="-std=c++17 -Wall -Wextra -Wpedantic $optimization_flags -DNDEBUG -gline-tables-only $profile_flag -Werror=profile-instr-out-of-date"
+    printf '%s\n' "$flags" > "$destination/cxxflags.txt"
+    set -- "$destination/sputnik"
+    if [ "$mode" = vm-optimize ]; then
+      # Test entry points were not in the training executable. In particular,
+      # their global main symbol collides with the CLI main profile. Compile
+      # only these two harness objects without PGO, then link them against the
+      # same profiled runtime as the CLI. Keep CFG mismatch errors for every
+      # trained runtime/compiler translation unit.
+      test_flags='-std=c++17 -Wall -Wextra -Wpedantic -O2 -DNDEBUG -gline-tables-only'
+      make -C "$repository" -j"${JOBS:-3}" "CXX=$(quote "$compiler")" \
+        "AR=$(quote "$archiver")" \
+        "BUILD_DIR=$destination" "CXXFLAGS=$test_flags" \
+        "$destination/obj/tests/vm_tests.o" \
+        "$destination/obj/tests/sputnik_ext_tests.o" \
+        > "$destination/test-harness-build.log" 2>&1 || {
+          tail -n 30 "$destination/test-harness-build.log" >&2
+          fail "Test harness build failed; see $destination/test-harness-build.log"
+        }
+      set -- "$@" "$destination/vm_tests" "$destination/sputnik_ext_tests"
+    fi
+    make -C "$repository" -j"${JOBS:-3}" "CXX=$(quote "$compiler")" \
+      "AR=$(quote "$archiver")" \
+      "BUILD_DIR=$destination" "CXXFLAGS=$flags" "$@" > "$destination/build.log" 2>&1 || {
+        tail -n 30 "$destination/build.log" >&2
+        fail "Build failed; see $destination/build.log"
+      }
+    if [ "$mode" = vm-optimize ]; then
+      (cd "$repository" && "$destination/vm_tests") > "$destination/vm-tests.log" 2>&1 || fail "VM tests failed; see $destination/vm-tests.log"
+      (cd "$repository" && "$destination/sputnik_ext_tests") > "$destination/ffi-tests.log" 2>&1 || fail "FFI tests failed; see $destination/ffi-tests.log"
+    fi
+    printf '%s\n' "$destination/sputnik"
+    ;;
+esac

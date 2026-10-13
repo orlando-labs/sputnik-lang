@@ -90,7 +90,9 @@ SputnikValue sputnik_make_list(SputnikCtx *cx, const SputnikValue *items, size_t
 
 /* Wrap a foreign pointer as a `native class` handle tagged `tag`. The
  * ownership/reclaim declared for `tag` in the package manifest governs teardown
- * (deterministic destroy! for owned/collected; GC reclaim only for collected). */
+ * (deterministic destroy! for owned/collected; GC reclaim only for collected).
+ * Ownership transfers only on success. A null opaque result means failure and
+ * leaves the pointer with the extension; the host also records a fault. */
 SputnikValue sputnik_make_handle(SputnikCtx *cx, const char *tag, void *ptr);
 
 /* ---- faults and callbacks --------------------------------------------- */
@@ -133,6 +135,7 @@ typedef SputnikStatus (*SputnikMethodFn)(SputnikCtx *cx, SputnikValue self,
  * thunk as the compatible fallback for hosts/call shapes without leaf support.
  */
 #define SPUTNIK_LEAF_ABI_VERSION 1u
+#define SPUTNIK_LEAF_ABI_VERSION_2 2u
 typedef struct SputnikLeafFault {
   void *state;
   SputnikStatus (*raise)(void *state, const char *error_class,
@@ -148,15 +151,27 @@ static inline SputnikStatus sputnik_leaf_fault(const SputnikLeafFault *fault,
 typedef SputnikStatus (*SputnikLeafHandleIntFn)(const void *receiver,
                                                int64_t *out,
                                                const SputnikLeafFault *fault);
+/* v2 HANDLE_INT_HANDLE accepts one raw Int and returns a fresh resource of
+ * the receiver's collected type. Success requires a nonnull output; failure
+ * should leave it null. The host adopts it after the call and reclaims any
+ * output on failure. Export `<symbol>_sputnik_leaf_v2` for this signature,
+ * retaining the ordinary thunk as the fallback. Other v1 leaf rules apply. */
+typedef SputnikStatus (*SputnikLeafHandleIntHandleFn)(const void *receiver,
+                                                     int64_t arg, void **out,
+                                                     const SputnikLeafFault *fault);
 typedef enum SputnikLeafSignature {
-  SPUTNIK_LEAF_HANDLE_INT = 1
+  SPUTNIK_LEAF_HANDLE_INT = 1,
+  SPUTNIK_LEAF_HANDLE_INT_HANDLE = 2
 } SputnikLeafSignature;
 typedef struct SputnikLeafDescriptor {
   uint32_t abi_version;
   uint32_t struct_size;
   SputnikLeafSignature signature;
   const char *receiver_tag;
-  SputnikLeafHandleIntFn handle_int;
+  union {
+    SputnikLeafHandleIntFn handle_int;
+    SputnikLeafHandleIntHandleFn handle_int_handle;
+  };
 } SputnikLeafDescriptor;
 typedef const SputnikLeafDescriptor *(*SputnikLeafDescriptorFn)(void);
 

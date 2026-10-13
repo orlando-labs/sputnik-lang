@@ -107,6 +107,23 @@ async function main() {
   const grammar = await loadGrammar();
   assert.ok(grammar, "Sputnik grammar failed to load");
 
+  const blocking = tokenize(grammar, [
+    'native def wait(timeout as Int) from "unit.wait" blocking',
+    '  def acquire(timeout as Int) from "unit.acquire" blocking: 1',
+    'native def multiline(',
+    '  timeout as Int) from "unit.multi" blocking # comment',
+    'blocking = 1',
+    'def blocking(): blocking',
+    'native def wait() from "unit.wait" blocking?',
+    '# from "unit.wait" blocking',
+    'text = \'from "unit.wait" blocking\'',
+    "native def wait() from 'unit.single' blocking",
+  ].join('\n'));
+  for (const line of [0, 1, 3, 9])
+    assertScope(blocking, line, 'blocking', 'storage.modifier.blocking.sputnik');
+  for (const line of [4, 5, 6, 7, 8])
+    assertNoScopePrefix(blocking, line, 'blocking', 'storage.modifier.blocking');
+
   const conditionals = tokenize(
     grammar,
     [

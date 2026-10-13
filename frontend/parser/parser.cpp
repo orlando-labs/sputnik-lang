@@ -1413,6 +1413,17 @@ Parser::parse_def_stmt(bool class_method, const lexer::Token *start_override,
       error(current(), "expected \"binding\" string after 'from'");
     }
   }
+  // `blocking` is contextual only in the native binding's modifier slot.
+  // Keep it available as an ordinary name everywhere else.
+  bool native_blocking = false;
+  if (check(lexer::TokenKind::Identifier) && current().lexeme == "blocking") {
+    const lexer::Token modifier = advance();
+    native_blocking = has_binding;
+    if (!has_binding) {
+      error_code(modifier, "E_NATIVE_BLOCKING_CONTEXT",
+                 "`blocking` requires a `from \"...\"` native binding");
+    }
+  }
   // A `from` binding is only meaningful on a `native def` or on a method inside
   // a `native class`. A plain `def ... from` anywhere else is malformed.
   if (has_binding && !is_native && !in_native_class_body_) {
@@ -1421,6 +1432,10 @@ Parser::parse_def_stmt(bool class_method, const lexer::Token *start_override,
                "method inside a `native class`");
   }
   if (has_binding && !check(lexer::TokenKind::Colon)) {
+    if (!is_declaration_boundary(current().kind)) {
+      error_code(current(), "E_NATIVE_BINDING_MODIFIER",
+                 "expected `blocking`, ':' or end of native declaration");
+    }
     auto node =
         ast::make_expr(class_method ? "AstClassMethodDef" : "AstDefStmt",
                        ast::join_spans(start.span, previous().span));
@@ -1431,6 +1446,7 @@ Parser::parse_def_stmt(bool class_method, const lexer::Token *start_override,
     node->bool_field("is_native", is_native);
     node->bool_field("native_only", true);
     node->string_field("native_binding", native_binding);
+    if (native_blocking) node->bool_field("native_blocking", true);
     return node;
   }
 
@@ -1449,6 +1465,7 @@ Parser::parse_def_stmt(bool class_method, const lexer::Token *start_override,
       node->bool_field("is_native", is_native);
       node->bool_field("native_only", false);
       node->string_field("native_binding", native_binding);
+      if (native_blocking) node->bool_field("native_blocking", true);
     }
     if (is_macro) {
       node->bool_field("is_macro", true);
@@ -1512,6 +1529,7 @@ Parser::parse_def_stmt(bool class_method, const lexer::Token *start_override,
     node->bool_field("is_native", is_native);
     node->bool_field("native_only", false);
     node->string_field("native_binding", native_binding);
+    if (native_blocking) node->bool_field("native_blocking", true);
   }
   // Only stamped when true, so ordinary def AST dumps (goldens) are unchanged.
   if (is_macro) {
@@ -3345,6 +3363,23 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
         !(check(lexer::TokenKind::Colon) && !header_mode &&
           can_accept_direct_block_suffix(*left))) {
       break;
+    }
+
+    // A suite consumes its final newline. Do not attach the next tuple
+    // assignment as call arguments to the preceding multiline expression.
+    if (check(lexer::TokenKind::LParen) &&
+        current().span.start.line > left->span.end.line) {
+      int depth = 0;
+      bool next_assignment = false;
+      for (std::size_t i = current_; i < tokens_.size(); ++i) {
+        if (tokens_[i].kind == lexer::TokenKind::LParen) ++depth;
+        if (tokens_[i].kind == lexer::TokenKind::RParen && --depth == 0) {
+          next_assignment = i + 1 < tokens_.size() &&
+                            tokens_[i + 1].kind == lexer::TokenKind::Equal;
+          break;
+        }
+      }
+      if (next_assignment) break;
     }
 
     if (has_segment && left->kind == "AstPostfixChain" && !header_mode &&

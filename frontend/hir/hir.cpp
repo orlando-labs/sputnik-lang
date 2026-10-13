@@ -1283,6 +1283,8 @@ private:
         !string_value(item, "native_binding").empty()) {
       node->bool_field("is_native", bool_value(item, "is_native"));
       node->bool_field("native_only", bool_value(item, "native_only"));
+      if (bool_value(item, "native_blocking"))
+        node->bool_field("native_blocking", true);
       node->string_field("native_binding",
                          string_value(item, "native_binding"));
     }

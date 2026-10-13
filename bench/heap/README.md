@@ -1,5 +1,13 @@
 # Heap churn benchmark
 
+`default_name_sync.s` isolates pooled child-VM name synchronization: it interns
+2000 symbols, then repeatedly evaluates a nonconstant default argument without
+changing the tables. Run `./build/sputnik bench/heap/default_name_sync.s` with
+each saved compiler. After one warmup it prints five totals in nanoseconds for
+20000 checked calls each. Compare multiple processes in alternating order;
+do not run builds or other benchmarks alongside them. This measures the
+default-call path, not MNIST throughput or allocation cost alone.
+
 `churn.s` is the §9 "bench scenario" from
 `RESEARCH-heap-fragmentation-allocators-2026-06-12.md`: it drives the two
 distinct RSS-retention mechanisms the research separates so they can be measured

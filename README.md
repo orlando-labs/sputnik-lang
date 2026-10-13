@@ -9,12 +9,16 @@ Current baseline:
 - supported host targets for now: Linux and macOS;
 - OpenSSL 1.1.1 or 3.x development headers/libraries are required for HTTP TLS;
   `pkg-config` locates them, or set `OPENSSL_PREFIX=/path/to/openssl` (macOS: `brew install openssl@3 pkg-config`);
+- ncurses headers/libraries are required for the bundled interactive console
+  (Linux: `libncurses-dev`; macOS: supplied by Xcode Command Line Tools);
 - W12 documentation sync uses only the Python 3 standard library for generated anchor-map checks;
 - bytecode tooling is pure C++17 and uses the same local `clang++` toolchain.
 
 Useful commands:
 
-`make` builds the user-facing `build/sputnik` executable and its runtime library.
+`make` builds `build/sputnik`, the interactive curses console `build/isputnik`,
+and their runtime/session libraries. Both executables belong to the language
+distribution; the build needs no notebook application checkout or Swift/AppKit.
 Tests are opt-in: `make build-tests`, `make test` or `make conformance`.
 Source files use `.s`, `.spu` (Sputnik Program Unit), or `.sputnik`; all three
 extensions have identical semantics. Manifests are `sputnik.toml` and
@@ -22,12 +26,27 @@ extensions have identical semantics. Manifests are `sputnik.toml` and
 
 Sputnik is a **technical preview**: language, APIs and artifact formats may change.
 
-The native macOS and terminal notebook live in the separate sibling application
+Run `build/isputnik` without arguments to open the interactive console; use
+`build/isputnik --help` for project and non-interactive evaluation commands.
+Console cells accept inline `class`, `mixin` and `def` declarations, including
+constructors and calls from later cells. A buffer containing definitions runs
+as ordinary Sputnik source: each Run executes the required source prefix once
+in a fresh runtime and displays a result for each cell. This also applies to
+`--run-sheet`; no separate module file or mode switch is required.
+Its session/engine sources and tests live here. `make test-isputnik` checks the
+headless backend and CLI; `make test-isputnik-tui` exercises the real curses UI
+in isolated terminals. See the [shared project format](docs/engineering/notebook-project-v1.md)
+and [directory dependencies](docs/engineering/notebook-dependencies-v1.md).
+
+The graphical notebook is the separate sibling application
 [`sputnik-notebook`](../sputnik-notebook/README.md). Build it there with `make`;
-it uses this repository as its language/runtime dependency.
+it uses this repository's language/runtime and shared session/engine sources.
 
 ```sh
 make build
+build/isputnik
+make test-isputnik
+make test-isputnik-tui
 make test
 make build/vm_net_http_tests
 make test-http-tls

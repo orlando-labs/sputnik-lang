@@ -899,6 +899,10 @@ void test_dispatch_registry_imports_native_package_bindings() {
       "F:nope",
       "sputnik.native.method:malformed",
       "pkg.bad",
+      "sputnik.native.blocking:7",
+      "pkg.free",
+      "sputnik.native.blocking:9",
+      "different.logical",
   };
   module.attrs = {
       {0, 1},
@@ -909,6 +913,8 @@ void test_dispatch_registry_imports_native_package_bindings() {
       {10, 11},
       {999, 1},
       {0, 999},
+      {12, 13},
+      {14, 15},
   };
 
   const RuntimeNativePackageDescriptor descriptor =
@@ -926,6 +932,16 @@ void test_dispatch_registry_imports_native_package_bindings() {
          "native package descriptor preserves handle method attrs");
 
   RuntimeDispatchRegistry dispatch;
+  dispatch.import_native_package_bindings(module);
+  expect(dispatch.native_package_thunk_is_blocking("pkg.free") &&
+             !dispatch.native_package_thunk_is_blocking("pkg.method"),
+         "source blocking metadata must match its code binding logical");
+  dispatch.register_native_package_thunk("pkg.free", nullptr);
+  expect(dispatch.native_package_thunk_is_blocking("pkg.free"),
+         "ordinary thunk registration cannot remove source blocking policy");
+  dispatch.register_native_package_code_binding(7, false, "pkg.replaced");
+  expect(!dispatch.native_package_thunk_is_blocking("pkg.free"),
+         "binding replacement removes obsolete source blocking policy");
   dispatch.import_native_package_bindings(module);
 
   const RuntimeNativePackageCodeBindingDescriptor *free_binding =

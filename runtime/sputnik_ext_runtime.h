@@ -28,6 +28,37 @@ namespace sputnik::runtime {
 void validate_native_leaf_descriptor(const SputnikLeafDescriptor *leaf,
                                      bool blocking);
 
+// A resource-producing leaf must finish before the host unwinds its caller.
+// Capture diagnostics at the C boundary, then raise after output cleanup.
+struct NativeLeafFaultRecord {
+  bool raised = false;
+  bool allocation_failed = false;
+  std::string error_name;
+  std::string error_message;
+
+  SputnikLeafFault callback() noexcept {
+    return {this, [](void *opaque, const char *name, const char *message) noexcept {
+      auto &record = *static_cast<NativeLeafFaultRecord *>(opaque);
+      if (record.raised) return SPUTNIK_ERR;
+      record.raised = true;
+      try {
+        record.error_name = name == nullptr ? "NativeError" : name;
+        record.error_message = message == nullptr ? "" : message;
+      } catch (...) {
+        record.allocation_failed = true;
+      }
+      return SPUTNIK_ERR;
+    }};
+  }
+
+  const char *name() const noexcept {
+    return allocation_failed ? "NativeError" : error_name.c_str();
+  }
+  const char *message() const noexcept {
+    return allocation_failed ? "could not record native leaf fault" : error_message.c_str();
+  }
+};
+
 using NativeExtErrorDescriptor = RuntimeNativePackageErrorDescriptor;
 
 // The host's logical-name -> thunk table, foreign-handle tag table, and package

@@ -373,6 +373,35 @@ void test_class_paths_are_module_qualified() {
 
 int main() {
   {
+    auto provider = module("alias.provider");
+    add_function_export(&provider, "add");
+    auto root = module("alias.main", {"alias.provider"});
+    root.module.strings.push_back("sputnik.import.alias:alias.main\tkernels");
+    const auto key = static_cast<std::uint32_t>(root.module.strings.size() - 1U);
+    root.module.strings.push_back("M\talias.provider\t0");
+    root.module.attrs.push_back({key, key + 1U});
+    BcCode init;
+    init.code_id = 1;
+    init.kind = CodeKind::Module;
+    init.reg_count = 1;
+    init.instructions = {{Opcode::LoadNull, {{0, false}}},
+                         {Opcode::Return, {{0, false}}}};
+    root.module.code_objects.push_back(init);
+    root.module.init.has_entry_code_id = true;
+    root.module.init.entry_code_id = 1;
+    const auto result = sputnik::bytecode::link_graph({root, provider}, "alias.main");
+    expect_valid_output(result);
+    bool namespace_found = false;
+    bool function_found = false;
+    for (const auto &attr : result.module.attrs) {
+      const auto &name = result.module.strings.at(attr.key_str_id);
+      namespace_found |= name == "sputnik.merged.module:alias.provider";
+      function_found |= name == "sputnik.merged.function:alias.provider.add";
+    }
+    expect(namespace_found && function_found,
+           "module aliases retain namespace and qualified function metadata");
+  }
+  {
     auto leaf = module("leaf");
     add_class_export(&leaf, "Thing");
     auto facade = module("facade", {"leaf"});

@@ -765,6 +765,7 @@ struct RuntimeNativePackageCodeBindingDescriptor {
   std::uint32_t code_id = 0;
   bool method = false;
   std::string logical;
+  bool blocking = false;
 };
 
 struct RuntimeNativePackageMethodBindingDescriptor {
@@ -831,7 +832,7 @@ public:
   bool native_package_thunk_is_blocking(const std::string &logical) const;
 
   void register_native_package_code_binding(std::uint32_t code_id, bool method,
-                                            std::string logical);
+                                            std::string logical, bool blocking = false);
   const RuntimeNativePackageCodeBindingDescriptor *
   native_package_code_binding(std::uint32_t code_id) const;
 
@@ -859,6 +860,7 @@ private:
   std::unordered_map<std::string, RuntimeNativePackageThunkDescriptor>
       native_package_thunks_;
   std::unordered_set<std::string> blocking_native_package_thunks_;
+  std::unordered_map<std::string, std::size_t> blocking_native_package_bindings_;
   std::unordered_map<std::uint32_t, RuntimeNativePackageCodeBindingDescriptor>
       native_package_code_bindings_;
   std::unordered_map<std::string, std::string> native_package_method_bindings_;

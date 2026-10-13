@@ -12,6 +12,8 @@ function! s:Source(lines) abort
   %delete _
   call setline(1, a:lines)
   syntax sync fromstart
+  " Refresh the first line after replacing the previous fixture's contents.
+  call synID(1, 1, 1)
 endfunction
 
 function! s:Group(lnum, text, expected, ...) abort
@@ -47,6 +49,27 @@ try
   execute 'edit ' . fnameescape(s:fixture)
   call assert_equal('sputnik', &l:filetype)
   call s:Group(1, 'if', 'sputnikConditional')
+
+  call s:Source([
+        \ 'native def wait(timeout as Int) from "unit.wait" blocking',
+        \ '  def acquire(timeout as Int) from "unit.acquire" blocking: 1',
+        \ 'native def multiline(',
+        \ '  timeout as Int) from "unit.multi" blocking # comment',
+        \ 'blocking = 1',
+        \ 'def blocking(): blocking',
+        \ 'native def wait() from "unit.wait" blocking?',
+        \ '# from "unit.wait" blocking',
+        \ 'text = ''from "unit.wait" blocking''',
+        \ "native def wait() from 'unit.single' blocking",
+        \ ])
+  for s:line in [1, 2, 4, 10]
+    call s:Group(s:line, 'blocking', 'sputnikBlocking')
+  endfor
+  call s:Group(5, 'blocking', 'sputnikIdentifier')
+  call s:Group(6, 'blocking', 'sputnikFunction')
+  call s:Group(7, 'blocking?', 'sputnikIdentifier')
+  call s:Group(8, 'blocking', 'sputnikComment')
+  call s:Group(9, 'blocking', 'sputnikSingleString')
 
   call s:Source([
         \ '@bytes += if Bytes === data then data.count else data.to_str.bytesize',

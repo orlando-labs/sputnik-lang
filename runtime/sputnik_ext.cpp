@@ -328,12 +328,11 @@ SputnikValue sputnik_make_handle(SputnikCtx *cx, const char *tag, void *ptr) {
   if (descriptor == nullptr) {
     cx->host->stdlib_raise_runtime_error(
         cx->frame, "TypeError", "unknown native handle tag '" + tag_str + "'");
-    return cx->push(Value::null());
+    return nullptr;
   }
-  auto handle = std::make_shared<sputnik::runtime::RuntimeForeignHandle>();
+  sputnik::runtime::RuntimeForeignHandle *handle = nullptr;
+  Value value = Value::new_foreign_handle(handle);
   handle->tag = std::move(tag_str);
-  handle->ptr = ptr;
-  handle->ownership = descriptor->ownership;
   switch (descriptor->ownership) {
   case sputnik::runtime::RuntimeForeignHandle::Ownership::Owned: {
     // The descriptor already type-erases the ctx to void* (vm.h stays free of
@@ -358,7 +357,12 @@ SputnikValue sputnik_make_handle(SputnikCtx *cx, const char *tag, void *ptr) {
   case sputnik::runtime::RuntimeForeignHandle::Ownership::Borrowed:
     break; // Sputnik never frees a borrowed handle.
   }
-  return cx->push(Value::foreign_handle(std::move(handle)));
+  // Adoption must be the last, non-throwing step. Before the arena accepts
+  // the Value, an allocation failure leaves the resource with its caller.
+  const SputnikValue result = cx->push(std::move(value));
+  handle->ownership = descriptor->ownership;
+  handle->ptr = ptr;
+  return result;
 }
 
 // ---- faults and callbacks ----------------------------------------------
@@ -452,11 +456,19 @@ bool sputnik_ext_destroy_direct(const SputnikExtDirectOps &ops, void *state,
 void validate_native_leaf_descriptor(const SputnikLeafDescriptor *leaf,
                                      bool blocking) {
   if (leaf == nullptr) return;
-  if (leaf->abi_version != SPUTNIK_LEAF_ABI_VERSION ||
-      leaf->struct_size != sizeof(SputnikLeafDescriptor) ||
-      leaf->signature != SPUTNIK_LEAF_HANDLE_INT ||
+  if (leaf->struct_size != sizeof(SputnikLeafDescriptor) ||
+      (leaf->abi_version != SPUTNIK_LEAF_ABI_VERSION &&
+       leaf->abi_version != SPUTNIK_LEAF_ABI_VERSION_2))
+    throw std::invalid_argument("incompatible native leaf ABI descriptor");
+  const bool supported =
+      (leaf->abi_version == SPUTNIK_LEAF_ABI_VERSION &&
+       leaf->signature == SPUTNIK_LEAF_HANDLE_INT && leaf->handle_int != nullptr) ||
+      (leaf->abi_version == SPUTNIK_LEAF_ABI_VERSION_2 &&
+       leaf->signature == SPUTNIK_LEAF_HANDLE_INT_HANDLE &&
+       leaf->handle_int_handle != nullptr);
+  if (!supported || leaf->struct_size != sizeof(SputnikLeafDescriptor) ||
       leaf->receiver_tag == nullptr || leaf->receiver_tag[0] == '\0' ||
-      leaf->handle_int == nullptr || blocking) {
+      blocking) {
     throw std::invalid_argument("incompatible native leaf ABI descriptor");
   }
 }
@@ -620,7 +632,7 @@ sputnik_ext_invoke_method(StdlibHost &host, const void *frame,
                         const NativeTagRegistry &tags, SputnikMethodFn fn,
                         const Value &self, const std::vector<Value> &args,
                         const SputnikLeafDescriptor *leaf) {
-  if (leaf != nullptr && args.empty()) {
+  if (leaf != nullptr && leaf->signature == SPUTNIK_LEAF_HANDLE_INT && args.empty()) {
     const auto fail = [&](const char *kind, const char *message) {
       host.stdlib_raise_runtime_error(frame, kind, message);
       return NativeExtCallOutcome{};
@@ -650,6 +662,47 @@ sputnik_ext_invoke_method(StdlibHost &host, const void *frame,
     if (status != SPUTNIK_OK)
       return fail("RuntimeError", "native leaf call failed without a fault");
     return {true, Value::integer(result)};
+  }
+  if (leaf != nullptr && leaf->signature == SPUTNIK_LEAF_HANDLE_INT_HANDLE &&
+      args.size() == 1U && args[0].is_integer()) {
+    const auto fail = [&](const char *kind, const char *message) {
+      host.stdlib_raise_runtime_error(frame, kind, message);
+      return NativeExtCallOutcome{};
+    };
+    if (!self.is_foreign_handle()) return fail("TypeError", "expected a native handle");
+    const auto receiver = self.as_foreign_handle();
+    if (receiver == nullptr) return fail("TypeError", "native handle is null");
+    if (receiver->tag != leaf->receiver_tag) return fail("TypeError", "native handle tag mismatch");
+    if (!receiver->live) return fail("LifetimeError", "native handle used after destroy!");
+    const auto *type = tags.lookup(receiver->tag);
+    if (type == nullptr || type->ownership != RuntimeForeignHandle::Ownership::Collected ||
+        type->collected_reclaim == nullptr)
+      return fail("TypeError", "native resource leaf requires a collected type");
+    const auto reclaim = type->collected_reclaim;
+    RuntimeForeignHandle *resource = nullptr;
+    Value result = Value::new_foreign_handle(resource);
+    resource->tag = receiver->tag;
+    resource->teardown = [reclaim](void *, void *pointer) { reclaim(pointer); };
+    NativeLeafFaultRecord diagnostic;
+    const auto fault = diagnostic.callback();
+    void *pointer = nullptr;
+    struct OutputGuard {
+      void *&pointer;
+      SputnikCollectedReclaim reclaim;
+      void reset() noexcept { if (pointer != nullptr) { reclaim(pointer); pointer = nullptr; } }
+      ~OutputGuard() { reset(); }
+    } output{pointer, reclaim};
+    const auto status = leaf->handle_int_handle(receiver->ptr, args[0].as_integer(), &pointer, &fault);
+    if (diagnostic.raised || status != SPUTNIK_OK || pointer == nullptr) {
+      output.reset();
+      if (diagnostic.raised) return fail(diagnostic.name(), diagnostic.message());
+      return fail("NativeError", status == SPUTNIK_OK
+          ? "native leaf returned a null resource" : "native leaf call failed without a fault");
+    }
+    resource->ownership = RuntimeForeignHandle::Ownership::Collected;
+    resource->ptr = pointer;
+    pointer = nullptr;
+    return {true, std::move(result)};
   }
   SputnikCtx ctx;
   ctx.host = &host;

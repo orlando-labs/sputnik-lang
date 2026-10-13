@@ -17,7 +17,7 @@ Sources, in order of trust:
 
 Modes::
 
-    python3 tools/gen_module_docs.py            # write site/modules-data.js + coverage
+    python3 tools/gen_module_docs.py            # write ../site/public/modules-data.js + coverage
     python3 tools/gen_module_docs.py --verify    # additionally run inline examples
     python3 tools/gen_module_docs.py --check      # drift guard only, non-zero on drift
 
@@ -40,8 +40,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SIDECAR_DIR = ROOT / "docs" / "module-examples"
 CORPUS_DIR = ROOT / "corpus" / "run"
-OUTPUT_JS = ROOT / "site" / "modules-data.js"
-COVERAGE_JSON = ROOT / "site" / "modules-coverage.json"
+SITE_DIR = ROOT.parent / "site" / "public"
 SPUTNIK = ROOT / "build" / "sputnik"
 
 IDENT_RE = re.compile(r"^[A-Za-z_Ѐ-ӿ][\wЀ-ӿ]*$")
@@ -323,7 +322,10 @@ def main() -> int:
     parser.add_argument(
         "--check", action="store_true", help="drift guard only; do not write outputs"
     )
+    parser.add_argument("--site-dir", type=Path, default=SITE_DIR, help="standalone website public directory")
     args = parser.parse_args()
+    if not args.check and not args.site_dir.is_dir():
+        parser.exit(1, f"Website directory not found: {args.site_dir}; pass --site-dir\n")
 
     modules, coverage = build_modules(verify=args.verify and not args.check)
     drift = compute_drift(modules)
@@ -341,7 +343,9 @@ def main() -> int:
         print(f"module drift check OK: {len(modules)} modules")
         return 0
 
-    OUTPUT_JS.write_text(emit_js(modules), encoding="utf-8")
+    output_js = args.site_dir / "modules-data.js"
+    coverage_json = args.site_dir / "modules-coverage.json"
+    output_js.write_text(emit_js(modules), encoding="utf-8")
 
     report = {
         "schema": "sputnik.modules.coverage.v1",
@@ -352,12 +356,12 @@ def main() -> int:
         "modules": coverage,
         "drift": drift,
     }
-    COVERAGE_JSON.write_text(
+    coverage_json.write_text(
         json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
 
     total_methods = report["totals"]["methods"]
-    print(f"wrote {OUTPUT_JS.relative_to(ROOT)}: {len(modules)} modules, {total_methods} methods")
+    print(f"wrote {output_js}: {len(modules)} modules, {total_methods} methods")
     if args.verify:
         verified = sum(c["verified"] for c in coverage)
         failed = sum(c["failed"] for c in coverage)

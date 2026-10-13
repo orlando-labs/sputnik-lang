@@ -1903,6 +1903,46 @@ void test_std018_task_local_deterministic_worker_migration() {
          "task-local binding must survive forced worker migration");
 }
 
+void test_task_local_empty_reads_and_scope_restoration() {
+  using namespace sputnik::runtime;
+  const auto context = RuntimeTaskContext::create();
+  RuntimeTaskContextScope scope(context);
+  RuntimeTaskLocal first(true), second(false);
+  expect_integer(first.get(Value::integer(7)), 7, "empty context returns default");
+  first.set(Value::integer(10));
+  const auto token = first.push_scope(Value::integer(20));
+  expect(first.clear(), "clear last binding within dynamic scope");
+  expect(!first.bound(), "empty active map still retains shadowed scope");
+  expect_integer(first.get(Value::integer(7)), 7, "cleared scoped binding uses default");
+  expect(first.pop_scope(token), "restore scope after empty map");
+  expect_integer(first.get(), 10, "restoration republishes last binding");
+  second.set(Value::integer(30));
+  const auto child = context->inherited_snapshot();
+  expect(child->binding(first.slot_id()).has_value(), "inherited context publishes nonempty state");
+  expect(!child->binding(second.slot_id()).has_value(), "noninherited key is absent in child");
+  first.clear();
+  expect_integer(second.get(), 30, "removing one key preserves nonempty map");
+  second.clear();
+  expect_integer(second.get(Value::integer(7)), 7, "removing last key restores empty read");
+}
+
+void test_task_local_get_argument_validation() {
+  for (const char *call : {"local.get(wrong: 1)", "local.get(1)", "local.get(): 1"}) {
+    const auto exec = execute_source_or_die(
+        std::string("import task\nlocal = task.local()\n") + call + "\n");
+    expect(!exec.ok() && exec.fault.has_value() &&
+               exec.fault->error_name == "TypeError",
+           "task-local get rejects invalid call shape with TypeError");
+  }
+  const auto exec = execute_source_or_die(
+      "import task\nlocal = task.local()\n[local.get(default: 8), local.get()]\n");
+  expect(exec.ok() && exec.value.is_list(), "task-local get defaults execute");
+  const auto &items = exec.value.as_list()->items;
+  expect(items.size() == 2, "task-local default result shape");
+  expect_integer(items[0], 8, "task-local get preserves keyword default");
+  expect(items[1].is_null(), "task-local get preserves omitted default");
+}
+
 void test_std018_task_local_lifecycle_cleanup_and_registry_reuse() {
   const std::uint64_t baseline_values =
       sputnik::runtime::runtime_task_local_retained_value_count();
@@ -2388,6 +2428,8 @@ int main() {
   test_std018_task_local_distinct_tasks_and_parallel_stress();
   test_std018_task_local_deterministic_worker_migration();
   test_std018_task_local_lifecycle_cleanup_and_registry_reuse();
+  test_task_local_empty_reads_and_scope_restoration();
+  test_task_local_get_argument_validation();
   std::cout << "stdlib_task_tests: ok\n";
   return 0;
 }

@@ -1,0 +1,20 @@
+{
+  "schema": "sputnik.build.v1",
+  "name": "test.blocking.progress",
+  "root": "test.blocking.progress",
+  "profiles": {"required": ["core.v1", "ffi.v1"]},
+  "modules": [{"name": "test.blocking.progress", "path": "progress.s"}],
+  "native_extensions": [{
+    "name": "blocking",
+    "language": "c++",
+    "sources": ["bridge.cpp"],
+    "symbols": [
+      {"logical": "blocking.pressure_reset", "symbol": "blocking_pressure_reset"},
+      {"logical": "blocking.pressure_arrivals", "symbol": "blocking_pressure_arrivals"},
+      {"logical": "blocking.pressure_wait", "symbol": "blocking_pressure_wait"},
+      {"logical": "blocking.pressure_release", "symbol": "blocking_pressure_release"},
+      {"logical": "blocking.pressure_release_ffi", "symbol": "blocking_pressure_release"},
+      {"logical": "blocking.batch", "symbol": "blocking_batch"}
+    ]
+  }]
+}

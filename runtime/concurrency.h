@@ -98,8 +98,9 @@ private:
 
 // Process-wide executor for foreign calls that may block an OS thread. VM
 // strands park before submitting work here, so scheduler workers remain
-// available. Fully-native callers may synchronously wait for completion, but
-// the foreign call still runs outside RuntimeWorld's serialized bridge.
+// available. Native stack-preserving task drivers also wait outside scheduler
+// workers. Synchronous callbacks can retain a carrier, so the executor grows
+// when all carriers are occupied; surplus idle carriers retire after a timeout.
 class RuntimeBlockingFfiExecutor {
 public:
   static RuntimeBlockingFfiExecutor &instance();
@@ -317,16 +318,23 @@ private:
   RuntimeTaskContext();
   explicit RuntimeTaskContext(std::shared_ptr<const State> initial_state);
 
+  void publish_state(std::shared_ptr<const State> state);
+
   void register_gc_roots();
   void unregister_gc_roots();
 
   std::shared_ptr<const State> state_;
+  // Task-owned writes publish this hint around the immutable snapshot. An
+  // empty read needs neither atomic shared_ptr locking nor map lookup.
+  std::atomic<bool> has_bindings_{false};
   std::atomic<std::uint64_t> next_scope_token_{1};
   std::size_t registry_shard_ = static_cast<std::size_t>(-1);
   std::size_t registry_slot_ = static_cast<std::size_t>(-1);
 };
 
 std::shared_ptr<RuntimeTaskContext> current_runtime_task_context();
+// Borrow only for immediate access without suspension or user callbacks.
+RuntimeTaskContext *current_runtime_task_context_borrowed();
 const void *current_runtime_scheduler_identity();
 
 // Installs a logical context for a root execution or other non-scheduler

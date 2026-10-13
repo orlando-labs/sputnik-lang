@@ -22,7 +22,8 @@ def main():
   if Math.hypot(3, 4) == 5.0 and Math.cbrt(27) == 3.0:
     score = score + 1
   if Math.log2(8) == 3.0 and Math.log10(100) == 2.0:
-    score = score + 1
+    if Math.log(1) == 0.0 and Math.abs(Math.log(Math.E()) - 1.0) < 0.000000001:
+      score = score + 1
   if Math.sin(0) == 0.0 and Math.cos(0) == 1.0 and Math.atan2(0, 1) == 0.0:
     score = score + 1
   if Math.PI() > 3.14 and Math.E() > 2.71:

@@ -380,6 +380,12 @@ Value Value::foreign_handle(std::shared_ptr<RuntimeForeignHandle> value) {
   return {std::move(value)};
 }
 
+Value Value::new_foreign_handle(RuntimeForeignHandle *&handle) {
+  auto resource = std::make_shared<RuntimeForeignHandle>();
+  handle = resource.get();
+  return foreign_handle(std::move(resource));
+}
+
 Value Value::ast_node(std::shared_ptr<RuntimeAstNode> value) {
   return {std::move(value)};
 }
@@ -389,6 +395,10 @@ Value Value::time(std::shared_ptr<RuntimeTimeValue> value) {
 }
 
 Value Value::time_zone(std::shared_ptr<RuntimeTimeZoneValue> value) {
+  return {std::move(value)};
+}
+
+Value Value::module_namespace(std::shared_ptr<ModuleNamespaceValue> value) {
   return {std::move(value)};
 }
 
@@ -570,6 +580,10 @@ bool Value::is_time() const {
 
 bool Value::is_time_zone() const {
   return std::holds_alternative<std::shared_ptr<RuntimeTimeZoneValue>>(payload);
+}
+
+bool Value::is_module_namespace() const {
+  return std::holds_alternative<std::shared_ptr<ModuleNamespaceValue>>(payload);
 }
 
 bool Value::is_time_period() const {
@@ -772,6 +786,10 @@ std::shared_ptr<RuntimeTimeZoneValue> Value::as_time_zone() const {
   return std::get<std::shared_ptr<RuntimeTimeZoneValue>>(payload);
 }
 
+std::shared_ptr<ModuleNamespaceValue> Value::as_module_namespace() const {
+  return std::get<std::shared_ptr<ModuleNamespaceValue>>(payload);
+}
+
 std::shared_ptr<RuntimeTimePeriodValue> Value::as_time_period() const {
   return std::get<std::shared_ptr<RuntimeTimePeriodValue>>(payload);
 }
@@ -814,7 +832,14 @@ void Value::release_payload(ValueTag tag, Storage &storage) noexcept {
   } else if (tag == ValueTag::Tail) {
     if (storage.tail != nullptr &&
         storage.tail->refcount.fetch_sub(1, std::memory_order_acq_rel) == 1) {
-      delete storage.tail;
+      if (storage.tail->shared_owner) {
+        // The alias owns the allocation containing this box. Break that
+        // ownership on the final Value release; exported shared_ptr aliases
+        // can still keep the resource and its tombstone alive.
+        auto owner = std::move(storage.tail->ptr);
+      } else {
+        delete storage.tail;
+      }
     }
   }
 }
@@ -824,6 +849,21 @@ Value Value::make_tail(ValueTailKind kind, std::shared_ptr<void> ptr) {
   v.tag_ = ValueTag::Tail;
   v.u_.tail = new ValueTailBox(kind, std::move(ptr));
   return v;
+}
+
+Value Value::new_foreign_handle(RuntimeForeignHandle *&handle) {
+  struct Storage {
+    RuntimeForeignHandle resource;
+    ValueTailBox box{ValueTailKind::ForeignHandle, {}};
+  };
+  auto owner = std::make_shared<Storage>();
+  handle = &owner->resource;
+  owner->box.ptr = std::shared_ptr<RuntimeForeignHandle>(owner, handle);
+  owner->box.shared_owner = true;
+  Value value;
+  value.tag_ = ValueTag::Tail;
+  value.u_.tail = &owner->box;
+  return value;
 }
 
 template <class T> Value Value::make_heap(ValueTag tag, IntrusivePtr<T> value) {

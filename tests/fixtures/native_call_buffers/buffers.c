@@ -14,6 +14,7 @@ SputnikStatus call_buffers_counter_new(SputnikCtx *cx, const SputnikValue *args,
   if (counter == NULL) return sputnik_fault(cx, "ValueError", "allocation failed");
   *counter = value;
   *out = sputnik_make_handle(cx, counter_tag, counter);
+  if (*out == NULL) { free(counter); return SPUTNIK_ERR; }
   return SPUTNIK_OK;
 }
 
@@ -38,7 +39,7 @@ static SputnikStatus counter_read_leaf(const void *receiver, int64_t *out,
 const SputnikLeafDescriptor *call_buffers_counter_read_sputnik_leaf_v1(void) {
   static const SputnikLeafDescriptor descriptor = {
       SPUTNIK_LEAF_ABI_VERSION, sizeof(SputnikLeafDescriptor),
-      SPUTNIK_LEAF_HANDLE_INT, counter_tag, counter_read_leaf};
+      SPUTNIK_LEAF_HANDLE_INT, counter_tag, {counter_read_leaf}};
   return &descriptor;
 }
 
@@ -71,13 +72,56 @@ SputnikStatus call_buffers_leaf_fail(SputnikCtx *cx, SputnikValue self,
 const SputnikLeafDescriptor *call_buffers_leaf_fail_sputnik_leaf_v1(void) {
   static const SputnikLeafDescriptor descriptor = {
       SPUTNIK_LEAF_ABI_VERSION, sizeof(SputnikLeafDescriptor),
-      SPUTNIK_LEAF_HANDLE_INT, counter_tag, counter_fail_leaf};
+      SPUTNIK_LEAF_HANDLE_INT, counter_tag, {counter_fail_leaf}};
   return &descriptor;
 }
 
 void call_buffers_counter_free(void *pointer) {
   ++counter_reclaims;
   free(pointer);
+}
+
+static SputnikStatus counter_value_leaf(const void *receiver, int64_t value,
+                                       void **out, const SputnikLeafFault *fault) {
+  (void)receiver;
+  if (value == -2) return SPUTNIK_OK; /* deliberately missing output */
+  int64_t *result = malloc(sizeof(*result));
+  if (result == NULL) return sputnik_leaf_fault(fault, "ValueError", "allocation failed");
+  *result = value;
+  *out = result;
+  if (value == -1) {
+    (void)sputnik_leaf_fault(fault, "ValueError", "typed resource failure");
+    return SPUTNIK_OK; /* output must be reclaimed despite this status */
+  }
+  return SPUTNIK_OK;
+}
+
+SputnikStatus call_buffers_counter_value(SputnikCtx *cx, SputnikValue self,
+                                        const SputnikValue *args, size_t argc,
+                                        SputnikValue *out) {
+  void *receiver;
+  if (!sputnik_handle_ptr(cx, self, counter_tag, &receiver)) return SPUTNIK_ERR;
+  (void)receiver;
+  return call_buffers_counter_new(cx, args, argc, out);
+}
+
+const SputnikLeafDescriptor *call_buffers_counter_value_sputnik_leaf_v2(void) {
+  static const SputnikLeafDescriptor descriptor = {
+      SPUTNIK_LEAF_ABI_VERSION_2, sizeof(SputnikLeafDescriptor),
+      SPUTNIK_LEAF_HANDLE_INT_HANDLE, counter_tag,
+      {.handle_int_handle = counter_value_leaf}};
+  return &descriptor;
+}
+
+SputnikStatus call_buffers_resource_probe(SputnikCtx *cx, SputnikValue self,
+                                         const SputnikValue *args, size_t argc,
+                                         SputnikValue *out) {
+  (void)self; (void)args; (void)argc; (void)out;
+  return sputnik_fault(cx, "ValueError", "typed resource leaf was not selected");
+}
+
+const SputnikLeafDescriptor *call_buffers_resource_probe_sputnik_leaf_v2(void) {
+  return call_buffers_counter_value_sputnik_leaf_v2();
 }
 
 SputnikStatus call_buffers_counter_reclaims(SputnikCtx *cx, const SputnikValue *args,

@@ -256,6 +256,7 @@ enum class ConstantLookupKind : std::uint8_t {
   TaskModule,
   FlowModule,
   ErrorNamespace,
+  ModuleNamespace,
   ModuleBinding,
   Missing,
   Ambiguous,
@@ -355,6 +356,10 @@ struct PendingNativeExtensionCall {
   std::string logical;
   std::size_t call_pc = 0;
   Value value = Value::null();
+  std::optional<Fault> fault;
+  std::optional<Value> escaped_exception;
+  std::optional<PendingThrow> escaped_throw;
+  std::optional<PendingNonlocalReturn> escaped_nonlocal_return;
   std::string exception_error_name;
   std::string exception_message;
 };

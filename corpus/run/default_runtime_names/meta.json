@@ -1,0 +1,7 @@
+{
+  "format": "sputnik.corpus.meta.v1",
+  "phase": "run",
+  "source": "source.s",
+  "expect": "expect.run.json",
+  "entry": "probe"
+}

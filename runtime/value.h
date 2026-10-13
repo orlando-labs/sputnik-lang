@@ -310,6 +310,10 @@ struct NativeErrorNamespaceValue {
   std::string path;
 };
 
+struct ModuleNamespaceValue {
+  std::string path;
+};
+
 // Arbitrary-precision integer per sputnik.numeric-profile.v1: explicit BigInt
 // values only; fixed-width Int arithmetic never promotes into this type.
 // Canonical form: little-endian base-2^64 magnitude with no trailing zero
@@ -462,7 +466,9 @@ struct RuntimeForeignHandle {
   X(foreign_handle, is_foreign_handle, as_foreign_handle,                      \
     RuntimeForeignHandle, ForeignHandle)                                       \
   X(ast_node, is_ast_node, as_ast_node, RuntimeAstNode, AstNode)               \
-  X(time_zone, is_time_zone, as_time_zone, RuntimeTimeZoneValue, TimeZone)
+  X(time_zone, is_time_zone, as_time_zone, RuntimeTimeZoneValue, TimeZone)      \
+  X(module_namespace, is_module_namespace, as_module_namespace,              \
+    ModuleNamespaceValue, ModuleNamespace)
 
 #ifndef SPUTNIK_VALUE_REPR_TAGGED
 // ---- Variant representation (default, 24 bytes) ---------------------------
@@ -490,7 +496,8 @@ struct Value {
       std::shared_ptr<RuntimeRegexpMatchValue>,
       std::shared_ptr<RuntimeForeignHandle>, std::shared_ptr<RuntimeAstNode>,
       std::shared_ptr<RuntimeTimeZoneValue>,
-      std::shared_ptr<RuntimeHeapStringValue>>;
+      std::shared_ptr<RuntimeHeapStringValue>,
+      std::shared_ptr<ModuleNamespaceValue>>;
 
   Payload payload;
 
@@ -538,9 +545,13 @@ struct Value {
   static Value regexp_pattern(std::shared_ptr<RuntimeRegexpPatternValue> value);
   static Value regexp_match(std::shared_ptr<RuntimeRegexpMatchValue> value);
   static Value foreign_handle(std::shared_ptr<RuntimeForeignHandle> value);
+  // Allocate a fresh foreign resource and its Value storage together. The
+  // returned Value pins `handle`; initialize it before publishing the Value.
+  static Value new_foreign_handle(RuntimeForeignHandle *&handle);
   static Value ast_node(std::shared_ptr<RuntimeAstNode> value);
   static Value time(std::shared_ptr<RuntimeTimeValue> value);
   static Value time_zone(std::shared_ptr<RuntimeTimeZoneValue> value);
+  static Value module_namespace(std::shared_ptr<ModuleNamespaceValue> value);
   static Value time_period(std::shared_ptr<RuntimeTimePeriodValue> value);
 
   bool is_null() const;
@@ -586,6 +597,7 @@ struct Value {
   bool is_ast_node() const;
   bool is_time() const;
   bool is_time_zone() const;
+  bool is_module_namespace() const;
   bool is_time_period() const;
 
   bool as_bool() const;
@@ -631,6 +643,7 @@ struct Value {
   std::shared_ptr<RuntimeAstNode> as_ast_node() const;
   std::shared_ptr<RuntimeTimeValue> as_time() const;
   std::shared_ptr<RuntimeTimeZoneValue> as_time_zone() const;
+  std::shared_ptr<ModuleNamespaceValue> as_module_namespace() const;
   std::shared_ptr<RuntimeTimePeriodValue> as_time_period() const;
 
   // Direct access for lifecycle and heap bookkeeping. This avoids materializing
@@ -706,6 +719,7 @@ enum class ValueTailKind : std::uint8_t {
   ForeignHandle,
   AstNode,
   TimeZone,
+  ModuleNamespace,
 };
 
 // Refcounted box for cold tail kinds. The layout is visible here so tagged
@@ -714,6 +728,10 @@ enum class ValueTailKind : std::uint8_t {
 struct ValueTailBox {
   std::atomic<std::uint32_t> refcount{1};
   ValueTailKind kind;
+  // Fresh foreign handles share one allocation with their box. In that case
+  // ptr owns the box as well, and the final Value release must move ptr out
+  // instead of deleting the embedded box directly.
+  bool shared_owner = false;
   std::shared_ptr<void> ptr;
   ValueTailBox(ValueTailKind k, std::shared_ptr<void> p)
       : kind(k), ptr(std::move(p)) {}
@@ -771,9 +789,11 @@ struct Value {
   static Value regexp_pattern(std::shared_ptr<RuntimeRegexpPatternValue> value);
   static Value regexp_match(std::shared_ptr<RuntimeRegexpMatchValue> value);
   static Value foreign_handle(std::shared_ptr<RuntimeForeignHandle> value);
+  static Value new_foreign_handle(RuntimeForeignHandle *&handle);
   static Value ast_node(std::shared_ptr<RuntimeAstNode> value);
   static Value time(std::shared_ptr<RuntimeTimeValue> value);
   static Value time_zone(std::shared_ptr<RuntimeTimeZoneValue> value);
+  static Value module_namespace(std::shared_ptr<ModuleNamespaceValue> value);
   static Value time_period(std::shared_ptr<RuntimeTimePeriodValue> value);
 
   bool is_null() const;
@@ -819,6 +839,7 @@ struct Value {
   bool is_ast_node() const;
   bool is_time() const;
   bool is_time_zone() const;
+  bool is_module_namespace() const;
   bool is_time_period() const;
 
   bool as_bool() const;
@@ -864,6 +885,7 @@ struct Value {
   std::shared_ptr<RuntimeAstNode> as_ast_node() const;
   std::shared_ptr<RuntimeTimeValue> as_time() const;
   std::shared_ptr<RuntimeTimeZoneValue> as_time_zone() const;
+  std::shared_ptr<ModuleNamespaceValue> as_module_namespace() const;
   std::shared_ptr<RuntimeTimePeriodValue> as_time_period() const;
 
   const ObjHeader *heap_header_if() const;

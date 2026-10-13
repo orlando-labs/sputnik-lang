@@ -45,20 +45,27 @@ public:
     const std::size_t worker_count =
         std::max<std::size_t>(4U, std::min<std::size_t>(32U, hardware * 2U));
     workers_.reserve(worker_count);
-    for (std::size_t index = 0; index < worker_count; ++index) {
-      workers_.emplace_back([this]() { worker_loop(); });
+    try {
+      std::lock_guard<std::mutex> lock(mutex_);
+      for (std::size_t index = 0; index < worker_count; ++index)
+        start_worker_locked(true);
+    } catch (...) {
+      stop_and_join();
+      throw;
     }
   }
 
-  ~Impl() {
+  ~Impl() { stop_and_join(); }
+
+  void stop_and_join() {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       stopping_ = true;
     }
     ready_.notify_all();
-    for (std::thread &worker : workers_) {
-      if (worker.joinable()) {
-        worker.join();
+    for (Worker &worker : workers_) {
+      if (worker.thread.joinable()) {
+        worker.thread.join();
       }
     }
   }
@@ -73,23 +80,66 @@ public:
         throw RuntimeTaskFailure("RuntimeError",
                                  "blocking FFI executor is shutting down");
       }
+      reap_workers_locked();
+      // Every job may wait for a producer that itself needs FFI. A fixed
+      // concurrency cap would prevent that producer from ever entering.
+      // Keep the idle pool bounded, but give queued work a carrier even when
+      // all existing carriers are occupied by synchronous foreign stacks.
+      if (queue_.size() >= available_workers_) start_worker_locked(false);
       queue_.push_back(std::move(function));
     }
     ready_.notify_one();
   }
 
 private:
-  void worker_loop() {
+  struct Worker {
+    std::thread thread;
+    std::shared_ptr<std::atomic<bool>> exited;
+  };
+
+  void reap_workers_locked() {
+    for (auto it = workers_.begin(); it != workers_.end();) {
+      if (!it->exited->load(std::memory_order_acquire)) { ++it; continue; }
+      it->thread.join();
+      it = workers_.erase(it);
+    }
+  }
+
+  void start_worker_locked(bool core) {
+    // Grow metadata before creating a joinable thread so allocation failure
+    // cannot destroy an unjoined std::thread during vector reallocation.
+    workers_.reserve(workers_.size() + 1U);
+    auto exited = std::make_shared<std::atomic<bool>>(false);
+    workers_.emplace_back();
+    workers_.back().exited = exited;
+    try {
+      workers_.back().thread = std::thread(
+          [this, core, exited] { worker_loop(core, exited); });
+    } catch (...) {
+      workers_.pop_back();
+      throw;
+    }
+    ++available_workers_;
+  }
+
+  void worker_loop(bool core, const std::shared_ptr<std::atomic<bool>> &exited) {
     while (true) {
       std::function<void()> function;
       {
         std::unique_lock<std::mutex> lock(mutex_);
-        ready_.wait(lock, [this]() { return stopping_ || !queue_.empty(); });
-        if (stopping_ && queue_.empty()) {
+        const auto ready = [this] { return stopping_ || !queue_.empty(); };
+        bool awakened = true;
+        if (core) ready_.wait(lock, ready);
+        else awakened = ready_.wait_for(lock, std::chrono::seconds(30), ready);
+        if ((!awakened || stopping_) && queue_.empty()) {
+          --available_workers_;
+          lock.unlock();
+          exited->store(true, std::memory_order_release);
           return;
         }
         function = std::move(queue_.front());
         queue_.pop_front();
+        --available_workers_;
       }
       try {
         tls_runtime_blocking_ffi_thread = true;
@@ -99,13 +149,18 @@ private:
         // never terminate an executor worker or the process.
       }
       tls_runtime_blocking_ffi_thread = false;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++available_workers_;
+      }
     }
   }
 
   std::mutex mutex_;
   std::condition_variable ready_;
   std::deque<std::function<void()>> queue_;
-  std::vector<std::thread> workers_;
+  std::vector<Worker> workers_;
+  std::size_t available_workers_ = 0;
   bool stopping_ = false;
 };
 
@@ -197,9 +252,8 @@ void adjust_task_context_retained_count(std::size_t before,
   }
 }
 
-std::shared_ptr<RuntimeTaskContext> require_runtime_task_context() {
-  std::shared_ptr<RuntimeTaskContext> context =
-      current_runtime_task_context();
+RuntimeTaskContext *require_runtime_task_context() {
+  RuntimeTaskContext *context = current_runtime_task_context_borrowed();
   if (context == nullptr) {
     throw RuntimeTaskFailure(
         "TaskLocalError",
@@ -709,6 +763,7 @@ RuntimeTaskContext::RuntimeTaskContext(
     std::shared_ptr<const RuntimeTaskContext::State> initial_state)
     : state_(initial_state == nullptr ? std::make_shared<State>()
                                      : std::move(initial_state)) {
+  has_bindings_.store(!state_->bindings.empty(), std::memory_order_relaxed);
   g_runtime_task_local_retained_values.fetch_add(
       static_cast<std::uint64_t>(task_context_retained_count(*state_)),
       std::memory_order_relaxed);
@@ -763,6 +818,7 @@ void RuntimeTaskContext::unregister_gc_roots() {
 
 std::optional<RuntimeTaskLocalBinding>
 RuntimeTaskContext::binding(std::uint64_t slot_id) const {
+  if (!has_bindings_.load(std::memory_order_acquire)) return std::nullopt;
   const std::shared_ptr<const State> snapshot =
       std::atomic_load_explicit(&state_, std::memory_order_acquire);
   const auto found = snapshot->bindings.find(slot_id);
@@ -770,6 +826,16 @@ RuntimeTaskContext::binding(std::uint64_t slot_id) const {
     return std::nullopt;
   }
   return found->second;
+}
+
+void RuntimeTaskContext::publish_state(std::shared_ptr<const State> state) {
+  const bool bound = !state->bindings.empty();
+  // A reader seeing true may still read the preceding snapshot. A reader
+  // seeing false can linearize before the first binding or after the empty
+  // snapshot; it must never skip a completed task-owned mutation.
+  if (bound) has_bindings_.store(true, std::memory_order_release);
+  std::atomic_store_explicit(&state_, std::move(state), std::memory_order_release);
+  if (!bound) has_bindings_.store(false, std::memory_order_release);
 }
 
 void RuntimeTaskContext::set(
@@ -786,9 +852,7 @@ void RuntimeTaskContext::set(
       RuntimeTaskLocalBinding{key.inherit(), std::move(value)};
   adjust_task_context_retained_count(task_context_retained_count(*before),
                                      task_context_retained_count(*after));
-  std::atomic_store_explicit(
-      &state_, std::shared_ptr<const State>(std::move(after)),
-      std::memory_order_release);
+  publish_state(std::shared_ptr<const State>(std::move(after)));
 }
 
 bool RuntimeTaskContext::erase(std::uint64_t slot_id) {
@@ -801,9 +865,7 @@ bool RuntimeTaskContext::erase(std::uint64_t slot_id) {
   after->bindings.erase(slot_id);
   adjust_task_context_retained_count(task_context_retained_count(*before),
                                      task_context_retained_count(*after));
-  std::atomic_store_explicit(
-      &state_, std::shared_ptr<const State>(std::move(after)),
-      std::memory_order_release);
+  publish_state(std::shared_ptr<const State>(std::move(after)));
   return true;
 }
 
@@ -839,9 +901,7 @@ std::uint64_t RuntimeTaskContext::push_scope(
       RuntimeTaskLocalBinding{key.inherit(), std::move(value)};
   adjust_task_context_retained_count(task_context_retained_count(*before),
                                      task_context_retained_count(*after));
-  std::atomic_store_explicit(
-      &state_, std::shared_ptr<const State>(std::move(after)),
-      std::memory_order_release);
+  publish_state(std::shared_ptr<const State>(std::move(after)));
   return token;
 }
 
@@ -861,9 +921,7 @@ bool RuntimeTaskContext::pop_scope(std::uint64_t token) {
   }
   adjust_task_context_retained_count(task_context_retained_count(*before),
                                      task_context_retained_count(*after));
-  std::atomic_store_explicit(
-      &state_, std::shared_ptr<const State>(std::move(after)),
-      std::memory_order_release);
+  publish_state(std::shared_ptr<const State>(std::move(after)));
   return true;
 }
 
@@ -888,9 +946,7 @@ void RuntimeTaskContext::clear() {
   if (retained == 0 && before->scopes.empty()) {
     return;
   }
-  std::atomic_store_explicit(
-      &state_, std::shared_ptr<const State>(std::make_shared<State>()),
-      std::memory_order_release);
+  publish_state(std::make_shared<State>());
   adjust_task_context_retained_count(retained, 0);
 }
 

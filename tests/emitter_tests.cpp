@@ -1,5 +1,6 @@
 #include "bytecode/emitter.h"
 #include "bytecode/format.h"
+#include "bytecode/trivial_body.h"
 #include "frontend/binder/binder.h"
 #include "frontend/hir/hir.h"
 #include "frontend/lexer/lexer.h"
@@ -553,6 +554,18 @@ void test_optional_index_emission() {
          "optional index interns []? selector");
 }
 
+void test_scattered_pattern_assignment_emission() {
+  const auto emitted = emit_ok("def unpack(a, untouched, b):\n"
+                              "  (a, b) = (b, a)\n"
+                              "  (a, untouched, b)\n");
+  const auto *code = code_by_id(emitted.module, emitted.module.methods[0].entry_code_id);
+  expect(code != nullptr, "scattered assignment code exists");
+  expect(count_opcode(*code, sputnik::bytecode::Opcode::PCommit) == 1,
+         "scattered assignment has a single atomic staging commit");
+  expect(count_opcode(*code, sputnik::bytecode::Opcode::Move) >= 2,
+         "scattered assignment moves committed temporaries to destinations");
+}
+
 void test_matcher_expr_emission() {
   const sputnik::bytecode::EmitResult emit_result =
       emit_ok("def choose(x, limit):\n"
@@ -679,7 +692,17 @@ void test_native_source_metadata_emission() {
       "class StepError < Error\n"
       "native class Conn from \"sqlite3.Conn\" owned:\n"
       "  def init(path as Str) from \"amsq_conn_open\"\n"
+      "  def wait(timeout as Int) from \"amsq_conn_wait\" blocking\n"
       "  def destroy!() from \"amsq_conn_free\"\n");
+
+  bool saw_blocking = false;
+  for (const auto &attr : emit_result.module.attrs) {
+    const auto &key = emit_result.module.strings.at(attr.key_str_id);
+    saw_blocking = saw_blocking ||
+        (key.rfind("sputnik.native.blocking:", 0) == 0 &&
+         emit_result.module.strings.at(attr.value_str_id) == "amsq_conn_wait");
+  }
+  expect(saw_blocking, "source blocking modifier survives HIR and bytecode emission");
 
   expect(contains_attr(emit_result.module, "sputnik.native.type:sqlite3.Conn",
                        "sqlite3.Conn\towned\tamsq_conn_free"),
@@ -1136,6 +1159,35 @@ void test_unknown_integer_send_stays_dynamic() {
          "unknown parameter addition does not emit IADD");
 }
 
+void test_trivial_forwarding_summary_round_trip() {
+  const auto emitted = emit_ok("class Wrapper:\n"
+                               "  def value(): @core.value\n"
+                               "  def explicit(): @core.value()\n");
+  const auto decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(emitted.module));
+  expect(decoded.ok(), "forwarding bytecode round trip");
+  for (const auto *module : {&emitted.module, &decoded.module}) {
+    for (const auto &method : module->methods) {
+      const auto *code = code_by_id(*module, method.entry_code_id);
+      expect(code != nullptr, "forwarding method exists");
+      const auto body = sputnik::bytecode::trivial_body(*module, *code, 0U);
+      expect(body.kind == sputnik::bytecode::TrivialBody::Kind::IvarSend0,
+             "forwarding recognized before and after serialization");
+      expect(module->symbols[body.index] == "core" &&
+                 module->symbols[body.selector] == "value",
+             "forwarding symbols preserved");
+      const bool property = module->symbols[method.selector_sym_id] == "value";
+      expect(body.call_flags == (property ? sputnik::bytecode::kCallSiteFlagPropertyAccess : 0U),
+             "forwarding syntax flags preserved");
+      auto with_block = *code;
+      with_block.instructions[2].operands[5].value = 0;
+      expect(sputnik::bytecode::trivial_body(*module, with_block, 0U).kind ==
+                 sputnik::bytecode::TrivialBody::Kind::None,
+             "a real block register declines trivial forwarding");
+    }
+  }
+}
+
 } // namespace
 
 int main() {
@@ -1165,6 +1217,7 @@ int main() {
   test_last_result_elision_without_explicit_last_value();
   test_explicit_last_value_preserves_last_result_updates();
   test_pattern_assignment_emission();
+  test_scattered_pattern_assignment_emission();
   test_optional_index_emission();
   test_matcher_expr_emission();
   test_dynamic_pattern_emission();
@@ -1183,6 +1236,7 @@ int main() {
   test_throw_catch_emission();
   test_integer_specialized_send_emission();
   test_unknown_integer_send_stays_dynamic();
+  test_trivial_forwarding_summary_round_trip();
   std::cout << "emitter_tests: ok\n";
   return 0;
 }

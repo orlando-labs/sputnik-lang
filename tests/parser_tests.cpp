@@ -1574,6 +1574,28 @@ bool has_bool_field(const Expr &expr, const std::string &name) {
 }
 
 void test_native_packages() {
+  {
+    auto module = parse_module_raw(
+        "native def wait(timeout as Int) -> Int from \"unit.wait\" blocking\n"
+        "native def fallback(value) from \"unit.fallback\" blocking: value\n"
+        "native class Pool from \"unit.Pool\" borrowed:\n"
+        "  def acquire(timeout as Int) from \"unit.acquire\" blocking\n"
+        "blocking = 1\n"
+        "def blocking(): 2\n");
+    expect(module.ok(), "blocking modifier parses on free and handle bindings");
+    expect(bool_field(*module.items[0], "native_blocking") &&
+               bool_field(*module.items[1], "native_blocking") &&
+               bool_field(*list_field(*module.items[2], "body").values[0], "native_blocking"),
+           "blocking modifier is carried only by native definitions");
+    expect(string_field(*module.items[4], "name") == "blocking" &&
+               !has_bool_field(*module.items[4], "native_blocking"),
+           "blocking remains an ordinary identifier");
+    expect(has_diagnostic(parse_module_raw("def wait() blocking: 1\n"),
+                          "E_NATIVE_BLOCKING_CONTEXT"),
+           "blocking modifier requires a native binding");
+    expect(!parse_module_raw("native def wait() from \"unit.wait\" blocking blocking\n").ok(),
+           "duplicate blocking modifier is rejected");
+  }
   // Accelerated free function: `native def ... from "..."` with a fallback body.
   {
     sputnik::parser::ParseModuleResult module = parse_module_raw(

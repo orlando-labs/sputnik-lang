@@ -243,6 +243,10 @@ std::shared_ptr<RuntimeTaskContext> current_runtime_task_context() {
   return tls_runtime_task_context;
 }
 
+RuntimeTaskContext *current_runtime_task_context_borrowed() {
+  return tls_runtime_task_context.get();
+}
+
 const void *current_runtime_scheduler_identity() {
   return tls_runtime_scheduler_identity;
 }

@@ -1,0 +1,6 @@
+{
+  "schema": "sputnik.run.v1",
+  "entry": "main",
+  "status": "ok",
+  "value": "42"
+}

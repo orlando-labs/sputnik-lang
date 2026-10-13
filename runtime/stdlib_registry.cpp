@@ -140,7 +140,8 @@ void RuntimeDispatchRegistry::register_native_package_thunk(std::string logical,
                                                             void *fn,
                                                             bool blocking,
                                                             const SputnikLeafDescriptor *leaf) {
-  validate_native_leaf_descriptor(leaf, blocking);
+  validate_native_leaf_descriptor(
+      leaf, blocking || blocking_native_package_bindings_.count(logical) != 0U);
   if (blocking) {
     blocking_native_package_thunks_.insert(logical);
   } else {
@@ -171,13 +172,23 @@ void *RuntimeDispatchRegistry::native_package_thunk(
 bool RuntimeDispatchRegistry::native_package_thunk_is_blocking(
     const std::string &logical) const {
   return blocking_native_package_thunks_.find(logical) !=
-         blocking_native_package_thunks_.end();
+             blocking_native_package_thunks_.end() ||
+         blocking_native_package_bindings_.count(logical) != 0U;
 }
 
 void RuntimeDispatchRegistry::register_native_package_code_binding(
-    std::uint32_t code_id, bool method, std::string logical) {
+    std::uint32_t code_id, bool method, std::string logical, bool blocking) {
+  const auto *thunk = native_package_thunk_descriptor(logical);
+  if (blocking && thunk != nullptr)
+    validate_native_leaf_descriptor(thunk->leaf, true);
+  const auto existing = native_package_code_bindings_.find(code_id);
+  if (existing != native_package_code_bindings_.end() && existing->second.blocking) {
+    auto count = blocking_native_package_bindings_.find(existing->second.logical);
+    if (--count->second == 0U) blocking_native_package_bindings_.erase(count);
+  }
+  if (blocking) ++blocking_native_package_bindings_[logical];
   native_package_code_bindings_[code_id] = {code_id, method,
-                                            std::move(logical)};
+                                          std::move(logical), blocking};
 }
 
 const RuntimeNativePackageCodeBindingDescriptor *
@@ -208,7 +219,7 @@ void RuntimeDispatchRegistry::import_native_package_bindings(
   for (const RuntimeNativePackageCodeBindingDescriptor &binding :
        descriptor.code_bindings) {
     register_native_package_code_binding(binding.code_id, binding.method,
-                                         binding.logical);
+                                         binding.logical, binding.blocking);
   }
   for (const RuntimeNativePackageMethodBindingDescriptor &binding :
        descriptor.method_bindings) {
@@ -223,6 +234,16 @@ RuntimeNativePackageDescriptor runtime_native_package_descriptor_from_module(
   static const std::string kMethodPrefix = "sputnik.native.method:";
   static const std::string kErrorPrefix = "sputnik.native.error:";
   RuntimeNativePackageDescriptor descriptor;
+  std::unordered_map<std::uint32_t, std::string> blocking_bindings;
+  static const std::string kBlockingPrefix = "sputnik.native.blocking:";
+  for (const bytecode::AttrEntry &attr : module.attrs) {
+    const std::string key = registry_string_or_empty(module, attr.key_str_id);
+    std::uint32_t code_id = 0;
+    if (key.compare(0, kBlockingPrefix.size(), kBlockingPrefix) == 0 &&
+        parse_native_binding_code_id(key, kBlockingPrefix, &code_id)) {
+      blocking_bindings[code_id] = registry_string_or_empty(module, attr.value_str_id);
+    }
+  }
   for (const bytecode::AttrEntry &attr : module.attrs) {
     const std::string key = registry_string_or_empty(module, attr.key_str_id);
     if (key.compare(0, kBindPrefix.size(), kBindPrefix) == 0) {
@@ -236,7 +257,9 @@ RuntimeNativePackageDescriptor runtime_native_package_descriptor_from_module(
         continue;
       }
       descriptor.code_bindings.push_back(
-          {code_id, value[0] == 'M', value.substr(2)});
+          {code_id, value[0] == 'M', value.substr(2),
+           blocking_bindings.count(code_id) != 0U &&
+               blocking_bindings.at(code_id) == value.substr(2)});
       continue;
     }
     if (key.compare(0, kMethodPrefix.size(), kMethodPrefix) == 0) {
@@ -534,7 +557,7 @@ void register_runtime_native_package_descriptor(
   for (const RuntimeNativePackageCodeBindingDescriptor &binding :
        descriptor.code_bindings) {
     dispatch.register_native_package_code_binding(
-        binding.code_id, binding.method, binding.logical);
+        binding.code_id, binding.method, binding.logical, binding.blocking);
   }
   for (const RuntimeNativePackageMethodBindingDescriptor &binding :
        descriptor.method_bindings) {

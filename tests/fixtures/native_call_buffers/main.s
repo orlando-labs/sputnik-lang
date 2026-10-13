@@ -13,13 +13,26 @@ native class Counter from "buffers.Counter.long.native.tag" collected:
   def read() from "buffers.counter_read"
   def leaf_probe() from "buffers.leaf_probe"
   def leaf_fail() from "buffers.leaf_fail"
+  def typed_value(value as Int) from "buffers.counter_value"
+  def typed_probe(value as Int) from "buffers.resource_probe"
   def destroy!() from "buffers.counter_free"
 
 def check(value): raise ValueError("call buffer regression") unless value
 
+class PlainCounter:
+  def read(): 43
+  def typed_value(value): value
+
+def mixed_read(receiver): receiver.read
+def mixed_value(receiver, value): receiver.typed_value(value)
+
 def keep(&block): block
 
 def churn(items, text, &block): _churn(items, text, block)
+
+def release_counter():
+  value = new_counter(99)
+  check(value.read == 99)
 
 def defaults(first, second: first + sum12(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)):
   second
@@ -78,6 +91,11 @@ class SingleArgument:
 
 class DefaultArgument:
   def call(value, offset: 0): value + offset
+
+class CounterWrapper:
+  def init(@core)
+  def value(): @core.leaf_probe
+  def failure(): @core.leaf_fail
 
 def polymorphic_call(receiver): receiver.call(42)
 
@@ -162,6 +180,17 @@ def main():
   counter = null
   check(alias.read == 42 and counter_reclaims() == 0)
   check(alias.leaf_probe == 42)
+  wrapper = CounterWrapper(alias)
+  check(wrapper.value == 42)
+  forwarded_fault = false
+  forwarded_cleanup = false
+  try:
+    wrapper.failure
+  rescue ValueError:
+    forwarded_fault = true
+  ensure:
+    forwarded_cleanup = true
+  check(forwarded_fault and forwarded_cleanup and wrapper.value == 42)
   caught_leaf = false
   try:
     alias.leaf_fail
@@ -175,5 +204,40 @@ def main():
   rescue LifetimeError:
     true
   check(caught_lifetime and counter_reclaims() == 1)
+  release_counter()
+  check(counter_reclaims() == 2)
+  receiver2 = new_counter(7)
+  plain = PlainCounter()
+  20.times:
+    check(mixed_read(receiver2) == 7 and mixed_read(plain) == 43)
+    check(mixed_value(plain, true))
+  typed = receiver2.typed_value(42)
+  check(typed.read == 42 and typed.destroy!)
+  probe = receiver2.typed_probe(43)
+  check(probe.read == 43 and probe.destroy!)
+  mixed = mixed_value(receiver2, 44)
+  check(mixed_read(mixed) == 44 and mixed.destroy!)
+  [-1, -2].each |value|:
+    caught_resource = try:
+      receiver2.typed_value(value)
+      false
+    rescue ValueError:
+      value == -1
+    rescue NativeError:
+      value == -2
+    check(caught_resource)
+  check(counter_reclaims() == 6)
+  wrong_type = try:
+    mixed_value(receiver2, true)
+    false
+  rescue TypeError:
+    true
+  check(wrong_type and receiver2.read == 7 and receiver2.destroy!)
+  dead_receiver = try:
+    mixed_value(receiver2, 42)
+    false
+  rescue LifetimeError:
+    true
+  check(dead_receiver and counter_reclaims() == 7)
   print "PASS native call buffers"
   0

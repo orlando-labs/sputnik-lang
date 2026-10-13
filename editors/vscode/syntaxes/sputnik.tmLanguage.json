@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#macro-definition" },
     { "include": "#comments" },
+    { "include": "#native-binding" },
     { "include": "#strings" },
     { "include": "#numbers" },
     { "include": "#constants" },
@@ -31,6 +32,14 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "native-binding": {
+      "match": "(?<![\\p{L}\\p{N}_])(from)(?![\\p{L}\\p{N}_?!])[ \\t]+((?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'))[ \\t]+(blocking)(?![\\p{L}\\p{N}_?!])(?=[ \\t]*(?::|#|$))",
+      "captures": {
+        "1": { "name": "keyword.declaration.sputnik" },
+        "2": { "name": "string.quoted.sputnik" },
+        "3": { "name": "storage.modifier.blocking.sputnik" }
+      }
+    },
     "macro-definition": {
       "name": "meta.definition.macro.sputnik",
       "begin": "^([ \\t]*)(?:(string_tag)\\s+)?(macro)\\s+(def)\\s+([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",

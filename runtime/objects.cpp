@@ -244,6 +244,11 @@ bool value_equals(const Value &lhs, const Value &rhs) {
     return lhs.as_native_error_class().error_id ==
            rhs.as_native_error_class().error_id;
   }
+  if (lhs.is_module_namespace()) {
+    const auto left = lhs.as_module_namespace();
+    const auto right = rhs.as_module_namespace();
+    return left == right || (left && right && left->path == right->path);
+  }
   if (lhs.is_native_error_namespace()) {
     const std::shared_ptr<NativeErrorNamespaceValue> left =
         lhs.as_native_error_namespace();

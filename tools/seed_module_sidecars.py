@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """One-time bootstrap: seed docs/module-examples/*.sidecar from the current
-site/modules-data.js baseline so no hand-authored content is lost when
+../site/public/modules-data.js baseline so no hand-authored content is lost when
 gen_module_docs.py takes over generation.
 
 Run once (already run to create the initial sidecars); kept for provenance and

@@ -1,4 +1,5 @@
 #include "runtime/vm.h"
+#include "bytecode/trivial_body.h"
 #include "frontend/ast/expr.h"
 #include "runtime/sputnik_ext_runtime.h"
 #include "runtime/context.h"
@@ -1580,6 +1581,10 @@ public:
     // RuntimeWorld name tables are append-only between world reloads. A
     // reloaded world discards its session, so size equality is sufficient on
     // this hot path and avoids comparing every interned string on every send.
+    if (runtime_strings_.size() != strings.size() ||
+        runtime_symbols_.size() != symbols.size()) {
+      runtime_names_version_ = std::make_shared<const char>(0);
+    }
     if (runtime_strings_.size() < strings.size()) {
       runtime_strings_.insert(runtime_strings_.end(),
                               strings.begin() + runtime_strings_.size(),
@@ -1823,6 +1828,7 @@ private:
       sync_runtime_names_to(init_vm);
       ExecutionResult init_result = init_vm.execute(
           module_.init.entry_code_id, {}, Value::null(), Value::null());
+      merge_runtime_names_from(init_vm);
       if (!init_result.ok()) {
         fault_ = init_result.fault;
         return false;
@@ -3247,6 +3253,12 @@ private:
       }
       return;
     }
+    // A shared immutable identity proves that neither private table changed
+    // since synchronization. In particular, do not scan the whole module's
+    // strings and symbols on every native callback or default thunk lease.
+    if (nested.runtime_names_version_ == runtime_names_version_) {
+      return;
+    }
     // A pooled child may have the same table size as its parent but different
     // runtime-interned content. Size-only synchronization lets equal numeric
     // ids name unrelated strings after the child is reused. The parent is the
@@ -3262,12 +3274,17 @@ private:
       nested.symbol_index_.clear();
       nested.symbol_index_folded_ = 0;
     }
+    nested.runtime_names_version_ = runtime_names_version_;
   }
 
   void merge_runtime_names_from(const Vm &nested) {
     if (shared_runtime_names_ != nullptr &&
         nested.shared_runtime_names_ == shared_runtime_names_) {
       return;
+    }
+    if (runtime_strings_.size() < nested.runtime_strings_.size() ||
+        runtime_symbols_.size() < nested.runtime_symbols_.size()) {
+      runtime_names_version_ = std::make_shared<const char>(0);
     }
     if (runtime_strings_.size() < nested.runtime_strings_.size()) {
       runtime_strings_.insert(
@@ -5807,6 +5824,14 @@ private:
     // registered C thunk before any fast/direct body evaluation (5c-ii).
     if (dispatch_registry().native_package_code_binding(closure->code_id) !=
         nullptr) {
+      const auto *binding =
+          dispatch_registry().native_package_code_binding(closure->code_id);
+      // A resumable blocking CALL must preserve its instruction until the
+      // worker completes. Let the ordinary packet path park/resume it.
+      if (parkable_ && task_module_ != nullptr &&
+          !current_runtime_is_blocking_ffi_thread() &&
+          dispatch_registry().native_package_thunk_is_blocking(binding->logical))
+        return FastCallStatus::NotHandled;
       std::vector<Value> pos_args;
       pos_args.reserve(pos_count);
       for (std::uint32_t i = 0; i < pos_count; ++i) {
@@ -5852,6 +5877,30 @@ private:
 
     if (!ensure_closure_arity(frame, *code, pos_count)) {
       return FastCallStatus::Faulted;
+    }
+    if (!state_->step_budget_enabled && code->instructions.size() <= 5U &&
+        closure->captures.empty()) {
+      const auto body = bytecode::trivial_body(module_, *code, pos_count);
+      using Kind = bytecode::TrivialBody::Kind;
+      Value result = Value::null();
+      bool handled = true;
+      switch (body.kind) {
+      case Kind::Argument:
+        result = args[body.index].int_valid ? Value::integer(args[body.index].int_value)
+                                            : unwrap_watch_value_for_read(args[body.index].value);
+        break;
+      case Kind::Constant: result = load_constant(frame, body.index); break;
+      case Kind::Null: break;
+      case Kind::Bool: result = Value::boolean(body.index != 0U); break;
+      case Kind::Self: result = closure->self; break;
+      default: handled = false; break;
+      }
+      if (handled) {
+        if (!write_reg_fast_plain(frame, dst, std::move(result)))
+          return FastCallStatus::Faulted;
+        ++frame.pc;
+        return FastCallStatus::Matched;
+      }
     }
     const std::uint32_t call_pc = static_cast<std::uint32_t>(frame.pc);
     ++frame.pc;
@@ -6722,6 +6771,11 @@ private:
       value->path = entry.path;
       return Value::native_error_namespace(std::move(value));
     }
+    case ConstantLookupKind::ModuleNamespace: {
+      auto value = std::make_shared<ModuleNamespaceValue>();
+      value->path = entry.path;
+      return Value::module_namespace(std::move(value));
+    }
     case ConstantLookupKind::ModuleBinding:
       return unwrap_watch_value(*entry.binding);
     case ConstantLookupKind::Ambiguous:
@@ -6738,6 +6792,13 @@ private:
 
   void resolve_constant_lookup(const Frame &frame, const Constant &constant,
                                ConstantLookupCache &entry) {
+    for (const auto &attr : module_.attrs) {
+      if (string_or_empty(attr.key_str_id) ==
+          "sputnik.merged.module:" + entry.path) {
+        entry.kind = ConstantLookupKind::ModuleNamespace;
+        return;
+      }
+    }
     // Preserve the existing precedence: Sputnik classes (above), exact native
     // error, exact builtin, error namespace, live module binding, class fallback.
     // In particular ArgParser is both a callable builtin and an error prefix.
@@ -10230,6 +10291,7 @@ private:
       return id;
     }
     const std::uint32_t id = static_cast<std::uint32_t>(runtime_symbols_.size());
+    runtime_names_version_ = std::make_shared<const char>(0);
     runtime_symbols_.push_back(text);
     symbol_index_.emplace(text, id);
     symbol_index_folded_ = runtime_symbols_.size();
@@ -12125,6 +12187,10 @@ private:
           const ExecutionResult result =
               nested.execute(thunk, frame.regs, {}, frame.self, frame.block,
                              &frame.captures);
+          // Defaults may return interned symbols or publish them through
+          // shared objects before failing. Export names before observing
+          // either result so escaped values keep their meaning in the caller.
+          merge_runtime_names_from(nested);
           if (!result.ok()) {
             fault_ = result.fault;
             return false;
@@ -12213,6 +12279,7 @@ private:
       nested.step();
     }
 
+    merge_runtime_names_from(nested);
     out.value = nested.final_value_;
     out.regs = std::move(nested.last_completed_regs_);
     out.initialized = std::move(nested.last_completed_initialized_);
@@ -12233,6 +12300,7 @@ private:
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
       nested.step();
     }
+    merge_runtime_names_from(nested);
     out.value = nested.final_value_;
     out.regs = std::move(nested.last_completed_regs_);
     out.initialized = std::move(nested.last_completed_initialized_);
@@ -12260,14 +12328,18 @@ private:
       return false; // bytecode build: a native-only ctor falls through and the
                     // synthesized NativeRequiredError body runs.
     }
-    NativeExtCallOutcome outcome = sputnik_ext_invoke_free(
-        *this, &frame, type_registry().native_package_tags(),
-        reinterpret_cast<SputnikFreeFn>(fn), pos_args);
-    if (!outcome.ok || fault_.has_value()) {
+    Value result = Value::null();
+    bool faulted = false;
+    bool parked = false;
+    (void)try_dispatch_native_extension_code(
+        frame, init.entry_code_id, pos_args, Value::null(), &result,
+        &faulted, &parked, true);
+    if (parked) { *ok = true; return true; }
+    if (faulted || fault_.has_value()) {
       *ok = false;
       return true;
     }
-    if (!write_reg(frame, dst, std::move(outcome.value))) {
+    if (!write_reg(frame, dst, std::move(result))) {
       *ok = false;
       return true;
     }
@@ -12329,8 +12401,33 @@ private:
       }
       caller.pending_native_extension_call.reset();
       blocking_ffi_call_.reset();
+      // The executor may run callback-local handlers, but must not unwind the
+      // suspended caller. Transfer that control flow only after consuming its
+      // activation, so rescue/ensure cannot leave a stale pending call behind.
+      if (pending->escaped_exception.has_value()) {
+        raise_value(caller, *pending->escaped_exception);
+        *faulted = true;
+        return true;
+      }
+      if (pending->escaped_throw.has_value()) {
+        const PendingThrow &escaped = *pending->escaped_throw;
+        throw_value(caller, escaped.tag, escaped.value, escaped.value_present);
+        *faulted = true;
+        return true;
+      }
+      if (pending->escaped_nonlocal_return.has_value()) {
+        const auto &escaped = *pending->escaped_nonlocal_return;
+        nonlocal_return_value(caller, escaped.target, escaped.value);
+        *faulted = true;
+        return true;
+      }
+      if (pending->fault.has_value()) {
+        fault_ = std::move(pending->fault);
+        *faulted = true;
+        return true;
+      }
       if (!exception_error_name.empty()) {
-        set_fault(caller, exception_error_name, exception_message);
+        raise_runtime_error(caller, exception_error_name, exception_message);
         *faulted = true;
         return true;
       }
@@ -12391,6 +12488,8 @@ private:
                 Value value = Value::null();
                 std::string exception_error_name;
                 std::string exception_message;
+                vm_owner->blocking_native_unwind_boundary_ =
+                    vm_owner->frames_.size() - 1U;
                 try {
                   NativeExtCallOutcome outcome =
                       method ? sputnik_ext_invoke_method(
@@ -12419,6 +12518,7 @@ private:
                   exception_error_name = "RuntimeError";
                   exception_message = "blocking FFI call failed";
                 }
+                vm_owner->blocking_native_unwind_boundary_.reset();
                 {
                   std::lock_guard<std::mutex> lock(pending->mutex);
                   pending->ok = ok;
@@ -12426,6 +12526,15 @@ private:
                   pending->exception_error_name =
                       std::move(exception_error_name);
                   pending->exception_message = std::move(exception_message);
+                  pending->fault = std::move(vm_owner->fault_);
+                  pending->escaped_exception = std::move(vm_owner->escaped_exception_);
+                  pending->escaped_throw = std::move(vm_owner->escaped_throw_);
+                  pending->escaped_nonlocal_return =
+                      std::move(vm_owner->escaped_nonlocal_return_);
+                  vm_owner->fault_.reset();
+                  vm_owner->escaped_exception_.reset();
+                  vm_owner->escaped_throw_.reset();
+                  vm_owner->escaped_nonlocal_return_.reset();
                   pending->ready = true;
                 }
                 task->scheduler().wake_strand(strand_id);
@@ -12478,6 +12587,7 @@ private:
       return false; // bytecode build: fall back to the Sputnik body.
     }
     if (allow_park && parkable_ && task_module_ != nullptr &&
+        !current_runtime_is_blocking_ffi_thread() &&
         dispatch_registry().native_package_thunk_is_blocking(binding->logical)) {
       bool ignored_parked = false;
       return try_dispatch_blocking_native_extension(
@@ -13273,6 +13383,134 @@ private:
         }
       }
       if (param_count.has_value() && pos_count == *param_count) {
+        if (!state_->step_budget_enabled && after_init_pending &&
+            return_override.has_value() && self.is_instance_object() &&
+            code.instructions.size() <= 5U && block.is_null() &&
+            no_suspend_label.empty() && method.type_hook_ids.empty() &&
+            method.default_thunk_ids.empty() &&
+            std::all_of(method.params.begin(), method.params.end(),
+                        [](const auto &param) { return param.flags == 0U; }) &&
+            bytecode::trivial_body(module_, code, *param_count).kind ==
+                bytecode::TrivialBody::Kind::Null &&
+            bytecode::positional_ivar_auto_assigns(module_, method, code)) {
+          const auto instance = self.as_instance_object();
+          if (instance != nullptr && instance->watch_state == nullptr &&
+              instance->header.shape != nullptr && !instance->header.shape->dead &&
+              !lifecycle_access_error_name(instance->header).has_value()) {
+            // Field writes retain the ordinary barrier/layout operations.
+            // Only the empty body and its pooled register frame disappear.
+            Frame boundary;
+            boundary.code = &code;
+            boundary.self = self;
+            for (const auto &assign : method.auto_assign_desc) {
+              std::size_t index = 0;
+              while (method.params[index].local_name_str_id != assign.local_name_str_id)
+                ++index;
+              const std::string name = module_.strings[assign.target_name_str_id].substr(1U);
+              Value value = unwrap_watch_value_for_read(pos_args[index]);
+              if (!store_instance_ivar_slow(boundary, instance, name, std::move(value)))
+                return FastSendStatus::Faulted;
+            }
+            return complete_constructor(caller, self, caller_result_reg)
+                       ? FastSendStatus::Matched : FastSendStatus::Faulted;
+          }
+        }
+        // The live method and call shape have already been checked. Bodies
+        // with no effects can return without allocating/clearing a VM frame.
+        // Keep constructors, properties, named-callable validation and the
+        // macro instruction budget on their complete invocation path.
+        if (!state_->step_budget_enabled && code.instructions.size() <= 5U &&
+            block.is_null() &&
+            !return_override.has_value() && !after_init_pending &&
+            no_suspend_label.empty() && method.auto_assign_desc.empty() &&
+            method.type_hook_ids.empty() && method.default_thunk_ids.empty() &&
+            std::all_of(method.params.begin(), method.params.end(),
+                        [](const auto &param) { return param.flags == 0U; })) {
+          const auto body = bytecode::trivial_body(module_, code, *param_count);
+          using Kind = bytecode::TrivialBody::Kind;
+          Value result = Value::null();
+          bool handled = true;
+          switch (body.kind) {
+          case Kind::Argument:
+            result = unwrap_watch_value_for_read(pos_args[body.index]);
+            break;
+          case Kind::Constant:
+            result = load_constant(caller, body.index);
+            break;
+          case Kind::Null: break;
+          case Kind::Bool: result = Value::boolean(body.index != 0U); break;
+          case Kind::Self: result = self; break;
+          case Kind::Ivar:
+          case Kind::IvarSend0: {
+            // Do not create/import a shape or bypass watched field reads.
+            // Those effects and their diagnostics belong to the full body.
+            const auto instance = self.is_instance_object()
+                                      ? self.as_instance_object()
+                                      : IntrusivePtr<InstanceValue>{};
+            if (instance == nullptr || instance->watch_state != nullptr ||
+                instance->header.shape == nullptr || instance->header.shape->dead ||
+                lifecycle_access_error_name(instance->header).has_value() ||
+                instance->ivar_storage.size() < instance->header.shape->slot_names.size()) {
+              handled = false;
+              break;
+            }
+            const auto slot = instance->header.shape->ivar_slots.find(
+                runtime_symbols_[body.index]);
+            if (slot == instance->header.shape->ivar_slots.end() ||
+                slot->second >= instance->ivar_storage.size()) {
+              handled = false;
+              break;
+            }
+            const Value &stored = instance->ivar_storage[slot->second];
+            if (body.kind == Kind::Ivar) {
+              result = unwrap_watch_value_for_read(stored);
+              break;
+            }
+            // A typed leaf is synchronous and cannot call user code or park.
+            // Only this contract permits forwarding without a resumable
+            // wrapper frame. Every ordinary/blocking target uses the body.
+            if (!stored.is_foreign_handle() ||
+                (body.call_flags & ~bytecode::kCallSiteFlagPropertyAccess) != 0U) {
+              handled = false;
+              break;
+            }
+            const auto handle = stored.as_foreign_handle();
+            const auto &selector = runtime_symbols_[body.selector];
+            if (handle == nullptr || !handle->live || selector == "not" ||
+                selector == "destroy!") {
+              handled = false;
+              break;
+            }
+            const auto *logical = dispatch_registry().native_package_method_binding(
+                handle->tag, selector);
+            const auto *thunk = logical == nullptr ? nullptr
+                : dispatch_registry().native_package_thunk_descriptor(*logical);
+            if (thunk == nullptr || thunk->fn == nullptr || thunk->leaf == nullptr) {
+              handled = false;
+              break;
+            }
+            // Retain the logical source frame for diagnostics and rescue;
+            // it owns no registers/captures and never enters the frame pool.
+            Frame boundary;
+            boundary.code = &code;
+            boundary.pc = 2U;
+            boundary.self = self;
+            static const std::vector<Value> no_args;
+            const auto outcome = sputnik_ext_invoke_method(
+                *this, &boundary, type_registry().native_package_tags(),
+                reinterpret_cast<SputnikMethodFn>(thunk->fn), stored, no_args,
+                thunk->leaf);
+            if (!outcome.ok || fault_.has_value()) return FastSendStatus::Faulted;
+            result = outcome.value;
+            break;
+          }
+          default: handled = false; break;
+          }
+          if (handled) {
+            return complete_invoke_result(caller, caller_result_reg, std::move(result))
+                       ? FastSendStatus::Matched : FastSendStatus::Faulted;
+          }
+        }
         const std::uint32_t call_pc = static_cast<std::uint32_t>(caller.pc);
         ++caller.pc;
         caller.active_call_pc = call_pc;
@@ -13689,6 +13927,8 @@ private:
                           const bytecode::HandlerEntry **handler) const {
     for (std::size_t index = frames_.size(); index > 0; --index) {
       const std::size_t candidate = index - 1U;
+      if (blocking_native_unwind_boundary_.has_value() &&
+          candidate <= *blocking_native_unwind_boundary_) break;
       const Frame &frame = frames_[candidate];
       const std::uint32_t pc =
           frame.active_call_pc.value_or(static_cast<std::uint32_t>(frame.pc));
@@ -13963,7 +14203,7 @@ private:
         fault_ = make_fault(completed_frame, "LocalJumpError",
                             "non-local return target is outside this VM");
       } else {
-        final_value_ = value;
+        final_value_ = std::move(value);
       }
       recycle_frame(std::move(completed_owner));
       return;
@@ -14018,7 +14258,8 @@ private:
       }
       return;
     }
-    if (!caller_reg.has_value() || !write_reg(caller, *caller_reg, value)) {
+    if (!caller_reg.has_value() ||
+        !write_reg(caller, *caller_reg, std::move(value))) {
       recycle_frame(std::move(completed_owner));
       return;
     }
@@ -14037,6 +14278,8 @@ private:
 
     std::optional<std::size_t> owner_index;
     for (std::size_t index = frames_.size(); index > 0; --index) {
+      if (blocking_native_unwind_boundary_.has_value() &&
+          index - 1U <= *blocking_native_unwind_boundary_) break;
       const Frame &candidate = frames_[index - 1U];
       if (candidate.owns_nonlocal_return_target &&
           candidate.nonlocal_return_target == target) {
@@ -14047,7 +14290,10 @@ private:
 
     std::optional<std::size_t> handler_frame_index;
     const bytecode::HandlerEntry *handler = nullptr;
-    const std::size_t lower_bound = owner_index.value_or(0U);
+    const std::size_t lower_bound =
+        blocking_native_unwind_boundary_.has_value()
+            ? std::max(owner_index.value_or(0U), *blocking_native_unwind_boundary_ + 1U)
+            : owner_index.value_or(0U);
     for (std::size_t index = frames_.size(); index > lower_bound; --index) {
       const std::size_t candidate_index = index - 1U;
       const Frame &candidate = frames_[candidate_index];
@@ -21592,6 +21838,100 @@ private:
       return true;
     };
 
+    // TaskLocal reads are a common metadata boundary. Preserve the registered
+    // handler (including embedding overrides), then enter its intrinsic path
+    // before walking unrelated native/IO/module receiver kinds a second time.
+    if (mode != NativeStdlibSendMode::TaskRuntimeIntrinsic &&
+        receiver.is_task_local()) {
+      if (const auto handler = dispatch_registry().native_handler(
+              RuntimeNativeTypeKind::TaskLocal)) {
+        NativeStdlibCall call{*this, &frame, receiver, RuntimeNativeTypeKind::TaskLocal,
+                             selector, args, block, kw_args, out};
+        return (*handler)(call);
+      }
+      return SendStatus::NotHandled;
+    }
+
+    if (mode == NativeStdlibSendMode::TaskRuntimeIntrinsic &&
+        receiver.is_task_local()) {
+      const std::shared_ptr<RuntimeTaskLocal> local = receiver.as_task_local();
+      if (local == nullptr) {
+        set_fault(frame, "TypeError", "task-local key is null");
+        return SendStatus::Faulted;
+      }
+      try {
+        if (selector == "bound?") {
+          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
+            if (!kw_args.empty()) {
+              set_fault(frame, "TypeError",
+                        "TaskLocal.bound? does not accept keywords");
+            }
+            return SendStatus::Faulted;
+          }
+          *out = Value::boolean(local->bound());
+          return SendStatus::Matched;
+        }
+        if (selector == "get") {
+          if (!require_arity(0)) return SendStatus::Faulted;
+          Value default_value = Value::null();
+          bool default_seen = false;
+          for (const auto &[symbol_id, value] : kw_args) {
+            if (symbol_id >= runtime_symbols_.size() ||
+                runtime_symbols_[symbol_id] != "default") {
+              set_fault(frame, "TypeError", "unknown keyword argument");
+              return SendStatus::Faulted;
+            }
+            if (!default_seen) default_value = value;
+            default_seen = true;
+          }
+          if (!require_no_block()) return SendStatus::Faulted;
+          *out = local->get(std::move(default_value));
+          return SendStatus::Matched;
+        }
+        if (selector == "set!") {
+          if (!require_arity(1) || !kw_args.empty() || !require_no_block()) {
+            if (!kw_args.empty()) {
+              set_fault(frame, "TypeError",
+                        "TaskLocal.set! does not accept keywords");
+            }
+            return SendStatus::Faulted;
+          }
+          *out = local->set(args[0]);
+          return SendStatus::Matched;
+        }
+        if (selector == "clear!") {
+          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
+            if (!kw_args.empty()) {
+              set_fault(frame, "TypeError",
+                        "TaskLocal.clear! does not accept keywords");
+            }
+            return SendStatus::Faulted;
+          }
+          *out = Value::boolean(local->clear());
+          return SendStatus::Matched;
+        }
+        if (selector == "inherit?") {
+          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
+            return SendStatus::Faulted;
+          }
+          *out = Value::boolean(local->inherit());
+          return SendStatus::Matched;
+        }
+        if (selector == "slot_id") {
+          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
+            return SendStatus::Faulted;
+          }
+          *out = Value::integer(
+              static_cast<std::int64_t>(local->slot_id()));
+          return SendStatus::Matched;
+        }
+      } catch (const RuntimeTaskFailure &failure) {
+        set_fault(frame, failure.error_name(), failure.message());
+        return SendStatus::Faulted;
+      }
+      return SendStatus::NotHandled;
+    }
+
     if (receiver.is_arg_parser() || receiver.is_regexp_pattern() ||
         receiver.is_regexp_match() || receiver.is_uuid() ||
         receiver.is_time() || receiver.is_time_zone() ||
@@ -23267,79 +23607,6 @@ private:
           }
         }
       }
-    }
-
-    if (mode == NativeStdlibSendMode::TaskRuntimeIntrinsic &&
-        receiver.is_task_local()) {
-      const std::shared_ptr<RuntimeTaskLocal> local = receiver.as_task_local();
-      if (local == nullptr) {
-        set_fault(frame, "TypeError", "task-local key is null");
-        return SendStatus::Faulted;
-      }
-      try {
-        if (selector == "bound?") {
-          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
-            if (!kw_args.empty()) {
-              set_fault(frame, "TypeError",
-                        "TaskLocal.bound? does not accept keywords");
-            }
-            return SendStatus::Faulted;
-          }
-          *out = Value::boolean(local->bound());
-          return SendStatus::Matched;
-        }
-        if (selector == "get") {
-          if (!require_arity(0) ||
-              !reject_unknown_keywords(frame, kw_args, {"default"}) ||
-              !require_no_block()) {
-            return SendStatus::Faulted;
-          }
-          *out = local->get(
-              keyword_arg_value(kw_args, "default").value_or(Value::null()));
-          return SendStatus::Matched;
-        }
-        if (selector == "set!") {
-          if (!require_arity(1) || !kw_args.empty() || !require_no_block()) {
-            if (!kw_args.empty()) {
-              set_fault(frame, "TypeError",
-                        "TaskLocal.set! does not accept keywords");
-            }
-            return SendStatus::Faulted;
-          }
-          *out = local->set(args[0]);
-          return SendStatus::Matched;
-        }
-        if (selector == "clear!") {
-          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
-            if (!kw_args.empty()) {
-              set_fault(frame, "TypeError",
-                        "TaskLocal.clear! does not accept keywords");
-            }
-            return SendStatus::Faulted;
-          }
-          *out = Value::boolean(local->clear());
-          return SendStatus::Matched;
-        }
-        if (selector == "inherit?") {
-          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
-            return SendStatus::Faulted;
-          }
-          *out = Value::boolean(local->inherit());
-          return SendStatus::Matched;
-        }
-        if (selector == "slot_id") {
-          if (!require_arity(0) || !kw_args.empty() || !require_no_block()) {
-            return SendStatus::Faulted;
-          }
-          *out = Value::integer(
-              static_cast<std::int64_t>(local->slot_id()));
-          return SendStatus::Matched;
-        }
-      } catch (const RuntimeTaskFailure &failure) {
-        set_fault(frame, failure.error_name(), failure.message());
-        return SendStatus::Faulted;
-      }
-      return SendStatus::NotHandled;
     }
 
     if (mode == NativeStdlibSendMode::TaskRuntimeIntrinsic &&
@@ -30668,7 +30935,8 @@ private:
       // dotted native error name used as a method constructs the error even
       // with zero arguments, while property access returns its class object.
       // Scalar dispatch alone cannot recover that call-site distinction.
-      if (receiver.is_native_type() || receiver.is_foreign_handle()) {
+      if (receiver.is_native_type() || receiver.is_foreign_handle() ||
+          receiver.is_module_namespace()) {
         return FastSendStatus::NotHandled;
       }
       // Bare conversion aliases have precedence over same-named collection
@@ -31064,6 +31332,59 @@ private:
                 "send cannot be both property access and assignment");
       return false;
     }
+    if (receiver.is_module_namespace() && *selector != "==" &&
+        *selector != "!=") {
+      if (property_assignment) {
+        raise_runtime_error(frame, "ReadOnlyPropertyError", "module exports are read-only");
+        return false;
+      }
+      const auto namespace_value = receiver.as_module_namespace();
+      const std::string path = namespace_value->path + "." + *selector;
+      Value member = Value::null();
+      bool found = false;
+      for (const auto &attr : module_.attrs) {
+        if (string_or_empty(attr.key_str_id) != "sputnik.merged.export:" + path) {
+          continue;
+        }
+        const std::string target = string_or_empty(attr.value_str_id);
+        const auto separator = target.find('\t');
+        if (separator == std::string::npos) break;
+        std::uint32_t index = 0;
+        const auto parsed = std::from_chars(target.data() + separator + 1U,
+                                           target.data() + target.size(), index);
+        if (parsed.ec != std::errc{} ||
+            parsed.ptr != target.data() + target.size()) {
+          set_fault(frame, "VMError", "invalid module export metadata: " + path);
+          return false;
+        }
+        if (target.substr(0, separator) == "class") {
+          member = Value::class_object(index);
+          found = true;
+        } else {
+          for (const auto &[name, storage] : state_->module_bindings) {
+            (void)name;
+            const Value value = unwrap_watch_value(storage);
+            if (value.is_closure() && value.as_closure() &&
+                value.as_closure()->code_id == index) {
+              member = value;
+              found = true;
+              break;
+            }
+          }
+        }
+        break;
+      }
+      if (!found) {
+        raise_runtime_error(frame, "NoMethodError", "module export is unknown: " + path);
+        return false;
+      }
+      if (property_access) {
+        if (!write_reg(frame, dst, member)) return false;
+        ++frame.pc;
+        return true;
+      }
+      return invoke_callable_value(frame, member, args, kw_args, block, dst);
+    }
     // TaskLocal.with must execute its block on this same persistent VM frame
     // stack. The ordinary stdlib block helper is one-shot and cannot preserve
     // dynamic scope across a cooperative park. The restoration token lives in
@@ -31177,6 +31498,7 @@ private:
           return false;
         }
         if (native_logical != nullptr && parkable_ && task_module_ != nullptr &&
+            !current_runtime_is_blocking_ffi_thread() &&
             dispatch_registry().native_package_thunk_is_blocking(
                 *native_logical)) {
           Value native_out = Value::null();
@@ -32317,7 +32639,7 @@ private:
         if (fault_.has_value()) {
           return;
         }
-        finish_return(frame, value);
+        finish_return(frame, std::move(value));
         return;
       }
       case QuickOpcode::Raise: {
@@ -33302,9 +33624,11 @@ private:
             nullptr) {
           Value native_out = Value::null();
           bool native_faulted = false;
+          bool native_parked = false;
           if (try_dispatch_native_extension_code(
                   frame, closure->code_id, packet.pos_args, closure->self,
-                  &native_out, &native_faulted)) {
+                  &native_out, &native_faulted, &native_parked, true)) {
+            if (native_parked) return;
             if (native_faulted) {
               return;
             }
@@ -34039,7 +34363,7 @@ private:
         return;
       }
       if (mode == kPatternFailModeMatchError) {
-        set_fault(frame, "MatchError", "pattern match failed");
+        raise_runtime_error(frame, "MatchError", "pattern match failed");
         return;
       }
       set_fault(frame, "VMError", "unknown pattern fail mode");
@@ -34054,7 +34378,7 @@ private:
       if (fault_.has_value()) {
         return;
       }
-      finish_return(frame, value);
+      finish_return(frame, std::move(value));
       return;
     }
     case Opcode::ReturnNonlocal: {
@@ -34196,6 +34520,10 @@ private:
   std::shared_ptr<RuntimeTaskModule> prelude_task_module_;
   std::optional<ParkRequest> park_request_;
   std::shared_ptr<PendingNativeExtensionCall> blocking_ffi_call_;
+  // While an FFI executor owns this VM, callback control flow may unwind only
+  // above its suspended caller. The pending activation carries escaped control
+  // back to the scheduler before any caller frame is changed or recycled.
+  std::optional<std::size_t> blocking_native_unwind_boundary_;
   // Set when this Vm executes inside a property arm of an outer Vm (nested
   // executions inherit the non-suspendable dynamic extent).
   std::optional<std::string> inherited_no_suspend_label_;
@@ -34251,6 +34579,11 @@ private:
   // Lazily created for top-level execution. Scheduler-driven/persistent VMs
   // use the context installed from their StrandRecord instead.
   std::shared_ptr<RuntimeTaskContext> root_task_context_;
+  // Replaced before each private-table mutation; synchronized children share
+  // the identity only after exact content comparison. Ownership prevents ABA
+  // when a pooled child survives several divergent interning branches.
+  std::shared_ptr<const char> runtime_names_version_ =
+      std::make_shared<const char>(0);
 };
 
 } // namespace

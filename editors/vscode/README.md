@@ -5,7 +5,8 @@ Editor support for the [Sputnik](https://github.com/orlando-labs/amber-lang) pro
 ## Features (v1)
 
 - **Syntax highlighting** — control/declaration keywords (including contextual `then`,
-  `as`, and `next` forms), callable references (`&fn`, `&Type.method`, `&Type#method`),
+  `as`, and `next` forms), native ownership and `from "..." blocking` modifiers,
+  callable references (`&fn`, `&Type.method`, `&Type#method`),
   properties, instance/class variables (`@x`, `@@x`), placeholders and `$_`, symbols,
   numeric forms, operators, strings and tagged text blocks. Double-quoted strings support
   nested `#{ }` interpolation. Unicode identifiers (e.g. `α`, `@масса`) are supported.

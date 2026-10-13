@@ -1,0 +1,64 @@
+{
+  "schema": "sputnik.build.v1",
+  "name": "test.blocking.vm_control",
+  "root": "test.blocking.vm_control",
+  "profiles": {
+    "required": [
+      "core.v1",
+      "ffi.v1"
+    ]
+  },
+  "modules": [
+    {
+      "name": "test.blocking.vm_control",
+      "path": "vm_control.s"
+    },
+    {
+      "name": "test.blocking.bindings",
+      "path": "bindings.s"
+    }
+  ],
+  "native_extensions": [
+    {
+      "name": "blocking",
+      "language": "c++",
+      "sources": [
+        "bridge.cpp"
+      ],
+      "symbols": [
+        {
+          "logical": "blocking.worker",
+          "symbol": "blocking_worker"
+        },
+        {
+          "logical": "blocking.inline_worker",
+          "symbol": "blocking_worker"
+        },
+        {
+          "logical": "blocking.batch",
+          "symbol": "blocking_batch"
+        },
+        {
+          "logical": "blocking.fail",
+          "symbol": "blocking_fail"
+        },
+        {
+          "logical": "blocking.probe_new",
+          "symbol": "blocking_probe_new"
+        },
+        {
+          "logical": "blocking.probe_worker",
+          "symbol": "blocking_probe_worker"
+        },
+        {
+          "logical": "blocking.probe_constructed",
+          "symbol": "blocking_probe_constructed"
+        },
+        {
+          "logical": "blocking.probe_inline_worker",
+          "symbol": "blocking_probe_inline_worker"
+        }
+      ]
+    }
+  ]
+}

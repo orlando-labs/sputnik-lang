@@ -109,6 +109,10 @@ execute 'syntax region sputnikInlineConditional transparent matchgroup=sputnikCo
       \ . s:before . 'if' . s:after . '\ze[^#\r\n]*' . s:before . 'then' . s:after
       \ . '/ end=/' . s:before . 'else' . s:after . '/ end=/$/ contains=@sputnikExpression,sputnikThen'
 call s:Match('sputnikOwnership', '\%(owned\|borrowed\|collected\)' . s:after, 'contained')
+call s:Match('sputnikBlocking', 'blocking' . s:after . '\ze\s*\%(:\|#\|$\)', 'contained')
+call s:Match('sputnikNativeBinding', s:before . 'from' . s:after
+      \ . "\\s\\+\\%(\"\\%(\\\\.\\|[^\"\\\\]\\)*\"\\|'\\%(\\\\.\\|[^'\\\\]\\)*'\\)",
+      \ 'transparent contains=sputnikDeclaration,sputnikDoubleString,sputnikSingleString nextgroup=sputnikBlocking skipwhite')
 execute 'syntax region sputnikNativeClass transparent matchgroup=sputnikModifier start=/'
       \ . s:before . 'native\ze\s\+class' . s:after
       \ . '/ end=/$/ contains=@sputnikExpression,sputnikOwnership'
@@ -168,6 +172,7 @@ highlight default link sputnikWordOperator Operator
 highlight default link sputnikDeclaration Keyword
 highlight default link sputnikModifier StorageClass
 highlight default link sputnikOwnership StorageClass
+highlight default link sputnikBlocking StorageClass
 highlight default link sputnikDirective PreProc
 highlight default link sputnikPropertyModifier StorageClass
 highlight default link sputnikAttrModifier StorageClass

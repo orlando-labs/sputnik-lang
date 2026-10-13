@@ -3,6 +3,7 @@
 #include "bytecode/emitter.h"
 #include "bytecode/format.h"
 #include "bytecode/graph_linker.h"
+#include "bytecode/trivial_body.h"
 #include "frontend/ast/expr.h"
 #include "frontend/binder/binder.h"
 #include "frontend/checker/checker.h"
@@ -1278,6 +1279,7 @@ struct NativeCppBuildPlan {
   bool uses_native_http_runtime = false;
   bool uses_native_system_runtime = false;
   bool uses_native_threaded_runtime = false;
+  bool uses_native_blocking_runtime = false;
 };
 
 struct NativeExecutableBuildResult {
@@ -1720,7 +1722,8 @@ bool native_cpp_math_selector(const std::string &selector,
                               std::uint32_t pos_count) {
   return ((selector == "PI" || selector == "E") && pos_count == 0U) ||
          ((selector == "abs" || selector == "sign" || selector == "sqrt" ||
-           selector == "cbrt" || selector == "exp" || selector == "log2" ||
+           selector == "cbrt" || selector == "exp" || selector == "log" ||
+           selector == "log2" ||
            selector == "log10" || selector == "sin" || selector == "cos" ||
            selector == "tan" || selector == "asin" || selector == "acos" ||
            selector == "atan" || selector == "floor" || selector == "ceil" ||
@@ -1752,6 +1755,26 @@ bool native_cpp_clause_dispatch_supported(
     }
   }
   return true;
+}
+
+bool native_cpp_has_package_namespaces(const sputnik::bytecode::BcModule &module) {
+  return std::any_of(module.attrs.begin(), module.attrs.end(), [&](const auto &attr) {
+    return attr.key_str_id < module.strings.size() &&
+           module.strings[attr.key_str_id].rfind("sputnik.merged.module:", 0) == 0;
+  });
+}
+
+bool native_cpp_package_member_selector(const sputnik::bytecode::BcModule &module,
+                                       std::string selector) {
+  if (!selector.empty() && selector.back() == '=') selector.pop_back();
+  const std::string suffix = "." + selector;
+  return std::any_of(module.attrs.begin(), module.attrs.end(), [&](const auto &attr) {
+    if (attr.key_str_id >= module.strings.size()) return false;
+    const std::string &key = module.strings[attr.key_str_id];
+    return key.rfind("sputnik.merged.export:", 0) == 0 &&
+           key.size() >= suffix.size() &&
+           key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0;
+  });
 }
 
 bool native_cpp_user_method_selector(const sputnik::bytecode::BcModule &module,
@@ -1881,11 +1904,12 @@ struct NativeCppMergedExport {
 };
 
 std::optional<NativeCppMergedExport> native_cpp_merged_export_for_path(
-    const sputnik::bytecode::BcModule &module, std::uint32_t path_const_id) {
+    const sputnik::bytecode::BcModule &module, std::uint32_t path_const_id,
+    const std::string &prefix = "sputnik.merged.export:") {
   const std::string path =
       native_cpp_constant_path_text(module, path_const_id);
   if (path.empty()) return std::nullopt;
-  const std::string expected_key = "sputnik.merged.export:" + path;
+  const std::string expected_key = prefix + path;
   for (const sputnik::bytecode::AttrEntry &attr : module.attrs) {
     if (attr.key_str_id >= module.strings.size() ||
         attr.value_str_id >= module.strings.size() ||
@@ -1908,6 +1932,17 @@ std::optional<NativeCppMergedExport> native_cpp_merged_export_for_path(
         value.substr(0, separator), static_cast<std::uint32_t>(parsed)};
   }
   return std::nullopt;
+}
+
+bool native_cpp_package_module_for_path(
+    const sputnik::bytecode::BcModule &module, std::uint32_t path_const_id) {
+  const std::string key = "sputnik.merged.module:" +
+      native_cpp_constant_path_text(module, path_const_id);
+  return std::any_of(module.attrs.begin(), module.attrs.end(),
+      [&](const auto &attr) {
+        return attr.key_str_id < module.strings.size() &&
+               module.strings[attr.key_str_id] == key;
+      });
 }
 
 std::optional<std::uint32_t>
@@ -1958,6 +1993,10 @@ native_cpp_class_index_for_path(const sputnik::bytecode::BcModule &module,
 std::optional<std::uint32_t>
 native_cpp_function_code_for_path(const sputnik::bytecode::BcModule &module,
                                   std::uint32_t path_const_id) {
+  if (const auto function = native_cpp_merged_export_for_path(
+          module, path_const_id, "sputnik.merged.function:")) {
+    return function->target;
+  }
   if (const auto merged =
           native_cpp_merged_export_for_path(module, path_const_id);
       merged.has_value() &&
@@ -1993,7 +2032,8 @@ native_cpp_function_code_for_path(const sputnik::bytecode::BcModule &module,
 
 bool native_cpp_lookup_const_supported(
     const sputnik::bytecode::BcModule &module, std::uint32_t path_const_id) {
-  if (native_cpp_class_index_for_path(module, path_const_id).has_value() ||
+  if (native_cpp_package_module_for_path(module, path_const_id) ||
+      native_cpp_class_index_for_path(module, path_const_id).has_value() ||
       native_cpp_function_code_for_path(module, path_const_id).has_value()) {
     return true;
   }
@@ -2408,7 +2448,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       }
       const std::string &selector = module.symbols[selector_id];
       if (!native_cpp_user_constructor_shape(module, selector) &&
-          !native_cpp_user_method_selector(module, selector)) {
+          !native_cpp_user_method_selector(module, selector) &&
+          !native_cpp_package_member_selector(module, selector)) {
         *reason = "SEND_SPREAD selector `" + selector +
                   "` is not a native user-code send";
         return false;
@@ -3030,7 +3071,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       const bool user_send =
           native_cpp_user_constructor_shape(module, selector) ||
           native_cpp_user_method_selector(module, selector) ||
-          native_cpp_open_protocol_selector(selector);
+          native_cpp_open_protocol_selector(selector) ||
+          native_cpp_package_member_selector(module, selector);
       const bool system_send = std::set<std::string>{
           "command", "shell", "__template", "with", "argv", "program", "cwd",
           "capture", "output", "run", "spawn", "communicate", "wait", "close",
@@ -4845,6 +4887,30 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       << "(const NativeArgsView &args, "
          "NativeClosure *current_closure, NativeHandlerSeed *handler_seed, "
          "std::uint32_t *trace_pc) {\n";
+  // Code-id dispatch and direct method entry can both reach these bodies.
+  // A primitive return needs no register file, invocation frame or local
+  // capture cells. Keep undersupplied argument reads on their legacy path.
+  if (!uses_local_capture_cells && !needs_outer_try && !needs_handler_frame) {
+    const auto body = sputnik::bytecode::trivial_body(
+        module, code, native_cpp_argument_register_count(module, code));
+    using Kind = sputnik::bytecode::TrivialBody::Kind;
+    std::string result;
+    switch (body.kind) {
+    case Kind::Argument:
+      out << "  if (args.size() > " << body.index << "U) return args["
+          << body.index << "U];\n";
+      break;
+    case Kind::Constant: result = native_cpp_constant_expr(module.const_pool[body.index]); break;
+    case Kind::Null: result = "NativeValue::nullv()"; break;
+    case Kind::Bool: result = std::string("NativeValue::boolean(") + (body.index ? "true)" : "false)"); break;
+    case Kind::Self: result = "native_closure_self(current_closure)"; break;
+    default: break;
+    }
+    if (!result.empty()) {
+      out << "  return " << result << ";\n}\n\n";
+      return out.str();
+    }
+  }
   if (!user_send_call_site_index.empty()) {
     out << "  static std::array<NativeUserCallSiteCache, "
         << user_send_call_site_index.size() << "> user_call_sites{};\n";
@@ -5422,7 +5488,10 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
               native_cpp_constant_path_text(module, const_id);
           const std::optional<std::uint32_t> declared_class_index =
               native_cpp_class_index_for_path(module, const_id);
-          if (native_cpp_declared_error_path(module, path_text, true)) {
+          if (native_cpp_package_module_for_path(module, const_id)) {
+            native_module_expr = "native_package_module("
+                "native_hex_to_string(\"" + string_to_hex_text(path_text) + "\"))";
+          } else if (native_cpp_declared_error_path(module, path_text, true)) {
             native_module_expr =
                 "native_error_constant(native_hex_to_string(\"" +
                 string_to_hex_text(path_text) + "\"))";
@@ -5862,7 +5931,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
             code.call_site_table[send_spread_site_id].flags;
       }
       out << "  if (!native_value_is_user_receiver("
-          << read_reg_expr(receiver) << ")) native_bailout();\n";
+          << read_reg_expr(receiver) << ") && " << read_reg_expr(receiver)
+          << ".tag != NativeValue::Tag::PackageModule) native_bailout();\n";
       write_reg_stmt(dst, "native_user_send(" + read_reg_expr(receiver) +
                               ", native_symbol_text(" +
                               std::to_string(selector_id) +
@@ -6066,6 +6136,19 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         args_expr << "}";
         return args_expr.str();
       };
+      if (native_cpp_has_package_namespaces(module) && selector != "==" &&
+          selector != "!=" && selector != "===") {
+        out << "  if (" << read_reg_expr(recv)
+            << ".tag == NativeValue::Tag::PackageModule) {\n";
+        write_reg_stmt(dst, "native_user_send(" + read_reg_expr(recv) +
+            ", " + selector_expr + ", " + pos_args_expr(0U) + ", " +
+            call_kw_args_expr() + ", " +
+            (has_block ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                       : "NativeValue::nullv()") +
+            ", nullptr, " + std::to_string(send_site_flags) + "U)");
+        emit_next(pc, next_scalar_state);
+        out << "  }\n";
+      }
       if (native_cpp_conversion_property_selector(selector) &&
           (send_site_flags & sputnik::bytecode::kCallSiteFlagPropertyAccess) != 0U &&
           pos_count == 0U && kw_count == 0U && !has_block) {
@@ -6130,7 +6213,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         break;
       }
       out << "  if (native_value_is_user_receiver(" << read_reg_expr(recv)
-          << ")) {\n";
+          << ") || " << read_reg_expr(recv)
+          << ".tag == NativeValue::Tag::PackageModule) {\n";
       write_reg_stmt(dst, "native_user_send(" + read_reg_expr(recv) +
                               ", " + selector_expr + ", " +
                               pos_args_expr(0U) + ", " + call_kw_args_expr() +
@@ -6972,6 +7056,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
           write_reg_stmt(
               dst, "native_missing_selector(" + selector_expr + ")");
         }
+      } else {
+        write_reg_stmt(dst, "native_missing_selector(" + selector_expr + ")");
       }
       out << "  }\n";
       emit_next(pc, next_scalar_state);
@@ -8083,8 +8169,14 @@ std::set<std::string> manifest_native_logicals(
 }
 
 std::set<std::string> manifest_blocking_native_logicals(
+    const sputnik::bytecode::BcModule &module,
     const std::vector<sputnik::pkg::PackageNativeExtension> &native_extensions) {
   std::set<std::string> out;
+  const auto descriptor =
+      sputnik::runtime::runtime_native_package_descriptor_from_module(module);
+  for (const auto &binding : descriptor.code_bindings) {
+    if (binding.blocking) out.insert(binding.logical);
+  }
   for (const sputnik::pkg::PackageNativeExtension &extension :
        native_extensions) {
     out.insert(extension.blocking_symbols.begin(),
@@ -8114,6 +8206,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
                       const std::vector<sputnik::pkg::PackageNativeExtension>
                           &native_extensions = {}) {
   NativeCppBuildPlan plan;
+  plan.uses_native_blocking_runtime =
+      !manifest_blocking_native_logicals(module, native_extensions).empty();
   plan.uses_native_threaded_runtime =
       std::find(module.symbols.begin(), module.symbols.end(), "threaded") != module.symbols.end() ||
       std::find(module.symbols.begin(), module.symbols.end(), "parallel") != module.symbols.end();
@@ -8541,7 +8635,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "RangeModule, TimeModule, "
          "TimePeriodModule, MutexModule, AtomicModule, ResultOkFunction, "
          "ResultErrFunction, DescFunction, PrintFunction, ErrorClass, Class, "
-         "Bytes, List, "
+         "PackageModule, Bytes, List, "
          "Tuple, Set, "
          "Map, Range, "
          "ArgParser, "
@@ -8575,6 +8669,9 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "out.tag = Tag::Float; out.float_value = value; return out; }\n";
   out << "  static NativeValue string_ref(std::int64_t string_id) { "
          "NativeValue out; out.tag = Tag::String; out.scalar_value = "
+         "string_id; return out; }\n";
+  out << "  static NativeValue package_module(std::int64_t string_id) { "
+         "NativeValue out; out.tag = Tag::PackageModule; out.scalar_value = "
          "string_id; return out; }\n";
   out << "  static NativeValue symbol_ref(std::int64_t symbol_id) { "
          "NativeValue out; out.tag = Tag::Symbol; out.scalar_value = "
@@ -8708,6 +8805,8 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  static NativeValue foreign_handle("
          "std::shared_ptr<sputnik::runtime::RuntimeForeignHandle> handle, "
          "std::uint32_t class_index);\n";
+  out << "  static NativeValue new_foreign_handle("
+         "sputnik::runtime::RuntimeForeignHandle *&resource);\n";
   out << "  static NativeValue runtime_handle("
          "sputnik::runtime::Value value);\n";
   out << "  static NativeValue instance(std::uint32_t class_index);\n";
@@ -8975,6 +9074,7 @@ private:
   // tensor result in a fully native program.
   out << "  std::shared_ptr<sputnik::runtime::RuntimeForeignHandle> handle;\n";
   out << "  std::uint32_t class_index = 0;\n";
+  out << "  bool shared_owner = false;\n";
   out << "};\n";
   out << "struct NativeRuntimeHandle : NativeRcHeader {\n";
   out << "  sputnik::runtime::Value value = sputnik::runtime::Value::null();\n";
@@ -9774,8 +9874,17 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
       delete static_cast<NativeMutex *>(payload); return;
     case NativeValue::Tag::ErrorInstance:
       delete static_cast<NativeErrorInstance *>(payload); return;
-    case NativeValue::Tag::ForeignHandle:
-      delete static_cast<NativeForeignHandle *>(payload); return;
+    case NativeValue::Tag::ForeignHandle: {
+      auto *handle = static_cast<NativeForeignHandle *>(payload);
+      if (handle->shared_owner) {
+        // Release the allocation's self-alias after its last NativeValue.
+        // Runtime bridge aliases may still own the resource and tombstone.
+        auto owner = std::move(handle->handle);
+      } else {
+        delete handle;
+      }
+      return;
+    }
     case NativeValue::Tag::RuntimeHandle:
       delete static_cast<NativeRuntimeHandle *>(payload); return;
     case NativeValue::Tag::Instance:
@@ -10541,6 +10650,23 @@ static void native_collect_finished_cycles() {
   out << "  out.heap_value = handle; out.tag = Tag::ForeignHandle; "
          "return native_track_value(std::move(out));\n";
   out << "}\n";
+  out << R"SPUTNIKPP(NativeValue NativeValue::new_foreign_handle(
+    sputnik::runtime::RuntimeForeignHandle *&resource) {
+  struct Storage {
+    sputnik::runtime::RuntimeForeignHandle resource;
+    NativeForeignHandle wrapper;
+  };
+  auto owner = std::make_shared<Storage>();
+  resource = &owner->resource;
+  owner->wrapper.handle =
+      std::shared_ptr<sputnik::runtime::RuntimeForeignHandle>(owner, resource);
+  owner->wrapper.shared_owner = true;
+  NativeValue value;
+  value.heap_value = &owner->wrapper;
+  value.tag = Tag::ForeignHandle;
+  return value;
+}
+)SPUTNIKPP";
   out << "NativeValue NativeValue::runtime_handle("
          "sputnik::runtime::Value value) {\n";
   out << "  NativeValue out; auto *handle = new NativeRuntimeHandle();\n";
@@ -10600,6 +10726,32 @@ static void native_collect_finished_cycles() {
   }
   std::map<std::uint32_t, std::vector<std::uint32_t>>
       captured_module_function_dependencies;
+  // Metadata identifies the actual module closure, including flattened
+  // multi-clause bodies whose code differs from the method descriptor.
+  for (const auto &attr : module.attrs) {
+    if (attr.key_str_id >= module.strings.size() ||
+        attr.value_str_id >= module.strings.size()) continue;
+    const std::string &key = module.strings[attr.key_str_id];
+    if (key.rfind("sputnik.merged.function:", 0) != 0) continue;
+    const std::string &target = module.strings[attr.value_str_id];
+    const auto separator = target.find('\t');
+    if (separator == std::string::npos) continue;
+    char *end = nullptr;
+    const auto parsed = std::strtoul(target.c_str() + separator + 1U, &end, 10);
+    if (end == target.c_str() + separator + 1U ||
+        end != target.c_str() + target.size() ||
+        parsed > std::numeric_limits<std::uint32_t>::max()) continue;
+    const auto code_id = static_cast<std::uint32_t>(parsed);
+    const auto *code = native_code_by_id(module, code_id);
+    if (code == nullptr) continue;
+    const bool inserted = module_function_code_ids.insert(code_id).second;
+    if (code->capture_layout.empty())
+      captureless_module_function_code_ids.insert(code_id);
+    if (inserted) {
+      const auto dot = key.rfind('.');
+      module_function_codes_by_name[key.substr(dot + 1U)].push_back(code_id);
+    }
+  }
   for (const std::uint32_t code_id : module_function_code_ids) {
     const sputnik::bytecode::BcCode *code = native_code_by_id(module, code_id);
     if (code == nullptr || code->capture_layout.empty()) {
@@ -10720,6 +10872,49 @@ static void native_collect_finished_cycles() {
   out << "    delete candidate;\n";
   out << "  }\n";
   out << "  return *published;\n";
+  out << "}\n\n";
+  out << "static NativeValue native_package_module(const std::string &path) {\n";
+  out << "  static const std::unordered_map<std::string, std::int64_t> modules = {\n";
+  for (const auto &attr : module.attrs) {
+    if (attr.key_str_id >= module.strings.size() ||
+        attr.value_str_id >= module.strings.size()) continue;
+    const std::string &key = module.strings[attr.key_str_id];
+    const std::string prefix = "sputnik.merged.module:";
+    if (key.rfind(prefix, 0) != 0) continue;
+    out << "    {native_hex_to_string(\""
+        << string_to_hex_text(key.substr(prefix.size())) << "\"), "
+        << attr.value_str_id << "},\n";
+  }
+  out << "  };\n";
+  out << "  const auto found = modules.find(path);\n";
+  out << "  if (found == modules.end()) throw NativeBailout();\n";
+  out << "  return NativeValue::package_module(found->second);\n";
+  out << "}\n\n";
+  out << "static std::optional<NativeValue> native_package_member("
+         "const NativeValue &module, const std::string &selector) {\n";
+  out << "  static const std::unordered_map<std::string, "
+         "std::pair<bool, std::uint32_t>> exports = {\n";
+  for (const auto &attr : module.attrs) {
+    if (attr.key_str_id >= module.strings.size() ||
+        attr.value_str_id >= module.strings.size()) continue;
+    const std::string &key = module.strings[attr.key_str_id];
+    const std::string prefix = "sputnik.merged.export:";
+    if (key.rfind(prefix, 0) != 0) continue;
+    const std::string &target = module.strings[attr.value_str_id];
+    const auto separator = target.find('\t');
+    if (separator == std::string::npos) continue;
+    out << "    {native_hex_to_string(\""
+        << string_to_hex_text(key.substr(prefix.size())) << "\"), {"
+        << (target.substr(0, separator) == "class" ? "true" : "false")
+        << ", " << target.substr(separator + 1U) << "U}},\n";
+  }
+  out << "  };\n";
+  out << "  const auto found = exports.find(native_string_text("
+         "NativeValue::string_ref(module.scalar_value)) + \".\" + selector);\n";
+  out << "  if (found == exports.end()) return std::nullopt;\n";
+  out << "  return found->second.first "
+         "? NativeValue::class_object(found->second.second) "
+         ": native_module_function(found->second.second);\n";
   out << "}\n\n";
   out << "static const NativeValue &native_null_value() {\n";
   out << "  static const NativeValue value = NativeValue::nullv();\n";
@@ -19484,6 +19679,8 @@ static NativeValue native_benchmark_send(
          "NativeValue::floating(std::cbrt(value));\n";
   out << "  if (selector == \"exp\") return "
          "NativeValue::floating(std::exp(value));\n";
+  out << "  if (selector == \"log\") return "
+         "NativeValue::floating(std::log(value));\n";
   out << "  if (selector == \"log2\") return "
          "NativeValue::floating(std::log2(value));\n";
   out << "  if (selector == \"log10\") return "
@@ -22903,7 +23100,8 @@ static NativeValue native_channel_send(
   out << "  static sputnik::runtime::RuntimeTaskModule runtime;\n";
   out << "  return runtime;\n";
   out << "}\n";
-  if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime)
+  if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime ||
+      plan.uses_native_blocking_runtime)
     out << "#include \"runtime/system_native_task.inc\"\n";
   out << "static std::chrono::milliseconds native_task_duration("
          "const NativeValue &value) {\n";
@@ -22982,6 +23180,11 @@ static NativeValue native_channel_send(
   out << "            state->exception = raised.exception;\n";
   out << "            state->has_exception = true;\n";
   out << "          }\n";
+  out << "          const auto cancelled = native_error_registry.error_id(\"CancelledError\");\n";
+  out << "          if (sputnik::runtime::current_runtime_task_cancel_requested() && "
+         "cancelled.has_value() && raised.exception.tag == NativeValue::Tag::ErrorInstance && "
+         "native_error_registry.error_is_a(as_native_error(raised.exception).error_id, *cancelled)) "
+         "throw sputnik::runtime::RuntimeTaskCancelled();\n";
   out << "          throw sputnik::runtime::RuntimeTaskFailure("
          "\"RuntimeError\", \"native task failed\");\n";
   out << "        } catch (const NativeBailout &) {\n";
@@ -22990,7 +23193,8 @@ static NativeValue native_channel_send(
   out << "        }\n";
   out << "        return sputnik::runtime::Value::null();\n";
   out << "      };\n";
-  if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime) {
+  if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime ||
+      plan.uses_native_blocking_runtime) {
     out << "      auto driver = native_system_task_driver(std::move(function));\n";
     out << "      sputnik::runtime::RuntimeTaskHandle handle = native_task_runtime().spawn_resumable(std::move(driver));\n";
   } else out << "      sputnik::runtime::RuntimeTaskHandle handle = "
@@ -23018,8 +23222,8 @@ static NativeValue native_channel_send(
   out << "  }\n";
   out << "  if (receiver.tag == NativeValue::Tag::TaskLocal) {\n";
   out << "    NativeTaskLocal &local = as_native_task_local(receiver);\n";
-  out << "    std::shared_ptr<sputnik::runtime::RuntimeTaskContext> context = "
-         "sputnik::runtime::current_runtime_task_context();\n";
+  out << "    auto *context = "
+         "sputnik::runtime::current_runtime_task_context_borrowed();\n";
   out << "    if (context == nullptr) throw NativeRaised{native_named_error("
          "\"TaskLocalError\", \"task-local access requires an active logical Sputnik task\")};\n";
   out << "    const auto stored_binding = context->binding(local.key.slot_id());\n";
@@ -23080,6 +23284,8 @@ static NativeValue native_channel_send(
          "local.key.slot_id()));\n";
   out << "    if (selector == \"with\" && args.size() == 1U && "
          "kwargs.empty() && block.tag != NativeValue::Tag::Null) {\n";
+  out << "      const auto owned_context = "
+         "sputnik::runtime::current_runtime_task_context();\n";
   if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
     out << "      const std::uint64_t token = context->push_scope("
            "local.key, std::make_shared<NativeTaskLocalStoredValueHolder>("
@@ -23092,10 +23298,10 @@ static NativeValue native_channel_send(
   }
   out << "      try {\n";
   out << "        NativeValue result = sputnik_native_call_closure(block, {});\n";
-  out << "        (void)context->pop_scope(token);\n";
+  out << "        (void)owned_context->pop_scope(token);\n";
   out << "        return result;\n";
   out << "      } catch (...) {\n";
-  out << "        (void)context->pop_scope(token);\n";
+  out << "        (void)owned_context->pop_scope(token);\n";
   out << "        throw;\n";
   out << "      }\n";
   out << "    }\n";
@@ -23319,6 +23525,117 @@ static NativeValue native_channel_send(
          "    throw NativeBailout();\n"
          "  }\n";
   out << "}\n\n";
+  // Resolve a plain method once, then enter its compiled body without either
+  // shaped-method or code-id dispatch. The immutable method record is still
+  // selected by the receiver/class guard, including aliases and mixins.
+  std::set<std::uint32_t> plain_method_code_ids;
+  for (const auto &entry : emitted_method_signatures) {
+    const std::uint32_t code_id = entry.first;
+    const auto *signature = entry.second;
+    if (!signature->clause_table.empty() ||
+        (!signature->type_hook_ids.empty() &&
+         plan.native_extension_code_ids.count(code_id) == 0U) ||
+        !signature->default_thunk_ids.empty() ||
+        std::any_of(signature->params.begin(), signature->params.end(),
+                    [](const auto &param) { return param.flags != 0U; }) ||
+        (plan.native_code_ids.count(code_id) == 0U &&
+         plan.native_extension_code_ids.count(code_id) == 0U)) {
+      continue;
+    }
+    const auto code = std::find_if(module.code_objects.begin(),
+                                   module.code_objects.end(), [&](const auto &c) {
+                                     return c.code_id == code_id;
+                                   });
+    auto body = plan.native_code_ids.count(code_id) != 0U &&
+                              code != module.code_objects.end()
+                          ? sputnik::bytecode::trivial_body(
+                                module, *code, signature->params.size())
+                          : sputnik::bytecode::TrivialBody{};
+    using Kind = sputnik::bytecode::TrivialBody::Kind;
+    if (!signature->auto_assign_desc.empty() &&
+        (body.kind != Kind::Null || code == module.code_objects.end() ||
+         !sputnik::bytecode::positional_ivar_auto_assigns(module, *signature, *code))) {
+      continue;
+    }
+    plain_method_code_ids.insert(code_id);
+    // A native declaration's validation belongs to its extension adapter.
+    // Its direct entry still calls that adapter (including typed ABI guards),
+    // and cannot summarize or skip a Sputnik type-check body.
+    if (body.kind == Kind::IvarSend0) {
+      const auto &selector = module.symbols[body.selector];
+      if ((native_cpp_conversion_property_selector(selector) &&
+           (body.call_flags & sputnik::bytecode::kCallSiteFlagPropertyAccess) != 0U) ||
+          selector == "not" || selector == "===" || selector == "==" || selector == "!=")
+        body = {};
+    }
+    out << "static NativeValue native_plain_method_c" << code_id
+        << "(const NativeArgsView &args, const NativeValue &self, "
+           "const NativeValue &block) {\n";
+    if (plan.uses_native_stdlib_bridge || !plan.vm_callable_code_ids.empty()) {
+      out << "  SputnikNativeBridgeRequestStateScope bridge_state_scope;\n";
+    }
+    out << "  std::uint32_t trace_pc = 0U;\n  try {\n";
+    switch (body.kind) {
+    case Kind::Argument:
+      out << "    return args[" << body.index << "U];\n";
+      break;
+    case Kind::Constant:
+      out << "    return " << native_cpp_constant_expr(module.const_pool[body.index])
+          << ";\n";
+      break;
+    case Kind::Null:
+      out << "    return NativeValue::nullv();\n";
+      break;
+    case Kind::Bool:
+      out << "    return NativeValue::boolean(" << (body.index ? "true" : "false")
+          << ");\n";
+      break;
+    case Kind::Self:
+      out << "    return self;\n";
+      break;
+    case Kind::Ivar:
+      out << "    trace_pc = 1U;\n    return native_load_ivar(self, "
+          << body.index << "U);\n";
+      break;
+    case Kind::IvarSend0:
+      // Nested sends may run callbacks which replace the caller's receiver.
+      // Pin both logical self and the forwarded receiver across that call.
+      out << "    NativeValue pinned_self = self;\n    trace_pc = 1U;\n"
+             "    NativeValue target = native_load_ivar(pinned_self, "
+          << body.index << "U);\n    trace_pc = 2U;\n"
+             "    if (native_value_is_user_receiver(target)) {\n"
+             "      static NativeUserCallSiteCache site;\n"
+             "      return native_user_send(target, native_symbol_text("
+          << body.selector << "U), {}, {}, NativeValue::nullv(), &site, "
+          << body.call_flags << "U);\n    }\n"
+             "    // Builtin/special receivers retain the original SEND lowering.\n"
+             "    NativeClosure invocation; invocation.code_id = " << code_id
+          << "U; invocation.self = pinned_self; invocation.block = block;\n"
+             "    trace_pc = 0U;\n    return " << native_cpp_function_name(code_id)
+          << "(args, &invocation, nullptr, &trace_pc);\n";
+      break;
+    case Kind::None:
+      if (plan.native_extension_code_ids.count(code_id) != 0U) {
+        out << "    NativeValue pinned_self = self;\n"
+               "    return sputnik_native_extension_call(" << code_id
+            << "U, args, pinned_self);\n";
+      } else {
+        out << "    NativeClosure invocation; invocation.code_id = " << code_id
+            << "U; invocation.self = self; invocation.block = block;\n"
+               "    return " << native_cpp_function_name(code_id)
+            << "(args, &invocation, nullptr, &trace_pc);\n";
+      }
+      break;
+    }
+    out << "  } catch (NativeRaised &raised) {\n"
+           "    if (native_trace_at_dispatch(" << code_id
+        << "U)) native_append_trace_frame(raised, " << code_id
+        << "U, trace_pc);\n    throw;\n"
+           "  } catch (const NativeBailout &bailout) {\n"
+           "    throw NativeBailout(\"c" << code_id
+        << ":\" + std::to_string(trace_pc) + \": \" + bailout.what());\n"
+           "  }\n}\n";
+  }
   out << "struct NativeUserMethod {\n";
   out << "  std::uint32_t code_id = 0;\n";
   out << "  std::uint32_t flags = 0;\n";
@@ -23327,6 +23644,8 @@ static NativeValue native_channel_send(
   out << "  bool needs_param_shaping = false;\n";
   out << "  bool has_auto_assigns = false;\n";
   out << "  bool accepts_zero_arguments = false;\n";
+  out << "  NativeValue (*plain_invoke)(const NativeArgsView &, "
+         "const NativeValue &, const NativeValue &) = nullptr;\n";
   out << "};\n";
   // A site publishes only class/key + one immutable method-table index. Two
   // separately published atomics could pair the old code with a new receiver's
@@ -23361,6 +23680,10 @@ static NativeValue native_channel_send(
         << ", "
         << (params != nullptr && method_accepts_zero_arguments(*params) ? "true"
                                                                       : "false")
+        << ", "
+        << (plain_method_code_ids.count(method.entry_code_id) != 0U
+                ? "native_plain_method_c" + std::to_string(method.entry_code_id)
+                : "nullptr")
         << "},\n";
   }
   out << "}};\n";
@@ -23669,6 +23992,19 @@ static std::string native_named_callable_type_name(
          "const NativeKeywordArgsView &kwargs, "
          "NativeValue block, NativeUserCallSiteCache *call_site, "
          "std::uint32_t call_flags) {\n";
+  out << "  if (receiver.tag == NativeValue::Tag::PackageModule) {\n";
+  out << "    if ((call_flags & "
+      << sputnik::bytecode::kCallSiteFlagPropertyAssignment
+      << "U) != 0U) throw NativeRaised{native_named_error("
+         "\"ReadOnlyPropertyError\", \"module exports are read-only\")};\n";
+  out << "    const auto member = native_package_member(receiver, selector);\n";
+  out << "    if (!member) throw NativeRaised{native_named_error("
+         "\"NoMethodError\", \"module export is unknown: \" + selector)};\n";
+  out << "    if ((call_flags & "
+      << sputnik::bytecode::kCallSiteFlagPropertyAccess
+      << "U) != 0U) return *member;\n";
+  out << "    return sputnik_native_call_value(*member, args, kwargs, block);\n";
+  out << "  }\n";
   out << "  const bool class_side = receiver.tag == NativeValue::Tag::Class;\n";
   if (!plan.native_extension_code_ids.empty()) {
     out << "  if (receiver.tag == NativeValue::Tag::ForeignHandle && "
@@ -23700,8 +24036,6 @@ static std::string native_named_callable_type_name(
          "(property_setter ? \"setter `\" : \"getter `\") + "
          "property_name + \"`\");\n";
   out << "    }\n";
-  out << "    NativeClosure invocation; invocation.code_id = method.code_id; "
-         "invocation.self = self; invocation.block = block;\n";
   out << "    if (kwargs.empty() && "
          "!method.needs_param_shaping) {\n";
   out << "      if (args.size() > method.param_count) "
@@ -23710,11 +24044,23 @@ static std::string native_named_callable_type_name(
   out << "      if (args.size() < method.param_count) "
          "throw NativeRaised{native_named_error("
          "\"TypeError\", \"missing required parameter\")};\n";
+  out << "      if (method.plain_invoke != nullptr) {\n";
+  out << "        if (method.has_auto_assigns) {\n"
+         "          NativeValue pinned_self = self;\n"
+         "          native_apply_auto_assigns(method.code_id, pinned_self, args);\n"
+         "          return method.plain_invoke(args, pinned_self, block);\n"
+         "        }\n"
+         "        return method.plain_invoke(args, self, block);\n"
+         "      }\n";
+  out << "      NativeClosure invocation; invocation.code_id = method.code_id; "
+         "invocation.self = self; invocation.block = block;\n";
   out << "      if (method.has_auto_assigns) "
          "native_apply_auto_assigns(method.code_id, self, args);\n";
   out << "      return sputnik_native_call_shaped_method("
          "method.code_id, args, &invocation);\n";
   out << "    }\n";
+  out << "    NativeClosure invocation; invocation.code_id = method.code_id; "
+         "invocation.self = self; invocation.block = block;\n";
   out << "    NativeShapedArgs shaped = native_shape_method_args("
          "method.code_id, args, kwargs, block, &invocation);\n";
   out << "    if (method.has_auto_assigns) "
@@ -24444,6 +24790,8 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
            "const std::vector<std::string> &runtime_strings, "
            "const std::vector<std::string> &runtime_symbols) {\n";
     out << "  if (value.is_null()) return NativeValue::nullv();\n";
+    out << "  if (value.is_module_namespace()) return "
+           "native_package_module(value.as_module_namespace()->path);\n";
     out << "  if (value.is_bool()) return "
            "NativeValue::boolean(value.as_bool());\n";
     out << "  if (value.is_integer()) return "
@@ -24615,6 +24963,14 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
     out << "static sputnik::runtime::Value sputnik_native_bridge_argument("
            "const NativeValue &arg) {\n";
     out << "  switch (arg.tag) {\n";
+    out << "  case NativeValue::Tag::PackageModule: {\n";
+    out << "    auto module = std::make_shared<"
+           "sputnik::runtime::ModuleNamespaceValue>();\n";
+    out << "    module->path = native_string_text("
+           "NativeValue::string_ref(arg.scalar_value));\n";
+    out << "    return sputnik::runtime::Value::module_namespace("
+           "std::move(module));\n";
+    out << "  }\n";
     out << "  case NativeValue::Tag::Null: "
            "return sputnik::runtime::Value::null();\n";
     out << "  case NativeValue::Tag::Bool: "
@@ -24749,6 +25105,7 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
       out << R"SPUTNIKPP(struct SputnikNativeExtensionState {
   sputnik::runtime::NativeCallValueArena<NativeValue> arena;
   std::optional<NativeRaised> raised;
+  std::optional<NativeNonlocalReturn> nonlocal_return;
   std::string error_name;
   std::string error_message;
 
@@ -24951,12 +25308,11 @@ static SputnikValue sputnik_native_ext_make_handle(void *opaque, const char *tag
   if (descriptor == nullptr) {
     state->fail("TypeError",
                 ("unknown native handle tag '" + tag_text + "'").c_str());
-    return state->push(NativeValue::nullv());
+    return nullptr;
   }
-  auto handle = std::make_shared<sputnik::runtime::RuntimeForeignHandle>();
+  sputnik::runtime::RuntimeForeignHandle *handle = nullptr;
+  NativeValue value = NativeValue::new_foreign_handle(handle);
   handle->tag = std::move(tag_text);
-  handle->ptr = ptr;
-  handle->ownership = descriptor->ownership;
   switch (descriptor->ownership) {
   case sputnik::runtime::RuntimeForeignHandle::Ownership::Owned: {
     void (*destroy)(void *, void *) = descriptor->owned_destructor;
@@ -24977,15 +25333,19 @@ static SputnikValue sputnik_native_ext_make_handle(void *opaque, const char *tag
   }
   try {
     const std::uint32_t class_index =
-        sputnik_native_bridge_foreign_class_index(handle.get());
-    return state->push(
-        NativeValue::foreign_handle(std::move(handle), class_index));
+        sputnik_native_bridge_foreign_class_index(handle);
+    as_native_foreign_handle(value)->class_index = class_index;
+    const SputnikValue result = state->push(std::move(value));
+    // All potentially throwing allocations precede resource adoption.
+    handle->ownership = descriptor->ownership;
+    handle->ptr = ptr;
+    return result;
   } catch (const std::exception &error) {
     state->fail("TypeError", error.what());
   } catch (...) {
     state->fail("TypeError", "native handle class is unavailable");
   }
-  return state->push(NativeValue::nullv());
+  return nullptr;
 }
 static SputnikStatus sputnik_native_ext_fault(void *opaque, const char *name,
                                           const char *message) {
@@ -25002,12 +25362,15 @@ static SputnikStatus sputnik_native_ext_call_block(void *opaque, SputnikValue bl
     block_args.push_back(state->resolve(args[index]));
   }
   try {
+    NativeCycleScope callback_scope;
     NativeValue result = sputnik_native_call_value(
         state->resolve(block), block_args, {}, NativeValue::nullv());
     *out = state->push(std::move(result));
     return SPUTNIK_OK;
   } catch (const NativeRaised &raised) {
     state->raised.emplace(raised);
+  } catch (const NativeNonlocalReturn &signal) {
+    state->nonlocal_return.emplace(signal);
   } catch (const sputnik::runtime::RuntimeTaskCancelled &) {
     state->fail("CancelledError", "task cancelled");
   } catch (const std::exception &error) {
@@ -25069,6 +25432,7 @@ static NativeValue sputnik_native_extension_invoke_inline(
                    sputnik_native_ext_ops(), &state,
                    reinterpret_cast<SputnikFreeFn>(fn), handles.data(),
                    handles.size());
+  if (state.nonlocal_return.has_value()) throw std::move(*state.nonlocal_return);
   if (state.raised.has_value()) throw std::move(*state.raised);
   if (!state.error_name.empty() || outcome.status != SPUTNIK_OK) {
     throw NativeRaised{native_named_error(
@@ -25093,7 +25457,8 @@ static NativeValue sputnik_native_extension_destroy(const NativeValue &self) {
 static NativeValue sputnik_native_extension_invoke(
     const sputnik::runtime::NativeExtRegistry::ResolvedThunk &thunk,
     bool method, const NativeArgsView &args, const NativeValue &self) {
-  if (thunk.leaf != nullptr && method && args.empty()) {
+  if (thunk.leaf != nullptr && method && args.empty() &&
+      thunk.leaf->signature == SPUTNIK_LEAF_HANDLE_INT) {
     const auto fail = [](const char *kind, const char *message) -> NativeValue {
       throw NativeRaised{native_named_error(kind, message)};
     };
@@ -25121,6 +25486,52 @@ static NativeValue sputnik_native_extension_invoke(
       return fail("RuntimeError", "native leaf call failed without a fault");
     return NativeValue::integer(result);
   }
+  if (thunk.leaf != nullptr && method && args.size() == 1U &&
+      args[0].tag == NativeValue::Tag::Integer &&
+      thunk.leaf->signature == SPUTNIK_LEAF_HANDLE_INT_HANDLE) {
+    const auto fail = [](const char *kind, const char *message) -> NativeValue {
+      throw NativeRaised{native_named_error(kind, message)};
+    };
+    if (self.tag != NativeValue::Tag::ForeignHandle)
+      return fail("TypeError", "expected a native handle");
+    const auto *wrapper = as_native_foreign_handle(self);
+    const auto &receiver = wrapper->handle;
+    if (receiver == nullptr) return fail("TypeError", "native handle is null");
+    if (receiver->tag != thunk.leaf->receiver_tag)
+      return fail("TypeError", "native handle tag mismatch");
+    if (!receiver->live) return fail("LifetimeError", "native handle used after destroy!");
+    const auto *type = sputnik::runtime::NativeExtRegistry::global().find_type(receiver->tag);
+    if (type == nullptr || type->ownership != sputnik::runtime::RuntimeForeignHandle::Ownership::Collected ||
+        type->collected_reclaim == nullptr)
+      return fail("TypeError", "native resource leaf requires a collected type");
+    const auto reclaim = type->collected_reclaim;
+    sputnik::runtime::RuntimeForeignHandle *resource = nullptr;
+    NativeValue result = NativeValue::new_foreign_handle(resource);
+    as_native_foreign_handle(result)->class_index = wrapper->class_index;
+    resource->tag = receiver->tag;
+    resource->teardown = [reclaim](void *, void *pointer) { reclaim(pointer); };
+    sputnik::runtime::NativeLeafFaultRecord diagnostic;
+    const auto fault = diagnostic.callback();
+    void *pointer = nullptr;
+    struct OutputGuard {
+      void *&pointer;
+      SputnikCollectedReclaim reclaim;
+      void reset() noexcept { if (pointer != nullptr) { reclaim(pointer); pointer = nullptr; } }
+      ~OutputGuard() { reset(); }
+    } output{pointer, reclaim};
+    const auto status = thunk.leaf->handle_int_handle(
+        receiver->ptr, as_int(args[0]), &pointer, &fault);
+    if (diagnostic.raised || status != SPUTNIK_OK || pointer == nullptr) {
+      output.reset();
+      if (diagnostic.raised) return fail(diagnostic.name(), diagnostic.message());
+      return fail("NativeError", status == SPUTNIK_OK
+          ? "native leaf returned a null resource" : "native leaf call failed without a fault");
+    }
+    resource->ownership = sputnik::runtime::RuntimeForeignHandle::Ownership::Collected;
+    resource->ptr = pointer;
+    pointer = nullptr;
+    return result;
+  }
   if (!thunk.blocking || sputnik::runtime::current_runtime_is_blocking_ffi_thread()) {
     return sputnik_native_extension_invoke_inline(thunk.fn, method, args, self);
   }
@@ -25132,6 +25543,11 @@ static NativeValue sputnik_native_extension_invoke(
   const std::uint64_t sync_owner_id = sputnik::runtime::tls_runtime_sync_owner_id;
   const std::atomic<bool> *cancel_flag =
       sputnik::runtime::tls_runtime_task_cancel_flag;
+  const auto cancel_owner = sputnik::runtime::current_runtime_task_cancel_owner();
+  const auto run_cancellation = sputnik::runtime::current_runtime_run_cancellation();
+  const bool cleanup = sputnik::runtime::runtime_run_cancel_requested() &&
+      !sputnik::runtime::runtime_run_cancel_checkpoint_requested();
+  const auto annotation = sputnik::runtime::current_runtime_task_annotation();
   const std::shared_ptr<sputnik::runtime::RuntimeTaskContext> task_context =
       sputnik::runtime::tls_runtime_task_context;
   const void *scheduler_identity =
@@ -25146,12 +25562,16 @@ static NativeValue sputnik_native_extension_invoke(
       [completion, fn = thunk.fn, method,
        copied_args = std::move(copied_args),
        copied_self = std::move(copied_self), strand_id, task_id, sync_owner_id,
-       cancel_flag, task_context, scheduler_identity, stdout_writer,
+       cancel_flag, cancel_owner, run_cancellation, cleanup, annotation,
+       task_context, scheduler_identity, stdout_writer,
        stderr_writer]() mutable {
         sputnik::runtime::RuntimeStrandScope strand_scope(strand_id);
+        sputnik::runtime::RuntimeRunCancellationScope run_scope(run_cancellation);
+        sputnik::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
+        sputnik::runtime::RuntimeTaskAnnotationScope annotation_scope(annotation);
         sputnik::runtime::RuntimeTaskScope task_scope(
             task_id, cancel_flag, sync_owner_id, task_context,
-            scheduler_identity);
+            scheduler_identity, cancel_owner);
         sputnik::runtime::RuntimeOutputScope output_scope(stdout_writer,
                                                         stderr_writer);
         try {
@@ -25161,6 +25581,7 @@ static NativeValue sputnik_native_extension_invoke(
           completion->set_exception(std::current_exception());
         }
       });
+  NativeCycleSuspension suspension;
   return result.get();
 }
 
@@ -25301,6 +25722,9 @@ static NativeValue sputnik_native_extension_invoke(
   out << "  case NativeValue::Tag::Mutex: return \"<instance Mutex>\";\n";
   out << "  case NativeValue::Tag::ErrorNamespace: return "
          "\"<error namespace \" + native_error_namespace_path(value) + "
+         "\">\";\n";
+  out << "  case NativeValue::Tag::PackageModule: return \"<module \" + "
+         "native_string_text(NativeValue::string_ref(value.scalar_value)) + "
          "\">\";\n";
   out << "  case NativeValue::Tag::ErrorInstance: return \"<instance \" + "
          "std::string(native_error_registry.error_name("
@@ -25474,12 +25898,15 @@ static NativeValue sputnik_native_extension_invoke(
       out << "#if defined(__GNUC__)\n"
              "extern \"C\" __attribute__((weak, noinline)) "
              "const SputnikLeafDescriptor *" << symbol
-          << "_sputnik_leaf_v1(void) { return nullptr; }\n#endif\n";
+          << "_sputnik_leaf_v1(void) { return nullptr; }\n"
+             "extern \"C\" __attribute__((weak, noinline)) "
+             "const SputnikLeafDescriptor *" << symbol
+          << "_sputnik_leaf_v2(void) { return nullptr; }\n#endif\n";
     };
     const std::vector<std::string> direct_symbols =
         direct_native_symbols(module, native_extensions);
     const std::set<std::string> blocking_symbols =
-        manifest_blocking_native_logicals(native_extensions);
+        manifest_blocking_native_logicals(module, native_extensions);
     for (const sputnik::pkg::PackageNativeExtension &extension :
          native_extensions) {
       for (const sputnik::pkg::PackageNativeSymbol &symbol : extension.symbols) {
@@ -25494,6 +25921,8 @@ static NativeValue sputnik_native_extension_invoke(
     const auto emit_leaf_sidecar = [&](const std::string &symbol) {
       out << "#if defined(__GNUC__)\n"
              "  package.thunks.back().leaf = " << symbol
+          << "_sputnik_leaf_v2();\n"
+             "  if (package.thunks.back().leaf == nullptr) package.thunks.back().leaf = " << symbol
           << "_sputnik_leaf_v1();\n#endif\n";
     };
     for (const std::string &symbol : direct_symbols) {
@@ -27873,19 +28302,22 @@ void compile_and_load_native_extensions(
 
   sputnik::runtime::RuntimeNativePackageDescriptor package;
   const std::set<std::string> blocking_symbols =
-      manifest_blocking_native_logicals(extensions);
+      manifest_blocking_native_logicals(module, extensions);
   std::unordered_map<std::string, std::string> logical_to_symbol;
   std::set<std::string> registered_logicals;
   const auto leaf_sidecar = [&](const std::string &symbol) {
-    (void)::dlerror();
-    void *address = ::dlsym(handle, (symbol + "_sputnik_leaf_v1").c_str());
-    const char *error = ::dlerror();
-    if (error != nullptr || address == nullptr)
-      return static_cast<const SputnikLeafDescriptor *>(nullptr);
-    SputnikLeafDescriptorFn query = nullptr;
-    static_assert(sizeof(query) == sizeof(address));
-    std::memcpy(&query, &address, sizeof(query));
-    return query();
+    for (const char *suffix : {"_sputnik_leaf_v2", "_sputnik_leaf_v1"}) {
+      (void)::dlerror();
+      void *address = ::dlsym(handle, (symbol + suffix).c_str());
+      const char *error = ::dlerror();
+      if (error != nullptr || address == nullptr) continue;
+      SputnikLeafDescriptorFn query = nullptr;
+      static_assert(sizeof(query) == sizeof(address));
+      std::memcpy(&query, &address, sizeof(query));
+      const auto *leaf = query();
+      if (leaf != nullptr) return leaf;
+    }
+    return static_cast<const SputnikLeafDescriptor *>(nullptr);
   };
   for (const sputnik::pkg::PackageNativeExtension &extension : extensions) {
     for (const sputnik::pkg::PackageNativeSymbol &symbol : extension.symbols) {

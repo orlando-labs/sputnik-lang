@@ -590,10 +590,76 @@ void test_sputnik_ext_make_handle_unknown_tag() {
   const SputnikValue handle_v = sputnik_make_handle(cx, "missing.Tag", &resource);
   expect(host.faulted && host.fault_class == "TypeError",
          "an unknown tag records a TypeError");
+  expect(handle_v == nullptr,
+         "failed handle construction leaves ownership with the extension");
   expect(sputnik_is_null(cx, handle_v) == 1,
          "an unknown tag yields a null handle value");
 
   sputnik::runtime::sputnik_ext_ctx_close(cx);
+}
+
+void test_coallocated_foreign_handle_lifetime() {
+  int reclaims = 0;
+  std::shared_ptr<RuntimeForeignHandle> exported;
+  {
+    RuntimeForeignHandle *resource = nullptr;
+    Value value = Value::new_foreign_handle(resource);
+    resource->tag = "unit.Collected";
+    resource->ptr = &reclaims;
+    resource->ownership = RuntimeForeignHandle::Ownership::Collected;
+    resource->teardown = [](void *, void *pointer) {
+      ++*static_cast<int *>(pointer);
+    };
+    Value alias = value;
+    exported = alias.as_foreign_handle();
+    expect(exported.get() == resource,
+           "the foreign Value and exported alias share the same tombstone");
+    value = Value::null();
+    expect(reclaims == 0 && alias.as_foreign_handle()->live,
+           "a copied Value keeps the collected resource alive");
+  }
+  expect(reclaims == 0 && exported->live,
+         "an exported shared_ptr outlives the final foreign Value");
+  // Importing a bridge alias after the original box was released is valid.
+  Value imported = Value::foreign_handle(exported);
+  exported.reset();
+  expect(reclaims == 0, "a bridge import retains the collected resource");
+  imported = Value::null();
+  expect(reclaims == 1, "final bridge release reclaims the resource once");
+
+  {
+    RuntimeForeignHandle *resource = nullptr;
+    Value value = Value::new_foreign_handle(resource);
+    resource->ptr = &reclaims;
+    resource->ownership = RuntimeForeignHandle::Ownership::Collected;
+    resource->teardown = [](void *, void *pointer) {
+      ++*static_cast<int *>(pointer);
+    };
+    Value alias = value;
+    expect(resource->destroy() && !alias.as_foreign_handle()->destroy(),
+           "deterministic destruction tombstones every coallocated alias");
+  }
+  expect(reclaims == 2, "destroyed collected aliases never reclaim twice");
+
+  RecordingHost host;
+  NativeTagRegistry tags;
+  NativeTypeDescriptor descriptor;
+  descriptor.tag = "unit.ArenaCollected";
+  descriptor.ownership = RuntimeForeignHandle::Ownership::Collected;
+  descriptor.collected_reclaim = [](void *pointer) {
+    ++*static_cast<int *>(pointer);
+  };
+  tags.register_type(descriptor);
+  SputnikCtx *cx = sputnik::runtime::sputnik_ext_ctx_open(host, nullptr, tags);
+  const SputnikValue result = sputnik_make_handle(cx, descriptor.tag.c_str(), &reclaims);
+  expect(result != nullptr && !host.faulted,
+         "the ABI adopts a collected resource after publishing its result");
+  exported = sputnik::runtime::sputnik_ext_ctx_export(cx, result).as_foreign_handle();
+  sputnik::runtime::sputnik_ext_ctx_close(cx);
+  expect(reclaims == 2 && exported->ptr == &reclaims,
+         "closing the call arena preserves an exported result");
+  exported.reset();
+  expect(reclaims == 3, "final exported ABI result release reclaims once");
 }
 
 void test_sputnik_ext_fault_and_version() {
@@ -1024,7 +1090,7 @@ void test_typed_leaf_abi() {
   NativeTagRegistry tags;
   const SputnikLeafDescriptor leaf{SPUTNIK_LEAF_ABI_VERSION,
       sizeof(SputnikLeafDescriptor), SPUTNIK_LEAF_HANDLE_INT,
-      "unit.typed", &typed_test_leaf};
+      "unit.typed", {&typed_test_leaf}};
   auto handle = std::make_shared<RuntimeForeignHandle>();
   std::int64_t value = std::numeric_limits<std::int64_t>::max();
   handle->tag = "unit.typed";
@@ -1087,17 +1153,135 @@ void test_typed_leaf_abi() {
   catch (const std::invalid_argument &) { blocking_rejected = true; }
   expect(blocking_rejected && dispatch.native_package_leaf("unit.leaf") == nullptr,
          "blocking thunk cannot bypass scheduler through leaf ABI");
+  dispatch.register_native_package_code_binding(7, true, "unit.source", true);
+  blocking_rejected = false;
+  try { dispatch.register_native_package_thunk("unit.source", nullptr, false, &leaf); }
+  catch (const std::invalid_argument &) { blocking_rejected = true; }
+  expect(blocking_rejected && dispatch.native_package_leaf("unit.source") == nullptr,
+         "source blocking modifier rejects synchronous leaf registration");
+  dispatch.register_native_package_thunk("unit.existing", nullptr, false, &leaf);
+  blocking_rejected = false;
+  try { dispatch.register_native_package_code_binding(8, true, "unit.existing", true); }
+  catch (const std::invalid_argument &) { blocking_rejected = true; }
+  expect(blocking_rejected && dispatch.native_package_code_binding(8) == nullptr,
+         "source blocking modifier cannot replace an existing leaf binding");
+}
+
+int resource_leaf_calls = 0;
+int resource_leaf_reclaims = 0;
+int resource_leaf_failure = 0;
+RecordingHost *resource_leaf_host = nullptr;
+
+void resource_leaf_reclaim(void *pointer) {
+  ++resource_leaf_reclaims;
+  delete static_cast<std::int64_t *>(pointer);
+}
+
+SputnikStatus resource_test_leaf(const void *, std::int64_t arg, void **out,
+                                 const SputnikLeafFault *fault) {
+  ++resource_leaf_calls;
+  if (resource_leaf_failure == 3) return SPUTNIK_OK;
+  *out = new std::int64_t(arg);
+  if (resource_leaf_failure == 1) {
+    (void)sputnik_leaf_fault(fault, "ValueError", "resource leaf failure");
+    expect(!resource_leaf_host->faulted,
+           "resource leaf diagnostics wait until the kernel has returned");
+    return SPUTNIK_OK; // An output plus a reported fault must still be reclaimed.
+  }
+  return resource_leaf_failure == 2 ? SPUTNIK_ERR : SPUTNIK_OK;
+}
+
+void test_typed_resource_leaf_abi() {
+  struct LegacyDescriptor {
+    std::uint32_t abi_version, struct_size;
+    SputnikLeafSignature signature;
+    const char *receiver_tag;
+    SputnikLeafHandleIntFn handle_int;
+  };
+  static_assert(sizeof(LegacyDescriptor) == sizeof(SputnikLeafDescriptor));
+  static_assert(offsetof(LegacyDescriptor, handle_int) ==
+                offsetof(SputnikLeafDescriptor, handle_int));
+  SputnikLeafDescriptor leaf{};
+  leaf.abi_version = SPUTNIK_LEAF_ABI_VERSION_2;
+  leaf.struct_size = sizeof(leaf);
+  leaf.signature = SPUTNIK_LEAF_HANDLE_INT_HANDLE;
+  leaf.receiver_tag = "unit.resource";
+  leaf.handle_int_handle = &resource_test_leaf;
+  sputnik::runtime::validate_native_leaf_descriptor(&leaf, false);
+  RecordingHost host;
+  resource_leaf_host = &host;
+  resource_leaf_calls = resource_leaf_reclaims = resource_leaf_failure = 0;
+  NativeTagRegistry tags;
+  NativeTypeDescriptor type;
+  type.tag = leaf.receiver_tag;
+  type.ownership = RuntimeForeignHandle::Ownership::Collected;
+  type.collected_reclaim = &resource_leaf_reclaim;
+  tags.register_type(type);
+  auto receiver = std::make_shared<RuntimeForeignHandle>();
+  receiver->tag = leaf.receiver_tag;
+  std::int64_t source = 7;
+  receiver->ptr = &source; // Borrowed input, independently owned output.
+  const Value self = Value::foreign_handle(receiver);
+  const auto invoke = [&](const std::vector<Value> &args) {
+    host.faulted = false;
+    return sputnik::runtime::sputnik_ext_invoke_method(
+        host, nullptr, tags, &typed_test_opaque, self, args, &leaf);
+  };
+  for (auto arg : {std::numeric_limits<std::int64_t>::min(),
+                   std::numeric_limits<std::int64_t>::max()}) {
+    auto result = invoke({Value::integer(arg)});
+    expect(result.ok && result.value.is_foreign_handle() &&
+           *static_cast<std::int64_t *>(result.value.as_foreign_handle()->ptr) == arg,
+           "typed arguments and collected results preserve full-width Int");
+    Value alias = result.value;
+    result.value = Value::null();
+    expect(alias.as_foreign_handle()->live, "typed resource aliases retain the result");
+  }
+  expect(resource_leaf_reclaims == 2, "typed resources reclaim on final Value release");
+  for (int failure = 1; failure <= 3; ++failure) {
+    resource_leaf_failure = failure;
+    const int before = resource_leaf_reclaims;
+    expect(!invoke({Value::integer(42)}).ok && host.faulted,
+           "typed resource errors cannot publish a result");
+    expect(resource_leaf_reclaims == before + (failure == 3 ? 0 : 1),
+           "an unadopted output is reclaimed before propagating its fault");
+    expect(host.fault_class == (failure == 1 ? "ValueError" : "NativeError"),
+           "resource faults preserve diagnostics and reject missing outputs");
+  }
+  resource_leaf_failure = 0;
+  const int calls = resource_leaf_calls;
+  expect(invoke({}).ok && invoke({Value::boolean(true)}).ok &&
+         resource_leaf_calls == calls,
+         "incompatible resource-leaf call shapes use the ordinary ABI");
+  receiver->tag = "wrong.tag";
+  expect(!invoke({Value::integer(1)}).ok && host.fault_class == "TypeError" &&
+         resource_leaf_calls == calls, "resource tag mismatch stops before the leaf");
+  receiver->tag = leaf.receiver_tag;
+  receiver->live = false;
+  expect(!invoke({Value::integer(1)}).ok && host.fault_class == "LifetimeError" &&
+         resource_leaf_calls == calls, "a destroyed resource receiver cannot enter the leaf");
+  receiver->live = true;
+  type.ownership = RuntimeForeignHandle::Ownership::Borrowed;
+  tags.register_type(type);
+  expect(!invoke({Value::integer(1)}).ok && host.fault_class == "TypeError" &&
+         resource_leaf_calls == calls, "resource leaves require collected ownership");
+  bool rejected = false;
+  try { sputnik::runtime::validate_native_leaf_descriptor(&leaf, true); }
+  catch (const std::invalid_argument &) { rejected = true; }
+  expect(rejected, "resource leaves cannot bypass blocking dispatch");
 }
 
 } // namespace
 
 int main() {
   test_typed_leaf_abi();
+  test_typed_resource_leaf_abi();
   test_call_arena_value_lifetime();
   test_sputnik_ext_scalar_round_trip();
   test_sputnik_ext_str_and_bytes_round_trip();
   test_sputnik_ext_handle_lifecycle();
   test_sputnik_ext_make_handle_unknown_tag();
+  test_coallocated_foreign_handle_lifetime();
   test_sputnik_ext_fault_and_version();
   test_native_extension_type_import();
   test_native_extension_thunk_import();

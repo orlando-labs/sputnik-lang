@@ -583,6 +583,8 @@ private:
   local_slot_for_reference(const std::string &name) const;
   std::optional<std::pair<std::uint32_t, std::uint32_t>>
   binding_commit_range(const ast::Expr &match_program) const;
+  void emit_pattern_binding(std::uint32_t slot, std::uint32_t value,
+                            const lexer::Span &span);
   void add_fail_patch(std::vector<PatchRef> *fail_patches,
                       std::size_t instruction_index, std::size_t operand_index);
   void patch_fail_patches(const std::vector<PatchRef> &fail_patches,
@@ -605,6 +607,7 @@ private:
   const ast::Expr *body_override_ = nullptr;
   BcCode code_;
   std::uint32_t next_temp_ = 0;
+  std::unordered_map<std::uint32_t, std::uint32_t> pattern_assignment_slots_;
   bool preserve_last_result_ = false;
   std::optional<std::uint32_t> last_value_reg_;
   std::vector<LoopContext> loops_;
@@ -850,6 +853,11 @@ public:
       const std::string value =
           (record.is_method ? "M:" : "F:") + record.logical;
       module_.attrs.push_back({intern_string(key), intern_string(value)});
+      if (record.blocking) {
+        module_.attrs.push_back({
+            intern_string("sputnik.native.blocking:" + std::to_string(record.code_id)),
+            intern_string(record.logical)});
+      }
     }
     // Foreign-handle method dispatch table: key `sputnik.native.method:<tag>\t
     // <selector>`, value `<logical>`. The tab separates tag (dotted, no tabs)
@@ -1685,7 +1693,7 @@ private:
           owner_class.has_value() && string_field(item, "name") == "init";
       native_bindings_.push_back({method.entry_code_id,
                                   owner_class.has_value() && !is_constructor,
-                                  native_binding});
+                                  native_binding, bool_field(item, "native_blocking")});
     }
     return method;
   }
@@ -1769,6 +1777,7 @@ private:
     std::uint32_t code_id = 0;
     bool is_method = false;
     std::string logical;
+    bool blocking = false;
   };
   std::vector<NativeBindingRecord> native_bindings_;
 
@@ -3199,6 +3208,14 @@ void CodeEmitter::emit_fail_jump(std::vector<PatchRef> *fail_patches,
   add_fail_patch(fail_patches, jump, 0);
 }
 
+void CodeEmitter::emit_pattern_binding(std::uint32_t slot, std::uint32_t value,
+                                       const lexer::Span &span) {
+  const auto staged = pattern_assignment_slots_.find(slot);
+  emit_instruction(Opcode::PBind,
+                   {{staged == pattern_assignment_slots_.end() ? slot : staged->second, false},
+                    {value, false}}, span);
+}
+
 void CodeEmitter::compile_pattern_node(const ast::Expr &node,
                                        std::uint32_t value_reg,
                                        std::vector<PatchRef> *fail_patches) {
@@ -3213,8 +3230,7 @@ void CodeEmitter::compile_pattern_node(const ast::Expr &node,
       emit_fail_jump(fail_patches, node.span);
       return;
     }
-    emit_instruction(Opcode::PBind, {{*slot, false}, {value_reg, false}},
-                     node.span);
+    emit_pattern_binding(*slot, value_reg, node.span);
     return;
   }
   if (node.kind == "PPin") {
@@ -3326,8 +3342,7 @@ void CodeEmitter::compile_pattern_node(const ast::Expr &node,
       emit_fail_jump(fail_patches, node.span);
       return;
     }
-    emit_instruction(Opcode::PBind, {{*slot, false}, {value_reg, false}},
-                     node.span);
+    emit_pattern_binding(*slot, value_reg, node.span);
     return;
   }
   if (node.kind == "POr") {
@@ -3401,8 +3416,7 @@ void CodeEmitter::compile_pattern_node(const ast::Expr &node,
         diag(node.span, "BC2001", "sequence rest binding slot is missing");
         emit_fail_jump(fail_patches, node.span);
       } else {
-        emit_instruction(Opcode::PBind, {{*slot, false}, {seq_reg, false}},
-                         node.span);
+        emit_pattern_binding(*slot, seq_reg, node.span);
       }
     }
     return;
@@ -3450,8 +3464,7 @@ void CodeEmitter::compile_pattern_node(const ast::Expr &node,
         diag(node.span, "BC2001", "map rest binding slot is missing");
         emit_fail_jump(fail_patches, node.span);
       } else {
-        emit_instruction(Opcode::PBind, {{*slot, false}, {map_reg, false}},
-                         node.span);
+        emit_pattern_binding(*slot, map_reg, node.span);
       }
     }
     return;
@@ -4604,17 +4617,49 @@ std::uint32_t CodeEmitter::compile_pattern_assign(const ast::Expr &expr) {
     return alloc_temp();
   }
 
-  const std::uint32_t rhs_reg = compile_expr(*value);
+  std::uint32_t rhs_reg = compile_expr(*value);
+  if (const auto *bindings = list_field(*match_program, "binding_order")) {
+    for (const auto &binding : bindings->values) {
+      const auto slot = local_slot_for_binding(string_field(*binding, "name"), binding->span);
+      if (slot.has_value() && *slot == rhs_reg) {
+        const auto saved = alloc_temp();
+        emit_instruction(Opcode::Move, {{saved, false}, {rhs_reg, false}}, expr.span);
+        rhs_reg = saved;
+        break;
+      }
+    }
+  }
+  auto outer_slots = std::move(pattern_assignment_slots_);
+  pattern_assignment_slots_.clear();
+  const auto commit = binding_commit_range(*match_program);
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> staged_slots;
+  if (!commit.has_value()) {
+    if (const auto *bindings = list_field(*match_program, "binding_order")) {
+      // P_COMMIT is contiguous. Stage scattered destinations together, then
+      // copy them to locals only after the entire pattern has succeeded.
+      for (const auto &binding : bindings->values) {
+        const auto slot = local_slot_for_binding(string_field(*binding, "name"), binding->span);
+        if (!slot.has_value()) {
+          diag(binding->span, "BC2001", "pattern assignment binding slot is missing");
+        } else if (pattern_assignment_slots_.find(*slot) == pattern_assignment_slots_.end()) {
+          const auto temporary = alloc_temp();
+          pattern_assignment_slots_.emplace(*slot, temporary);
+          staged_slots.emplace_back(*slot, temporary);
+        }
+      }
+    }
+  }
   std::vector<PatchRef> fail_patches;
   compile_pattern_node(*root, rhs_reg, &fail_patches);
+  pattern_assignment_slots_ = std::move(outer_slots);
   if (bool_field(*match_program, "requires_commit")) {
-    const std::optional<std::pair<std::uint32_t, std::uint32_t>> commit =
-        binding_commit_range(*match_program);
-    if (!commit.has_value()) {
-      diag(expr.span, "BC2001",
-           "pattern assignment bindings are not representable as one commit "
-           "range");
-    } else if (commit->second != 0U) {
+    if (!staged_slots.empty()) {
+      emit_instruction(Opcode::PCommit,
+                       {{staged_slots.front().second, false},
+                        {static_cast<std::int64_t>(staged_slots.size()), false}}, expr.span);
+      for (const auto &[destination, temporary] : staged_slots)
+        emit_instruction(Opcode::Move, {{destination, false}, {temporary, false}}, expr.span);
+    } else if (commit.has_value() && commit->second != 0U) {
       emit_instruction(Opcode::PCommit,
                        {{commit->first, false}, {commit->second, false}},
                        expr.span);

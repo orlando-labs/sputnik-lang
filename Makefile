@@ -36,6 +36,7 @@ $(BUILD_DIR)/obj/%.o: %.cpp
 $(LIBRARY): $(LIB_OBJS)
 	$(AR) rcs $@ $^
 -include $(LIB_OBJS:.o=.d) $(wildcard $(BUILD_DIR)/obj/tools/*/*.d) $(wildcard $(BUILD_DIR)/obj/tests/*.d)
+include mk/isputnik.mk
 LEXER_TEST_SRCS := tests/lexer_tests.cpp $(LEXER_SRCS)
 PARSER_TEST_SRCS := tests/parser_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS)
 BINDER_TEST_SRCS := tests/binder_tests.cpp $(PROFILE_SRCS) $(FRONTEND_SRCS)
@@ -234,7 +235,7 @@ FORMAT_FILES := \
 
 all: build
 
-build: $(BUILD_DIR)/sputnik
+build: $(BUILD_DIR)/sputnik $(BUILD_DIR)/isputnik
 
 .PHONY: build-tests runtime
 build-tests: build $(BUILD_DIR)/sputniktest $(BUILD_DIR)/system_tests $(BUILD_DIR)/stdlib_system_tests $(BUILD_DIR)/lexer_tests $(BUILD_DIR)/parser_tests $(BUILD_DIR)/binder_tests $(BUILD_DIR)/checker_tests $(BUILD_DIR)/wasm_accel_tests $(BUILD_DIR)/modern_profile_tests $(BUILD_DIR)/build_tests $(BUILD_DIR)/hir_tests $(BUILD_DIR)/mir_tests $(BUILD_DIR)/native_tests $(BUILD_DIR)/frozen_image_tests $(BUILD_DIR)/bytecode_tests $(BUILD_DIR)/emitter_tests $(BUILD_DIR)/vm_tests $(BUILD_DIR)/stdlib_collections_tests $(BUILD_DIR)/stdlib_task_tests $(BUILD_DIR)/stdlib_registry_tests $(BUILD_DIR)/stdlib_json_tests $(BUILD_DIR)/stdlib_codecs_tests $(BUILD_DIR)/stdlib_digest_tests $(BUILD_DIR)/stdlib_signature_tests $(BUILD_DIR)/stdlib_benchmark_tests $(BUILD_DIR)/stdlib_secure_random_tests $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests $(BUILD_DIR)/stdlib_regexp_tests $(BUILD_DIR)/stdlib_uuid_tests $(BUILD_DIR)/stdlib_time_tests $(BUILD_DIR)/stdlib_url_tests $(BUILD_DIR)/stdlib_yaml_tests $(BUILD_DIR)/sputnik_ext_tests $(BUILD_DIR)/io_tests $(BUILD_DIR)/http_codec_tests $(BUILD_DIR)/net_http_tests $(BUILD_DIR)/net_http_tcp_tests $(BUILD_DIR)/module_loader_tests $(BUILD_DIR)/package_tests $(BUILD_DIR)/graph_linker_tests
@@ -597,6 +598,10 @@ test: build-tests
 	$(BUILD_DIR)/sputnik build corpus/run/native_pattern_triple_eq/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-pattern-triple-eq > $(BUILD_DIR)/native-pattern-triple-eq-build.json
 	$(BUILD_DIR)/native-pattern-triple-eq > $(BUILD_DIR)/native-pattern-triple-eq.out
 	grep -q '^21$$' $(BUILD_DIR)/native-pattern-triple-eq.out
+	$(BUILD_DIR)/sputnik build corpus/run/native_scattered_pattern_assign/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-scattered-pattern-assign > $(BUILD_DIR)/native-scattered-pattern-assign-build.json
+	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-scattered-pattern-assign-build.json
+	$(BUILD_DIR)/native-scattered-pattern-assign > $(BUILD_DIR)/native-scattered-pattern-assign.out
+	grep -q '^42$$' $(BUILD_DIR)/native-scattered-pattern-assign.out
 	$(BUILD_DIR)/sputnik build corpus/run/native_user_exception_state/source.s --entry main --require-full-native -o $(BUILD_DIR)/native-user-exception-state > $(BUILD_DIR)/native-user-exception-state-build.json
 	$(BUILD_DIR)/native-user-exception-state > $(BUILD_DIR)/native-user-exception-state.out
 	grep -q '^21$$' $(BUILD_DIR)/native-user-exception-state.out
@@ -688,6 +693,7 @@ test: build-tests
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_vm_fallback_code_count"] == 0, result' $(BUILD_DIR)/native-graph-pure-build.json
 	$(BUILD_DIR)/native_graph_pure/out/nat.graph.main > $(BUILD_DIR)/native-graph-pure.out
 	grep -q '^42$$' $(BUILD_DIR)/native-graph-pure.out
+	$(MAKE) test-module-aliases
 	$(MAKE) test-object-lifecycle
 	rm -rf $(BUILD_DIR)/native_implicit_self_cli
 	$(BUILD_DIR)/sputnik build tests/fixtures/native_implicit_self_cli/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_implicit_self_cli/out --cache-dir $(BUILD_DIR)/native_implicit_self_cli/cache > $(BUILD_DIR)/native-implicit-self-cli-build.json
@@ -739,7 +745,57 @@ test-bool-parse: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR
 	grep -q 'ArgParser.InvalidValue' $(BUILD_DIR)/bool-parse-invalid-flag.out
 
 .PHONY: test-native-language-idioms
-test: test-native-language-idioms test-native-call-buffers test-native-dispatch-cache
+test: test-native-language-idioms test-native-call-buffers test-native-dispatch-cache test-native-trivial-methods
+test: test-native-blocking
+
+.PHONY: test-native-blocking
+$(BUILD_DIR)/blocking_ffi_tests: $(BUILD_DIR)/obj/tests/blocking_ffi_tests.o $(LIBRARY) | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
+
+test-native-blocking: $(BUILD_DIR)/sputnik $(BUILD_DIR)/blocking_ffi_tests check-native-blocking-progress
+	$(BUILD_DIR)/blocking_ffi_tests
+	mkdir -p $(BUILD_DIR)/native_blocking
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/sputnik.build.json --grant ffi > $(BUILD_DIR)/native_blocking/vm.out
+	grep -q '^PASS source blocking native dispatch$$' $(BUILD_DIR)/native_blocking/vm.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/vm_control.build.json --grant ffi > $(BUILD_DIR)/native_blocking/vm-control.out
+	grep -q '^PASS blocking callback throw$$' $(BUILD_DIR)/native_blocking/vm-control.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_blocking/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_blocking/native > $(BUILD_DIR)/native_blocking/build.json
+	$(BUILD_DIR)/native_blocking/native/test.blocking > $(BUILD_DIR)/native_blocking/native.out
+	grep -q '^PASS source blocking native dispatch$$' $(BUILD_DIR)/native_blocking/native.out
+
+# Exercise waits with no spare scheduler workers, including a producer that
+# needs to enter FFI while the original idle pool is fully occupied.
+.PHONY: check-native-blocking-progress
+check-native-blocking-progress: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/native_blocking/progress
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case native > $(BUILD_DIR)/native_blocking/progress/vm-native.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case callback > $(BUILD_DIR)/native_blocking/progress/vm-callback.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case ffi-producer > $(BUILD_DIR)/native_blocking/progress/vm-ffi-producer.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_blocking/progress.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_blocking/progress > $(BUILD_DIR)/native_blocking/progress/build.json
+	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case native
+	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case callback
+	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case ffi-producer
+
+.PHONY: test-native-trivial-methods
+test-native-trivial-methods: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/native_trivial_methods
+	$(BUILD_DIR)/sputnik tests/fixtures/native_trivial_methods/main.s > $(BUILD_DIR)/native_trivial_methods/vm.out
+	grep -q '^PASS trivial methods and forwarding$$' $(BUILD_DIR)/native_trivial_methods/vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_trivial_methods/main.s --entry init --require-full-native -o $(BUILD_DIR)/native_trivial_methods/native > $(BUILD_DIR)/native_trivial_methods/build.json
+	$(BUILD_DIR)/native_trivial_methods/native > $(BUILD_DIR)/native_trivial_methods/native.out
+	grep -q '^PASS trivial methods and forwarding$$' $(BUILD_DIR)/native_trivial_methods/native.out
+	! $(BUILD_DIR)/sputnik tests/fixtures/native_trivial_methods/invalid_property.s > $(BUILD_DIR)/native_trivial_methods/property-vm.out 2>&1
+	grep -q 'TypeError' $(BUILD_DIR)/native_trivial_methods/property-vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_trivial_methods/invalid_property.s --entry init --require-full-native -o $(BUILD_DIR)/native_trivial_methods/property > $(BUILD_DIR)/native_trivial_methods/property-build.json
+	! $(BUILD_DIR)/native_trivial_methods/property > $(BUILD_DIR)/native_trivial_methods/property-native.out 2>&1
+	grep -q 'TypeError' $(BUILD_DIR)/native_trivial_methods/property-native.out
+	cmp $(BUILD_DIR)/native_trivial_methods/property-vm.out $(BUILD_DIR)/native_trivial_methods/property-native.out
+	! $(BUILD_DIR)/sputnik tests/fixtures/native_trivial_methods/invalid_forward.s > $(BUILD_DIR)/native_trivial_methods/forward-vm.out 2>&1
+	grep -q 'NoMethodError' $(BUILD_DIR)/native_trivial_methods/forward-vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_trivial_methods/invalid_forward.s --entry init --require-full-native -o $(BUILD_DIR)/native_trivial_methods/forward > $(BUILD_DIR)/native_trivial_methods/forward-build.json
+	! $(BUILD_DIR)/native_trivial_methods/forward > $(BUILD_DIR)/native_trivial_methods/forward-native.out 2>&1
+	grep -q 'NoMethodError' $(BUILD_DIR)/native_trivial_methods/forward-native.out
+	cmp $(BUILD_DIR)/native_trivial_methods/forward-vm.out $(BUILD_DIR)/native_trivial_methods/forward-native.out
 
 .PHONY: test-native-dispatch-cache
 test-native-dispatch-cache: $(BUILD_DIR)/sputnik
@@ -821,3 +877,12 @@ test-http-tls: $(BUILD_DIR)/sputnik $(BUILD_DIR)/vm_net_http_tests $(BUILD_DIR)/
 
 # The TLS resource state and canonical error list affect runtime ABI/dispatch.
 $(BUILD_DIR)/sputnik $(BUILD_DIR)/vm_net_http_tests: runtime/tls.h runtime/net_http_client.h spec/registries/runtime_errors.def
+
+.PHONY: test-module-aliases
+test-module-aliases: $(BUILD_DIR)/sputnik $(BUILD_DIR)/graph_linker_tests
+	$(BUILD_DIR)/graph_linker_tests
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_module_aliases/sputnik.build.json > $(BUILD_DIR)/module-aliases-vm.out
+	grep -q '^42$$' $(BUILD_DIR)/module-aliases-vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_module_aliases/sputnik.build.json --target native --out-dir $(BUILD_DIR)/native-module-aliases --require-full-native > $(BUILD_DIR)/module-aliases-build.json
+	$(BUILD_DIR)/native-module-aliases/alias.main > $(BUILD_DIR)/module-aliases-native.out
+	cmp $(BUILD_DIR)/module-aliases-vm.out $(BUILD_DIR)/module-aliases-native.out

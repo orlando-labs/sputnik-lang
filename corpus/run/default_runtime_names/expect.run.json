@@ -1,0 +1,6 @@
+{
+  "schema": "sputnik.run.v1",
+  "entry": "probe",
+  "status": "ok",
+  "value": "true"
+}

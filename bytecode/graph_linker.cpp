@@ -345,6 +345,33 @@ private:
     return found == state.code_ids.end() ? 0U : found->second;
   }
 
+  std::uint32_t function_binding_code(GraphModuleState &state,
+                                      const BcMethod &method) const {
+    // Multi-clause METH entries describe dispatch; the module closure uses
+    // the flattened callable body emitted in CODE.
+    if (!method.clause_table.empty() &&
+        state.input->module.init.has_entry_code_id) {
+      const std::string name = bc_symbol_or_empty(
+          state.input->module, method.selector_sym_id);
+      for (const auto &code : state.input->module.code_objects) {
+        if (code.code_id != state.input->module.init.entry_code_id) continue;
+        for (const auto &local : code.local_layout) {
+          if (bc_string_or_empty(state.input->module, local.name_str_id) != name)
+            continue;
+          for (const auto &instruction : code.instructions) {
+            if (instruction.opcode == Opcode::MakeClosure &&
+                instruction.operands.size() >= 2U &&
+                instruction.operands[0].value == local.slot) {
+              return map_code(state, static_cast<std::uint32_t>(
+                  instruction.operands[1].value));
+            }
+          }
+        }
+      }
+    }
+    return map_code(state, method.entry_code_id);
+  }
+
   std::string qualify_import_path(const std::string &path) const {
     std::string best_module;
     std::string best_export;
@@ -751,12 +778,6 @@ private:
                            {{slot, false}, {const_id, false}}});
           continue;
         }
-        if (!dep_state->second.input->stdlib) {
-          throw std::runtime_error(
-              "whole-graph native does not support non-stdlib module import "
-              "aliases in executable package objects: " +
-              key.substr(prefix.size()));
-        }
         const std::uint32_t const_id = intern_path_constant(fields[1]);
         seeds.push_back({Opcode::LookupConst,
                          {{slot, false}, {const_id, false}}});
@@ -1106,6 +1127,14 @@ private:
         entry.target_name_str_id = map_string(state, entry.target_name_str_id);
       }
       method.entry_code_id = map_code(state, method.entry_code_id);
+      if ((method.flags & (kMethodFlagInstance | kMethodFlagClass |
+                           kMethodFlagPropertyGetter |
+                           kMethodFlagPropertySetter)) == 0U) {
+        add_module_attr(&out_, "sputnik.merged.function:" + state.input->name +
+                                  "." + bc_symbol_or_empty(
+                                      state.input->module, source.selector_sym_id),
+                        "method\t" + std::to_string(function_binding_code(state, source)));
+      }
       out_.methods.push_back(std::move(method));
     }
 
@@ -1140,6 +1169,11 @@ private:
       PatternProgramEntry entry = source;
       entry.pattern_id = pattern_index(state, source.pattern_id);
       out_.pattern_programs.push_back(entry);
+    }
+
+    if (!state.input->stdlib) {
+      add_module_attr(&out_, "sputnik.merged.module:" + state.input->name,
+                      state.input->name);
     }
 
     for (const ExportEntry &source :
@@ -1193,7 +1227,7 @@ private:
         const BcMethod &method =
             state.input->module.methods[source.target_index];
         ref.method_index = entry.target_index;
-        ref.code_id = map_code(state, method.entry_code_id);
+        ref.code_id = function_binding_code(state, method);
         ref.qualified_path =
             state.input->name + "." +
             bc_symbol_or_empty(state.input->module, method.selector_sym_id);
@@ -1281,13 +1315,14 @@ private:
         continue;
       }
       std::string key = raw_key;
-      if (raw_key.rfind("sputnik.native.bind:", 0) == 0) {
+      if (raw_key.rfind("sputnik.native.bind:", 0) == 0 ||
+          raw_key.rfind("sputnik.native.blocking:", 0) == 0) {
+        const std::string prefix = raw_key.substr(0, raw_key.find_last_of(':') + 1U);
         std::uint32_t old_code = 0;
         if (parse_u32_text(
-                raw_key.substr(std::string("sputnik.native.bind:").size()),
+                raw_key.substr(prefix.size()),
                 &old_code)) {
-          key =
-              "sputnik.native.bind:" + std::to_string(map_code(state, old_code));
+          key = prefix + std::to_string(map_code(state, old_code));
         }
       }
       out_.attrs.push_back({intern_string(key), intern_string(raw_value)});

@@ -1,6 +1,14 @@
 .DEFAULT_GOAL := all
 include mk/config.mk
 
+test: test-run-cancellation-checkpoint
+.PHONY: test-run-cancellation-checkpoint
+test-run-cancellation-checkpoint: $(BUILD_DIR)/run_cancellation_checkpoint_tests
+	$(BUILD_DIR)/run_cancellation_checkpoint_tests
+
+$(BUILD_DIR)/run_cancellation_checkpoint_tests: $(BUILD_DIR)/obj/tests/run_cancellation_checkpoint_tests.o $(BUILD_DIR)/libsputnik.a | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) -pthread -o $@
+
 LEXER_SRCS := frontend/lexer/lexer.cpp frontend/lexer/token.cpp
 AST_SRCS := frontend/ast/expr.cpp
 PARSER_SRCS := frontend/parser/parser.cpp
@@ -564,6 +572,8 @@ test: build-tests
 	$(BUILD_DIR)/native-http-server-core/native.http_server_core > $(BUILD_DIR)/native-http-server-core.out
 	grep -q '^7$$' $(BUILD_DIR)/native-http-server-core.out
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-lifetime
+	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-checkpoint-loop tests/fixtures/native_cycle_checkpoint_loop/main.s
+	python3 tests/native_scalar_safepoint_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-scalar-safepoint
 	python3 tests/conditional_chain_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/conditional-chain
 	$(BUILD_DIR)/sputnik build tests/fixtures/native_fs_path_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-fs-path-core > $(BUILD_DIR)/native-fs-path-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-fs-path-core-build.json

@@ -4585,6 +4585,72 @@ struct NativeRegisterAllocation {
   std::uint32_t slot_count = 0;
 };
 
+// No calls, heap writes, captures, handlers or unknown scalar reads. Errors in
+// these checked operations unwind out of the body rather than resume a loop.
+// After an entry checkpoint, an empty-argument invocation cannot accrue any
+// cycle debt. Other invocations keep their ordinary back-edge checkpoints.
+bool native_cpp_allocation_free_scalar_body(
+    const sputnik::bytecode::BcModule &module,
+    const sputnik::bytecode::BcCode &code, const NativeScalarFlow &flow) {
+  using sputnik::bytecode::Opcode;
+  if (!code.capture_layout.empty() || !code.handler_table.empty() ||
+      (code.flags & sputnik::bytecode::kCodeFlagRestParam) != 0U ||
+      flow.at_pc.size() != code.instructions.size()) return false;
+  bool has_checkpoint = false;
+  for (std::size_t pc = 0; pc < code.instructions.size(); ++pc) {
+    const auto &insn = code.instructions[pc];
+    const auto scalar_operand = [&](std::size_t index, bool integer_only = false) {
+      std::uint32_t reg = 0;
+      if (!operand_u32_value(insn, index, &reg) || reg >= flow.at_pc[pc].size()) return false;
+      const auto kind = flow.at_pc[pc][reg];
+      return kind == NativeScalarKind::Integer || (!integer_only && kind == NativeScalarKind::Bool);
+    };
+    bool constant_rhs = false;
+    switch (insn.opcode) {
+    case Opcode::Safepoint: has_checkpoint = true; continue;
+    case Opcode::Jump: continue;
+    // The emitter already treats this as a no-op without capture cells.
+    case Opcode::CloseUpvalues: continue;
+    case Opcode::JumpIfTrue:
+    case Opcode::JumpIfFalse:
+    case Opcode::Return:
+      if (!scalar_operand(0)) return false;
+      continue;
+    case Opcode::Move:
+      if (!scalar_operand(1)) return false;
+      break;
+    case Opcode::LoadK: {
+      std::uint32_t index = 0;
+      if (!operand_u32_value(insn, 1, &index) || index >= module.const_pool.size() ||
+          module.const_pool[index].kind != sputnik::bytecode::ConstantKind::Integer) return false;
+      break;
+    }
+    case Opcode::LoadBool: break;
+    case Opcode::IAddK: case Opcode::ISubK: case Opcode::IMulK:
+    case Opcode::ILtK: case Opcode::IGtK: case Opcode::ILeK: case Opcode::IGeK:
+    case Opcode::IEqK: case Opcode::INeK: case Opcode::ICmpK:
+      constant_rhs = true;
+      [[fallthrough]];
+    case Opcode::IAdd: case Opcode::ISub: case Opcode::IMul:
+    case Opcode::ILt: case Opcode::IGt: case Opcode::ILe: case Opcode::IGe:
+    case Opcode::IEq: case Opcode::INe: case Opcode::ICmp:
+      if (!scalar_operand(1, true)) return false;
+      if (constant_rhs) {
+        std::uint32_t index = 0;
+        if (!operand_u32_value(insn, 2, &index) || index >= module.const_pool.size() ||
+            module.const_pool[index].kind != sputnik::bytecode::ConstantKind::Integer) return false;
+      } else if (!scalar_operand(2, true)) return false;
+      break;
+    default: return false;
+    }
+    const auto dst = native_cpp_defined_register(insn);
+    if (!dst || *dst >= flow.after_pc[pc].size()) return false;
+    const auto kind = flow.after_pc[pc][*dst];
+    if (kind != NativeScalarKind::Integer && kind != NativeScalarKind::Bool) return false;
+  }
+  return has_checkpoint;
+}
+
 NativeRegisterAllocation native_cpp_compact_register_allocation(
     const sputnik::bytecode::BcModule &module,
     const sputnik::bytecode::BcCode &code,
@@ -4742,6 +4808,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
   const NativeScalarFlow scalar_flow =
       uses_scalar_lanes ? native_cpp_scalar_registers(module, code)
                         : NativeScalarFlow{};
+  const bool allocation_free_scalar_body = uses_scalar_lanes &&
+      native_cpp_allocation_free_scalar_body(module, code, scalar_flow);
   const std::vector<std::vector<bool>> live_registers_at_pc =
       uses_scalar_lanes ? native_cpp_live_registers_at_pc(code)
                         : std::vector<std::vector<bool>>{};
@@ -5050,6 +5118,11 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
     emit_outer_catches();
     out << "}\n\n";
     return out.str();
+  }
+  if (allocation_free_scalar_body) {
+    out << "  // Proven scalar leaf: flush existing debt once; no debt accrues inside.\n"
+           "  const bool scalar_leaf_cycle_polls = !args.empty();\n"
+           "  native_cycle_checkpoint_if_due();\n";
   }
   const auto materialize_changed_scalars =
       [&](const std::vector<NativeScalarKind> &from,
@@ -7664,7 +7737,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       // Allocation-heavy while/until loops can outlive the outer task scope.
       // The cheap local threshold check publishes and collects pending cycles
       // only when due; treating this opcode as a no-op retained the whole loop.
-      out << "  native_cycle_checkpoint_if_due();\n";
+      out << (allocation_free_scalar_body ? "  if (scalar_leaf_cycle_polls) " : "  ")
+          << "native_cycle_checkpoint_if_due();\n";
       emit_next(pc, next_scalar_state);
       break;
     case Opcode::CloseUpvalues:

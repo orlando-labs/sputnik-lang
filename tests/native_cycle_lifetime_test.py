@@ -47,7 +47,8 @@ def main() -> int:
         work = (root / work).resolve()
     work.mkdir(parents=True, exist_ok=True)
 
-    source = root / "tests/fixtures/native_cycle_lifetime_core/main.s"
+    source = Path(sys.argv[3]) if len(sys.argv) > 3 else root / "tests/fixtures/native_cycle_lifetime_core/main.s"
+    if not source.is_absolute(): source = (root / source).resolve()
     executable = work / "native-cycle-lifetime"
     build = subprocess.run(
         [

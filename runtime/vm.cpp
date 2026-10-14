@@ -1470,8 +1470,9 @@ public:
           return static_cast<const Vm *>(ctx)->current_text_source_location();
         },
         this);
+    const auto &cancellation = current_runtime_run_cancel_checkpoint();
     while (fault_ == std::nullopt && !frames_.empty()) {
-      step();
+      step(cancellation);
     }
     state_->heap.drain_remote_frees();
     RuntimeWatchPollResult watch_snapshot =
@@ -2486,9 +2487,10 @@ private:
       // Stop when the root block returns normally or when dynamic control
       // removes it. A parent rescue/catch may immediately push a handler above
       // the caller, so stack depth alone is not a sufficient boundary.
+      const auto &cancellation = current_runtime_run_cancel_checkpoint();
       while (fault_ == std::nullopt && frames_.size() > caller_depth &&
              &frames_[caller_depth] == root_block) {
-        step();
+        step(cancellation);
       }
     } catch (...) {
       while (frames_.size() > caller_depth &&
@@ -3007,8 +3009,9 @@ private:
     nested.push_frame_from_args(*code, &value, 1, closure->captures,
                                 closure->self, Value::null(), std::nullopt,
                                 closure->nonlocal_return_target);
+    const auto &cancellation = current_runtime_run_cancel_checkpoint();
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
+      nested.step(cancellation);
     }
     merge_runtime_names_from(nested);
     if (nested.escaped_throw_.has_value()) {
@@ -3074,8 +3077,9 @@ private:
                                 closure->captures, closure->self, Value::null(),
                                 std::nullopt,
                                 closure->nonlocal_return_target);
+    const auto &cancellation = current_runtime_run_cancel_checkpoint();
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
+      nested.step(cancellation);
     }
     merge_runtime_names_from(nested);
     if (nested.escaped_throw_.has_value()) {
@@ -3209,8 +3213,9 @@ private:
                                 closure->captures, closure->self,
                                 Value::null(), std::nullopt,
                                 closure->nonlocal_return_target);
+    const auto &cancellation = current_runtime_run_cancel_checkpoint();
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
+      nested.step(cancellation);
     }
     merge_runtime_names_from(nested);
     if (nested.escaped_throw_.has_value()) {
@@ -12275,8 +12280,9 @@ private:
       }
     }
 
+    const auto &cancellation = current_runtime_run_cancel_checkpoint();
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
+      nested.step(cancellation);
     }
 
     merge_runtime_names_from(nested);
@@ -12297,8 +12303,9 @@ private:
       nested.inherited_no_suspend_label_ = *label;
     }
     nested.frames_.push_back(std::move(frame));
+    const auto &cancellation = current_runtime_run_cancel_checkpoint();
     while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-      nested.step();
+      nested.step(cancellation);
     }
     merge_runtime_names_from(nested);
     out.value = nested.final_value_;
@@ -14651,8 +14658,9 @@ private:
           }
           nested.push_frame(*code, args, captures, self, Value::null(),
                             std::nullopt);
+          const auto &cancellation = current_runtime_run_cancel_checkpoint();
           while (nested.fault_ == std::nullopt && !nested.frames_.empty()) {
-            nested.step();
+            nested.step(cancellation);
           }
           if (nested.fault_.has_value()) {
             throw RuntimeTaskFailure(nested.fault_->error_name,
@@ -14877,9 +14885,10 @@ private:
             return Value::null();
           }
         }
+        const auto &cancellation = current_runtime_run_cancel_checkpoint();
         while (vm->fault_ == std::nullopt && !vm->park_request_.has_value() &&
                !vm->frames_.empty()) {
-          vm->step();
+          vm->step(cancellation);
         }
         if (vm->fault_.has_value()) {
           vm->unwind_all_frame_scopes();
@@ -32271,8 +32280,8 @@ private:
     return invoke_method(frame, *method, args, kw_args, receiver, block, dst);
   }
 
-  void step() {
-    if (!run_cancellation_unwinding_ && runtime_run_cancel_checkpoint_requested()) {
+  void step(const RuntimeRunCancellationCheckpoint &cancellation) {
+    if (!run_cancellation_unwinding_ && cancellation.requested()) {
       run_cancellation_unwinding_ = true;
       raise_runtime_error(frames_.back(), "CancelledError", "execution cancelled");
       return;

@@ -29,7 +29,7 @@ thread_local const RuntimeIoWaitObserver *tls_runtime_io_wait_observer =
 thread_local std::uint32_t tls_runtime_io_wait_depth = 0;
 namespace {
 thread_local RuntimeRunCancellation tls_run_cancellation;
-thread_local unsigned tls_run_cancellation_mask = 0;
+thread_local RuntimeRunCancellationCheckpoint tls_run_cancel_checkpoint;
 thread_local std::shared_ptr<std::atomic<bool>> tls_task_cancel_owner;
 }
 std::shared_ptr<std::atomic<bool>> current_runtime_task_cancel_owner() {
@@ -43,10 +43,13 @@ bool runtime_run_cancel_requested() {
   return tls_run_cancellation && tls_run_cancellation->cancelled();
 }
 bool runtime_run_cancel_checkpoint_requested() {
-  return tls_run_cancellation_mask == 0 && runtime_run_cancel_requested();
+  return tls_run_cancel_checkpoint.requested();
+}
+const RuntimeRunCancellationCheckpoint &current_runtime_run_cancel_checkpoint() {
+  return tls_run_cancel_checkpoint;
 }
 const std::atomic<bool> *runtime_wait_cancel_flag() {
-  if (tls_run_cancellation_mask && runtime_run_cancel_requested()) return nullptr;
+  if (tls_run_cancel_checkpoint.mask_depth && runtime_run_cancel_requested()) return nullptr;
   return tls_runtime_task_cancel_flag != nullptr ? tls_runtime_task_cancel_flag
       : tls_run_cancellation ? tls_run_cancellation->cancel_flag() : nullptr;
 }
@@ -130,19 +133,21 @@ std::vector<RuntimeRunTaskFailure> RuntimeRunState::unobserved_failures() const 
 }
 RuntimeRunCancellationScope::RuntimeRunCancellationScope(RuntimeRunCancellation token)
     : previous_(std::move(tls_run_cancellation)),
-      previous_mask_(tls_run_cancellation_mask) {
+      previous_mask_(tls_run_cancel_checkpoint.mask_depth) {
   tls_run_cancellation = std::move(token);
-  tls_run_cancellation_mask = 0;
+  tls_run_cancel_checkpoint.cancel_flag = tls_run_cancellation ? tls_run_cancellation->cancel_flag() : nullptr;
+  tls_run_cancel_checkpoint.mask_depth = 0;
 }
 RuntimeRunCancellationScope::~RuntimeRunCancellationScope() {
   tls_run_cancellation = std::move(previous_);
-  tls_run_cancellation_mask = previous_mask_;
+  tls_run_cancel_checkpoint.cancel_flag = tls_run_cancellation ? tls_run_cancellation->cancel_flag() : nullptr;
+  tls_run_cancel_checkpoint.mask_depth = previous_mask_;
 }
 RuntimeRunCancellationMask::RuntimeRunCancellationMask(bool enabled) : enabled_(enabled) {
-  if (enabled_) ++tls_run_cancellation_mask;
+  if (enabled_) ++tls_run_cancel_checkpoint.mask_depth;
 }
 RuntimeRunCancellationMask::~RuntimeRunCancellationMask() {
-  if (enabled_) --tls_run_cancellation_mask;
+  if (enabled_) --tls_run_cancel_checkpoint.mask_depth;
 }
 thread_local bool tls_runtime_io_park_enabled = false;
 thread_local bool tls_runtime_io_park_requested = false;
@@ -355,7 +360,7 @@ std::string current_runtime_task_annotation() {
 }
 
 bool current_runtime_task_cancel_requested() {
-  if (tls_run_cancellation_mask && runtime_run_cancel_requested()) return false;
+  if (tls_run_cancel_checkpoint.mask_depth && runtime_run_cancel_requested()) return false;
   return runtime_run_cancel_checkpoint_requested() ||
          (tls_runtime_task_cancel_flag != nullptr &&
           tls_runtime_task_cancel_flag->load());

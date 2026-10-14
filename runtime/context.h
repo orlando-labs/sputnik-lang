@@ -94,6 +94,18 @@ private:
 using RuntimeRunCancellation = std::shared_ptr<RuntimeRunState>;
 RuntimeRunCancellation current_runtime_run_cancellation();
 bool runtime_run_cancel_requested();
+// Borrow once per execution dispatch, never across thread migration. Scopes
+// update this thread's view in place, including nested run/ensure scopes. The
+// TLS owner retains the flag; the view adds no shared_ptr traffic per opcode.
+struct RuntimeRunCancellationCheckpoint {
+  const std::atomic<bool> *cancel_flag = nullptr;
+  unsigned mask_depth = 0;
+  bool requested() const noexcept {
+    return mask_depth == 0 && cancel_flag != nullptr &&
+           cancel_flag->load(std::memory_order_relaxed);
+  }
+};
+const RuntimeRunCancellationCheckpoint &current_runtime_run_cancel_checkpoint();
 class RuntimeRunCancellationScope {
 public:
   explicit RuntimeRunCancellationScope(RuntimeRunCancellation token);

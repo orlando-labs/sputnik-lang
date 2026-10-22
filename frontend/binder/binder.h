@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frontend/ast/expr.h"
+#include "frontend/import_aliases.h"
 #include "frontend/lexer/token.h"
 
 #include <memory>
@@ -115,6 +116,7 @@ struct CallSiteShape {
 };
 
 struct BindGraph {
+  frontend::ImportAliases import_aliases;
   std::vector<Scope> scopes;
   std::vector<Binding> bindings;
   std::vector<Reference> references;
@@ -139,7 +141,8 @@ struct CallBindResult {
 };
 
 BindResult bind_module(const std::vector<std::unique_ptr<ast::Expr>> &items,
-                       const std::string &module_name);
+                       const std::string &module_name,
+                       const frontend::ImportAliases &aliases = {});
 // True for names supplied by the runtime prelude rather than a lexical
 // binding. HIR uses the same predicate so these globals are never mistaken for
 // implicit receiver sends inside object methods.

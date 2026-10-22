@@ -62,6 +62,7 @@ struct NotebookDisplay {
   std::uint32_t width = 0, height = 0;
   // Bounded JSON, inert data only; empty for raster-only/3D/older renderers.
   std::string plot_scene;
+  std::string id;
   std::size_t storage_bytes() const { return bytes.size() + plot_scene.size(); }
 };
 
@@ -81,6 +82,7 @@ public:
     std::lock_guard<std::mutex> lock(mutex_);
     if (!open_ || owner_ != std::this_thread::get_id())
       throw std::invalid_argument("notebook.show requires an active synchronous notebook cell");
+    display.id = id;
     const auto previous = id.empty() ? entries_.end() : std::find_if(entries_.begin(), entries_.end(),
         [&](const auto &entry) { return entry.id == id; });
     const auto previous_bytes = previous == entries_.end() ? 0 : previous->display.storage_bytes();

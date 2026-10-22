@@ -11,6 +11,7 @@
 #include "runtime/tls.h"
 #include "runtime/value.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -374,6 +375,28 @@ public:
       std::chrono::milliseconds::max();
   std::optional<std::chrono::steady_clock::time_point> write_deadline;
   std::vector<std::string> declared_trailers;
+  std::optional<std::uint64_t> stream_length;
+  // Payload admitted by write, including a pending resumable write. This is
+  // length enforcement state, not a counter of bytes delivered to the peer.
+  std::uint64_t body_queued = 0;
+  std::uint64_t payload_written = 0;
+  std::size_t payload_begin = 0;
+  std::size_t payload_end = 0;
+  std::function<void(bool, std::uint64_t)> on_complete;
+  bool completion_notified = false;
+  void count_write(std::size_t offset, std::size_t size) {
+    if (pending != Pending::Chunk) return;
+    const auto begin = std::max(offset, payload_begin);
+    const auto end = std::min(offset + size, payload_end);
+    if (end > begin) payload_written += end - begin;
+  }
+  void notify_complete(bool success) noexcept {
+    if (completion_notified) return;
+    completion_notified = true;
+    try { if (on_complete) on_complete(success, payload_written); } catch (...) {}
+    on_complete = {};
+  }
+  bool body_length_failed = false;
   std::shared_ptr<std::atomic<bool>> final_response_started;
   std::string pending_bytes;
   std::size_t pending_offset = 0;
@@ -392,8 +415,10 @@ public:
   std::string reason;
   http::HttpHeaders headers;
   std::string body;
+  std::optional<std::uint64_t> stream_length;
   std::vector<std::string> trailer_names;
   std::function<std::function<Value()>(std::vector<Value>)> producer_factory;
+  std::function<void(bool, std::uint64_t)> on_complete;
 
   bool streaming() const { return static_cast<bool>(producer_factory); }
 };

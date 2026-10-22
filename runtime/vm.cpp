@@ -1,4 +1,5 @@
 #include "runtime/vm.h"
+#include "runtime/config_document.h"
 #include "bytecode/trivial_body.h"
 #include "frontend/ast/expr.h"
 #include "runtime/sputnik_ext_runtime.h"
@@ -15,6 +16,8 @@
 #include "runtime/stdlib_registry.h"
 #include "runtime/stdlib_url.h"
 #include "runtime/vm_internal.h"
+#include "runtime/notebook_table.h"
+#include "runtime/audio.h"
 
 #include <algorithm>
 #include <atomic>
@@ -26,6 +29,7 @@
 #include <cstring>
 #include <deque>
 #include <functional>
+#include <filesystem>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -1103,6 +1107,17 @@ public:
     return call_block_to_stdlib_result(*static_cast<const Frame *>(frame),
                                        block, args);
   }
+  int64_t stdlib_block_required_args(const Value &block) override {
+    if (!block.is_closure() || !block.as_closure()) return -1;
+    const auto *code = lookup_code(block.as_closure()->code_id);
+    if (!code || code->kind != CodeKind::Block) return -1;
+    const auto rest = rest_param_index_for_code(code->code_id);
+    return rest ? *rest : declared_closure_param_count(*code);
+  }
+  StdlibBlockResult stdlib_call_ruby_block(const void *frame, const Value &block,
+      std::vector<Value> args) override {
+    return call_block_to_stdlib_result(*static_cast<const Frame *>(frame), block, args, true);
+  }
   bool
   stdlib_block_suspension_in_property_arm(const void *frame,
                                           const std::string &context) override {
@@ -1204,6 +1219,61 @@ public:
                             bool report_fault) override {
     return stdlib_fs_close_file(*static_cast<const Frame *>(frame), file,
                                 report_fault);
+  }
+  bool stdlib_fs_atomic_write(const void *opaque, const std::string &path,
+                              const std::string &bytes, bool durable) override {
+    const auto &frame = *static_cast<const Frame *>(opaque);
+    if (!check_io_policy(frame, "fs_write", "fs.write", path)) return false;
+    record_io_wait("fs.atomic_write", path);
+    return set_fault_from_io_status(frame, runtime_fs_atomic_write(RuntimePath(path), bytes, durable));
+  }
+  bool stdlib_fs_sync(const void *opaque, const std::string &path) override {
+    const auto &frame = *static_cast<const Frame *>(opaque);
+    if (!check_io_policy(frame, "fs_write", "fs.write", path)) return false;
+    record_io_wait("fs.sync", path);
+    return set_fault_from_io_status(frame, runtime_fs_sync(RuntimePath(path)));
+  }
+  bool stdlib_fs_entries(const void *opaque, const std::string &path,
+                         std::vector<std::string> *out) override {
+    const auto &frame = *static_cast<const Frame *>(opaque);
+    if (!check_io_policy(frame, "fs_metadata", "fs.metadata", path)) return false;
+    std::error_code error;
+    std::filesystem::directory_iterator iterator(path, error);
+    if (error) { raise_runtime_error(frame, "IOError", "fs.entries: " + error.message()); return false; }
+    for (const auto end = std::filesystem::directory_iterator{}; iterator != end; iterator.increment(error)) {
+      if (error) break;
+      out->push_back(iterator->path().string());
+    }
+    if (error) { raise_runtime_error(frame, "IOError", "fs.entries: " + error.message()); return false; }
+    std::sort(out->begin(), out->end()); return true;
+  }
+  bool stdlib_fs_lock(const void *opaque, const std::string &path,
+                      bool exclusive, bool nonblock, Value *out) override {
+    const auto &frame = *static_cast<const Frame *>(opaque);
+    if (!check_io_policy(frame, "fs_write", "fs.write", path)) return false;
+    record_io_wait("fs.lock", path);
+    auto result = RuntimeFileLock::acquire(RuntimePath(path), exclusive, nonblock);
+    if (!set_fault_from_io_status(frame, result)) return false;
+    *out = Value::io_value(std::move(result.lock)); return true;
+  }
+  bool stdlib_net_unix_open(const void *opaque, const std::string &path,
+                            bool listen, int backlog, std::chrono::milliseconds timeout,
+                            RuntimeIsolationMode isolation, Value *out) override {
+    const auto &frame = *static_cast<const Frame *>(opaque);
+    if (!check_io_policy(frame, listen ? "net_listen" : "net_connect",
+                          listen ? "net.listen" : "net.connect", "unix:" + path)) return false;
+    if (listen && !check_io_policy(frame, "fs_write", "fs.write", path)) return false;
+    record_io_wait(listen ? "unix.listen" : "unix.connect", path);
+    if (listen) {
+      auto result = RuntimeTcpListener::listen_unix(path, backlog, isolation);
+      if (!set_fault_from_io_status(frame, result)) return false;
+      *out = Value::io_value(std::move(result.listener));
+    } else {
+      auto result = RuntimeTcpStream::connect_unix(path, timeout, isolation);
+      if (!set_fault_from_io_status(frame, result)) return false;
+      *out = Value::io_value(std::move(result.stream));
+    }
+    return true;
   }
   bool stdlib_net_udp_bind(const void *frame, const RuntimeEndpoint &endpoint,
                            RuntimeIsolationMode isolation,
@@ -2406,6 +2476,10 @@ private:
       set_fault(frame, "VMError", "closure code id is unknown");
       return std::nullopt;
     }
+    if ((code->flags & bytecode::kCodeFlagRubyBreakBlock) != 0U) {
+      raise_runtime_error(frame, "LocalJumpError", "break is forbidden in Sputnik iterator blocks");
+      return std::nullopt;
+    }
     if ((prepared == nullptr || prepared->code == nullptr) &&
         !ensure_closure_arity(frame, *code, arg_count)) {
       return std::nullopt;
@@ -3176,7 +3250,7 @@ private:
 
   StdlibBlockResult
   call_block_to_stdlib_result(const Frame &frame, const Value &block,
-                              const std::vector<Value> &args) {
+                              const std::vector<Value> &args, bool ruby_callback = false) {
     StdlibBlockResult result;
     if (block.is_null()) {
       set_fault(frame, "TypeError", "native stdlib method requires block");
@@ -3226,6 +3300,12 @@ private:
     if (nested.escaped_nonlocal_return_.has_value()) {
       const PendingNonlocalReturn escaped =
           *nested.escaped_nonlocal_return_;
+      if (ruby_callback && !escaped.target) {
+        result.status = StdlibBlockStatus::Stopped;
+        result.value = escaped.value;
+        result.stop_value_present = true;
+        return result;
+      }
       nonlocal_return_value(frame, escaped.target, escaped.value);
       return result;
     }
@@ -3679,6 +3759,7 @@ private:
     case Opcode::Raise:
     case Opcode::Return:
     case Opcode::ReturnNonlocal:
+    case Opcode::BreakForeign:
     case Opcode::TypeCheck:
       return quick_operand_reg_equals(insn, 0, reg);
     case Opcode::Throw:
@@ -4016,6 +4097,7 @@ private:
     case Opcode::JumpIfNull:
     case Opcode::Return:
     case Opcode::ReturnNonlocal:
+    case Opcode::BreakForeign:
     case Opcode::Raise:
     case Opcode::Throw:
     case Opcode::RequireBlock:
@@ -4089,6 +4171,7 @@ private:
       return quick_add_target_successor(code, insn, 2, out);
     case Opcode::Return:
     case Opcode::ReturnNonlocal:
+    case Opcode::BreakForeign:
     case Opcode::Raise:
     case Opcode::Throw:
       return true;
@@ -5213,6 +5296,11 @@ private:
     // machinery — not this check — is responsible for.
     if (code.kind != bytecode::CodeKind::Block) {
       return true;
+    }
+    if ((code.flags & bytecode::kCodeFlagRubyBreakBlock) != 0U &&
+        !sputnik_ruby_callback_active()) {
+      raise_runtime_error(caller, "LocalJumpError", "block break requires an active Ruby call");
+      return false;
     }
     const std::optional<std::uint32_t> rest_index =
         rest_param_index_for_code(code.code_id);
@@ -9166,6 +9254,21 @@ private:
       }
     }
     return make_symbol_map_value(std::move(merged));
+  }
+
+  static constexpr const char *kNativeTimesMarker = "__sputnik_times";
+
+  static bool value_is_times_instance(const Value &value) {
+    if (!value.is_instance_object()) {
+      return false;
+    }
+    const IntrusivePtr<InstanceValue> instance = value.as_instance_object();
+    if (!instance_is_native_range(instance)) {
+      return false;
+    }
+    const auto marker = instance->ivars.find(kNativeTimesMarker);
+    return marker != instance->ivars.end() && marker->second.is_bool() &&
+           marker->second.as_bool();
   }
 
   bool value_is_range_instance(const Value &value) {
@@ -14276,8 +14379,8 @@ private:
   bool nonlocal_return_value(
       const Frame &returning_frame,
       std::shared_ptr<NonlocalReturnTarget> target, Value value) {
-    if (target == nullptr ||
-        !target->active.load(std::memory_order_acquire)) {
+    if ((target == nullptr && !sputnik_ruby_callback_active()) ||
+        (target != nullptr && !target->active.load(std::memory_order_acquire))) {
       raise_runtime_error(returning_frame, "LocalJumpError",
                           "unexpected return from an expired block");
       return false;
@@ -14288,7 +14391,7 @@ private:
       if (blocking_native_unwind_boundary_.has_value() &&
           index - 1U <= *blocking_native_unwind_boundary_) break;
       const Frame &candidate = frames_[index - 1U];
-      if (candidate.owns_nonlocal_return_target &&
+      if (target && candidate.owns_nonlocal_return_target &&
           candidate.nonlocal_return_target == target) {
         owner_index = index - 1U;
         break;
@@ -14642,6 +14745,7 @@ private:
           // Count the invocation itself and reject callbacks after root drain.
           const auto run_activity = run_cancellation ? run_cancellation->register_task() : nullptr;
           RuntimeRunCancellationScope run_scope(run_cancellation);
+          RuntimeRunTaskScope activity_scope(run_activity);
           RuntimeRunCancellationMask cleanup_mask(run_cleanup);
           const BcCode *code = find_code(*module, code_id);
           if (code == nullptr) {
@@ -14707,12 +14811,13 @@ private:
     const RuntimeDispatchRegistry *child_dispatch = nullptr;
     const RuntimeErrorRegistry *child_errors = nullptr;
     std::shared_ptr<VmPool> vm_pool = std::make_shared<VmPool>();
+    bool parkable = true;
   };
 
   std::optional<ResumableTaskFactory>
   make_resumable_task_factory(const Frame &frame, const Value &block,
                               std::shared_ptr<RuntimeTaskModule> task,
-                              const std::string &context) {
+                              const std::string &context, bool parkable = true) {
     if (block.is_null()) {
       set_fault(frame, "TypeError", context + " requires block");
       return std::nullopt;
@@ -14769,6 +14874,7 @@ private:
     mutable_template->captures = closure->captures;
     mutable_template->self = closure->self;
     mutable_template->task = std::move(task);
+    mutable_template->parkable = parkable;
     mutable_template->inherited_stdout = current_runtime_stdout();
     mutable_template->inherited_stderr = current_runtime_stderr();
     mutable_template->child_registry = child_native_registry();
@@ -14843,7 +14949,7 @@ private:
             }
           });
       const std::shared_ptr<RuntimeTaskModule> task = template_state->task;
-      vm->parkable_ = true;
+      vm->parkable_ = template_state->parkable;
       vm->task_module_ = task;
       // Resumable callers consume only final_value_; copying the completed
       // entry frame into a debug snapshot on every request defeats the frame
@@ -17579,7 +17685,11 @@ private:
           "ArgumentError", "streaming response status must permit content");
     }
     std::string error;
-    if (!response.headers.set("transfer-encoding", "chunked", &error)) {
+    const bool framed = response.stream_length.has_value()
+        ? response.headers.set("content-length",
+                               std::to_string(*response.stream_length), &error)
+        : response.headers.set("transfer-encoding", "chunked", &error);
+    if (!framed) {
       throw RuntimeTaskFailure("InvalidHeaderError", error);
     }
     if (!response.trailer_names.empty()) {
@@ -17640,6 +17750,17 @@ private:
     } else if (writer->pending !=
                RuntimeHttpServerResponseWriter::Pending::None) {
       return false;
+    }
+    if (writer->stream_length.has_value()) {
+      if (writer->body_length_failed ||
+          writer->body_queued != *writer->stream_length) {
+        writer->body_length_failed = true;
+        throw RuntimeTaskFailure("BodyLengthError",
+                                 "streamed response does not match length");
+      }
+      writer->body_closed = true;
+      writer->finished = true;
+      return true;
     }
     if (!writer->body_closed) {
       const RuntimeIoStatus closed =
@@ -18175,7 +18296,8 @@ private:
       Value *out) {
     if (!args.empty() ||
         !reject_unknown_keywords(frame, kw_args,
-                                 {"status", "reason", "headers", "trailers"})) {
+                                 {"status", "reason", "headers", "trailers",
+                                  "length", "on_complete"})) {
       return SendStatus::Faulted;
     }
     const bool native_block =
@@ -18224,9 +18346,10 @@ private:
       }
     }
     if (response->headers.contains("content-length") ||
-        response->headers.contains("transfer-encoding")) {
+        response->headers.contains("transfer-encoding") ||
+        response->headers.contains("trailer")) {
       set_fault(frame, "InvalidHeaderError",
-                "streaming response owns Content-Length/Transfer-Encoding");
+                "streaming response owns Content-Length/Transfer-Encoding/Trailer");
       return SendStatus::Faulted;
     }
     if (const std::optional<Value> value =
@@ -18235,6 +18358,32 @@ private:
                                          &response->trailer_names)) {
         return SendStatus::Faulted;
       }
+    }
+    if (const std::optional<Value> value = keyword_arg_value(kw_args, "length");
+        value.has_value() && !value->is_null()) {
+      if (!value->is_integer() || value->as_integer() < 0) {
+        set_fault(frame, "ArgumentError", "length must be a nonnegative Int or null");
+        return SendStatus::Faulted;
+      }
+      response->stream_length = static_cast<std::uint64_t>(value->as_integer());
+      if (!response->trailer_names.empty()) {
+        set_fault(frame, "InvalidHeaderError",
+                  "fixed-length response does not permit trailers");
+        return SendStatus::Faulted;
+      }
+    }
+    if (const auto observer = keyword_arg_value(kw_args, "on_complete");
+        observer.has_value() && !observer->is_null()) {
+      auto factory = make_resumable_task_factory(
+          frame, *observer, task_module_, "net.http.ServerResponse.on_complete",
+          /*parkable=*/false);
+      if (!factory) return SendStatus::Faulted;
+      response->on_complete = [factory = std::move(*factory)](
+          bool success, std::uint64_t bytes) {
+        auto invoke = factory({Value::boolean(success),
+                               Value::integer(static_cast<std::int64_t>(bytes))});
+        (void)invoke();
+      };
     }
     response->producer_factory = std::move(*producer_factory);
     *out = Value::io_value(std::move(response));
@@ -18506,6 +18655,7 @@ private:
       // reclaim.
       state->handler = {};
       state->producer = {};
+      if (state->writer) state->writer->notify_complete(false);
       state->writer.reset();
       state->request_body.reset();
       if (state->stream != nullptr) {
@@ -18561,6 +18711,9 @@ private:
       RuntimeTaskHandle request_task = server->task->spawn_resumable(
           [this, server, state, factory, finish_task]() mutable {
         RuntimeTaskAnnotationScope annotation("net.http.server.request");
+        // A pending IO notification may race with terminal completion. The
+        // resumable task must remain inert after finish_task releases its stream.
+        if (state->stream == nullptr) return Value::null();
         state->stream->adopt_to_current_owner();
         while (true) {
           if (!state->request_started) {
@@ -18612,6 +18765,7 @@ private:
           }
 
           auto complete_request = [&]() -> bool {
+            if (state->writer) state->writer->notify_complete(true);
             if (state->request_in_flight) {
               state->request_in_flight = false;
               server->end_request();
@@ -18663,6 +18817,11 @@ private:
             }
 
             if (response.streaming() && state->request_method == "HEAD") {
+              if (response.stream_length.has_value()) {
+                std::string error;
+                (void)response.headers.set("content-length",
+                    std::to_string(*response.stream_length), &error);
+              }
               response.producer_factory = {};
               response.trailer_names.clear();
               response.headers.remove("transfer-encoding");
@@ -18686,6 +18845,8 @@ private:
               state->writer->task = server->task;
               state->writer->write_timeout = server->write_timeout;
               state->writer->declared_trailers = response.trailer_names;
+              state->writer->stream_length = response.stream_length;
+              state->writer->on_complete = response.on_complete;
               state->writer->final_response_started =
                   state->request_body->final_response_started;
               state->writer->pending_bytes =
@@ -21550,6 +21711,7 @@ private:
         written = writer->stream->write(
             writer->pending_bytes.substr(writer->pending_offset), remaining);
       }
+      writer->count_write(writer->pending_offset, written.count);
       if (written.park) {
         return begin_io_park(frame) ? HttpServerWriterFlushStatus::Parked
                                     : HttpServerWriterFlushStatus::Faulted;
@@ -21636,12 +21798,29 @@ private:
         }
       }
       std::string error;
-      if (!http::http_encode_chunk(*data, extensions, &writer->pending_bytes,
-                                   &error)) {
+      if (writer->stream_length.has_value()) {
+        if (writer->body_length_failed ||
+            data->size() > *writer->stream_length - writer->body_queued) {
+          writer->body_length_failed = true;
+          set_fault(frame, "BodyLengthError", "streamed response exceeds length");
+          return SendStatus::Faulted;
+        }
+        if (!extensions.empty()) {
+          set_fault(frame, "ChunkError",
+                    "fixed-length response does not permit chunk extensions");
+          return SendStatus::Faulted;
+        }
+        writer->body_queued += data->size();
+        writer->pending_bytes = *data;
+      } else if (!http::http_encode_chunk(*data, extensions, &writer->pending_bytes,
+                                          &error)) {
         set_fault(frame, "ChunkError", error);
         return SendStatus::Faulted;
       }
       writer->pending = RuntimeHttpServerResponseWriter::Pending::Chunk;
+      writer->payload_begin = writer->stream_length.has_value()
+          ? 0 : writer->pending_bytes.find("\r\n") + 2;
+      writer->payload_end = writer->payload_begin + data->size();
       return *flush_pending();
     }
 
@@ -21654,6 +21833,18 @@ private:
         return *status;
       }
       if (writer->body_closed) {
+        *out = Value::null();
+        return SendStatus::Matched;
+      }
+      if (writer->stream_length.has_value()) {
+        if (writer->body_length_failed ||
+            writer->body_queued != *writer->stream_length) {
+          writer->body_length_failed = true;
+          set_fault(frame, "BodyLengthError",
+                    "streamed response does not match length");
+          return SendStatus::Faulted;
+        }
+        writer->body_closed = true;
         *out = Value::null();
         return SendStatus::Matched;
       }
@@ -21670,6 +21861,10 @@ private:
       }
       if (const std::optional<SendStatus> status = flush_pending()) {
         return *status;
+      }
+      if (writer->stream_length.has_value()) {
+        set_fault(frame, "ChunkError", "fixed-length response does not permit trailers");
+        return SendStatus::Faulted;
       }
       if (!writer->body_closed || writer->finished) {
         set_fault(frame, "RequestStateError",
@@ -21713,6 +21908,11 @@ private:
         return SendStatus::Faulted;
       }
       if (writer->finished) {
+        *out = Value::null();
+        return SendStatus::Matched;
+      }
+      if (writer->stream_length.has_value()) {
+        writer->finished = true;
         *out = Value::null();
         return SendStatus::Matched;
       }
@@ -23600,7 +23800,7 @@ private:
       } else if (receiver.is_threaded_collection()) {
         task_runtime_kind = RuntimeNativeTypeKind::ThreadedCollection;
       } else if ((receiver.is_list() || receiver.is_tuple() ||
-                  receiver.is_set()) &&
+                  receiver.is_set() || value_is_times_instance(receiver)) &&
                  (selector == "threaded" || selector == "parallel")) {
         task_runtime_kind = RuntimeNativeTypeKind::ThreadedCollection;
       }
@@ -24395,7 +24595,8 @@ private:
     }
 
     if (mode == NativeStdlibSendMode::TaskRuntimeIntrinsic &&
-        (receiver.is_list() || receiver.is_tuple() || receiver.is_set()) &&
+        (receiver.is_list() || receiver.is_tuple() || receiver.is_set() ||
+         value_is_times_instance(receiver)) &&
         (selector == "threaded" || selector == "parallel")) {
       if (!block.is_null()) {
         set_fault(frame, "TypeError", selector + " does not accept block");
@@ -25399,6 +25600,7 @@ private:
 
 #include "runtime/vm_notebook.inc"
 #include "runtime/vm_notebook_chart.inc"
+#include "runtime/vm_notebook_image.inc"
 
   SendStatus try_apply_scalar_send(
       Frame &frame, const Value &receiver, const std::string &selector_text,
@@ -25414,7 +25616,7 @@ private:
     // The native-stdlib dispatcher serves module/IO/task/tail values. Core
     // scalars and ordinary collections cannot match it (apart from the
     // explicit threaded collection constructors), yet previously every Int,
-    // Str, Map and Array send walked its full type chain first. Ember's request
+    // Str, Map and Array send walked its full type chain first. Orbit's request
     // flow is dominated by those values, so reject them at the boundary.
     const bool native_stdlib_candidate =
         receiver.is_native_type() || receiver.is_arg_parser() ||
@@ -25428,7 +25630,8 @@ private:
         receiver.is_mutex() || receiver.is_atomic() ||
         receiver.is_barrier() || receiver.is_flow_module() ||
         receiver.is_threaded_collection() ||
-        ((receiver.is_list() || receiver.is_tuple() || receiver.is_set()) &&
+        ((receiver.is_list() || receiver.is_tuple() || receiver.is_set() ||
+          value_is_times_instance(receiver)) &&
          (selector == "threaded" || selector == "parallel"));
     if (native_stdlib_candidate) {
       Value native_result = Value::null();
@@ -26744,8 +26947,17 @@ private:
         return SendStatus::Faulted;
       }
       std::optional<std::uint32_t> wrapper;
-      for (std::uint32_t i = 0; i < module_.classes.size(); ++i)
-        if (class_name_for_index(i).value_or("") == "progressbar.ProgressEnumerable") { wrapper = i; break; }
+      for (std::uint32_t i = 0; i < module_.classes.size(); ++i) {
+        const auto name = class_name_for_index(i).value_or("");
+        const std::string suffix = ".progressbar.ProgressEnumerable";
+        if (name != "progressbar.ProgressEnumerable" &&
+            !(name.size() > suffix.size() && name.compare(name.size()-suffix.size(), suffix.size(), suffix) == 0)) continue;
+        if (wrapper) {
+          set_fault(frame, "TypeError", "with_progress has multiple imported progressbar providers; call the package's with_progress explicitly");
+          return SendStatus::Faulted;
+        }
+        wrapper = i;
+      }
       if (!wrapper) {
         set_fault(frame, "NoMethodError", "with_progress requires importing the progressbar package");
         return SendStatus::Faulted;
@@ -27994,15 +28206,18 @@ private:
           if (!require_arity(0)) {
             return SendStatus::Faulted;
           }
-          for (const Value &item : items) {
-            if (!call_block_to_value(frame, block, {item}).has_value()) {
-              return SendStatus::Faulted;
-            }
-            if (!require_receiver_live_after_block()) {
-              return SendStatus::Faulted;
+          const bool materialize_times = value_is_times_instance(receiver);
+          if (!materialize_times || !block.is_null()) {
+            for (const Value &item : items) {
+              if (!call_block_to_value(frame, block, {item}).has_value()) {
+                return SendStatus::Faulted;
+              }
+              if (!require_receiver_live_after_block()) {
+                return SendStatus::Faulted;
+              }
             }
           }
-          *out = receiver;
+          *out = materialize_times ? make_list_value(std::move(items)) : receiver;
           return SendStatus::Matched;
         }
         if (collection_selector == "map" ||
@@ -29078,19 +29293,23 @@ private:
           }
           return SendStatus::Faulted;
         }
-        std::vector<Value> indices;
-        if (lhs > 0) {
-          indices.reserve(static_cast<std::size_t>(lhs));
-          for (std::int64_t index = 0; index < lhs; ++index) {
-            indices.push_back(Value::integer(index));
-          }
-        }
         if (block.is_null()) {
-          *out = make_list_value(std::move(indices));
+          auto range = make_instance_value(kNativeSyntheticClassIndex);
+          range->ivars[kNativeRangeMarker] = Value::boolean(true);
+          range->ivars[kNativeTimesMarker] = Value::boolean(true);
+          range->ivars["start"] = Value::integer(0);
+          range->ivars["finish"] = Value::integer(std::max<std::int64_t>(lhs, 0));
+          range->ivars["inclusive_end"] = Value::boolean(false);
+          range->ivars["step"] = Value::integer(1);
+          *out = Value::instance(std::move(range));
           return SendStatus::Matched;
         }
-        for (const Value &index : indices) {
-          if (!call_block_to_value(frame, block, {index}).has_value()) {
+        // Direct repetition needs no index array or range object. Keep the
+        // block invocation/unwind protocol unchanged and generate one index
+        // at a time, including for counts too large to materialize.
+        for (std::int64_t index = 0; index < lhs; ++index) {
+          if (!call_block_to_value(frame, block, {Value::integer(index)})
+                   .has_value()) {
             return SendStatus::Faulted;
           }
         }
@@ -31336,6 +31555,36 @@ private:
     if (fault_.has_value()) {
       return false;
     }
+    if (*selector == "__super_dispatch__") {
+      if (args.size() < 2 || !args[0].is_class_object() || !args[1].is_string()) {
+        raise_runtime_error(frame, "TypeError", "invalid super call"); return false;
+      }
+      const auto owner = args[0].as_class_object().class_index;
+      const auto method_name = string_text_from_value(args[1]).value_or("");
+      if (owner >= module_.classes.size()) { set_fault(frame, "VMError", "super owner is out of range"); return false; }
+      args.erase(args.begin(), args.begin() + 2);
+      const auto &klass = module_.classes[owner];
+      if (!klass.has_superclass_ref) {
+        if ((klass.flags & bytecode::kClassFlagException) && method_name == "init" && receiver.is_instance_object()) {
+          if (args.size() > 1 || !kw_args.empty() || !block.is_null()) {
+            raise_runtime_error(frame, "ArgumentError", "Exception.init accepts an optional message"); return false;
+          }
+          Value message = args.empty() ? string_value_from_text("") : string_value_from_text(value_to_debug_string(args[0], &module_, &runtime_strings_, &runtime_symbols_));
+          if (args.size() == 1 && args[0].is_string()) message = args[0];
+          if (!store_instance_ivar(frame, receiver.as_instance_object(), "message", message, stdlib_symbol_value_from_text("message").as_symbol().symbol_id, site_id.value_or(0U))) return false;
+          if (!write_reg(frame, dst, Value::null())) return false;
+          ++frame.pc; return true;
+        }
+        raise_runtime_error(frame, "NoMethodError", "super has no parent method: " + method_name); return false;
+      }
+      std::uint32_t parent = 0;
+      if (!resolve_class_ref(frame, klass.superclass_ref, &parent)) return false;
+      const auto flags = receiver.is_class_object() ? kMethodFlagClass : kMethodFlagInstance;
+      const auto *method = find_method_for_dispatch(frame, parent, method_name, flags);
+      if (fault_.has_value()) return false;
+      if (!method) { raise_runtime_error(frame, "NoMethodError", "super has no parent method: " + method_name); return false; }
+      return invoke_method(frame, *method, args, kw_args, receiver, block, dst);
+    }
     if (property_access && property_assignment) {
       set_fault(frame, "VMError",
                 "send cannot be both property access and assignment");
@@ -31592,7 +31841,7 @@ private:
     }
     // Ordinary user instances/classes cannot match the scalar/native stdlib
     // dispatcher. Sending them through that very large selector/type chain
-    // before probing the class call cache made every Ember model/controller
+    // before probing the class call cache made every Orbit model/controller
     // method pay a full failed builtin dispatch. Range (both the native marker
     // and the legacy class-backed representation) and LazySeq are represented
     // as instances for compatibility, so keep those on the scalar path; all
@@ -34401,6 +34650,13 @@ private:
       }
       nonlocal_return_value(frame, frame.nonlocal_return_target,
                             std::move(value));
+      return;
+    }
+    case Opcode::BreakForeign: {
+      std::uint32_t src = 0;
+      if (!operand_u32(frame, insn, 0, &src)) return;
+      Value value = read_reg(frame, src);
+      if (!fault_) nonlocal_return_value(frame, nullptr, std::move(value));
       return;
     }
     case Opcode::Raise: {

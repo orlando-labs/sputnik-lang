@@ -1,3 +1,4 @@
+#include <deque>
 #include "runtime/text.h"
 
 #include "runtime/context.h"
@@ -45,7 +46,9 @@ public:
   mutable std::mutex mutex;
   bool closed = false;
   std::string buffer;
-  std::vector<RuntimeTextOutputEvent> events;
+  std::deque<RuntimeTextOutputEvent> events;
+  std::size_t event_bytes = 0;
+  std::uint64_t revision = 0, dropped_bytes = 0, dropped_events = 0;
 };
 
 RuntimeTextWriter::RuntimeTextWriter()
@@ -114,15 +117,27 @@ RuntimeTextWriteResult RuntimeTextWriter::write_str(const std::string &text) {
   case RuntimeTextWriterKind::Buffer:
     impl_->buffer += text;
     return text_write_ok();
-  case RuntimeTextWriterKind::CellStream:
-    impl_->buffer += text;
-    impl_->events.push_back(
-        RuntimeTextOutputEvent{impl_->stream.empty() ? "stdout" : impl_->stream,
-                               text,
-                               g_runtime_output_order.fetch_add(
-                                   1, std::memory_order_relaxed),
-                               resolve_runtime_text_source_location()});
+  case RuntimeTextWriterKind::CellStream: {
+    constexpr std::size_t limit = 256U * 1024U;
+    auto suffix = [](const std::string &value, std::size_t cap) {
+      std::size_t at = value.size() > cap ? value.size() - cap : 0;
+      while (at < value.size() && (static_cast<unsigned char>(value[at]) & 0xc0) == 0x80) ++at;
+      return value.substr(at);
+    };
+    auto retained = suffix(text, limit);
+    impl_->dropped_bytes += text.size() - retained.size();
+    if (text.size() >= limit) impl_->buffer = retained;
+    else impl_->buffer = suffix(impl_->buffer + text, limit);
+    while (!impl_->events.empty() && (impl_->events.size() >= 2048 || impl_->event_bytes + retained.size() > limit)) {
+      impl_->event_bytes -= impl_->events.front().text.size(); impl_->dropped_bytes += impl_->events.front().text.size();
+      ++impl_->dropped_events; impl_->events.pop_front();
+    }
+    impl_->event_bytes += retained.size();
+    impl_->events.push_back(RuntimeTextOutputEvent{impl_->stream.empty() ? "stdout" : impl_->stream,
+        std::move(retained), g_runtime_output_order.fetch_add(1, std::memory_order_relaxed), resolve_runtime_text_source_location()});
+    ++impl_->revision;
     return text_write_ok();
+  }
   }
   return text_write_error("IOError", "unknown text writer kind");
 }
@@ -223,7 +238,14 @@ std::vector<RuntimeTextOutputEvent> RuntimeTextWriter::events() const {
     return {};
   }
   std::lock_guard<std::mutex> lock(impl_->mutex);
-  return impl_->events;
+  std::vector<RuntimeTextOutputEvent> result(impl_->events.begin(), impl_->events.end());
+  if (impl_->dropped_events || impl_->dropped_bytes) result.insert(result.begin(), RuntimeTextOutputEvent{
+      "truncation", "[Earlier " + impl_->stream + " output omitted: " + std::to_string(impl_->dropped_events) + " events / " + std::to_string(impl_->dropped_bytes) + " bytes]\n", 0, {}});
+  return result;
+}
+std::uint64_t RuntimeTextWriter::revision() const {
+  if (!impl_) return 0;
+  std::lock_guard<std::mutex> lock(impl_->mutex); return impl_->revision;
 }
 
 std::string RuntimeTextWriter::stream_name() const {

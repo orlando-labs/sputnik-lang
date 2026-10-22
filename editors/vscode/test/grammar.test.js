@@ -160,6 +160,11 @@ async function main() {
     "ready and enabled or fallback\nnot empty? and item in items",
   );
   assertScope(logical, 0, "and", "keyword.operator.logical.sputnik");
+  const assignments = tokenize(grammar, "a?=false\nxs[0] or=fallback\nobj.value?=2\ndef []?(key): null");
+  assertScope(assignments, 0, "?=", "keyword.operator.sputnik");
+  assertScope(assignments, 1, "or=", "keyword.operator.logical.sputnik");
+  assertScope(assignments, 2, "?=", "keyword.operator.sputnik");
+  assertScope(assignments, 3, "[]?", "entity.name.function.sputnik");
   assertScope(logical, 0, "or", "keyword.operator.logical.sputnik");
   assertScope(logical, 1, "not", "keyword.operator.logical.sputnik");
   assertScope(logical, 1, "in", "keyword.operator.relational.sputnik");

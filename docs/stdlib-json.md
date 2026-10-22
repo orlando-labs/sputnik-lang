@@ -60,6 +60,7 @@ user.has_key?(:id)   # false
 ```sputnik
 value = Json.parse("{\"ok\": true, \"count\": 3}")
 strict = Json.parse("{\"ok\": true}", map: StrictMap)
+safe = Json.parse("{\"ok\": true}", duplicate_keys: :reject)
 ```
 
 `Json.parse(text)` принимает `Str` и возвращает одно JSON-значение. На входе
@@ -68,6 +69,10 @@ strict = Json.parse("{\"ok\": true}", map: StrictMap)
 
 Ошибки парсинга приходят как `JsonParseError` с позицией вида `line:col` и
 offset. Слишком глубокие документы также считаются ошибкой парсинга.
+
+`duplicate_keys: :reject` запрещает повторные ключи на любой глубине, включая
+одинаковые имена с разными JSON escapes. По умолчанию действует `:last`:
+последнее значение сохраняется. Опцию можно сочетать с `map: StrictMap`.
 
 ## Generate
 

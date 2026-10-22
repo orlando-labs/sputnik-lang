@@ -50,6 +50,12 @@ try
   call assert_equal('sputnik', &l:filetype)
   call s:Group(1, 'if', 'sputnikConditional')
 
+  call s:Source(['a?=false', 'xs[0] or= 1', 'obj.value?=2', 'def []?(key): null'])
+  call s:Group(1, '?=', 'sputnikOperator')
+  call s:Group(2, 'or=', 'sputnikWordOperator')
+  call s:Group(3, '?=', 'sputnikOperator')
+  call s:Group(4, '[]?', 'sputnikFunction')
+
   call s:Source([
         \ 'native def wait(timeout as Int) from "unit.wait" blocking',
         \ '  def acquire(timeout as Int) from "unit.acquire" blocking: 1',

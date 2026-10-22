@@ -1,9 +1,11 @@
 #pragma once
 
 #include "bytecode/format.h"
+#include "frontend/import_aliases.h"
 #include "notebook/notebook.h"
 #include "runtime/module_loader.h"
 #include "runtime/text.h"
+#include "runtime/context.h"
 #include "runtime/notebook_live.h"
 #include "tools/isputnik/activity.h"
 
@@ -70,6 +72,7 @@ struct ResultFormat {
   bool is_container = false;
   bool truncated = false;
   bool pretty_truncated = false;
+  std::string table_json;
 };
 
 struct Cell {
@@ -99,6 +102,12 @@ struct Cell {
   std::string formatting;
   std::vector<sputnik::runtime::NotebookDisplay> displays;
   std::vector<sputnik::runtime::NotebookLiveEvent> progress;
+  std::vector<sputnik::runtime::NotebookLiveEvent> charts;
+  std::vector<sputnik::runtime::NotebookLiveEvent> images;
+  std::vector<sputnik::runtime::NotebookLiveEvent> audio;
+  std::vector<sputnik::runtime::NotebookLiveEvent> audio_controls;
+  std::vector<sputnik::runtime::NotebookLiveEvent> stopwatches;
+  std::optional<std::uint64_t> elapsed_ms;
 };
 
 // Exact bundled sources selected by a project's ordered auto_imports list.
@@ -148,6 +157,7 @@ struct BundledEnvironmentPreparation {
   std::vector<BundledEnvironmentDiagnostic> diagnostics;
   std::shared_ptr<const sputnik::bytecode::BcModule> image;
   std::map<std::string, std::map<std::string, std::string>> import_paths;
+  sputnik::frontend::ImportAliases import_aliases;
 };
 
 // Opaque persistent backend owned by one Session.  Keeping this out of the
@@ -172,6 +182,10 @@ private:
 
 public:
   std::shared_ptr<const sputnik::runtime::NotebookInputSnapshot> project_inputs;
+  sputnik::runtime::RuntimeRunTelemetry run_telemetry;
+  std::shared_ptr<const sputnik::runtime::NotebookImageInputs> project_images;
+  std::shared_ptr<const sputnik::runtime::NotebookAudioInputs> project_audio_inputs;
+  std::shared_ptr<const std::vector<sputnik::runtime::NotebookAudioComponent>> project_audio;
   Session();
   ~Session();
   Session(const Session &) = delete;
@@ -219,9 +233,12 @@ public:
   // sheet's values for display but require explicit Apply before execution.
   bool environment_stale = false;
   std::vector<BundledModuleSource> bundled_modules;
+  // Anchor for packages/ discovery; empty for a projectless console.
+  std::string package_search_directory;
   std::string environment_error;
   std::vector<sputnik::runtime::RuntimeTextOutputEvent> environment_output;
   SessionOutputObserver output_observer;
+  std::function<void(sputnik::notebook::CellId)> execution_finished;
   // Owner-thread guard: progress callbacks may pump the UI reentrantly.
   // Callbacks may inspect state/pump events, but must not directly replace
   // the Session, its cells or its backend while an evaluation is active.
@@ -233,6 +250,9 @@ public:
   bool module_editor = false;
   std::string project_module_id;
   std::string project_module_path;
+  // Scratch module runs stay separate from the sheet kernel/backend. Workers
+  // retain their world until child tasks and late output have drained.
+  std::unique_ptr<sputnik::runtime::RuntimeWorld> module_world;
   // Document edits are independent of evaluation dirtiness/results.
   bool document_dirty = false;
   std::string execution_block_reason;
@@ -242,6 +262,8 @@ public:
 // Called by the project owner after publishing one validated input batch.
 // Never starts a sheet that has not been run; never runs unsaved code edits.
 void apply_project_input_changes(Session *session, const std::set<std::string> &keys);
+// Mark the dependency closure stale without executing user code.
+void invalidate_project_input_changes(Session *session, const std::set<std::string> &keys);
 
 struct CompileResult {
   bool ok = false;
@@ -253,6 +275,10 @@ struct CompileResult {
 
 struct EvalView {
   std::vector<sputnik::runtime::NotebookLiveEvent> progress;
+  std::vector<sputnik::runtime::NotebookLiveEvent> charts;
+  std::vector<sputnik::runtime::NotebookLiveEvent> images;
+  std::vector<sputnik::runtime::NotebookLiveEvent> audio;
+  std::vector<sputnik::runtime::NotebookLiveEvent> audio_controls;
   bool ok = false;
   std::string result;
   ResultFormat result_format;
@@ -271,7 +297,9 @@ CompileResult compile_source_text(const std::string &source,
 
 BundledEnvironmentPreparation prepare_bundled_environment(
     const std::vector<BundledModuleSource> &sources,
-    const std::vector<std::string> &explicit_imports = {});
+    const std::vector<std::string> &explicit_imports = {},
+    const std::string &package_search_directory = {},
+    const sputnik::frontend::ImportAliases &aliases = {});
 
 // Cross the same bytecode serialization boundary used by persisted modules
 // before an immutable notebook image is handed to RuntimeWorld.  The

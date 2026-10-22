@@ -1,8 +1,8 @@
-# DESIGN: Ember — единый web framework для Sputnik
+# DESIGN: Orbit — единый web framework для Sputnik
 
 Date: 2026-07-13
 Status: consolidated design proposal; no implementation in this document
-Target: external Sputnik package `ember` over the existing `net.http.Server`
+Target: external Sputnik package `orbit` over the existing `net.http.Server`
 
 This document supersedes the design direction of:
 
@@ -13,13 +13,13 @@ Those files remain useful as historical sketches, but this document is the
 single source of truth for the proposed framework shape. In particular, it
 removes handler-local route annotations, unifies the minimal and MVC variants,
 uses the real Sputnik callable-reference semantics, and accounts for the current
-`sputnik-orm` and `sqlite3-sputnik` concurrency constraints.
+`orm` and `sqlite3` concurrency constraints.
 
 ---
 
 ## 0. Executive summary
 
-Ember is one framework with one router and two ordinary ways to organize an
+Orbit is one framework with one router and two ordinary ways to organize an
 application:
 
 1. A small application binds routes directly to module functions.
@@ -33,21 +33,21 @@ over the same `App`, `Routes`, `Request`, `Response`, and middleware contracts.
 The canonical route declaration is:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/", to: &handler
 ```
 
-`ember.routes` is the only route-table constructor name. It is a block-suffix
-macro that returns an immutable `ember.Routes` value. It does not mutate a
+`orbit.routes` is the only route-table constructor name. It is a block-suffix
+macro that returns an immutable `orbit.Routes` value. It does not mutate a
 package-global registry and does not attach metadata to handler declarations.
 
 Controller actions use Sputnik's unbound instance-method reference syntax:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/", to: &Home#landing
 
-class Home < ember.Controller:
+class Home < orbit.Controller:
   def landing():
     render text: "o hai"
 ```
@@ -60,7 +60,7 @@ table. The router keeps a static shape such as `/people/:slug`; the captured
 slug is resolved through a repository at request time:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/people/:slug", to: &People#show, as: :person
 ```
 
@@ -84,19 +84,19 @@ workspace:
   `ServerResponse`-compatible value;
 - the server runs request hooks cooperatively and may have multiple concurrent
   requests;
-- `sputnik-orm` implements its P0 model, validation, query, and adapter surfaces,
+- `orm` implements its P0 model, validation, query, and adapter surfaces,
   plus a thin SQLite pool facade, one-time model binding, and model-level
   transactions;
-- `sqlite3-sputnik` implements database access, safe parameterized SQL, and a
+- `sqlite3` implements database access, safe parameterized SQL, and a
   shareable connection pool with exclusive leases, cooperative waiting, and a
   non-inheritable logical-task-local current-connection context.
 
-Ember is therefore primarily an Sputnik package plus macros. It should not add a
+Orbit is therefore primarily an Sputnik package plus macros. It should not add a
 second HTTP scheduler, runtime metaprogramming layer, or socket implementation.
 
 The low-level server currently remains intentionally small: plaintext HTTP/1.1,
 one request per accepted connection, `Connection: close`, and buffered server
-request/response bodies. Ember v1 must describe these limitations honestly and
+request/response bodies. Orbit v1 must describe these limitations honestly and
 must not imply TLS, HTTP/2, keep-alive, WebSocket, or streaming support that the
 substrate does not provide.
 
@@ -120,7 +120,7 @@ def show(request, id):
 Canonical:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/posts/:id", to: &show
 ```
 
@@ -136,7 +136,7 @@ central route declaration.
 
 ### 2.2. Macros generate ordinary Sputnik
 
-`ember.routes` and its nested DSL forms consume AST during F1.5 and generate
+`orbit.routes` and its nested DSL forms consume AST during F1.5 and generate
 ordinary declarations, route descriptors, target wrappers, and constructors.
 The binder, typed checker, HIR, and runtime see ordinary Sputnik after expansion.
 
@@ -146,7 +146,7 @@ prebuilt immutable matcher.
 ### 2.3. No runtime `load`
 
 `config/routes.s` is an ordinary Sputnik module. It is included in the build
-manifest and imported statically. Ember does not reproduce Ruby's `load`,
+manifest and imported statically. Orbit does not reproduce Ruby's `load`,
 caller-scope evaluation, or repeated source execution.
 
 Convention may decide which module an application generator imports, but the
@@ -188,14 +188,14 @@ frameworks:
 
 ```text
 src/
-  ember.s                  App, Request, Response, render
-  ember/router.s           Routes, matcher, route macros
-  ember/controller.s       Controller and `use ember.controller`
-  ember/middleware.s       middleware composition
-  ember/html.s             Html value and html string-tag macro
-  ember/testing.s          in-memory request helpers
-  ember/session.s          later phase
-  ember/security.s         later cookies/CSRF/security headers
+  orbit.s                  App, Request, Response, render
+  orbit/router.s           Routes, matcher, route macros
+  orbit/controller.s       Controller and `use orbit.controller`
+  orbit/middleware.s       middleware composition
+  orbit/html.s             Html value and html string-tag macro
+  orbit/testing.s          in-memory request helpers
+  orbit/session.s          later phase
+  orbit/security.s         later cookies/CSRF/security headers
 
 integrations/
   orm.s                    optional ORM integration
@@ -203,7 +203,7 @@ integrations/
 
 The minimal import must not force SQLite, FFI, ORM, templates, sessions, or a
 project generator into the application. An application that imports only
-`ember` gets the same router and HTTP adapter as an MVC application, with fewer
+`orbit` gets the same router and HTTP adapter as an MVC application, with fewer
 layers configured.
 
 ORM glue may live in an optional module or a small companion package so that
@@ -211,34 +211,34 @@ the core web package remains source-only and database-neutral.
 
 ---
 
-## 4. `ember.routes`
+## 4. `orbit.routes`
 
 ### 4.1. Canonical expression form
 
-`ember.routes` is a block-suffix macro returning `ember.Routes`:
+`orbit.routes` is a block-suffix macro returning `orbit.Routes`:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/", to: &home
   post "/sessions", to: &create_session
 ```
 
 Assignment is explicit because applications and tests may construct more than
-one router. A bare unused `ember.routes:` statement should be diagnosed as
-`EMBER_ROUTES_UNUSED` rather than silently creating a hidden global registry.
+one router. A bare unused `orbit.routes:` statement should be diagnosed as
+`ORBIT_ROUTES_UNUSED` rather than silently creating a hidden global registry.
 
 A conventional routes module is:
 
 ```sputnik
 package app.routes
 
-import ember
+import orbit
 from app.controllers.home import Home
 from app.controllers.posts import Posts
 
 export routes
 
-routes = ember.routes:
+routes = orbit.routes:
   get "/", to: &Home#landing, as: :root
   resources :posts, controller: Posts
 ```
@@ -247,14 +247,14 @@ The application entry imports it normally:
 
 ```sputnik
 from app.routes import routes
-import ember
+import orbit
 
-app = ember.App(routes: routes)
+app = orbit.App(routes: routes)
 ```
 
 ### 4.2. Return value and ownership
 
-`ember.routes` returns one immutable object containing:
+`orbit.routes` returns one immutable object containing:
 
 - normalized route descriptors;
 - a path matcher;
@@ -264,11 +264,11 @@ app = ember.App(routes: routes)
 - route-specific middleware chains;
 - source metadata for diagnostics and introspection.
 
-There is no mutable `ember.__routes` singleton. `App` receives routes through
+There is no mutable `orbit.__routes` singleton. `App` receives routes through
 its constructor:
 
 ```sputnik
-app = ember.App(routes: routes)
+app = orbit.App(routes: routes)
 ```
 
 ### 4.3. Basic DSL
@@ -276,7 +276,7 @@ app = ember.App(routes: routes)
 The first useful surface is intentionally small:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get     "/items",     to: &items_index, as: :items
   get     "/items/:id", to: &Items#show,  as: :item
   post    "/items",     to: &Items#create
@@ -292,7 +292,7 @@ route is an application option and must not be left implicit in the matcher.
 ### 4.4. Scope, middleware, and composition
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   scope "/api", before: [&request_id, &json_errors]:
     scope "/v1", before: [&authenticate]:
       get "/profile", to: &Profile#show
@@ -312,7 +312,7 @@ split across subrouters.
 The MVC layer may provide:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   resources(:posts, controller: Posts,
     only: [:index, :show, :create, :update, :destroy])
 ```
@@ -348,7 +348,7 @@ get "/", to: &Home#landing
 For this class:
 
 ```sputnik
-class Home < ember.Controller:
+class Home < orbit.Controller:
   def landing():
     # ...
 ```
@@ -358,13 +358,13 @@ The dot form is valid only when the action is actually class-side:
 ```sputnik
 class Health:
   class_method def show(request):
-    ember.render text: "ok"
+    orbit.render text: "ok"
 
-routes = ember.routes:
+routes = orbit.routes:
   get "/health", to: &Health.show
 ```
 
-Ember does not reinterpret `&Class.method` as an instance action. Doing so
+Orbit does not reinterpret `&Class.method` as an instance action. Doing so
 would contradict core Sputnik syntax and make ordinary callable references
 framework-dependent.
 
@@ -383,7 +383,7 @@ The macro generates a common internal handler wrapper for each route:
 Each generated wrapper ultimately has the same framework contract:
 
 ```text
-(ember.Request) -> ember.Response
+(orbit.Request) -> orbit.Response
 ```
 
 This permits one route table without reflective method names or a heterogeneous
@@ -405,7 +405,7 @@ controller = Home(request)
 result = controller.landing
 ```
 
-`ember.Controller` owns:
+`orbit.Controller` owns:
 
 - the request;
 - access to the application's routes and reverse-path helpers;
@@ -420,7 +420,7 @@ Controller instances are never pooled or shared.
 The canonical composition form is inheritance:
 
 ```sputnik
-class Home < ember.Controller:
+class Home < orbit.Controller:
 ```
 
 An alternative injection macro may be supplied for a class that already needs
@@ -428,7 +428,7 @@ another superclass:
 
 ```sputnik
 class Home < ApplicationObject:
-  use ember.controller
+  use orbit.controller
 ```
 
 The macro is lower-case to distinguish it from the runtime `Controller` class,
@@ -440,7 +440,7 @@ following the existing `use orm.model` style.
 
 ### 6.1. Request
 
-`ember.Request` is the normalized, request-scoped value passed through routing
+`orbit.Request` is the normalized, request-scoped value passed through routing
 and middleware. It exposes at least:
 
 ```text
@@ -465,13 +465,13 @@ low-level `ServerRequest`.
 ### 6.2. Minimal function handler
 
 ```sputnik
-import ember
+import orbit
 
 def handler(request):
-  ember.render text: "o hai", status: :ok
+  orbit.render text: "o hai", status: :ok
 ```
 
-`ember.render` is a pure response constructor in a module function. It does not
+`orbit.render` is a pure response constructor in a module function. It does not
 read a hidden current request.
 
 The following free-function spelling is deliberately not supported:
@@ -491,14 +491,14 @@ Both mechanisms conflict with the central-routing and explicit-state design.
 Controller methods may use receiver-local response state:
 
 ```sputnik
-class Home < ember.Controller:
+class Home < orbit.Controller:
   def landing():
     status :ok
     header "cache-control", "no-store"
     render text: "o hai"
 ```
 
-`render` returns a completed `ember.Response`. It does not perform an implicit
+`render` returns a completed `orbit.Response`. It does not perform an implicit
 language-level return. An early response is explicit:
 
 ```sputnik
@@ -513,7 +513,7 @@ A second render after the response has been completed raises
 
 The framework boundary accepts a deliberately small response-like set:
 
-- `ember.Response` — unchanged;
+- `orbit.Response` — unchanged;
 - `Str` — status 200, `text/plain; charset=utf-8`;
 - `Bytes` — status 200, `application/octet-stream`;
 - `Html` — status 200, `text/html; charset=utf-8`;
@@ -524,7 +524,7 @@ Maps and arbitrary model objects are not implicitly serialized as JSON. JSON
 must be explicit:
 
 ```sputnik
-ember.render json: {message: "ok"}, status: :ok
+orbit.render json: {message: "ok"}, status: :ok
 ```
 
 This prevents accidental serialization of model fields, secrets, ORM dirty
@@ -532,7 +532,7 @@ state, or framework objects.
 
 ### 6.5. Status symbols
 
-Ember maps known symbols to numeric HTTP statuses before constructing the
+Orbit maps known symbols to numeric HTTP statuses before constructing the
 low-level response:
 
 ```text
@@ -620,7 +620,7 @@ another route.
 
 ### 7.3. Required path policy
 
-Before implementation, Ember must fix:
+Before implementation, Orbit must fix:
 
 - strict, ignored, or redirected trailing slash behavior;
 - HEAD fallback to GET;
@@ -647,7 +647,7 @@ or remain explicit handler parsing.
 Recommended explicit form:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/people/:id",
     to: &People#show,
     params: {id: Int},
@@ -655,7 +655,7 @@ routes = ember.routes:
 ```
 
 ```sputnik
-class People < ember.Controller:
+class People < orbit.Controller:
   def show(id as Int):
     # `id` is already Int
 ```
@@ -688,7 +688,7 @@ When a database entity has a mutable human-readable URL, the route shape is
 normally static and only the capture value is dynamic:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/people/:slug", to: &People#show, as: :person
 ```
 
@@ -706,7 +706,7 @@ wrapper asks the repository to resolve the slug.
 Conceptual action:
 
 ```sputnik
-class People < ember.Controller:
+class People < orbit.Controller:
   def show(slug as Str):
     repo = service(:people)
     case repo.find_by_slug(slug):
@@ -779,7 +779,7 @@ the current canonical URL, and path updates must not create cycles.
 An application may intentionally place entity slugs at the root:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/login", to: &Sessions#new_
   get "/about", to: &Static#about
   get "/:slug", to: &People#show, as: :person
@@ -806,7 +806,7 @@ different database rows. Registering each path as a mutable route is still
 unnecessary. Use one lowest-precedence wildcard resolver:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/assets/*path", to: &Assets#show
   get "/api/*path",    to: &Api#dispatch
 
@@ -847,7 +847,7 @@ Display text is not necessarily the lookup key. An application may keep the
 original Unicode slug for rendering and store a normalized unique key for
 matching.
 
-Slug generation itself is application policy. Ember may later provide helpers
+Slug generation itself is application policy. Orbit may later provide helpers
 for transliteration and suffixing, but the router must not silently generate or
 mutate slugs.
 
@@ -878,7 +878,7 @@ If required later, the safe model is:
 4. atomically swap the snapshot for new requests;
 5. let in-flight requests finish on the previous snapshot.
 
-This is out of Ember v1. Arbitrary handler names from a database must never be
+This is out of Orbit v1. Arbitrary handler names from a database must never be
 sent through `send` or `method_missing` on the request hot path.
 
 ---
@@ -888,7 +888,7 @@ sent through `send` or `method_missing` on the request hot path.
 Named routes provide one canonical way to create URLs:
 
 ```sputnik
-routes = ember.routes:
+routes = orbit.routes:
   get "/people/:slug", to: &People#show, as: :person
 ```
 
@@ -948,7 +948,7 @@ def authenticate(request, next):
   if request.user:
     next(request)
   else:
-    ember.render text: "unauthorized", status: :unauthorized
+    orbit.render text: "unauthorized", status: :unauthorized
 ```
 
 Middleware layers are ordered from outermost to innermost:
@@ -979,10 +979,10 @@ Middleware that is an invariant of a module function, rather than policy of one
 particular route, may be attached with Sputnik's annotation macro surface:
 
 ```sputnik
-from ember.middleware import before
-import ember.integrations.orm as ember_orm
+from orbit.middleware import before
+import orbit.integrations.orm as orbit_orm
 
-database_request = ember_orm.connection(database)
+database_request = orbit_orm.connection(database)
 
 before database_request
 def create(request):
@@ -1056,7 +1056,7 @@ HTML string-tag macro:
 ```sputnik
 package app.views.posts
 
-from ember.html import html
+from orbit.html import html
 
 export index
 
@@ -1076,7 +1076,7 @@ default. Raw output requires an explicit audited type/helper.
 ### 12.3. External `.amv` files
 
 External view files require compiler/build support, not filesystem access from
-an Ember macro. The build layer must:
+an Orbit macro. The build layer must:
 
 - declare external files as build inputs;
 - map suffixes to exported string-tag macro providers;
@@ -1090,21 +1090,21 @@ GraphQL, protobuf, and other packages. It should not be hard-coded into the
 web framework.
 
 The exact registry/manifest syntax remains a separate compiler-level design.
-Until then Ember documentation must not present `.amv` mounting as an already
+Until then Orbit documentation must not present `.amv` mounting as an already
 implementable package-only macro.
 
 SQL template providers may safely parameterize interpolations, but declaring a
 typed result such as `List[Post]` additionally requires schema/result-shape
-validation that `sqlite3-sputnik` does not currently provide.
+validation that `sqlite3` does not currently provide.
 
 ---
 
 ## 13. ORM and database integration
 
-### 13.1. Core Ember is ORM-neutral
+### 13.1. Core Orbit is ORM-neutral
 
-Ember's router, request, response, middleware, and controller contracts do not
-depend on `sputnik-orm`. A handler may use raw SQLite, a repository, an HTTP
+Orbit's router, request, response, middleware, and controller contracts do not
+depend on `orm`. A handler may use raw SQLite, a repository, an HTTP
 service, an in-memory store, or no persistence.
 
 ### 13.2. One-time model binding to a shareable pool
@@ -1139,9 +1139,9 @@ surfaces; it does not add a second pool implementation.
 The optional ORM integration owns the controller execution scope:
 
 ```sputnik
-app = ember.App(
+app = orbit.App(
   routes: routes,
-  integrations: [ember_orm.pool(database)]
+  integrations: [orbit_orm.pool(database)]
 )
 ```
 
@@ -1157,7 +1157,7 @@ database.with_connection:
 The action remains ordinary model code:
 
 ```sputnik
-class People < ember.Controller:
+class People < orbit.Controller:
   def show(id as Int):
     match Person.find(id):
       when Ok(person):
@@ -1209,7 +1209,7 @@ lifecycle.
 
 ### 13.6. SQLite concurrency and transaction boundary
 
-`sqlite3-sputnik` now reports `pool: true`, `pool_affinity: :lease`, and
+`sqlite3` now reports `pool: true`, `pool_affinity: :lease`, and
 `pool_context: :task_local`. Its non-inheritable task-local binding survives
 suspension and worker migration; a `task.spawn` child obtains a separate lease.
 Open statements are finalized and unfinished transactions rolled back on
@@ -1236,10 +1236,10 @@ cannot give the compiler field information retroactively.
 `App` is a callable request pipeline independent of socket ownership:
 
 ```sputnik
-app = ember.App(
+app = orbit.App(
   routes: routes,
   middleware: [&request_id, &access_log],
-  integrations: [ember_orm.pool(database)]
+  integrations: [orbit_orm.pool(database)]
 )
 
 response = app.call(request)
@@ -1249,7 +1249,7 @@ The HTTP adapter is thin:
 
 ```sputnik
 server.serve |server_request|:
-  app.call(ember.Request.from_server(server_request)).to_server_response
+  app.call(orbit.Request.from_server(server_request)).to_server_response
 ```
 
 Convenience may construct the current low-level server:
@@ -1266,21 +1266,22 @@ app.run(
 But `App#call` is the primary semantic boundary. Tests, alternate servers, a
 future TLS transport, or an in-process caller use the same pipeline.
 
-Network/listen capabilities remain enforced by `net`/`net.http`; Ember does not
+Network/listen capabilities remain enforced by `net`/`net.http`; Orbit does not
 manufacture or hide capabilities.
 
 `integrations:` is optional application composition. An integration may
 decorate typed target wrappers, add explicit request services, and participate
 in shutdown, but it does not mutate `Routes` or create process-global current
-state. Core Ember remains usable without ORM imports.
+state. Core Orbit remains usable without ORM imports.
 
 ### 14.1. Bidirectional cooperative streaming
 
-Streaming support spans the low-level HTTP transport and Ember. It is a
+Streaming support spans the low-level HTTP transport and Orbit. It is a
 protocol feature, not a buffered-response convenience API. The first
 implementation covers HTTP/1.1 response chunked transfer coding and streaming
-request consumption for both chunked and Content-Length framing. Chunk
-extensions and trailer fields follow RFC 9112.
+request consumption for both chunked and Content-Length framing. The additive
+2026-10-20 extension also provides known-length streaming responses. Chunk
+extensions and trailer fields follow RFC 9112 and belong only to chunked mode.
 
 Streaming must be cooperative from its first implementation. Waiting for
 socket readability, socket writability, producer data, or downstream capacity
@@ -1294,7 +1295,7 @@ Selecting a streaming body is the response commitment point. A controller
 shape may be:
 
 ```sputnik
-class Events < ember.Controller:
+class Events < orbit.Controller:
   def index():
     stream(
       status: :ok,
@@ -1321,25 +1322,36 @@ The commitment rule is based on selecting the streaming body, not on whether
 the adapter has already flushed header bytes to the socket. This keeps behavior
 deterministic in tests and prevents a producer race from changing metadata.
 
-For an HTTP/1.1 streaming response Ember automatically adds
-`Transfer-Encoding: chunked` before freezing the headers. `Content-Length` is
-forbidden, and an application-supplied `Transfer-Encoding` must not override or
-extend the framework framing. Declared trailer names automatically produce the
-corresponding `Trailer` header. Streaming bodies are rejected for response
+For an HTTP/1.1 streaming response, `length: null` (the default) selects
+`Transfer-Encoding: chunked`. A nonnegative `length: N` selects `Content-Length: N`
+and streams exactly N content bytes without buffering the whole response.
+Raw `Content-Length`, `Transfer-Encoding` and `Trailer` fields remain forbidden:
+the transport owns framing. Fixed mode rejects chunk extensions and trailers;
+overflow/short close or producer raises `BodyLengthError` and closes the
+connection without reusing it, even if a producer catches the write error.
+In chunked mode declared trailer names automatically produce the corresponding
+`Trailer` header. Streaming bodies are rejected for response
 statuses and request methods whose HTTP semantics do not permit a body; HEAD
-uses the same selected metadata but never runs a body producer.
+uses the same selected metadata, including a declared fixed length, but never
+runs a body producer. The option is shared by `orbit.stream`, `StreamingResponse`,
+`Controller#stream` and `net.http.ServerResponse.stream`; header derivations and
+middleware preserve it. Fixed close/finish are framing-free; zero length and
+empty fixed writes are supported.
+The producer's return value is ignored in VM and native execution; only body
+writes contribute content. In particular, a trailing StreamBody or telemetry
+event is not converted into an HTTP handler result.
 
 #### 14.1.2. Response chunk contract
 
-Every successful non-empty `body.write(data, extensions: ...)` call is exactly
-one semantic HTTP chunk:
+In chunked mode every successful non-empty `body.write(data, extensions: ...)`
+call is exactly one semantic HTTP chunk:
 
 ```text
 chunk-size [chunk extensions] CRLF
 chunk-data CRLF
 ```
 
-Ember and the low-level encoder must not merge adjacent writes into one chunk
+Orbit and the low-level encoder must not merge adjacent writes into one chunk
 or split one write into several semantic chunks. The TCP layer may of course
 split the encoded bytes across packets. Empty writes are rejected or specified
 as a no-op; they must never encode a zero-size data chunk because zero denotes
@@ -1423,7 +1435,7 @@ def ingest(request):
     process(chunk.data, extensions: chunk.extensions)
 
   verify(request.body_stream.trailers)
-  ember.render status: :accepted
+  orbit.render status: :accepted
 ```
 
 `RequestChunk#data` is `Bytes`. Under chunked framing, `extensions` is the same
@@ -1454,13 +1466,13 @@ background drain.
 #### 14.1.5. Full-duplex exchange semantics
 
 Reading the complete request before selecting or producing the response is not
-an Ember requirement. HTTP request input and response output are independent
+an Orbit requirement. HTTP request input and response output are independent
 halves of one exchange. A handler may select a `StreamingResponse` immediately,
 and its deferred producer may interleave cooperative reads and writes:
 
 ```sputnik
 def mirror(request):
-  ember.stream(
+  orbit.stream(
     status: :ok,
     headers: {"content-type": "application/octet-stream"},
     trailers: ["x-received-chunks"]
@@ -1506,11 +1518,11 @@ response metadata.
 
 Backpressure remains bounded in both directions. A client that uploads without
 reading and an application that produces without reading can create a genuine
-protocol-level stalemate; Ember does not hide it with unbounded buffering.
+protocol-level stalemate; Orbit does not hide it with unbounded buffering.
 Configured idle/write/read deadlines and cancellation terminate that exchange
 without blocking the scheduler worker.
 
-Full duplex is guaranteed at Ember's direct HTTP connection boundary. A
+Full duplex is guaranteed at Orbit's direct HTTP connection boundary. A
 reverse proxy, gateway, or client library may independently buffer request or
 response bodies; deployments that require end-to-end duplex behavior must
 disable such buffering and verify the complete path with an integration test.
@@ -1563,7 +1575,7 @@ progress on one cooperative worker.
 Most framework tests should not open a socket:
 
 ```sputnik
-response = app.call(ember.testing.get("/people/ada-lovelace"))
+response = app.call(orbit.testing.get("/people/ada-lovelace"))
 
 expect(response.status).to_equal(200)
 expect(response.body_text).to_contain("Ada")
@@ -1668,18 +1680,18 @@ routing paths.
 ```sputnik
 package hello
 
-import ember
+import orbit
 
 export main
 
-routes = ember.routes:
+routes = orbit.routes:
   get "/", to: &handler
 
 def handler(request):
-  ember.render text: "o hai", status: :ok
+  orbit.render text: "o hai", status: :ok
 
 def main():
-  ember.App(routes: routes).run(port: 3000)
+  orbit.App(routes: routes).run(port: 3000)
 ```
 
 ### 18.2. MVC-shaped application
@@ -1703,13 +1715,13 @@ app.s
 ```sputnik
 package app.routes
 
-import ember
+import orbit
 from app.controllers.home import Home
 from app.controllers.people import People
 
 export routes
 
-routes = ember.routes:
+routes = orbit.routes:
   get "/", to: &Home#landing, as: :root
   get "/people/:slug", to: &People#show, as: :person
 ```
@@ -1723,12 +1735,12 @@ state, and response semantics are identical to the single-file application.
 
 ### Phase 0 — contract and diagnostics
 
-- fix the `ember.routes` AST/expansion contract;
+- fix the `orbit.routes` AST/expansion contract;
 - fix callable target categories;
 - fix route grammar, precedence, and ambiguity diagnostics;
 - fix Request/Response and status semantics;
 - fix controller lifecycle;
-- reserve stable `EMBER_*` diagnostic codes.
+- reserve stable `ORBIT_*` diagnostic codes.
 
 ### Phase 1 — minimal callable app
 
@@ -1742,7 +1754,7 @@ state, and response semantics are identical to the single-file application.
 
 ### Phase 2 — controllers and middleware
 
-- `ember.Controller`;
+- `orbit.Controller`;
 - `&Class#action` wrappers;
 - status/header/render/redirect helpers;
 - application/scope/route middleware;
@@ -1811,10 +1823,10 @@ responsibilities.
 
 ## 20. Decisions fixed by this document
 
-1. The framework and working package name is Ember.
-2. The only route-table constructor spelling is `ember.routes`.
-3. The canonical use is `routes = ember.routes:` and returns immutable
-   `ember.Routes`.
+1. The framework and working package name is Orbit.
+2. The only route-table constructor spelling is `orbit.routes`.
+3. The canonical use is `routes = orbit.routes:` and returns immutable
+   `orbit.Routes`.
 4. Routes are central and never declared by handler annotations.
 5. Separate route files are static Sputnik modules, not Ruby-style runtime loads.
 6. Function targets use `&handler`; controller actions use `&Class#method`.
@@ -1826,7 +1838,7 @@ responsibilities.
 11. Slug changes update canonical/history data and may redirect old paths.
 12. Arbitrary CMS URLs use a lowest-precedence database-backed catch-all.
 13. Routes remain immutable when slug/path data changes.
-14. Core Ember is ORM-neutral.
+14. Core Orbit is ORM-neutral.
 15. Web ORM integration binds models once to a shareable pool-backed executor.
 16. Controller targets automatically receive a scoped lease when the optional
     integration is installed; controller actions continue to use `Person.find`
@@ -1837,11 +1849,11 @@ responsibilities.
     compiler-level source-format registry.
 19. Selecting a streaming response immediately freezes status and initial
     headers, before the first body write.
-20. HTTP/1.1 streaming responses own their framing and automatically use
-    `Transfer-Encoding: chunked`; they never combine chunked coding with
-    `Content-Length`.
-21. Every response stream write is one semantic chunk and may carry validated
-    RFC chunk extensions.
+20. HTTP/1.1 streaming responses own framing: `length: null` uses chunked coding,
+    `length: N` uses exact fixed-length content; Content-Length and
+    Transfer-Encoding are never combined.
+21. In chunked mode every response stream write is one semantic chunk and may
+    carry validated RFC chunk extensions; fixed mode uses raw content parts.
 22. Response trailers are declared up front and are emitted only after the
     data body has been closed.
 23. `request.body_stream` is uniform across empty, Content-Length, and chunked
@@ -1872,5 +1884,5 @@ responsibilities.
 6. The final spelling and lifecycle ordering of `App#integrations` relative to
    application middleware and shutdown hooks.
 7. The manifest and provider-reference syntax for external `.amv` formats.
-8. The minimum low-level server work required before Ember is described as
+8. The minimum low-level server work required before Orbit is described as
    production-ready rather than an application-framework preview.

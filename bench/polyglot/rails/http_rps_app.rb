@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-# Rails API/Puma counterpart for the Ember request-flow benchmark. This is a
+# Rails API/Puma counterpart for the Orbit request-flow benchmark. This is a
 # framework lane, deliberately separate from the raw Ruby polyglot workloads.
 
 require "action_controller/railtie"

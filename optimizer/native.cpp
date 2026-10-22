@@ -59,6 +59,8 @@ const char *opcode_stub_kind(bytecode::Opcode opcode) {
     return "raise";
   case bytecode::Opcode::Throw:
     return "throw";
+  case bytecode::Opcode::BreakForeign:
+    return "foreign_break";
   default:
     return "";
   }

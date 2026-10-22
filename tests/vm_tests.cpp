@@ -4947,6 +4947,148 @@ void test_execute_emitted_v20_5_array_generation_and_optional_access() {
          "Array.filled non-Int length reports TypeError");
 }
 
+void expect_conditional_checks(const std::string &source) {
+  const auto exec = execute_emitted_init(source);
+  if (!exec.ok() && exec.fault.has_value()) {
+    std::cerr << exec.fault->error_name << ": " << exec.fault->message << "\n";
+  }
+  expect(exec.ok() && exec.value.is_list(), "conditional assignment executes");
+  const auto values = exec.value.as_list();
+  for (std::size_t i = 0; i < values->items.size(); ++i) {
+    expect(values->items[i].is_bool() && values->items[i].as_bool(),
+           "conditional assignment check " + std::to_string(i));
+  }
+}
+
+void test_runtime_conditional_assignment() {
+  expect_conditional_checks(
+      "calls = 0\n"
+      "def fallback():\n"
+      "  calls += 1\n"
+      "  42\n"
+      "a = null\n"
+      "b = false\n"
+      "c = false\n"
+      "r1 = (a?=fallback())\n"
+      "r2 = (b ?= fallback())\n"
+      "r3 = (c or=fallback())\n"
+      "r4 = (a or= fallback())\n"
+      "z = 0\n"
+      "s = \"\"\n"
+      "xs = []\n"
+      "m = {}\n"
+      "z or= fallback()\n"
+      "s ?= fallback()\n"
+      "xs or= fallback()\n"
+      "m ?= fallback()\n"
+      "p = null\n"
+      "q = null\n"
+      "p ?= q or= 7\n"
+      "def captured():\n"
+      "  b ?= 9\n"
+      "  b or= 10\n"
+      "captured()\n"
+      "[r1 == 42, r2 == false, r3 == 42, r4 == 42, calls == 2, "
+      "z == 0, s == \"\", xs == [], m == {}, p == 7, q == 7, b == 10]\n");
+  expect_conditional_checks(
+      "m = {nil: null, flag: false, zero: 0}\n"
+      "r1 = (m[:missing] ?= 1)\n"
+      "r2 = (m[:nil] ?= 2)\n"
+      "r3 = (m[:flag] ?= 3)\n"
+      "r4 = (m[\"flag\"] or= 4)\n"
+      "m[:zero] or= 99\n"
+      "m[:other] or= 5\n"
+      "strict = StrictMap{name: null}\n"
+      "strict[\"name\"] ?= 6\n"
+      "strict[:name] ?= 7\n"
+      "xs = [null, false, 0]\n"
+      "r5 = (xs[0] ?= 8)\n"
+      "r6 = (xs[1] ?= 9)\n"
+      "r7 = (xs[-2] or= 10)\n"
+      "xs[-1] or= 11\n"
+      "[r1 == 1, r2 == 2, r3 == false, r4 == 4, m[:zero] == 0, "
+      "m[:other] == 5, strict[\"name\"] == 6, strict[:name] == 7, "
+      "strict.count == 2, r5 == 8, r6 == false, r7 == 10, "
+      "xs == [8, 10, 0]]\n");
+}
+
+void test_runtime_conditional_assignment_targets() {
+  expect_conditional_checks(
+      "events = []\n"
+      "xs = [null]\n"
+      "def target():\n"
+      "  events.push!(:receiver)\n"
+      "  xs\n"
+      "def index():\n"
+      "  events.push!(:index)\n"
+      "  0\n"
+      "def value():\n"
+      "  events.push!(:rhs)\n"
+      "  12\n"
+      "target()[index()] ?= value()\n"
+      "target()[index()] or= value()\n"
+      "class Box:\n"
+      "  def init():\n"
+      "    @value = null\n"
+      "    @gets = 0\n"
+      "    @sets = 0\n"
+      "  attr gets\n"
+      "  attr sets\n"
+      "  prop value:\n"
+      "    get:\n"
+      "      @gets += 1\n"
+      "      @value\n"
+      "    set(v):\n"
+      "      @sets += 1\n"
+      "      @value = v\n"
+      "      999\n"
+      "  def defaults():\n"
+      "    @value ?= false\n"
+      "    @value or= 13\n"
+      "box = Box()\n"
+      "r1 = (box.value ?= false)\n"
+      "r2 = (box.value ?= 99)\n"
+      "r3 = (box.value or= 14)\n"
+      "r4 = (box.value or= 99)\n"
+      "box2 = Box()\n"
+      "r5 = box2.defaults()\n"
+      "class Bag:\n"
+      "  def init(): @values = {}\n"
+      "  def []?(key): @values[?key]\n"
+      "  def []=(key, v):\n"
+      "    @values[key] = v\n"
+      "    999\n"
+      "bag = Bag()\n"
+      "r6 = (bag[:key] ?= 15)\n"
+      "r7 = (bag[:key] or= 99)\n"
+      "[xs[0] == 12, events == [:receiver, :index, :rhs, :receiver, :index], "
+      "r1 == false, r2 == false, r3 == 14, r4 == 14, "
+      "box.gets == 4, box.sets == 2, r5 == 13, r6 == 15, r7 == 15]\n");
+  expect_conditional_checks("a = null\n"
+                            "7\n"
+                            "a ?= $_\n"
+                            "r = $_\n"
+                            "m = {flag: false, yes: 1}\n"
+                            "m.freeze()\n"
+                            "r1 = (m[:flag] ?= 9)\n"
+                            "r2 = (m[:yes] or= 9)\n"
+                            "[a == 7, r == 7, r1 == false, r2 == 1]\n");
+  for (const std::string &op : {std::string("?="), std::string("or=")}) {
+    for (const auto &probe : std::vector<std::pair<std::string, std::string>>{
+             {"xs = [null]\nxs[1] " + op + " 1\n", "IndexError"},
+             {"xs = [null]\nxs[\"bad\"] " + op + " 1\n", "TypeError"},
+             {"m = {}\nm.freeze()\nm[:key] " + op + " 1\n", "FrozenError"},
+             {"xs = [null]\nxs.freeze()\nxs[0] " + op + " 1\n", "FrozenError"},
+             {"a = null\na " + op + " raise ValueError(\"failure\")\n",
+              "ValueError"}}) {
+      const auto exec = execute_emitted_init(probe.first);
+      expect(!exec.ok() && exec.fault.has_value() &&
+                 exec.fault->error_name == probe.second,
+             op + " preserves " + probe.second);
+    }
+  }
+}
+
 void test_runtime_map_get_or_set() {
   const sputnik::runtime::ExecutionResult exec = execute_emitted_init(
       "calls = 0\n"
@@ -13337,6 +13479,8 @@ int main() {
   test_execute_emitted_user_index_methods();
   test_execute_emitted_v20_5_array_generation_and_optional_access();
   test_runtime_map_get_or_set();
+  test_runtime_conditional_assignment();
+  test_runtime_conditional_assignment_targets();
   test_runtime_watch_local_storage_replacement();
   test_runtime_watch_stream_cursor_and_overflow();
   test_runtime_watch_activity_hook_runs_after_publication_and_is_advisory();

@@ -1780,6 +1780,9 @@ bool decode_opcode(std::uint8_t raw, Opcode &opcode) {
   case 0x38:
     opcode = Opcode::ReturnNonlocal;
     return true;
+  case 0x39:
+    opcode = Opcode::BreakForeign;
+    return true;
   case 0x40:
     opcode = Opcode::PPrepSeq;
     return true;
@@ -3412,7 +3415,7 @@ bool verify_ordinary_code_ref(
     const std::unordered_map<std::uint32_t, std::size_t> &ids,
     std::uint32_t code_id, const std::string &message,
     std::vector<VerifyError> &errors, const char *missing_code = "BC1312",
-    SectionKind section = SectionKind::Code) {
+    SectionKind section = SectionKind::Code, bool handler_reference = false) {
   if (!code_id_exists(ids, code_id)) {
     add_verify_error(errors, missing_code, message, section, 0);
     return false;
@@ -3423,6 +3426,14 @@ bool verify_ordinary_code_ref(
                      "notebook cell code cannot be used as an ordinary "
                      "executable target",
                      SectionKind::Code, 0);
+    return false;
+  }
+  if (!handler_reference &&
+      (target.kind == CodeKind::Rescue || target.kind == CodeKind::Ensure)) {
+    add_verify_error(errors, "BC1316",
+                     "private handler code cannot be used as an ordinary "
+                     "executable target",
+                     section, 0);
     return false;
   }
   return true;
@@ -3552,9 +3563,66 @@ void verify_initializedness(const BcModule &module, const BcCode &code,
   }
 }
 
+using NotebookCodeOwners = std::unordered_map<std::uint32_t, std::uint32_t>;
+
+// Rescue/ensure code executes in its owner's cell context. Infer ownership
+// only through handler-table edges: ordinary closures/functions must never
+// gain slot access. Topological propagation rejects orphaned, cyclic, shared
+// and ordinary-code-owned helpers without recursive traversal of untrusted BC.
+NotebookCodeOwners notebook_code_owners(
+    const BcModule &module,
+    const std::unordered_map<std::uint32_t, std::size_t> &code_ids) {
+  std::vector<const BcCode *> codes;
+  for (const auto &entry : code_ids) codes.push_back(&module.code_objects[entry.second]);
+  NotebookCodeOwners owners, candidate;
+  std::unordered_map<std::uint32_t, std::size_t> pending;
+  std::unordered_map<std::uint32_t, bool> valid;
+  std::unordered_map<std::uint32_t, std::vector<std::uint32_t>> children;
+  std::vector<std::uint32_t> ready;
+  for (const auto *entry : codes) {
+    const auto &code = *entry;
+    if (code.kind == CodeKind::Rescue || code.kind == CodeKind::Ensure) {
+      pending.emplace(code.code_id, 0);
+      valid.emplace(code.code_id, true);
+    } else {
+      ready.push_back(code.code_id);
+      if (code.kind == CodeKind::NotebookCell)
+        owners.emplace(code.code_id, code.code_id);
+    }
+  }
+  for (const auto *entry : codes) {
+    const auto &code = *entry;
+    for (const auto &handler : code.handler_table) {
+      auto found = pending.find(handler.handler_code_id);
+      if (found == pending.end()) continue;
+      ++found->second;
+      children[code.code_id].push_back(handler.handler_code_id);
+    }
+  }
+  for (const auto &entry : pending)
+    if (entry.second == 0) ready.push_back(entry.first);
+  for (std::size_t index = 0; index < ready.size(); ++index) {
+    const auto parent = ready[index];
+    const auto owner = owners.find(parent);
+    const auto root = owner == owners.end() ? 0U : owner->second;
+    const auto edges = children.find(parent);
+    if (edges == children.end()) continue;
+    for (const auto child : edges->second) {
+      const auto inserted = candidate.emplace(child, root);
+      if (root == 0U || inserted.first->second != root) valid[child] = false;
+      if (--pending.at(child) == 0) {
+        if (valid.at(child)) owners.emplace(child, candidate.at(child));
+        ready.push_back(child);
+      }
+    }
+  }
+  return owners;
+}
+
 void verify_notebook_metadata(
     const BcModule &module,
     const std::unordered_map<std::uint32_t, std::size_t> &code_ids,
+    const NotebookCodeOwners &notebook_owners,
     std::vector<VerifyError> &errors) {
   const bool notebook_only =
       (module.file_flags & kFileFlagNotebookOnly) != 0U;
@@ -3775,6 +3843,11 @@ void verify_notebook_metadata(
   // after both tables have been indexed. A descriptor may be used multiple
   // times in a cell, while each occurrence still has to use its declared
   // direction.
+  std::unordered_map<std::uint32_t, std::vector<const BcCode *>> cell_code;
+  for (const auto &code : module.code_objects) {
+    const auto owner = notebook_owners.find(code.code_id);
+    if (owner != notebook_owners.end()) cell_code[owner->second].push_back(&code);
+  }
   for (const BcCode &code : module.code_objects) {
     if (code.kind != CodeKind::NotebookCell) {
       continue;
@@ -3788,34 +3861,36 @@ void verify_notebook_metadata(
     const std::vector<std::uint32_t> &outputs = cell.output_descriptor_ids;
     std::set<std::uint32_t> load_operands;
     std::set<std::uint32_t> store_operands;
-    for (const Instruction &instruction : code.instructions) {
-      if (instruction.operands.size() != 2U) {
-        continue;
-      }
-      std::uint32_t descriptor_id = 0;
-      if (instruction.opcode == Opcode::LoadNotebookSlot) {
-        if (!operand_u32_for_verify(instruction, 1, &descriptor_id)) {
+    for (const auto *owned : cell_code[code.code_id]) {
+      for (const Instruction &instruction : owned->instructions) {
+        if (instruction.operands.size() != 2U) {
           continue;
         }
-        load_operands.insert(descriptor_id);
-        if (std::find(inputs.begin(), inputs.end(), descriptor_id) ==
-            inputs.end()) {
-          add_verify_error(
-              errors, "BC1433",
-              "LOAD_NOTEBOOK_SLOT descriptor is not a declared input",
-              SectionKind::Nbmd, 0);
-        }
-      } else if (instruction.opcode == Opcode::StoreNotebookSlot) {
-        if (!operand_u32_for_verify(instruction, 0, &descriptor_id)) {
-          continue;
-        }
-        store_operands.insert(descriptor_id);
-        if (std::find(outputs.begin(), outputs.end(), descriptor_id) ==
-            outputs.end()) {
-          add_verify_error(
-              errors, "BC1434",
-              "STORE_NOTEBOOK_SLOT descriptor is not a declared output",
-              SectionKind::Nbmd, 0);
+        std::uint32_t descriptor_id = 0;
+        if (instruction.opcode == Opcode::LoadNotebookSlot) {
+          if (!operand_u32_for_verify(instruction, 1, &descriptor_id)) {
+            continue;
+          }
+          load_operands.insert(descriptor_id);
+          if (std::find(inputs.begin(), inputs.end(), descriptor_id) ==
+              inputs.end()) {
+            add_verify_error(
+                errors, "BC1433",
+                "LOAD_NOTEBOOK_SLOT descriptor is not a declared input",
+                SectionKind::Nbmd, 0);
+          }
+        } else if (instruction.opcode == Opcode::StoreNotebookSlot) {
+          if (!operand_u32_for_verify(instruction, 0, &descriptor_id)) {
+            continue;
+          }
+          store_operands.insert(descriptor_id);
+          if (std::find(outputs.begin(), outputs.end(), descriptor_id) ==
+              outputs.end()) {
+            add_verify_error(
+                errors, "BC1434",
+                "STORE_NOTEBOOK_SLOT descriptor is not a declared output",
+                SectionKind::Nbmd, 0);
+          }
         }
       }
     }
@@ -3840,6 +3915,7 @@ void verify_notebook_metadata(
 InstructionFlow verify_instruction_flow(
     const BcModule &module,
     const std::unordered_map<std::uint32_t, std::size_t> &code_ids,
+    const NotebookCodeOwners &notebook_owners,
     const BcCode &code, std::size_t pc, std::vector<VerifyError> &errors) {
   const Instruction &instruction = code.instructions[pc];
   const std::size_t insn_count = code.instructions.size();
@@ -3857,9 +3933,9 @@ InstructionFlow verify_instruction_flow(
   };
 
   auto require_notebook_cell = [&]() {
-    if (code.kind != CodeKind::NotebookCell) {
+    if (notebook_owners.find(code.code_id) == notebook_owners.end()) {
       add_verify_error(errors, "BC1317",
-                       "notebook slot opcode requires notebook cell code",
+                       "notebook slot opcode requires a cell or its private handler",
                        SectionKind::Code, 0);
     }
   };
@@ -3948,7 +4024,8 @@ InstructionFlow verify_instruction_flow(
     break;
   }
   case Opcode::Return:
-  case Opcode::ReturnNonlocal: {
+  case Opcode::ReturnNonlocal:
+  case Opcode::BreakForeign: {
     if (operand_count_is(instruction, 1, errors)) {
       add_register_read(code, instruction, 0, flow, errors);
     }
@@ -4758,7 +4835,8 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
     }
   }
 
-  verify_notebook_metadata(module, code_ids, errors);
+  const auto notebook_owners = notebook_code_owners(module, code_ids);
+  verify_notebook_metadata(module, code_ids, notebook_owners, errors);
 
   for (const Constant &constant : module.const_pool) {
     switch (constant.kind) {
@@ -4879,7 +4957,7 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
       if (kind != kHandlerKindCatch) {
         verify_ordinary_code_ref(module, code_ids, entry.handler_code_id,
                                  "handler references unknown code id", errors,
-                                 "BC1204");
+                                 "BC1204", SectionKind::Code, true);
       }
     }
 
@@ -4887,7 +4965,7 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
     flows.reserve(code.instructions.size());
     for (std::size_t pc = 0; pc < code.instructions.size(); ++pc) {
       flows.push_back(
-          verify_instruction_flow(module, code_ids, code, pc, errors));
+          verify_instruction_flow(module, code_ids, notebook_owners, code, pc, errors));
     }
     for (std::size_t pc = 0; pc < flows.size(); ++pc) {
       for (std::uint32_t target : flows[pc].successors) {
@@ -5879,6 +5957,8 @@ std::string opcode_name(Opcode opcode) {
     return "RETURN";
   case Opcode::ReturnNonlocal:
     return "RETURN_NONLOCAL";
+  case Opcode::BreakForeign:
+    return "BREAK_FOREIGN";
   case Opcode::Raise:
     return "RAISE";
   case Opcode::RequireBlock:

@@ -573,6 +573,79 @@ void test_compiled_source_runs_through_runtime_and_kernel() {
          "compiled consumer should publish y = 3");
 }
 
+void test_compiled_conditional_assignment_publishes_both_branches() {
+  for (const std::string &op : {std::string("?="), std::string("or=")}) {
+    for (const std::string &initial :
+         {std::string("null"), std::string("false"), std::string("5")}) {
+      const std::vector<CellSource> cells{cell(1, "x = " + initial + "\n"),
+                                          cell(2, "x " + op + " 7\ny = x\n")};
+      const sputnik::notebook::DependencyGraph graph(cells);
+      NotebookImage image;
+      const auto provider =
+          sputnik::notebook::compile_cell(cells[0], graph, image);
+      const auto consumer =
+          sputnik::notebook::compile_cell(cells[1], graph, image);
+      expect(provider.ok && consumer.ok, "conditional source cells compile");
+      NotebookKernel kernel(cells);
+      const auto snapshot = image.snapshot();
+      std::string manifest_error;
+      const auto manifest = sputnik::notebook::vm_notebook_image_manifest(
+          *snapshot, &manifest_error);
+      expect(manifest.has_value(), manifest_error);
+      RuntimeWorld world(*snapshot);
+      NotebookVmCellExecutor provider_executor(
+          &world, provider.code_id, manifest->cell_for_id(1)->descriptors);
+      NotebookVmCellExecutor consumer_executor(
+          &world, consumer.code_id, manifest->cell_for_id(2)->descriptors);
+      expect(kernel.run_cell(1, provider_executor.as_executor()).ok,
+             "conditional provider publishes x");
+      const auto result = kernel.run_cell(2, consumer_executor.as_executor());
+      expect(result.ok, result.error);
+      for (const std::string &name : {std::string("x"), std::string("y")}) {
+        const auto value = kernel.read_slot({2, name});
+        const bool retains_false = initial == "false" && op == "?=";
+        expect(value.has_value() &&
+                   (retains_false
+                        ? value->is_bool() && !value->as_bool()
+                        : value->is_integer() &&
+                              value->as_integer() == (initial == "5" ? 5 : 7)),
+               "conditional cell publishes the retained or assigned value");
+      }
+    }
+  }
+}
+
+void test_rescue_ensure_publish_notebook_slots() {
+  std::vector<CellSource> cells{cell(1,
+      "rejected = false\nvalue = 0\ntry:\n  1 // 0\n"
+      "rescue:\n  rejected = true\n  try:\n    value = 2\n"
+      "  ensure:\n    value = 3\nensure:\n  value = value + 1\n"
+      "result = (rejected, value)\n")};
+  const sputnik::notebook::DependencyGraph graph(cells);
+  NotebookImage image;
+  const auto compiled = sputnik::notebook::compile_cell(cells[0], graph, image);
+  expect(compiled.ok, "rescue/ensure output source compiles");
+  const auto snapshot = image.snapshot();
+  const auto decoded = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(*snapshot));
+  expect(decoded.ok(), "rescue/ensure image verifies with private handlers");
+  std::string error;
+  const auto manifest = sputnik::notebook::vm_notebook_image_manifest(*snapshot, &error);
+  expect(manifest.has_value(), error);
+  RuntimeWorld world(*snapshot);
+  NotebookKernel kernel(cells);
+  NotebookVmCellExecutor executor(&world, compiled.code_id,
+                                 manifest->cell_for_id(1)->descriptors);
+  const auto result = kernel.run_cell(1, executor.as_executor());
+  expect(result.ok, result.error);
+  const auto rejected = kernel.read_slot({1, "rejected"});
+  const auto value = kernel.read_slot({1, "value"});
+  expect(rejected && rejected->is_bool() && rejected->as_bool(),
+         "rescue assignment publishes true");
+  expect(value && value->is_integer() && value->as_integer() == 4,
+         "nested ensure writes are published atomically");
+}
+
 } // namespace
 
 int main() {
@@ -588,6 +661,8 @@ int main() {
   test_executor_reports_run_local_runtime_dependency_capture();
   test_kernel_stores_adapter_runtime_dependencies_transactionally();
   test_compiled_source_runs_through_runtime_and_kernel();
+  test_compiled_conditional_assignment_publishes_both_branches();
+  test_rescue_ensure_publish_notebook_slots();
   std::cout << "notebook_vm_integration_tests ok\n";
   return 0;
 }

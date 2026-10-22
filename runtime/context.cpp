@@ -1,3 +1,5 @@
+#include "runtime/notebook_live.h"
+#include <exception>
 #include "runtime/context.h"
 #include "runtime/reactor.h"
 
@@ -54,8 +56,45 @@ const std::atomic<bool> *runtime_wait_cancel_flag() {
       : tls_run_cancellation ? tls_run_cancellation->cancel_flag() : nullptr;
 }
 
+static thread_local std::uint64_t tls_run_registration = 0;
+RuntimeRunTaskScope::RuntimeRunTaskScope(const std::shared_ptr<RuntimeRunState::Task> &task) : previous_(tls_run_registration) {
+  tls_run_registration = task ? task->id() : 0;
+  if (task) task->mark_active();
+}
+RuntimeRunTaskScope::~RuntimeRunTaskScope() { tls_run_registration = previous_; }
+void RuntimeRunState::Task::mark_active() {
+  std::lock_guard<std::mutex> lock(run_->mutex_);
+  auto found = run_->task_records_.find(id_);
+  if (found != run_->task_records_.end() && !found->second.finished && found->second.value.state != "active") {
+    found->second.value.state = "active"; ++run_->task_revision_;
+  }
+}
+RuntimeRunTelemetry RuntimeRunState::telemetry() const {
+  std::lock_guard<std::mutex> lock(mutex_);
+  RuntimeRunTelemetry out; out.revision = task_revision_; out.dropped = task_dropped_;
+  out.active = tasks_.size(); out.total = next_task_ - 1;
+  const auto now = std::chrono::steady_clock::now();
+  for (const auto &[_, record] : task_records_) {
+    auto value = record.value;
+    if (!record.finished) value.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - record.start).count();
+    out.tasks.push_back(std::move(value));
+  }
+  return out;
+}
+void RuntimeRunState::finish_task(std::uint64_t id, const std::string &state, const std::string &error) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto found = task_records_.find(id);
+  if (found == task_records_.end() || found->second.finished) return;
+  auto &record = found->second; record.finished = true; record.value.state = state;
+  record.value.error = error.substr(0, 1024);
+  record.value.elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - record.start).count();
+  ++task_revision_;
+}
+
 std::shared_ptr<RuntimeRunState::Task> RuntimeRunState::register_task() {
   auto task = std::shared_ptr<Task>(new Task(shared_from_this()));
+  const auto source = resolve_runtime_text_source_location();
+  const auto cell = NotebookLiveScope::cell_id();
   std::lock_guard<std::mutex> lock(mutex_);
   if (root_closed_ && tasks_.empty())
     throw RuntimeTaskFailure("LifetimeError", "execution run has already drained");
@@ -63,18 +102,30 @@ std::shared_ptr<RuntimeRunState::Task> RuntimeRunState::register_task() {
     throw RuntimeTaskFailure("RuntimeError", "run task identity exhausted");
   const auto id = next_task_++;
   tasks_.emplace(id, std::function<void()>{});
-  task->id_ = id;
+  task->id_ = id; task->exceptions_ = std::uncaught_exceptions();
+  if (task_records_.size() >= 512) {
+    const auto retired = std::find_if(task_records_.begin(), task_records_.end(), [](const auto &item) { return item.second.finished; });
+    if (retired != task_records_.end()) { task_records_.erase(retired); ++task_dropped_; }
+  }
+  if (task_records_.size() < 512) {
+    RuntimeRunTaskSnapshot value; value.id = id; value.state = "queued";
+    value.parent = current_runtime_run_cancellation().get() == this ? tls_run_registration : 0;
+    value.cell = cell; value.file = source.file.substr(0, 1024); value.line = source.line;
+    task_records_[id] = TaskRecord{std::move(value), std::chrono::steady_clock::now(), false};
+  } else ++task_dropped_;
+  ++task_revision_;
   return task;
 }
 RuntimeRunState::Task::~Task() {
   if (!id_) return;
+  run_->finish_task(id_, run_->cancelled() ? "cancelled" : std::uncaught_exceptions() > exceptions_ ? "failed" : "succeeded");
   std::function<void()> retired;
   {
     std::lock_guard<std::mutex> lock(run_->mutex_);
     auto found = run_->tasks_.find(id_);
     if (found != run_->tasks_.end()) {
       retired = std::move(found->second);
-      run_->tasks_.erase(found);
+      run_->tasks_.erase(found); ++run_->task_revision_;
     }
   }
   run_->idle_.notify_all();
@@ -133,7 +184,8 @@ std::vector<RuntimeRunTaskFailure> RuntimeRunState::unobserved_failures() const 
 }
 RuntimeRunCancellationScope::RuntimeRunCancellationScope(RuntimeRunCancellation token)
     : previous_(std::move(tls_run_cancellation)),
-      previous_mask_(tls_run_cancel_checkpoint.mask_depth) {
+      previous_mask_(tls_run_cancel_checkpoint.mask_depth), previous_task_(tls_run_registration) {
+  if (token != previous_) tls_run_registration = 0;
   tls_run_cancellation = std::move(token);
   tls_run_cancel_checkpoint.cancel_flag = tls_run_cancellation ? tls_run_cancellation->cancel_flag() : nullptr;
   tls_run_cancel_checkpoint.mask_depth = 0;
@@ -142,6 +194,7 @@ RuntimeRunCancellationScope::~RuntimeRunCancellationScope() {
   tls_run_cancellation = std::move(previous_);
   tls_run_cancel_checkpoint.cancel_flag = tls_run_cancellation ? tls_run_cancellation->cancel_flag() : nullptr;
   tls_run_cancel_checkpoint.mask_depth = previous_mask_;
+  tls_run_registration = previous_task_;
 }
 RuntimeRunCancellationMask::RuntimeRunCancellationMask(bool enabled) : enabled_(enabled) {
   if (enabled_) ++tls_run_cancel_checkpoint.mask_depth;

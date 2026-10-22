@@ -53,6 +53,13 @@ Currently lowered node families:
 - local/import/placeholder reads as `HLoadLocal`;
 - closure capture reads and writes as `HLoadCapture` / `HStoreCapture`;
 - explicit safe-nav guards as `HIf(cond = HIsNull(...), ...)`;
+- conditional assignments `?=` / `or=` as `HLet` temporary bindings followed
+  by `HIf`, testing `HIsNull` / truthiness respectively. Receiver, index and
+  old value are read once; RHS and setter run only in the write branch.
+  Indexed targets read through `HIndex(optional = true)` and write through
+  `[]=`. Internal bindings preserve the preceding `$_`; both branches return
+  the retained value or original RHS. Notebook output versions are published
+  on both branches;
 - conditional chain segments as `HLet(binding = HStoreLocal(slot, receiver),
   body = HIf(condition, applied_segment, saved_receiver))`; `unless` swaps
   the branches. `HLet` evaluates its binding before its body and returns the

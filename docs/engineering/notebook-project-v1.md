@@ -1,6 +1,6 @@
 # Notebook project v1 — shared document, not a runtime snapshot
 
-Compatible extensions: [boards and project inputs (v2)](../../../sputnik-notebook/docs/engineering/notebook-boards-v1.md),
+Compatible extensions: [cell components and local inputs (v4)](../../../sputnik-notebook/docs/engineering/notebook-cell-components.md), [boards and project inputs (v2)](../../../sputnik-notebook/docs/engineering/notebook-boards-v1.md),
 [external directory dependencies (v3)](notebook-dependencies-v1.md).
 Bundled modules are project-owned code; external packages are linked separately.
 

@@ -573,9 +573,19 @@ std::shared_ptr<Process> spawn(const Command &command, bool pipes,
     else
       process->errors = endpoint;
   }
-  if (!command.cwd.empty())
+  if (!command.cwd.empty()) {
+#if defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 29)
     os_check(posix_spawn_file_actions_addchdir_np(&setup.actions, cwd.c_str()),
              "spawn cwd");
+#else
+    fail("ProcessSpawnError", "spawn cwd is unavailable on this glibc version");
+#endif
+#else
+    os_check(posix_spawn_file_actions_addchdir_np(&setup.actions, cwd.c_str()),
+             "spawn cwd");
+#endif
+  }
   short flags = POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF;
 #if defined(__APPLE__)
   flags |= POSIX_SPAWN_CLOEXEC_DEFAULT;

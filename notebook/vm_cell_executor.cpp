@@ -375,6 +375,9 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
   context.live_store = runtime::NotebookLiveScope::current();
   context.live_cell_id = consumer_cell_id_;
   context.project_inputs = project_inputs_;
+  context.project_images = project_images_;
+  context.project_audio_inputs = project_audio_inputs_;
+  context.project_audio = project_audio_;
   context.load_slot =
       [&input_values,
        this](std::uint32_t descriptor) -> std::optional<runtime::Value> {
@@ -443,8 +446,13 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
     return result;
   }
 
-  if (report) for (const auto &event : runtime_result.live_events)
+  if (report) for (const auto &event : runtime_result.live_events) {
     if (event.kind == runtime::NotebookLiveEventKind::Progress) report->progress.push_back(event);
+    else if (event.kind == runtime::NotebookLiveEventKind::ChartPoints) report->charts.push_back(event);
+    else if (event.kind == runtime::NotebookLiveEventKind::Images) report->images.push_back(event);
+    else if (event.kind == runtime::NotebookLiveEventKind::Audio) report->audio.push_back(event);
+    else if (event.kind == runtime::NotebookLiveEventKind::AudioControl) report->audio_controls.push_back(event);
+  }
   if (!runtime_result.ok()) {
     if (runtime_result.fault.has_value()) {
       result.error = runtime_result.fault->error_name;

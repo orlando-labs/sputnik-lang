@@ -2,14 +2,34 @@
 #include <cstdint>
 #include <iostream>
 #include <vector>
+#ifdef SPUTNIK_BENCH_GENERIC_ARRAYS
+#include <variant>
+#include <string>
+#endif
 
 namespace {
 
 constexpr std::int64_t kLimit = 2147483647;
 constexpr std::int64_t kRounds = 20000;
 
+#ifdef SPUTNIK_BENCH_GENERIC_ARRAYS
+// Mutable heap array of heterogeneous values with type/bounds checks.
+// Callees remain typed C++ functions; this isolates collection representation.
+class Row {
+  std::vector<std::variant<std::int64_t, std::string>> values_;
+public:
+  Row(std::initializer_list<std::int64_t> values) {
+    for (auto value : values) values_.emplace_back(value);
+  }
+  std::int64_t operator[](std::size_t index) const {
+    return std::get<std::int64_t>(values_.at(index));
+  }
+};
+using Weights = Row;
+#else
 using Row = std::array<std::int64_t, 3>;
 using Weights = std::array<std::int64_t, 3>;
+#endif
 
 std::int64_t wrap(std::int64_t value, std::int64_t limit) {
   while (value > limit) {

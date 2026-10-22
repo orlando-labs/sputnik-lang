@@ -1,0 +1,15 @@
+[package]
+name = "polyglot-json-full-api"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = "=1.0.145"
+
+[[bin]]
+name = "json_full_api"
+path = "../json_full_api.rs"
+
+[profile.release]
+opt-level = 3

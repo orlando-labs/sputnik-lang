@@ -191,10 +191,32 @@ void test_effect_rows_and_call_validation() {
   expect(result.ok(), "Uuid.parse should remain pure");
 }
 
+void test_conditional_assignment_types() {
+  expect(check_source("def defaulted() -> Int:\n"
+                      "  x = null\n"
+                      "  x ?= 1\n"
+                      "  x\n")
+             .ok(),
+         "null assignment infers the assigned type for a null local");
+  expect(check_source("def defaulted(x as Int?) -> Int:\n"
+                      "  x ?= 1\n")
+             .ok(),
+         "null assignment removes Null from an optional input");
+  expect(check_source("def defaulted(x as Bool?) -> Bool:\n"
+                      "  x ?= false\n")
+             .ok(),
+         "null assignment preserves Bool");
+  expect(check_source("def defaulted(x as Int?) -> Int:\n"
+                      "  x or= 1\n")
+             .ok(),
+         "or assignment uses logical result typing");
+}
+
 } // namespace
 
 int main() {
   test_type_term_parser();
+  test_conditional_assignment_types();
   test_exported_boundary_success();
   test_missing_export_annotations();
   test_boundary_mismatches();

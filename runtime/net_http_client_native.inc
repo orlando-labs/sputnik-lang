@@ -51,13 +51,18 @@ static NativeValue native_http_client_response_once(
     const std::string &method, const std::string &url,
     const sputnik::runtime::http::HttpHeaders &headers, const std::string &body,
     bool has_body, std::chrono::milliseconds timeout,
-    std::chrono::milliseconds pool_timeout) {
+    std::chrono::milliseconds pool_timeout,
+    const std::shared_ptr<sputnik::runtime::RuntimeHttpRequestBody> &reader_body = nullptr) {
   using namespace sputnik::runtime;
   http::HttpRequest request;
   http::HttpErrorKind kind = http::HttpErrorKind::None;
   std::string error;
-  if (!http::http_build_request(method, url, headers, body, has_body, true,
-                                &request, &kind, &error))
+  const bool built = reader_body
+      ? http::http_build_streaming_request(method, url, headers,
+          reader_body->length, true, &request, &kind, &error)
+      : http::http_build_request(method, url, headers, body, has_body, true,
+          &request, &kind, &error);
+  if (!built)
     native_http_client_error(kind, error);
   const std::string endpoint =
       request.host + ":" + std::to_string(request.port);
@@ -88,10 +93,44 @@ static NativeValue native_http_client_response_once(
   }
   std::uint64_t written = 0;
   if (!http::http_write_request_head(*transport, request, &kind, &error) ||
-      (has_body && !http::http_write_request_body_chunk(
+      (!reader_body && has_body && !http::http_write_request_body_chunk(
                        *transport, request, body, &written, &kind, &error))) {
     client->release_transport(origin, std::move(transport), false);
     native_http_client_error(kind, error);
+  }
+  if (reader_body) {
+    try {
+      const auto reader = reader_body->reader.as_io_value();
+      RuntimeByteBuffer buffer(65536);
+      for (;;) {
+        (void)buffer.clear();
+        RuntimeIoStatus read;
+        if (auto file = std::dynamic_pointer_cast<RuntimeFile>(reader))
+          read = file->read(buffer, timeout);
+        else if (auto file = std::dynamic_pointer_cast<RuntimeMemoryFile>(reader))
+          read = file->read(buffer, timeout);
+        else if (auto pipe = std::dynamic_pointer_cast<RuntimePipeReader>(reader))
+          read = pipe->read(buffer, timeout);
+        else if (auto stream = std::dynamic_pointer_cast<RuntimeTcpStream>(reader))
+          read = stream->read(buffer, timeout);
+        else
+          native_http_client_error("TypeError", "unsupported native request reader");
+        if (!read.ok && !read.eof)
+          native_http_client_error(read.error_name, read.message);
+        if (read.count) {
+          (void)buffer.flip();
+          if (!http::http_write_request_body_chunk(*transport, request,
+                  buffer.bytes(), &written, &kind, &error))
+            native_http_client_error(kind, error);
+        }
+        if (read.eof || read.count == 0) break;
+      }
+      if (!http::http_finish_request_body(*transport, request, written, &kind, &error))
+        native_http_client_error(kind, error);
+    } catch (...) {
+      client->release_transport(origin, std::move(transport), false);
+      throw;
+    }
   }
   std::weak_ptr<RuntimeHttpClient> weak_client = client;
   auto release = [weak_client,
@@ -130,6 +169,26 @@ static bool native_http_try_client_send(const NativeValue &receiver,
   const Value &value = as_native_runtime_handle(receiver)->value;
   if (value.is_native_type()) {
     const auto type = value.as_native_type().kind;
+    if (type == RuntimeNativeTypeKind::NetHttpRequestBody && selector == "from_reader") {
+      if (args.size() != 1 || block.tag != NativeValue::Tag::Null ||
+          args[0].tag != NativeValue::Tag::RuntimeHandle ||
+          !as_native_runtime_handle(args[0])->value.is_io_value())
+        native_http_client_error("TypeError", "from_reader expects an IO reader");
+      auto body = std::make_shared<RuntimeHttpRequestBody>();
+      body->kind = RuntimeHttpRequestBodyKind::Reader;
+      body->reader = as_native_runtime_handle(args[0])->value;
+      for (const auto &keyword : kwargs) {
+        if (keyword.name != "length")
+          native_http_client_error("ArgumentError", "unknown request body keyword");
+        if (keyword.value.tag != NativeValue::Tag::Null) {
+          if (keyword.value.tag != NativeValue::Tag::Integer || keyword.value.scalar_value < 0)
+            native_http_client_error("ArgumentError", "length must be nonnegative or null");
+          body->length = keyword.value.scalar_value;
+        }
+      }
+      *out = NativeValue::runtime_handle(Value::io_value(body));
+      return true;
+    }
     if (type == RuntimeNativeTypeKind::Net && selector == "http" &&
         args.empty() && kwargs.empty()) {
       *out = NativeValue::runtime_handle(
@@ -254,6 +313,7 @@ static bool native_http_try_client_send(const NativeValue &receiver,
     std::string url = native_http_client_text(args[0]);
     http::HttpHeaders headers;
     std::string body;
+    std::shared_ptr<RuntimeHttpRequestBody> reader_body;
     bool has_body = false;
     auto timeout = client->timeout;
     auto pool_timeout = client->pool_timeout;
@@ -262,7 +322,13 @@ static bool native_http_try_client_send(const NativeValue &receiver,
         headers = native_http_client_headers(keyword.value);
       else if (keyword.name == "body") {
         if (keyword.value.tag != NativeValue::Tag::Null) {
-          body = keyword.value.tag == NativeValue::Tag::Bytes
+          if (keyword.value.tag == NativeValue::Tag::RuntimeHandle &&
+              as_native_runtime_handle(keyword.value)->value.is_io_value())
+            reader_body = std::dynamic_pointer_cast<RuntimeHttpRequestBody>(
+                as_native_runtime_handle(keyword.value)->value.as_io_value());
+          if (reader_body && reader_body->kind != RuntimeHttpRequestBodyKind::Reader)
+            native_http_client_error("TypeError", "native request body requires an IO reader");
+          if (!reader_body) body = keyword.value.tag == NativeValue::Tag::Bytes
                      ? as_bytes(keyword.value).bytes
                      : native_http_client_text(keyword.value);
           has_body = true;
@@ -284,7 +350,7 @@ static bool native_http_try_client_send(const NativeValue &receiver,
     std::vector<RuntimeHttpRedirectRecordData> redirects;
     for (;;) {
       NativeValue result = native_http_client_response_once(
-          client, method, url, headers, body, has_body, timeout, pool_timeout);
+          client, method, url, headers, body, has_body, timeout, pool_timeout, reader_body);
       auto response = std::dynamic_pointer_cast<RuntimeHttpResponse>(
           as_native_runtime_handle(result)->value.as_io_value());
       response->redirects = redirects;
@@ -348,6 +414,7 @@ static bool native_http_try_client_send(const NativeValue &receiver,
       headers.remove("host");
       if (status == 303) {
         body.clear();
+        reader_body.reset();
         has_body = false;
         headers.remove("content-length");
         headers.remove("content-type");

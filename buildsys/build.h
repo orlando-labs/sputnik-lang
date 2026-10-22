@@ -38,6 +38,8 @@ struct BuildManifest {
   BuildProfileSet profiles;
   std::vector<BuildModule> stdlib_modules;
   std::vector<BuildModule> modules;
+  // Package identities and exact versions, independent of module names.
+  std::vector<pkg::PackageDependency> dependencies;
   // Native extension units, lowered from the package manifest's [[native]]
   // sections. Reuses the package shape so there is one schema for the build to
   // compile/link against (native-packages design §5).

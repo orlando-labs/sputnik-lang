@@ -1,4 +1,5 @@
 #include "tools/isputnik/project_session.h"
+#include "notebook/audio_components.h"
 #include "tools/isputnik/dependencies.h"
 
 #include <algorithm>
@@ -59,8 +60,12 @@ void load_project_into_session(Session *session,
     throw std::runtime_error("unknown project sheet: " + id);
   }
   Session loaded;
+  loaded.package_search_directory = project.directory.string();
   loaded.project_inputs = sputnik::notebook::project_input_defaults(project.document);
   loaded.project_sheet_id = id;
+  loaded.project_audio_inputs = sputnik::notebook::load_project_audio_inputs(project.document, project.directory, id);
+  loaded.project_audio = sputnik::notebook::project_audio_components(project.document, id);
+  loaded.project_images = sputnik::notebook::load_project_image_inputs(project.document, project.directory, id);
   loaded.project_label = project.document.title + "/" + found->title;
   loaded.bundled_modules = load_project_bundled_sources(project, true);
   for (const auto &sheet : project.document.sheets) {
@@ -209,6 +214,7 @@ void load_project_module_into_session(
   }
   Session loaded;
   loaded.module_editor = true;
+  loaded.package_search_directory = project.directory.string();
   loaded.project_module_id = module.id;
   loaded.project_module_path = module.path;
   loaded.project_label = project.document.title + "/module:" + module.id;

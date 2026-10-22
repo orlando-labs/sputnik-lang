@@ -1,3 +1,4 @@
+#include "frontend/foreign_import.h"
 #include "frontend/ast/expr.h"
 
 #include <iomanip>
@@ -557,12 +558,13 @@ void desugar_module_namespace_calls(std::vector<std::unique_ptr<Expr>> &items) {
     }
     const std::string *module_path = find_string_field(*item, "module_path");
     if (module_path == nullptr || module_path->empty() ||
-        is_native_prelude_namespace(*module_path)) {
+        is_native_prelude_namespace(*module_path) ||
+        !sputnik::frontend::foreign_import_provider(*module_path).empty()) {
       continue;
     }
     const std::string *alias = find_string_field(*item, "alias");
     const std::string local = (alias != nullptr && !alias->empty())
-                                  ? *alias
+                                  ? last_path_segment_of(*alias)
                                   : last_path_segment_of(*module_path);
     if (!local.empty()) {
       state.aliases[local] = *module_path;

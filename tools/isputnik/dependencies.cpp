@@ -1,6 +1,7 @@
 #include "tools/isputnik/dependencies.h"
 #include "buildsys/build.h"
 #include "package/package.h"
+#include "package/store.h"
 #include "frontend/lexer/token.h"
 #include "runtime/sputnik_ext_runtime.h"
 #include "runtime/sputnik_ext.h"
@@ -10,6 +11,7 @@
 #include <fstream>
 #include <map>
 #include <set>
+#include <sstream>
 #include <stdexcept>
 #include <unistd.h>
 
@@ -205,7 +207,40 @@ void load_prepared_native_dependencies(const sputnik::notebook::LoadedProject &p
   // have process lifetime; never dlclose code still referenced by a world.
   struct LoadedLibrary { void *handle; std::string digest; };
   static std::map<std::string, LoadedLibrary> libraries;
-  for (const auto &dependency : project.document.dependencies) {
+  auto dependencies = project.document.dependencies;
+  std::map<std::string, sputnik::pkg::PackageManifest> installed_manifests;
+  std::map<std::string, std::string> artifact_digests;
+  for (const auto &attr : module.attrs) {
+    const auto &key = module.strings.at(attr.key_str_id);
+    const std::string prefix = "sputnik.package.artifact:";
+    if (key.rfind(prefix, 0) != 0) continue;
+    const auto inserted = artifact_digests.emplace(key, module.strings.at(attr.value_str_id));
+    if (!inserted.second) {
+      if (inserted.first->second != module.strings.at(attr.value_str_id))
+        throw std::runtime_error("cannot mix package snapshots in one notebook environment");
+      continue;
+    }
+    const auto package = sputnik::pkg::read_package(key.substr(prefix.size()));
+    if (package.digest != module.strings.at(attr.value_str_id))
+      throw std::runtime_error("installed package changed since Apply: " + package.manifest.name);
+    if (package.manifest.native_extensions.empty() || installed_manifests.count(package.directory.string())) continue;
+    sputnik::pkg::verify_prepared_native(package);
+    std::size_t budget = 16384;
+    std::istringstream descriptor(read_source(checked_member(package.directory, "native-library.meta"), &budget));
+    std::string target, library, digest;
+    std::getline(descriptor, target); std::getline(descriptor, library); std::getline(descriptor, digest);
+    if (target != sputnik::pkg::package_host_target()) throw std::runtime_error("installed native package targets another platform: " + package.manifest.name);
+    const auto quoted = [](const std::string &text) {
+      return sputnik::notebook::serialize_project_input_value(sputnik::runtime::NotebookInputValue{text});
+    };
+    sputnik::notebook::ProjectDependency dependency;
+    dependency.path = package.directory.string();
+    dependency.extra["native_library"] = quoted(library);
+    dependency.extra["native_sha256"] = quoted(digest);
+    dependencies.push_back(std::move(dependency));
+    installed_manifests.emplace(package.directory.string(), package.manifest);
+  }
+  for (const auto &dependency : dependencies) {
     const auto library_name = extra_string(dependency, "native_library");
     if (library_name.empty()) continue;
     if (!authorized) throw std::runtime_error("Native dependencies require explicit trust before Run.");
@@ -242,20 +277,29 @@ void load_prepared_native_dependencies(const sputnik::notebook::LoadedProject &p
     };
     auto abi = reinterpret_cast<std::uint32_t (*)()>(symbol("sputnik_ext_abi_version"));
     if (abi() != SPUTNIK_EXT_ABI_VERSION) throw std::runtime_error("native dependency ABI mismatch");
-    const auto manifest_name = extra_string(dependency, "manifest");
-    const auto manifest_path = checked_member(root, manifest_name.empty() ? "sputnik.build.json" : manifest_name);
-    const auto parsed = sputnik::build::parse_build_manifest(read_source(manifest_path, &budget), manifest_path.string());
-    if (!parsed.ok()) throw std::runtime_error(sputnik::build::diagnostics_to_string(parsed.diagnostics));
+    sputnik::build::BuildManifest manifest;
+    const auto installed = installed_manifests.find(root.string());
+    if (installed != installed_manifests.end()) {
+      manifest.native_extensions = installed->second.native_extensions;
+      for (const auto &entry : installed->second.modules) manifest.modules.push_back({entry.name, entry.path, false, {}});
+    } else {
+      const auto manifest_name = extra_string(dependency, "manifest");
+      const auto manifest_path = checked_member(root, manifest_name.empty() ? "sputnik.build.json" : manifest_name);
+      const auto parsed = sputnik::build::parse_build_manifest(read_source(manifest_path, &budget), manifest_path.string());
+      if (!parsed.ok()) throw std::runtime_error(sputnik::build::diagnostics_to_string(parsed.diagnostics));
+      manifest = parsed.manifest;
+    }
     std::set<std::string> blocking;
     std::map<std::string, std::string> symbols;
-    for (const auto &extension : parsed.manifest.native_extensions) {
+    for (const auto &extension : manifest.native_extensions) {
       blocking.insert(extension.blocking_symbols.begin(), extension.blocking_symbols.end());
       for (const auto &entry : extension.symbols) symbols[entry.logical] = entry.symbol;
     }
     sputnik::runtime::RuntimeNativePackageDescriptor package;
     std::set<std::string> added;
+    std::set<std::string> added_errors;
     const auto belongs = [&](const std::string &name) {
-      for (const auto &entry : parsed.manifest.modules)
+      for (const auto &entry : manifest.modules)
         if (name.rfind(entry.name + ".", 0) == 0) return true;
       return false;
     };
@@ -292,8 +336,21 @@ void load_prepared_native_dependencies(const sputnik::notebook::LoadedProject &p
         package.types.push_back(std::move(type));
       } else if (key.rfind(error_prefix, 0) == 0 && belongs(key.substr(error_prefix.size()))) {
         package.errors.push_back({key.substr(error_prefix.size()), value.empty() ? "NativeError" : value, {}, -1});
+        added_errors.insert(key.substr(error_prefix.size()));
       }
     }
+    for (const auto &extension : manifest.native_extensions)
+      for (const auto &error : extension.errors)
+        if (added_errors.insert(error.name).second) {
+          std::int64_t exit_code = -1;
+          try {
+            std::size_t consumed = 0;
+            const auto parsed = std::stoll(error.default_exit_code, &consumed);
+            if (consumed == error.default_exit_code.size()) exit_code = parsed;
+          } catch (const std::exception &) {}
+          package.errors.push_back({error.name, error.parent.empty() ? "NativeError" : error.parent,
+                                    error.default_message, exit_code});
+        }
     sputnik::runtime::NativeExtRegistry::global().register_package(std::move(package));
   }
 }

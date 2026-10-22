@@ -4,6 +4,21 @@ Status: `W9.4` package/registry/signing/lockfile tooling is implemented, and
 `W9.5` hot reload consumes whole package artifacts through the runtime
 package-swap API.
 
+The target v1 contract is designed separately in
+[package format v1](../../../sputnik-registry/docs/PACKAGE_FORMAT.md)
+(2026-10-19): ordinary tar.gz, individual files, and source or bytecode delivery
+per module, plus [platform variants and prebuilt shared libraries](../../../sputnik-registry/docs/NATIVE_ARTIFACTS.md).
+The distribution builder, inspector, verifier and extractor are now implemented:
+see [package-distribution-v1.md](package-distribution-v1.md). Shared installation
+and registry variant selection still need integration with that format.
+The text container below is an unreleased
+implementation prototype, not an applied compatibility contract. Breaking changes
+stay within v1 until first actual use; dual readers and prototype artifact/lock
+migration are not required. Development outputs can be rebuilt.
+
+Shared installation, `sputnik pkg install`, automatic source/manifest/notebook
+imports and application locks are described in [package-store-v1.md](package-store-v1.md).
+
 Implemented surface:
 
 - restricted `sputnik.toml` parsing through

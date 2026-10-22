@@ -25,12 +25,12 @@ mode remain identical.
   complete microbenchmark and HTTP matrices were measured from clean
   `124cefc`; the historical commits only changed reporting and remain listed
   so the older rows can be reproduced.
-- Ember: clean `9e603ddf933999c70e4b40ae9daa6d879fb8bc3a`.
-- sputnik-orm: clean `438be2194399fcb84680d0fdb6d9d9e927f9a981`.
-- sqlite3-sputnik: clean `bb62e533bb6096702fbbe36dd0a9a15813ed28eb`.
+- Orbit: clean `9e603ddf933999c70e4b40ae9daa6d879fb8bc3a`.
+- orm: clean `438be2194399fcb84680d0fdb6d9d9e927f9a981`.
+- sqlite3: clean `bb62e533bb6096702fbbe36dd0a9a15813ed28eb`.
 - Ruby `4.0.5`, Rails `8.1.3`, Puma `8.0.2`.
 - Rails uses real Strong Parameters: `expect` for create/PUT, `permit` for
-  PATCH and query parameters, plus strict unknown-field checks matching Ember.
+  PATCH and query parameters, plus strict unknown-field checks matching Orbit.
 - HTTP client SHA-256:
   `f1a35a838dbbd16bebb510c95988fd72063ff3c379e8d754c10b9f3216584b27`.
   It has 38/38 native bodies and the explicitly reported
@@ -60,15 +60,15 @@ repeat; the displayed RPS is the median and the displayed CI is for the mean.
 |---|---:|---:|---:|---|
 | raw / VM | 20,262 | 0.68% | 20,103–20,444 | Go 37,042 / 1.823x; Rust 37,662 / 1.845x; Python 12,513 / 0.616x |
 | raw / native | 32,426 | 1.10% | 31,848–32,734 | Go 37,005 / 1.155x; Rust 37,256 / 1.150x; Python 12,461 / 0.388x |
-| Ember / VM / pool 1 | 1,788 | 0.41% | 1,779–1,797 | Rails 1,989 / 1.110x |
-| Ember / native / pool 1 | 6,542 | 0.81% | 6,499–6,630 | Rails 1,990 / 0.304x (Sputnik is 3.287x faster) |
+| Orbit / VM / pool 1 | 1,788 | 0.41% | 1,779–1,797 | Rails 1,989 / 1.110x |
+| Orbit / native / pool 1 | 6,542 | 0.81% | 6,499–6,630 | Rails 1,990 / 0.304x (Sputnik is 3.287x faster) |
 
 Derived top-level ratios (ratios across separate series are not paired):
 
 - raw native / raw VM: `1.600x`.
-- Ember native / Ember VM: `3.659x`.
-- Ember VM retains `8.824%` of raw VM throughput (`91.176%` loss).
-- Ember native retains `20.175%` of raw native throughput (`79.825%` loss).
+- Orbit native / Orbit VM: `3.659x`.
+- Orbit VM retains `8.824%` of raw VM throughput (`91.176%` loss).
+- Orbit native retains `20.175%` of raw native throughput (`79.825%` loss).
 - The raw/framework comparison intentionally changes storage from an in-memory
   map to ORM + SQLite. Its loss is the combined framework, model, SQL, row
   mapping, SQLite, and controller/schema cost; it is not all avoidable overhead.
@@ -77,12 +77,12 @@ Machine-readable and rendered reports:
 
 - `results/raw-http-rps-vm-r5-2026-08-19-215535-+0300.{json,md}`
 - `results/raw-http-rps-native-r5-2026-08-19-220613-+0300.{json,md}`
-- `results/ember-http-rps-vm-pool1-r5-2026-08-19-221637-+0300.{json,md}`
-- `results/ember-http-rps-native-pool1-r5-2026-08-19-222316-+0300.{json,md}`
+- `results/orbit-http-rps-vm-pool1-r5-2026-08-19-221637-+0300.{json,md}`
+- `results/orbit-http-rps-native-pool1-r5-2026-08-19-222316-+0300.{json,md}`
 
 The raw native server is a VM-independent 61/61-code-object binary, SHA-256
 `f2bbb6f1ccb9661eaa15762d7d7dcfdddea5b87908c0d55fcf0e5863edda52d2`.
-The Ember native server is a VM-independent 2048/2048-code-object, ten-module
+The Orbit native server is a VM-independent 2048/2048-code-object, ten-module
 binary with the SQLite extension embedded, SHA-256
 `9c43d159b7bf6a56d87bdab24ede6d634fc6b0c63572277b88f1e9cf94db5bc8`,
 size 11,930,856 bytes.
@@ -152,24 +152,24 @@ instead of `7.14x` and `10.08x`.
    `map_value_find_entry` fell to `191/7,748` samples (`2.47%`). Canonical-name
    hash lookup is now visible (`607/7,748` samples in the quick map lookup
    branch), but it is a much smaller, separate optimization candidate.
-4. The suspected link to low Ember VM RPS was tested and rejected. In the
-   fresh 10-second Ember VM profile, `map_value_find_entry` did not reach the
+4. The suspected link to low Orbit VM RPS was tested and rejected. In the
+   fresh 10-second Orbit VM profile, `map_value_find_entry` did not reach the
    flat-profile reporting threshold of five top-of-stack samples. The
    unsampled five-pair follow-up at `7d0d0c9` measured Sputnik `1,700.51 RPS`,
    Rails `1,888.29 RPS`, and paired Rails/Sputnik `1.107x` (mean-ratio 95% CI
    `1.094...1.119x`). The original paired median was `1.110x`. Thus the large
    microbenchmark win is real, but it does not explain or materially improve
-   Ember request throughput. See
-   `results/ember-http-rps-vm-pool1-r5-2026-08-20-115325-+0300.{json,md}`.
+   Orbit request throughput. See
+   `results/orbit-http-rps-vm-pool1-r5-2026-08-20-115325-+0300.{json,md}`.
 5. The first map patch performed the key-shape check twice on successful hits.
    A clean intermediate run at `efded10` measured paired Rails/Sputnik `1.125x`.
    After folding hit and miss handling under one check (`7d0d0c9`), it returned
    to `1.107x`. This is why the final form, rather than `efded10` alone, is the
    optimization endpoint.
 6. A prior native profile attributed 1,318 samples (3.83% of active
-   Ember/native time) to `NativeClosure` construction/destruction in
+   Orbit/native time) to `NativeClosure` construction/destruction in
    `string.chars.each`. Commit `f940d2d` borrowed the already rooted closure;
-   an exact-binary A/B measured `+0.646%` Ember/native. It was real but small.
+   an exact-binary A/B measured `+0.646%` Orbit/native. It was real but small.
 7. SQLite blocking calls already run through the Blocking FFI executor. Waiting
    inside the C extension while holding the bridge lock was rejected because a
    C library callback into Sputnik may need to park a strand. Pool size 1 is the
@@ -184,13 +184,13 @@ The current data rejects three overly broad explanations:
   on calls/collections, JSON, secure-random, time-flow, and UUID, and is close
   to Ruby on secure-random and SHA digest.
 - Fully native is not a weak optimization: it is `+60%` on raw HTTP and
-  `+266%` on Ember. The much larger Ember uplift means VM execution of
+  `+266%` on Orbit. The much larger Orbit uplift means VM execution of
   framework-heavy semantics is a first-class problem.
-- Large ordinary-map misses are not the Ember bottleneck. They were nearly the
-  entire `map-words` VM profile, are now fixed, and were absent from the Ember
+- Large ordinary-map misses are not the Orbit bottleneck. They were nearly the
+  entire `map-words` VM profile, are now fixed, and were absent from the Orbit
   flat profile. Do not use the `5.746x` micro result to predict framework RPS.
 
-The current Ember VM flat top-of-stack profile (diagnostic, sampled while under
+The current Orbit VM flat top-of-stack profile (diagnostic, sampled while under
 load) is broad rather than dominated by one map operation. Excluding parked
 thread primitives, leading entries include `Vm::step` (991), allocator malloc
 (335), free (252), `memcmp` (226), `try_apply_scalar_send` (200), frame recycle
@@ -202,13 +202,13 @@ reactor, SQLite-executor, and listener threads.
 Raw local samples used for the summary are
 `/private/tmp/sputnik-map-words-vm.sample.txt`,
 `/private/tmp/sputnik-map-words-vm-post.sample.txt`, and
-`bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-20-114155-+0300/repeat-01-position-01-sputnik/server.sample.txt`.
+`bench/polyglot/build/http-rps/runs/orbit-vm-r1-2026-08-20-114155-+0300/repeat-01-position-01-sputnik/server.sample.txt`.
 They are diagnostic build artifacts and are not required to trust or reproduce
 the statistical reports.
 
 The next optimization must therefore pass these gates:
 
-1. Re-profile the unchanged Ember VM workload with active samples separated
+1. Re-profile the unchanged Orbit VM workload with active samples separated
    from accept/reactor/scheduler/Blocking-FFI waits. Attribute active time to
    dispatch, method argument shaping, Value copy/destruction, frame lifecycle,
    allocation, JSON, ORM row materialization, and SQLite bridge categories.
@@ -223,7 +223,7 @@ The next optimization must therefore pass these gates:
 4. Keep the negative map lookup fast path, but only pursue its remaining
    canonical-name hash cost if a future real workload profile supports it.
 5. Validate changes with saved exact binaries, paired order-rotated repeats,
-   and both raw and Ember lanes. A faster microbenchmark alone is insufficient.
+   and both raw and Orbit lanes. A faster microbenchmark alone is insufficient.
 
 ## 2026-08-21 optimization: tagged Value as the default
 
@@ -235,7 +235,7 @@ and the tagged runtime performs the same operation as a tag-range test plus a
 pointer load. The separate `VALUE_REPR=variant` build remains supported and
 was compiled and smoke-tested after the change.
 
-The saved-binary Ember/VM gate used identical 4-client, pool-1, 15-second,
+The saved-binary Orbit/VM gate used identical 4-client, pool-1, 15-second,
 three-repeat commands on the same machine:
 
 | Exact binary | Median RPS | Delta from legacy |
@@ -261,19 +261,19 @@ Compiler binary size improved as a second, independent consequence:
 
 Every row below is an unprofiled five-repeat series with 30-second samples,
 four clients, a contract warmup before each timed sample, and balanced rotation
-seed `20260821`. All Sputnik rows use clean `58b3600`; Ember is clean `9e603ddf`,
-sputnik-orm is clean `438be219`, sqlite3-sputnik is clean `bb62e533`. The same
+seed `20260821`. All Sputnik rows use clean `58b3600`; Orbit is clean `9e603ddf`,
+orm is clean `438be219`, sqlite3 is clean `bb62e533`. The same
 pinned client SHA `f1a35a83...` drives every server.
 
 | Lane | Sputnik median RPS | Competitor medians | Paired interpretation |
 |---|---:|---|---|
 | raw / VM | 21,584.94 | Go 38,795.11; Rust 38,933.78; Python 12,634.20 | Go 1.800x; Rust 1.823x; Python 0.585x |
 | raw / native | 33,730.67 | Go 38,886.48; Rust 39,147.09; Python 12,654.26 | Go 1.152x; Rust 1.161x; Python 0.376x |
-| Ember / VM / pool 1 | 1,967.90 | Rails 1,991.74 | Rails 1.011x (+1.08% paired); median-RPS gap 1.21% |
-| Ember / native / pool 1 | 6,595.67 | Rails 1,992.70 | Rails 0.303x; Sputnik 3.310x by medians |
+| Orbit / VM / pool 1 | 1,967.90 | Rails 1,991.74 | Rails 1.011x (+1.08% paired); median-RPS gap 1.21% |
+| Orbit / native / pool 1 | 6,595.67 | Rails 1,992.70 | Rails 0.303x; Sputnik 3.310x by medians |
 
 Derived ratios across separate series (not paired): raw native/VM is 1.563x;
-Ember native/VM is 3.352x. Against the original 2026-08-19 Ember/VM median of
+Orbit native/VM is 3.352x. Against the original 2026-08-19 Orbit/VM median of
 1,788 RPS, the current 1,967.90 RPS is +10.06%; the exact saved-binary gate
 attributes +7.288% to this representation change alone. The original Rails
 median (1,989) and current Rails median (1,991.74) are stable, whereas the
@@ -286,10 +286,10 @@ Reports:
   (`raw-http-rps-vm-r5-2026-08-21-005921-+0300.json`).
 - `results/raw-http-rps-native-tagged-default-r5-2026-08-21.md`
   (`raw-http-rps-native-r5-2026-08-21-011016-+0300.json`).
-- `results/ember-http-rps-vm-pool1-tagged-default-r5-2026-08-21.md`
-  (`ember-http-rps-vm-pool1-r5-2026-08-21-012036-+0300.json`).
-- `results/ember-http-rps-native-pool1-tagged-default-r5-2026-08-21.md`
-  (`ember-http-rps-native-pool1-r5-2026-08-21-012710-+0300.json`).
+- `results/orbit-http-rps-vm-pool1-tagged-default-r5-2026-08-21.md`
+  (`orbit-http-rps-vm-pool1-r5-2026-08-21-012036-+0300.json`).
+- `results/orbit-http-rps-native-pool1-tagged-default-r5-2026-08-21.md`
+  (`orbit-http-rps-native-pool1-r5-2026-08-21-012710-+0300.json`).
 
 ### Current complete microbenchmark matrix
 
@@ -315,7 +315,7 @@ The rendered and machine-readable reports are
 
 ### Pre/post profile and next largest area
 
-The diagnostic Ember/VM samples used the same workload, but profiler overhead
+The diagnostic Orbit/VM samples used the same workload, but profiler overhead
 makes their sampled RPS unsuitable for comparison with the table above. Their
 flat totals are similar enough for hotspot-shape comparison (245,537 pre and
 248,954 post entries as emitted by `/usr/bin/sample`). Before migration,
@@ -336,10 +336,10 @@ frame recycling.
 
 Raw samples and rendered one-run diagnostic reports:
 
-- pre: `build/http-rps/runs/ember-vm-r1-2026-08-21-002018-+0300/repeat-01-position-01-sputnik/server.sample.txt`;
-- post: `build/http-rps/runs/ember-vm-r1-2026-08-21-013345-+0300/repeat-01-position-01-sputnik/server.sample.txt`;
-- post diagnostic: `results/ember-vm-tagged-post-profile-r1-2026-08-21.md`
-  and `ember-http-rps-vm-pool1-r1-2026-08-21-013345-+0300.json`.
+- pre: `build/http-rps/runs/orbit-vm-r1-2026-08-21-002018-+0300/repeat-01-position-01-sputnik/server.sample.txt`;
+- post: `build/http-rps/runs/orbit-vm-r1-2026-08-21-013345-+0300/repeat-01-position-01-sputnik/server.sample.txt`;
+- post diagnostic: `results/orbit-vm-tagged-post-profile-r1-2026-08-21.md`
+  and `orbit-http-rps-vm-pool1-r1-2026-08-21-013345-+0300.json`.
 
 ### Correctness gates
 
@@ -349,7 +349,7 @@ Raw samples and rendered one-run diagnostic reports:
 - Targeted full-native UUID: 3/3 direct-native code objects, full coverage,
   no fallback, expected output 42.
 - Raw native HTTP: 61/61 direct-native, no bridge/fallback.
-- Ember native HTTP: 2048/2048 direct-native, no bridge/fallback; cached SQLite
+- Orbit native HTTP: 2048/2048 direct-native, no bridge/fallback; cached SQLite
   extension reused.
 - The current full backend-equivalence script contains 146 cold full-runtime
   native links. It was stopped rather than letting hours of compilation skew
@@ -369,7 +369,7 @@ RuntimeHeap-owned objects retain their original final-release behavior.
 ### Exact-binary A/B
 
 The pre-change compiler and REPL were saved before editing. Three unprofiled
-4-client, pool-1, 15-second Ember/VM series were run old -> new -> old to check
+4-client, pool-1, 15-second Orbit/VM series were run old -> new -> old to check
 both directions of machine drift:
 
 | Position | Exact binary | Median RPS | CV |
@@ -387,7 +387,7 @@ provenance for this gate.
 
 ### Post-change profile
 
-The comparable 10-second sampled Ember/VM profile changes the targeted flat
+The comparable 10-second sampled Orbit/VM profile changes the targeted flat
 top as follows:
 
 | Symbol/category | Before | After |
@@ -409,9 +409,9 @@ inspection confirms that its type switch executes only on final release.
 Profiler throughput
 (`1,775.76 RPS`) is diagnostic only and must not be compared with unprofiled
 RPS. Raw sample:
-`build/http-rps/runs/ember-vm-r1-2026-08-22-123219-+0300/repeat-01-position-01-sputnik/server.sample.txt`.
+`build/http-rps/runs/orbit-vm-r1-2026-08-22-123219-+0300/repeat-01-position-01-sputnik/server.sample.txt`.
 Rendered report:
-`results/ember-vm-header-release-post-profile-r1-2026-08-22.md`.
+`results/orbit-vm-header-release-post-profile-r1-2026-08-22.md`.
 
 The next broad target is no longer concrete heap-kind dispatch. It is the
 remaining `Value` copy/move/destructor traffic plus unconditional watch-cell
@@ -456,13 +456,13 @@ series with contract smoke before every sample and balanced seed `20260822`.
 |---|---:|---:|---|---|
 | raw / VM | 22,310.20 | 1.00% | Go 39,458.78; Rust 39,596.97; Python 11,892.47 | Go 1.788x; Rust 1.776x; Python 0.534x |
 | raw / native | 33,775.35 | 0.52% | Go 39,492.94; Rust 39,543.64; Python 11,927.97 | Go 1.166x; Rust 1.171x; Python 0.355x |
-| Ember / VM / pool 1 | 1,958.40 | 0.36% | Rails 1,833.15 | Rails 0.935x; Sputnik is 1.068x by medians |
-| Ember / native / pool 1 | 6,171.63 | 0.26% | Rails 1,837.19 | Rails 0.298x; Sputnik is 3.359x by medians |
+| Orbit / VM / pool 1 | 1,958.40 | 0.36% | Rails 1,833.15 | Rails 0.935x; Sputnik is 1.068x by medians |
+| Orbit / native / pool 1 | 6,171.63 | 0.26% | Rails 1,837.19 | Rails 0.298x; Sputnik is 3.359x by medians |
 
 Raw/VM is +3.360% versus the preceding clean median, while raw/native is
 +0.132% (neutral). Current cross-series native/VM ratios are 1.514x raw and
-3.151x Ember. Do not interpret the inter-day framework deltas as patch effect:
-the current Ember/VM median is -0.483% versus 2026-08-21 and Ember/native is
+3.151x Orbit. Do not interpret the inter-day framework deltas as patch effect:
+the current Orbit/VM median is -0.483% versus 2026-08-21 and Orbit/native is
 -6.429%, but Rails simultaneously moved from approximately 1,992 to 1,833--
 1,837 RPS. The same-day old/new/old gate above isolates the +4.34% VM effect;
 the current Rails comparison states today's competitive position only.
@@ -473,10 +473,10 @@ Reports:
   (`raw-http-rps-vm-r5-2026-08-22-124413-+0300.json`).
 - `results/raw-http-rps-native-header-release-r5-2026-08-22.md`
   (`raw-http-rps-native-r5-2026-08-22-125512-+0300.json`).
-- `results/ember-http-rps-vm-pool1-header-release-r5-2026-08-22.md`
-  (`ember-http-rps-vm-pool1-r5-2026-08-22-130531-+0300.json`).
-- `results/ember-http-rps-native-pool1-header-release-r5-2026-08-22.md`
-  (`ember-http-rps-native-pool1-r5-2026-08-22-131206-+0300.json`).
+- `results/orbit-http-rps-vm-pool1-header-release-r5-2026-08-22.md`
+  (`orbit-http-rps-vm-pool1-r5-2026-08-22-130531-+0300.json`).
+- `results/orbit-http-rps-native-pool1-header-release-r5-2026-08-22.md`
+  (`orbit-http-rps-native-pool1-r5-2026-08-22-131206-+0300.json`).
 
 ### Correctness and size
 
@@ -484,10 +484,10 @@ Reports:
 - Full corpus: 214 passed, 0 failed.
 - Separate legacy `VALUE_REPR=variant` compiler build and calls/collections
   smoke checksum `2047795430`: pass.
-- Raw native: 61/61 direct-native; Ember native: 2048/2048 direct-native;
+- Raw native: 61/61 direct-native; Orbit native: 2048/2048 direct-native;
   both have full body coverage and zero VM fallback/runtime bridge.
 - `sputnik` is 9,010,536 bytes and `isputnik` is 7,544,744 bytes: +240 bytes each
-  versus `58b3600`. Raw and Ember native servers are 1,580,488 and 11,881,464
+  versus `58b3600`. Raw and Orbit native servers are 1,580,488 and 11,881,464
   bytes respectively: 16 bytes smaller each than the preceding endpoint.
 
 ## 2026-08-22 optimization: skip watch probes in plain VM frames
@@ -512,7 +512,7 @@ compiler (`old / new / old`). The old compiler was
 the accepted compiler is SHA-256
 `4e71d30bc8e2c0fa6296eecbfce099b853c69004b5ba0f634364ef27b4a14d0e`.
 
-| Phase | Ember/VM median RPS | Mean RPS | CV |
+| Phase | Orbit/VM median RPS | Mean RPS | CV |
 |---|---:|---:|---:|
 | old flank 1 | 1,983.81 | 1,982.84 | 1.119% |
 | new | 1,993.27 | 1,993.09 | 0.464% |
@@ -520,16 +520,16 @@ the accepted compiler is SHA-256
 
 The mean of the two old-flank medians is 1,972.05 RPS, so the accepted result
 is **+1.076%**. Using phase means gives **+1.145%**. Raw result files are
-`ember-http-rps-vm-pool1-r3-2026-08-22-192802-+0300.json`,
+`orbit-http-rps-vm-pool1-r3-2026-08-22-192802-+0300.json`,
 `...-192858-+0300.json`, and `...-192955-+0300.json`.
 
 ### Post-change profile
 
 The diagnostic profile is
-`bench/polyglot/build/http-rps/runs/ember-vm-r1-2026-08-22-193147-+0300/`
+`bench/polyglot/build/http-rps/runs/orbit-vm-r1-2026-08-22-193147-+0300/`
 `repeat-01-position-01-sputnik/server.sample.txt`; its unprofiled RPS must not be
 compared with statistical runs. Relative to the preceding profile at
-`ember-vm-r1-2026-08-22-123219-+0300`, top-of-stack samples changed as follows:
+`orbit-vm-r1-2026-08-22-123219-+0300`, top-of-stack samples changed as follows:
 
 | Symbol | Before | After | Delta |
 |---|---:|---:|---:|
@@ -579,14 +579,14 @@ Five paired/rotated repeats, 30 seconds, 4 clients, pool 1, no profiling.
 |---|---:|---:|---:|---|
 | raw / VM | 22,281.32 | 0.585% | Go 39,453.00; Rust 39,429.92; Python 11,913.19 | native/VM reported below |
 | raw / native | 33,726.55 | 0.216% | Go 39,456.15; Rust 39,550.38; Python 11,940.35 | native/VM 1.514x |
-| Ember / VM / pool 1 | 1,972.23 | 0.764% | Rails 1,834.15 | Sputnik 1.075x; +7.53% |
-| Ember / native / pool 1 | 6,183.11 | 0.135% | Rails 1,837.84 | Sputnik 3.364x |
+| Orbit / VM / pool 1 | 1,972.23 | 0.764% | Rails 1,834.15 | Sputnik 1.075x; +7.53% |
+| Orbit / native / pool 1 | 6,183.11 | 0.135% | Rails 1,837.84 | Sputnik 3.364x |
 
 Compared with the preceding clean matrix, raw/VM is -0.129%, raw/native is
--0.144%, Ember/VM is **+0.706%**, and Ember/native is +0.186%. Rails stayed
+-0.144%, Orbit/VM is **+0.706%**, and Orbit/native is +0.186%. Rails stayed
 effectively fixed in the VM comparison (1,833.15 to 1,834.15 RPS), so the
 framework VM gain is not a competitor drift artifact. Current native/VM ratios
-are 1.514x raw and 3.135x Ember.
+are 1.514x raw and 3.135x Orbit.
 
 Reports and machine-readable samples:
 
@@ -594,10 +594,10 @@ Reports and machine-readable samples:
   (`raw-http-rps-vm-r5-2026-08-22-194442-+0300.json`).
 - `results/raw-http-rps-native-watch-fast-r5-2026-08-22.md`
   (`raw-http-rps-native-r5-2026-08-22-195539-+0300.json`).
-- `results/ember-http-rps-vm-pool1-watch-fast-r5-2026-08-22.md`
-  (`ember-http-rps-vm-pool1-r5-2026-08-22-200559-+0300.json`).
-- `results/ember-http-rps-native-pool1-watch-fast-r5-2026-08-22.md`
-  (`ember-http-rps-native-pool1-r5-2026-08-22-201234-+0300.json`).
+- `results/orbit-http-rps-vm-pool1-watch-fast-r5-2026-08-22.md`
+  (`orbit-http-rps-vm-pool1-r5-2026-08-22-200559-+0300.json`).
+- `results/orbit-http-rps-native-pool1-watch-fast-r5-2026-08-22.md`
+  (`orbit-http-rps-native-pool1-r5-2026-08-22-201234-+0300.json`).
 
 ### Correctness and size
 
@@ -605,9 +605,9 @@ Reports and machine-readable samples:
 - Full corpus: 214 passed, 0 failed.
 - Separate legacy `VALUE_REPR=variant` compiler build and calls/collections
   checksum `2047795430`: pass.
-- Raw native remains 61/61 direct-native; Ember native remains 2048/2048;
+- Raw native remains 61/61 direct-native; Orbit native remains 2048/2048;
   both have full body coverage and zero VM fallback/runtime bridge.
-- `sputnik` is 9,010,536 bytes and `isputnik` is 7,544,744 bytes; raw and Ember
+- `sputnik` is 9,010,536 bytes and `isputnik` is 7,544,744 bytes; raw and Orbit
   native servers are 1,580,488 and 11,881,464 bytes. All four sizes are exactly
   unchanged from `2301e12`.
 
@@ -691,13 +691,13 @@ checksums matched.
 - `sputnik` is 9,010,664 bytes and `isputnik` is 7,544,872 bytes: +128 bytes each
   versus `124cefc`. Native artifacts are unaffected by this VM-only change.
 - The current environment denied both elevated loopback servers and macOS
-  process inspection. Therefore an Ember/VM old/new/old HTTP gate and a
+  process inspection. Therefore an Orbit/VM old/new/old HTTP gate and a
   post-change `sample` profile could not be collected in this continuation.
   The preceding `watch-fast` HTTP matrix remains the latest authoritative
   framework comparison; do not replace it with process-microbenchmark deltas.
 
 The first action when elevated local execution is available is an exact saved-
-binary Ember/VM old/new/old gate followed by a post-change profile. Confirm that
+binary Orbit/VM old/new/old gate followed by a post-change profile. Confirm that
 `Value::operator=(Value&&)` loses its `recycle_frame` samples; then reassess the
 remaining destructor/copy traffic before returning to borrowed register reads.
 
@@ -712,13 +712,13 @@ python3 bench/polyglot/run_http_rps.py --stack raw \
   --sputnik-execution vm --duration 30 --clients 4 --repeats 5 \
   --order-seed 20260822 --languages sputnik,go,rust,python
 
-python3 bench/polyglot/run_http_rps.py --stack ember \
+python3 bench/polyglot/run_http_rps.py --stack orbit \
   --sputnik-execution vm --duration 30 --clients 4 --repeats 5 \
   --order-seed 20260822 --sputnik-pool-size 1 --languages sputnik,rails
 
 # Diagnostic only; profiling changes throughput and must not be compared to
 # the unprofiled statistical series.
-python3 bench/polyglot/run_http_rps.py --stack ember \
+python3 bench/polyglot/run_http_rps.py --stack orbit \
   --sputnik-execution vm --duration 15 --clients 4 --repeats 1 \
   --sputnik-pool-size 1 --languages sputnik --sample-seconds 10 --skip-build
 ```

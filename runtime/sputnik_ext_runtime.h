@@ -150,6 +150,9 @@ struct SputnikExtDirectOps {
   SputnikStatus (*fault)(void *, const char *, const char *) = nullptr;
   SputnikStatus (*call_block)(void *, SputnikValue, const SputnikValue *,
                             std::size_t, SputnikValue *) = nullptr;
+  int64_t (*block_required_args)(void *, SputnikValue) = nullptr;
+  SputnikStatus (*call_ruby_block)(void *, SputnikValue, const SputnikValue *,
+                                 std::size_t, SputnikValue *) = nullptr;
 };
 
 struct SputnikExtDirectCallOutcome {

@@ -690,6 +690,11 @@ void test_native_source_metadata_emission() {
       "package sqlite3\n"
       "class Error < NativeError\n"
       "class StepError < Error\n"
+      "def fail():\n"
+      "  try:\n"
+      "    raise StepError(\"failure\")\n"
+      "  rescue Error:\n"
+      "    42\n"
       "native class Conn from \"sqlite3.Conn\" owned:\n"
       "  def init(path as Str) from \"amsq_conn_open\"\n"
       "  def wait(timeout as Int) from \"amsq_conn_wait\" blocking\n"
@@ -720,6 +725,19 @@ void test_native_source_metadata_emission() {
   expect((emit_result.module.classes[1].flags &
           sputnik::bytecode::kClassFlagNativeError) != 0U,
          "NativeError ancestry is inherited");
+  bool qualified_step = false, qualified_root = false;
+  for (const auto &constant : emit_result.module.const_pool) {
+    if (constant.kind != sputnik::bytecode::ConstantKind::Path) continue;
+    std::string path;
+    for (const auto symbol : constant.items) {
+      if (!path.empty()) path += '.';
+      path += emit_result.module.symbols.at(symbol);
+    }
+    qualified_step |= path == "Sqlite3.StepError";
+    qualified_root |= path == "Sqlite3.Error";
+    expect(path != "StepError" && path != "Error", "local native error constants use their registered namespace");
+  }
+  expect(qualified_step && qualified_root, "raise and rescue qualify local native error classes");
 }
 
 void test_collection_literal_emission() {
@@ -1191,6 +1209,65 @@ void test_trivial_forwarding_summary_round_trip() {
 } // namespace
 
 int main() {
+  {
+    const auto emitted = emit_ok(
+        "package bridges\n"
+        "import pycall.numpy as np\n"
+        "from rbcall.json import JSON as json\n"
+        "def use(): np.array([1]); json.generate([1])\n");
+    std::vector<std::string> dependencies;
+    for (const auto &dep : emitted.module.dependencies)
+      dependencies.push_back(emitted.module.strings.at(dep.module_name_str_id));
+    expect(dependencies == std::vector<std::string>({"pycall", "rbcall"}),
+           "foreign imports depend on bridge packages, not foreign modules");
+    const auto decoded = sputnik::bytecode::deserialize_module(
+        sputnik::bytecode::serialize_module(emitted.module));
+    expect(decoded.ok(), "foreign import initializers and captures verify");
+  }
+  {
+    const auto emitted = emit_ok("package bridges\n"
+        "import slowpilot.pycall.numpy as np\n"
+        "from slowpilot.rbcall.json import JSON as json\n"
+        "def use(): np.array([1]); json.generate([1])\n");
+    std::vector<std::string> dependencies;
+    for (const auto &dep : emitted.module.dependencies)
+      dependencies.push_back(emitted.module.strings.at(dep.module_name_str_id));
+    expect(dependencies == std::vector<std::string>({"slowpilot.pycall", "slowpilot.rbcall"}),
+           "scoped foreign imports retain the provider namespace");
+  }
+  {
+    const auto forbidden = emit_allow_bytecode_diagnostics(
+        "[1, 2].each |x|: break x\n");
+    expect(!forbidden.ok(), "literal Sputnik iterator still rejects block break at compile time");
+  }
+  {
+    const auto emitted = emit_ok("def run(receiver):\n"
+        "  receiver.each |x|:\n"
+        "    try:\n"
+        "      break x\n"
+        "    ensure:\n"
+        "      print(x)\n");
+    bool saw_break = false, saw_block_contract = false;
+    for (const auto &code : emitted.module.code_objects) {
+      saw_block_contract |= code.kind == sputnik::bytecode::CodeKind::Block &&
+          (code.flags & sputnik::bytecode::kCodeFlagRubyBreakBlock) != 0U;
+      for (const auto &insn : code.instructions)
+        saw_break |= insn.opcode == sputnik::bytecode::Opcode::BreakForeign;
+    }
+    expect(saw_break && saw_block_contract, "foreign break survives protected regions");
+    expect(sputnik::bytecode::deserialize_module(
+        sputnik::bytecode::serialize_module(emitted.module)).ok(),
+        "foreign break bytecode round trip");
+    auto invalid = emitted.module;
+    bool corrupted = false;
+    for (auto &code : invalid.code_objects) for (auto &insn : code.instructions)
+      if (insn.opcode == sputnik::bytecode::Opcode::BreakForeign) {
+        insn.operands.clear(); corrupted = true;
+      }
+    expect(corrupted && !sputnik::bytecode::deserialize_module(sputnik::bytecode::serialize_module(invalid)).ok(),
+           "foreign break requires an initialized value register");
+  }
+
   {
     const auto emitted = emit_ok("package facade\nfrom provider import Thing as Alias\nexport Alias\n");
     const auto &module = emitted.module;

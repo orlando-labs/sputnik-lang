@@ -52,8 +52,21 @@ public:
   void close_activity() noexcept;
   const sputnik::runtime::NotebookInputSnapshot &inputs() const noexcept { return *inputs_; }
   bool set_input(const std::string &id, const std::string &json);
+  bool set_inputs(const std::map<std::string, std::string> &values, bool evaluate = true);
+  bool set_cell_inputs(sputnik::notebook::CellId cell, const std::map<std::string, std::string> &values, bool evaluate = true);
+  void save_cell_ui(sputnik::notebook::CellId cell, const std::string &json);
+  // Persist a stable identity and migrate component bindings and local inputs.
+  // Source buffers and runtime execution remain untouched.
+  void set_cell_id(sputnik::notebook::CellId cell, sputnik::notebook::CellId replacement);
   void create_input(const sputnik::notebook::ProjectInput &input);
+  void delete_input(const std::string &id);
   void save_board(const sputnik::notebook::ProjectBoard &board);
+  void set_retain_cell_results(bool enabled);
+  bool restore_inputs(const std::map<std::string, std::string> &values);
+  void edit_component_data(const sputnik::notebook::ProjectComponentDataEdit &);
+  void edit_audio(const sputnik::notebook::ProjectAudioEdit &edit);
+  void edit_images(const sputnik::notebook::ProjectImageEdit &edit);
+  void select_image(const std::string &sheet, const std::string &channel, std::size_t index);
   void add_dependency(const std::string &directory);
   void remove_dependency(const std::string &path);
 

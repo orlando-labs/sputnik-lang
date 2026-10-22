@@ -165,6 +165,11 @@ SendStatus tcp_stream_instance_send(NativeStdlibCall &call) {
   if (call.selector == "closed?" || call.selector == "close!") {
     return resource_lifecycle_send(call, *stream);
   }
+  if (call.selector == "local_path" || call.selector == "remote_path") {
+    if (!call.require_arity(0) || !call.kw_args.empty() || !call.require_no_block()) return SendStatus::Faulted;
+    *call.out = call.string_value(call.selector == "local_path" ? stream->local_path() : stream->remote_path());
+    return SendStatus::Matched;
+  }
   if (call.selector != "local_endpoint" && call.selector != "remote_endpoint") {
     return call.vm_io_value_intrinsic_send();
   }
@@ -186,6 +191,10 @@ SendStatus tcp_listener_instance_send(NativeStdlibCall &call) {
   }
   if (call.selector == "closed?" || call.selector == "close!") {
     return resource_lifecycle_send(call, *listener);
+  }
+  if (call.selector == "local_path") {
+    if (!call.require_arity(0) || !call.kw_args.empty() || !call.require_no_block()) return SendStatus::Faulted;
+    *call.out = call.string_value(listener->local_path()); return SendStatus::Matched;
   }
   if (call.selector != "local_endpoint") {
     return call.vm_io_value_intrinsic_send();
@@ -412,9 +421,30 @@ SendStatus udp_type_send(NativeStdlibCall &call) {
   return SendStatus::NotHandled;
 }
 
+SendStatus unix_type_send(NativeStdlibCall &call) {
+  if (call.selector != "listen" && call.selector != "connect") return SendStatus::NotHandled;
+  const bool listen = call.selector == "listen";
+  if (!call.require_arity(1) || !call.args[0].is_string()) return call.fault("TypeError", "Unix socket expects a path Str");
+  if (!call.reject_unknown_keywords(listen ? std::initializer_list<const char *>{"backlog", "isolation"}
+                                         : std::initializer_list<const char *>{"timeout", "isolation"})) return SendStatus::Faulted;
+  auto path = call.text_of(call.args[0]);
+  auto isolation = isolation_from_keywords(call);
+  auto timeout = timeout_from_keywords(call);
+  if (!path || !isolation || !timeout) return SendStatus::Faulted;
+  int backlog = 128;
+  if (auto value = call.keyword("backlog")) {
+    if (!value->is_integer() || value->as_integer() <= 0 || value->as_integer() > 65536)
+      return call.fault("ArgumentError", "backlog must be 1..65536");
+    backlog = static_cast<int>(value->as_integer());
+  }
+  Value resource;
+  if (!call.host.stdlib_net_unix_open(call.frame, *path, listen, backlog, *timeout, *isolation, &resource)) return SendStatus::Faulted;
+  return tcp_block_result(call, resource);
+}
+
 SendStatus net_namespace_send(NativeStdlibCall &call) {
   if (call.selector != "tcp" && call.selector != "udp" &&
-      call.selector != "Endpoint" && call.selector != "http") {
+      call.selector != "Endpoint" && call.selector != "http" && call.selector != "unix") {
     return SendStatus::NotHandled;
   }
   if (!call.require_arity(0) || !call.kw_args.empty() ||
@@ -423,6 +453,7 @@ SendStatus net_namespace_send(NativeStdlibCall &call) {
   }
   const RuntimeNativeTypeKind member_kind =
       call.selector == "tcp"    ? RuntimeNativeTypeKind::NetTcp
+      : call.selector == "unix" ? RuntimeNativeTypeKind::NetUnix
       : call.selector == "udp"  ? RuntimeNativeTypeKind::NetUdp
       : call.selector == "http" ? RuntimeNativeTypeKind::NetHttp
                                 : RuntimeNativeTypeKind::NetEndpoint;
@@ -434,17 +465,21 @@ RuntimeNativeModuleDescriptor net_module_descriptor() {
   return {{{"net", RuntimeNativeTypeKind::Net},
            {"net.Endpoint", RuntimeNativeTypeKind::NetEndpoint},
            {"net.tcp", RuntimeNativeTypeKind::NetTcp},
-           {"net.udp", RuntimeNativeTypeKind::NetUdp}},
+           {"net.udp", RuntimeNativeTypeKind::NetUdp},
+           {"net.unix", RuntimeNativeTypeKind::NetUnix}},
           {{RuntimeNativeTypeKind::Net, net_namespace_send},
            {RuntimeNativeTypeKind::NetEndpoint, endpoint_type_send},
            {RuntimeNativeTypeKind::NetTcp, tcp_type_send},
-           {RuntimeNativeTypeKind::NetUdp, udp_type_send}},
+           {RuntimeNativeTypeKind::NetUdp, udp_type_send},
+           {RuntimeNativeTypeKind::NetUnix, unix_type_send}},
           {{"net.Endpoint", RuntimeNativeTypeKind::NetEndpoint,
             endpoint_instance_send},
            {"net.TcpStream", RuntimeNativeTypeKind::NetTcp,
             tcp_stream_instance_send},
            {"net.TcpListener", RuntimeNativeTypeKind::NetTcp,
             tcp_listener_instance_send},
+           {"net.UnixStream", RuntimeNativeTypeKind::NetUnix, tcp_stream_instance_send},
+           {"net.UnixListener", RuntimeNativeTypeKind::NetUnix, tcp_listener_instance_send},
            {"net.UdpSocket", RuntimeNativeTypeKind::NetUdp,
             udp_socket_instance_send}},
           {{RuntimeNativeTypeKind::NetEndpoint, "new"}},

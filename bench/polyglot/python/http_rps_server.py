@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Contract-compatible server for the Ember soak-client RPS benchmark."""
+"""Contract-compatible server for the Orbit soak-client RPS benchmark."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import argparse
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+from socketserver import TCPServer
 import threading
 import time
 from typing import Optional, Tuple
@@ -376,12 +377,20 @@ class Handler(BaseHTTPRequestHandler):
         self.problem(405)
 
 
+class BenchmarkHTTPServer(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        # The benchmark supplies an explicit local address. Avoid HTTPServer's
+        # reverse-DNS lookup, which can stall startup on an unavailable resolver.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=3400)
     args = parser.parse_args()
-    server = ThreadingHTTPServer((args.host, args.port), Handler)
+    server = BenchmarkHTTPServer((args.host, args.port), Handler)
     server.daemon_threads = True
     server.serve_forever(poll_interval=0.1)
     return 0

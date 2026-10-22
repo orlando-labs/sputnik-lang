@@ -9,6 +9,9 @@ Current baseline:
 - supported host targets for now: Linux and macOS;
 - OpenSSL 1.1.1 or 3.x development headers/libraries are required for HTTP TLS;
   `pkg-config` locates them, or set `OPENSSL_PREFIX=/path/to/openssl` (macOS: `brew install openssl@3 pkg-config`);
+- LibYAML development headers/libraries are required for notebook YAML config
+  codecs (`brew install libyaml` or `apt install libyaml-dev`); `YAML_PREFIX`
+  overrides discovery. TOML parsing uses the vendored MIT-licensed toml++ header;
 - ncurses headers/libraries are required for the bundled interactive console
   (Linux: `libncurses-dev`; macOS: supplied by Xcode Command Line Tools);
 - W12 documentation sync uses only the Python 3 standard library for generated anchor-map checks;

@@ -3157,7 +3157,7 @@ private:
         RuntimeRunCancellation run;
         std::shared_ptr<RuntimeRunState::Task> registration;
         StrandFunction function;
-        void invoke() { RuntimeRunCancellationScope scope(run); function(); }
+        void invoke() { RuntimeRunCancellationScope scope(run); RuntimeRunTaskScope activity(registration); function(); }
       };
       auto body = std::make_shared<RunTaskBody>(RunTaskBody{run, registration, std::move(function)});
       function = [body] { body->invoke(); };
@@ -3486,6 +3486,9 @@ private:
             final_error.error_name, final_error.message, task.spawn_source});
     }
 
+    if (const auto run = task.run.lock()) run->finish_task(task.run_task_id,
+        final_state == RuntimeStrandState::Cancelled ? "cancelled" : final_state == RuntimeStrandState::Failed ? "failed" : "succeeded",
+        final_error.error_name.empty() ? std::string{} : final_error.error_name + ": " + final_error.message);
     task.state = final_state;
     task.error = final_error;
     task.worker_id = 0;

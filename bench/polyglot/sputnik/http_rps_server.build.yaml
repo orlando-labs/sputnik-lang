@@ -9,23 +9,23 @@ profiles:
 
 modules:
   - name: sqlite3
-    path: ../../../../ember/.build/dependencies/sqlite3-sputnik/src/sqlite3.s
+    path: ../../../../orbit/.build/dependencies/sqlite3/src/sqlite3.s
   - name: orm
-    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm.s
+    path: ../../../../orbit/.build/dependencies/orm/src/orm.s
   - name: orm.pool
-    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/pool.s
+    path: ../../../../orbit/.build/dependencies/orm/src/orm/pool.s
   - name: orm.sqlite3.adapter
-    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/sqlite3/adapter.s
+    path: ../../../../orbit/.build/dependencies/orm/src/orm/sqlite3/adapter.s
   - name: orm.sqlite3.pool
-    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/sqlite3/pool.s
+    path: ../../../../orbit/.build/dependencies/orm/src/orm/sqlite3/pool.s
   - name: orm.sqlite3
-    path: ../../../../ember/.build/dependencies/sputnik-orm/src/orm/sqlite3.s
-  - name: ember
-    path: ../../../../ember/src/ember.s
-  - name: ember.telemetry
-    path: ../../../../ember/src/ember/telemetry.s
-  - name: ember.integrations.orm
-    path: ../../../../ember/packages/ember-orm/src/ember/integrations/orm.s
+    path: ../../../../orbit/.build/dependencies/orm/src/orm/sqlite3.s
+  - name: orbit
+    path: ../../../../orbit/src/orbit.s
+  - name: orbit.telemetry
+    path: ../../../../orbit/src/orbit/telemetry.s
+  - name: orbit.integrations.orm
+    path: ../../../../orbit/packages/orbit-orm/src/orbit/integrations/orm.s
   - name: sputnik.bench.polyglot.http_rps_server
     path: http_rps_server.s
 
@@ -33,10 +33,10 @@ native_extensions:
   - name: sqlite3
     language: c
     sources:
-      - ../../../../ember/.build/dependencies/sqlite3-sputnik/native/sqlite3_ext.c
-      - ../../../../ember/.build/dependencies/sqlite3-sputnik/native/sqlite3.c
+      - ../../../../orbit/.build/dependencies/sqlite3/native/sqlite3_ext.c
+      - ../../../../orbit/.build/dependencies/sqlite3/native/sqlite3.c
     headers:
-      - ../../../../ember/.build/dependencies/sqlite3-sputnik/native/sqlite3.h
+      - ../../../../orbit/.build/dependencies/sqlite3/native/sqlite3.h
     blocking_symbols:
       - amsq_pool_acquire_wait
     defines:

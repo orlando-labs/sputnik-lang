@@ -298,7 +298,7 @@ LexResult Lexer::lex() {
         const bool valid_index = !has_index || text[3] != '0';
         // '!=' and '!~' are operators, not identifier suffixes.
         const bool invalid_suffix =
-            current() == '?' ||
+            (current() == '?' && peek() != '=') ||
             (current() == '!' && peek() != '=' && peek() != '~');
         const bool valid_boundary =
             at_end() || (!is_identifier_part_at(index_) && !invalid_suffix);
@@ -597,7 +597,8 @@ void Lexer::lex_identifier_or_keyword() {
     advance();
   }
 
-  if (!at_end() && (current() == '?' || current() == '!')) {
+  // Adjacent `?=` is conditional assignment, not a predicate-name suffix.
+  if (!at_end() && ((current() == '?' && peek() != '=') || current() == '!')) {
     const char suffix = current();
     advance();
     if (!at_end() && is_identifier_part_at(index_)) {

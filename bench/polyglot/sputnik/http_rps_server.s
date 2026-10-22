@@ -1,10 +1,10 @@
 package sputnik.bench.polyglot.http_rps_server
 
-import ember
+import orbit
 import orm
 import task
-from ember.telemetry import MetricsRegistry, Telemetry
-from ember.integrations.orm import pool as orm_pool
+from orbit.telemetry import MetricsRegistry, Telemetry
+from orbit.integrations.orm import pool as orm_pool
 from orm.sqlite3 import memory_pool
 
 export main
@@ -82,7 +82,7 @@ class Schemas:
   attr list_item
 
   def init():
-    @create_item = ember.params(root: :item, unknown: :reject):
+    @create_item = orbit.params(root: :item, unknown: :reject):
       field(:sku, required: true)
       field(:name, required: true)
       field(:description, required: true)
@@ -105,7 +105,7 @@ class Schemas:
         field(:batch, required: true)
         field(:fragile, type: Bool, required: true)
 
-    @patch_item = ember.params(root: :item, unknown: :reject):
+    @patch_item = orbit.params(root: :item, unknown: :reject):
       field(:sku)
       field(:name)
       field(:description)
@@ -128,11 +128,11 @@ class Schemas:
         field(:batch, required: true)
         field(:fragile, type: Bool, required: true)
 
-    @list_item = ember.params(unknown: :reject):
+    @list_item = orbit.params(unknown: :reject):
       field(:status)
 
 def problem(status, code, message, details: []):
-  ember.render(
+  orbit.render(
     json: {error: {code: code, message: message, details: details}},
     status: status)
 
@@ -235,11 +235,11 @@ def update_item(item, attrs, request, partial: false):
   item[:updated_at] = Time.now.iso8601
   saved = item.save
   return persistence_problem(saved) if saved.err?
-  ember.render(
+  orbit.render(
     json: item_json(saved.value),
     headers: {"etag": saved.value[:version].to_str})
 
-class Items < ember.Controller:
+class Items < orbit.Controller:
   def index():
     filters = params.query.expect(service(:schemas).list_item)
     if filters.has_key?(:status) and not catalog_status?(filters[:status]):
@@ -321,7 +321,7 @@ def readiness(request):
   request.service(:telemetry).health.readiness(request)
 
 def service_routes():
-  ember.routes:
+  orbit.routes:
     get "/v1/items", to: &Items#index
     post "/v1/items", to: &Items#create
     get "/v1/items/:id", to: &Items#show, params: {id: Int}
@@ -388,14 +388,14 @@ def main():
     sink: QuietSink(),
     metrics: MetricsRegistry(max_series: 256),
     tracer: false)
-  app = ember.App(
+  app = orbit.App(
     routes: service_routes(),
     integrations: [orm_pool(database, name: "catalog")],
     services: {
       telemetry: telemetry,
       schemas: Schemas()
     },
-    security: ember.SecurityPolicy(allowed_hosts: ["localhost", "127.0.0.1", "::1"]),
+    security: orbit.SecurityPolicy(allowed_hosts: ["localhost", "127.0.0.1", "::1"]),
     telemetry: telemetry)
   app.server(
     host: args["host"],

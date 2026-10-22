@@ -321,6 +321,25 @@ void test_pattern_operands_and_targets_are_relocated() {
   }
 }
 
+void test_native_binding_in_source_namespace() {
+  auto helpers = module("notebook.ui");
+  add_class_export(&helpers, "DataTableView");
+  auto root = module("root", {"notebook.ui"});
+  root.module.strings.push_back("sputnik.import.alias:root\tStopwatch");
+  root.module.strings.push_back("F\tnotebook.ui\tStopwatch\t0");
+  root.module.attrs.push_back({1, 2});
+  BcCode init;
+  init.code_id = 1; init.kind = CodeKind::Module; init.reg_count = 1;
+  init.instructions = {{Opcode::LoadNull, {{0, false}}}, {Opcode::Return, {{0, false}}}};
+  root.module.code_objects.push_back(init);
+  root.module.init = {true, 1, 0};
+  expect(!sputnik::bytecode::link_graph({root, helpers}, "root").ok,
+         "missing source export still requires a native binding");
+  expect_valid_output(sputnik::bytecode::link_graph({root, helpers}, "root", [](const std::string &name) {
+    return name == "notebook.ui.Stopwatch";
+  }));
+}
+
 void test_failures_are_explicit() {
   expect(!sputnik::bytecode::link_graph({module("root", {"missing"})}, "root")
               .ok,
@@ -337,6 +356,46 @@ void test_failures_are_explicit() {
   reexport.module.exports.push_back({0, 0, 0, 1, true, 1});
   expect(!sputnik::bytecode::link_graph({std::move(reexport)}, "reexport").ok,
          "re-export should be rejected explicitly");
+}
+
+void test_import_replacement_paths() {
+  sputnik::frontend::ImportAliases aliases;
+  aliases.add("orm", "my.orm");
+  aliases.add("vendor.orm", "orm");
+  aliases.add("orm.special", "custom.special");
+  expect(aliases.resolve("vendor.orm.utils") == "my.orm.utils", "replacement chains preserve submodules");
+  expect(aliases.resolve("orm.special.extra") == "custom.special.extra", "longest replacement wins");
+  expect(aliases.resolve("ormish.utils") == "ormish.utils", "replacement respects path segment boundary");
+  sputnik::frontend::ImportAliases prefix;
+  prefix.add("a", "a.b");
+  expect(prefix.resolve("a.b") == "a.b" && prefix.resolve("a") == "a.b",
+         "canonical provider nested in alias is stable");
+
+  auto root = module("main", {"orm", "client"});
+  root.module.strings.push_back("sputnik.import.redirect:orm");
+  root.module.strings.push_back("my.orm");
+  root.module.attrs.push_back({2, 3});
+  auto client = module("client", {"orm.utils"});
+  auto replacement = module("my.orm");
+  auto submodule = module("my.orm.utils");
+  const auto linked = sputnik::bytecode::link_graph(
+      {root, client, replacement, submodule, module("orm")}, "main");
+  expect_valid_output(linked);
+  expect(linked.init_order == std::vector<std::string>({"my.orm", "my.orm.utils", "client", "main"}),
+         "replacement links canonical modules once and excludes original");
+
+  auto lexical = module("client", {"unrelated"});
+  lexical.module.strings.push_back("sputnik.import.alias:client\torm");
+  lexical.module.strings.push_back("M\tunrelated\t0");
+  lexical.module.attrs.push_back({1, 2});
+  lexical.module.symbols = {"orm", "Thing"};
+  Constant path;
+  path.kind = ConstantKind::Path;
+  path.items = {0, 1};
+  lexical.module.const_pool.push_back(path);
+  sputnik::bytecode::redirect_module_imports(&lexical.module, aliases);
+  expect(lexical.module.const_pool.front().items == path.items,
+         "replacement does not capture a dependency's lexical alias");
 }
 
 void test_class_paths_are_module_qualified() {
@@ -437,9 +496,11 @@ int main() {
   test_input_verification_and_file_flags_are_rejected();
   test_pattern_ids_are_module_local_identities();
   test_import_metadata_cannot_bypass_dependency_admission();
+  test_native_binding_in_source_namespace();
   test_pattern_operands_and_targets_are_relocated();
   test_failures_are_explicit();
   test_class_paths_are_module_qualified();
+  test_import_replacement_paths();
   std::cout << "graph_linker_tests: ok\n";
   return 0;
 }

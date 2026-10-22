@@ -12,6 +12,7 @@
     {"name": "bench.polyglot.calls_collections", "path": "src/calls_collections.s"},
     {"name": "bench.polyglot.codecs", "path": "src/codecs.s"},
     {"name": "bench.polyglot.json", "path": "src/json.s"},
+    {"name": "bench.polyglot.json_full_api", "path": "src/json_full_api.s"},
     {"name": "bench.polyglot.map_words", "path": "src/map_words.s"},
     {"name": "bench.polyglot.secure_random", "path": "src/secure_random.s"},
     {"name": "bench.polyglot.sha_digest", "path": "src/sha_digest.s"},

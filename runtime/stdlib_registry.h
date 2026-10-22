@@ -177,6 +177,12 @@ public:
                                               const Value &block,
                                               std::vector<Value> args) = 0;
 
+  virtual int64_t stdlib_block_required_args(const Value &) { return -1; }
+  virtual StdlibBlockResult stdlib_call_ruby_block(const void *frame,
+      const Value &block, std::vector<Value> args) {
+    return stdlib_call_block(frame, block, std::move(args));
+  }
+
   // Guard against operations that can suspend while evaluating property arms.
   // The VM owns the frame/property-arm state; stdlib handlers only name the
   // operation they are about to perform.
@@ -238,6 +244,17 @@ public:
                                    Value *out) = 0;
   virtual bool stdlib_fs_close_file(const void *frame, const Value &file,
                                     bool report_fault) = 0;
+  virtual bool stdlib_fs_atomic_write(const void *frame, const std::string &path,
+                                       const std::string &bytes, bool durable) = 0;
+  virtual bool stdlib_fs_sync(const void *frame, const std::string &path) = 0;
+  virtual bool stdlib_fs_entries(const void *frame, const std::string &path,
+                                  std::vector<std::string> *out) = 0;
+  virtual bool stdlib_fs_lock(const void *frame, const std::string &path,
+                               bool exclusive, bool nonblock, Value *out) = 0;
+  virtual bool stdlib_net_unix_open(const void *frame, const std::string &path,
+                                     bool listen, int backlog,
+                                     std::chrono::milliseconds timeout,
+                                     RuntimeIsolationMode isolation, Value *out) = 0;
   virtual bool stdlib_net_udp_bind(const void *frame,
                                    const RuntimeEndpoint &endpoint,
                                    RuntimeIsolationMode isolation,
@@ -1057,6 +1074,8 @@ void register_signature_runtime_module(RuntimeModuleRegistry &modules,
                                        RuntimeTypeRegistry &types,
                                        RuntimeErrorRegistry *errors = nullptr);
 void register_benchmark(NativeRegistry &registry);
+void register_notebook_ui(NativeRegistry &registry);
+void register_notebook_ui_runtime_module(RuntimeModuleRegistry &, RuntimeDispatchRegistry &, RuntimeTypeRegistry &);
 void register_benchmark_runtime_module(RuntimeModuleRegistry &modules,
                                        RuntimeDispatchRegistry &dispatch,
                                        RuntimeTypeRegistry &types,

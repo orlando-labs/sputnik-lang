@@ -113,6 +113,42 @@ void test_console_definitions_errors_and_capabilities() {
          "native notebook sessions must keep their persistent cell profile");
 }
 
+void test_import_as_replaces_notebook_dependencies() {
+  for (const bool console : {false, true}) {
+    for (const std::string alias : {"orm", "vendor.orm"}) {
+      Session session;
+      session.console_definitions = console;
+      session.cells = {
+          make_cell("import my.orm as " + alias + "\n"),
+          make_cell("import " + alias + "\nfrom " + alias + " import answer\n"
+                    "from client import through_dependency, Box as ClientBox\n"
+                    "from my.orm import Box\n"
+                    "[orm.answer(), answer(), through_dependency(), Box == ClientBox]\n")};
+      const std::vector<BundledModuleSource> modules{
+          {"my.orm", "fork.s", "package my.orm\nprint \"fork initialized\"\n"
+           "export answer, Box\ndef answer(): 42\nclass Box:\n  def init()\n", false},
+          {alias, "original.s", "package " + alias + "\nraise \"original initialized\"\n", false},
+          {"client", "client.s", "package client\nfrom " + alias + " import answer, Box\n"
+           "export through_dependency, Box\ndef through_dependency(): answer()\n", false}};
+      expect(apply_bundled_environment(&session, modules, true, false),
+             "notebook import replacement must prepare: " + session.environment_error +
+             " | " + session.cells[1].error);
+      expect(session.cells[1].ok && session.cells[1].result == "[42, 42, 42, true]",
+             "notebook cells and dependencies must share the fork: " + session.cells[1].error);
+      std::string output = output_text(session.environment_output);
+      for (const auto &cell : session.cells) output += output_text(cell.output_events);
+      expect(output == "fork initialized\n", "fork must initialize once per notebook generation: " + output);
+      // A replacement edit stages a fresh environment; an invalid edit must
+      // preserve the previous generation and successful output.
+      session.cells[0].source += "import different.orm as " + alias + "\n";
+      expect(!apply_bundled_environment(&session, modules, true, false),
+             "conflicting replacements must fail notebook Apply");
+      expect(session.cells[1].result == "[42, 42, 42, true]",
+             "failed replacement edit preserves the previous result");
+    }
+  }
+}
+
 void test_console_definitions_imports_and_private_results() {
   Session session;
   session.console_definitions = true;
@@ -787,6 +823,7 @@ void test_runtime_event_pump_coalesces_reentry_and_reports_drain_cap() {
 } // namespace
 
 int main() {
+  test_import_as_replaces_notebook_dependencies();
   test_console_definitions_across_cells();
   test_console_definitions_errors_and_capabilities();
   test_console_definitions_imports_and_private_results();

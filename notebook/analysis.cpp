@@ -102,6 +102,8 @@ public:
           const auto dot = path.rfind('.');
           alias = dot == std::string::npos ? path : path.substr(dot + 1);
         }
+        const auto dot = alias.rfind('.');
+        if (dot != std::string::npos) alias = alias.substr(dot + 1);
         if (!alias.empty()) local_bindings_.insert(alias);
       } else if (const auto *names = list_field(expr, "names")) {
         for (const auto &name : names->values) {

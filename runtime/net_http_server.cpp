@@ -556,7 +556,11 @@ std::string http_server_streaming_response_head(
         "ArgumentError", "streaming response status must permit content");
   }
   std::string error;
-  if (!response.headers.set("transfer-encoding", "chunked", &error)) {
+  const bool framed = response.stream_length.has_value()
+      ? response.headers.set("content-length",
+                             std::to_string(*response.stream_length), &error)
+      : response.headers.set("transfer-encoding", "chunked", &error);
+  if (!framed) {
     throw RuntimeTaskFailure("InvalidHeaderError", error);
   }
   if (!response.trailer_names.empty()) {
@@ -617,6 +621,17 @@ bool http_server_finish_streaming_response(
              RuntimeHttpServerResponseWriter::Pending::None) {
     return false;
   }
+  if (writer->stream_length.has_value()) {
+    if (writer->body_length_failed ||
+        writer->body_queued != *writer->stream_length) {
+      writer->body_length_failed = true;
+      throw RuntimeTaskFailure("BodyLengthError",
+                               "streamed response does not match length");
+    }
+    writer->body_closed = true;
+    writer->finished = true;
+    return true;
+  }
   if (!writer->body_closed) {
     const RuntimeIoStatus closed =
         writer->stream->write_all("0\r\n", writer->write_timeout);
@@ -656,6 +671,7 @@ RuntimeHttpServerWriterResult flush_http_server_writer(
     }
     const RuntimeIoStatus written = writer->stream->write_all(
         writer->pending_bytes.substr(writer->pending_offset), remaining);
+    writer->count_write(writer->pending_offset, written.count);
     writer->write_deadline.reset();
     if (!written.ok) {
       result.error_name =
@@ -1235,14 +1251,34 @@ RuntimeHttpServerWriterResult runtime_http_server_writer_write(
     return result;
   }
   std::string error;
-  if (!http::http_encode_chunk(data, extensions, &writer->pending_bytes,
-                               &error)) {
+  if (writer->stream_length.has_value()) {
+    if (writer->body_length_failed ||
+        data.size() > *writer->stream_length - writer->body_queued) {
+      writer->body_length_failed = true;
+      result.ok = false;
+      result.error_name = "BodyLengthError";
+      result.message = "streamed response exceeds length";
+      return result;
+    }
+    if (!extensions.empty()) {
+      result.ok = false;
+      result.error_name = "ChunkError";
+      result.message = "fixed-length response does not permit chunk extensions";
+      return result;
+    }
+    writer->body_queued += data.size();
+    writer->pending_bytes = data;
+  } else if (!http::http_encode_chunk(data, extensions, &writer->pending_bytes,
+                                      &error)) {
     result.ok = false;
     result.error_name = "ChunkError";
     result.message = std::move(error);
     return result;
   }
   writer->pending = RuntimeHttpServerResponseWriter::Pending::Chunk;
+  writer->payload_begin = writer->stream_length.has_value()
+      ? 0 : writer->pending_bytes.find("\r\n") + 2;
+  writer->payload_end = writer->payload_begin + data.size();
   return flush_http_server_writer(writer);
 }
 
@@ -1263,6 +1299,18 @@ RuntimeHttpServerWriterResult runtime_http_server_writer_close(
   if (writer->body_closed) {
     return result;
   }
+  if (writer->stream_length.has_value()) {
+    if (writer->body_length_failed ||
+        writer->body_queued != *writer->stream_length) {
+      writer->body_length_failed = true;
+      result.ok = false;
+      result.error_name = "BodyLengthError";
+      result.message = "streamed response does not match length";
+      return result;
+    }
+    writer->body_closed = true;
+    return result;
+  }
   writer->pending_bytes = "0\r\n";
   writer->pending = RuntimeHttpServerResponseWriter::Pending::Close;
   return flush_http_server_writer(writer);
@@ -1279,6 +1327,12 @@ RuntimeHttpServerWriterResult runtime_http_server_writer_trailer(
       flush_http_server_writer(writer);
   if (!result.ok || pending !=
                         RuntimeHttpServerResponseWriter::Pending::None) {
+    return result;
+  }
+  if (writer->stream_length.has_value()) {
+    result.ok = false;
+    result.error_name = "ChunkError";
+    result.message = "fixed-length response does not permit trailers";
     return result;
   }
   if (!writer->body_closed || writer->finished) {
@@ -1329,6 +1383,10 @@ RuntimeHttpServerWriterResult runtime_http_server_writer_finish(
     return result;
   }
   if (writer->finished) {
+    return result;
+  }
+  if (writer->stream_length.has_value()) {
+    writer->finished = true;
     return result;
   }
   writer->pending_bytes = "\r\n";
@@ -1384,6 +1442,7 @@ RuntimeHttpServerServeResult runtime_http_server_serve_native(
     }
     state->request.reset();
     state->producer = {};
+    if (state->writer) state->writer->notify_complete(false);
     state->writer.reset();
     state->request_body.reset();
     if (state->stream != nullptr) {
@@ -1494,6 +1553,7 @@ RuntimeHttpServerServeResult runtime_http_server_serve_native(
             }
 
             auto complete_request = [&]() -> bool {
+              if (state->writer) state->writer->notify_complete(true);
               if (state->request_in_flight) {
                 state->request_in_flight = false;
                 server->end_request();
@@ -1545,6 +1605,11 @@ RuntimeHttpServerServeResult runtime_http_server_serve_native(
 
               if (response.streaming() &&
                   state->request_method == "HEAD") {
+                if (response.stream_length.has_value()) {
+                  std::string error;
+                  (void)response.headers.set("content-length",
+                      std::to_string(*response.stream_length), &error);
+                }
                 response.producer_factory = {};
                 response.trailer_names.clear();
                 response.headers.remove("transfer-encoding");
@@ -1563,6 +1628,8 @@ RuntimeHttpServerServeResult runtime_http_server_serve_native(
                 state->writer->task = server->task;
                 state->writer->write_timeout = server->write_timeout;
                 state->writer->declared_trailers = response.trailer_names;
+                state->writer->stream_length = response.stream_length;
+                state->writer->on_complete = response.on_complete;
                 state->writer->final_response_started =
                     state->request_body->final_response_started;
                 state->writer->pending_bytes =

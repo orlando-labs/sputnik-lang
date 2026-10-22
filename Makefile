@@ -1,6 +1,11 @@
 .DEFAULT_GOAL := all
 include mk/config.mk
 
+# Opt-in Linux toolchain gate: Clang 19+ with matching LLVM and LLD tools.
+.PHONY: test-native-parallel
+test-native-parallel: $(BUILD_DIR)/sputnik
+	python3 tests/native_parallel_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-parallel-test
+
 test: test-run-cancellation-checkpoint
 .PHONY: test-run-cancellation-checkpoint
 test-run-cancellation-checkpoint: $(BUILD_DIR)/run_cancellation_checkpoint_tests
@@ -25,10 +30,58 @@ BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp bytecode/graph_linker.
 IO_SRCS := runtime/io.cpp runtime/reactor.cpp runtime/tls.cpp
 DIGEST_SRCS := runtime/digest.cpp
 HTTP_SRCS := runtime/http_codec.cpp runtime/net_http.cpp runtime/net_http_server.cpp runtime/net_http_transport.cpp
-STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_bool.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_signature.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
+STDLIB_SRCS := runtime/stdlib_registry.cpp runtime/stdlib_bool.cpp runtime/stdlib_io.cpp runtime/stdlib_fs.cpp runtime/stdlib_net.cpp runtime/stdlib_net_http.cpp runtime/stdlib_task.cpp runtime/stdlib_math.cpp runtime/stdlib_json.cpp runtime/stdlib_codecs.cpp runtime/stdlib_digest.cpp runtime/stdlib_signature.cpp runtime/stdlib_benchmark.cpp runtime/stdlib_notebook_ui.cpp runtime/stdlib_secure_random.cpp runtime/stdlib_argparser.cpp runtime/stdlib_regexp.cpp runtime/stdlib_uuid.cpp runtime/stdlib_time.cpp runtime/stdlib_url.cpp runtime/stdlib_yaml.cpp
 RUNTIME_SRCS := runtime/context.cpp runtime/text.cpp runtime/watch.cpp runtime/value.cpp runtime/value_display.cpp runtime/errors.cpp runtime/numeric.cpp runtime/objects.cpp runtime/heap.cpp runtime/concurrency.cpp runtime/world.cpp $(IO_SRCS) $(DIGEST_SRCS) $(HTTP_SRCS) runtime/system.cpp runtime/vm.cpp $(STDLIB_SRCS) runtime/sputnik_ext.cpp runtime/module_loader.cpp runtime/native_bridge.cpp runtime/macro_expander.cpp
+RUNTIME_SRCS += runtime/config_document.cpp
 FROZEN_RUNTIME_SRCS := runtime/frozen_image.cpp
-PACKAGE_SRCS := package/package.cpp
+PACKAGE_SRCS := package/package.cpp package/store.cpp package/distribution.cpp package/registry.cpp package/selection.cpp
+
+$(BUILD_DIR)/package_selection_tests: tests/package_selection_tests.cpp package/selection.cpp package/selection.h package/package.h
+	@mkdir -p "$(@D)"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/package_selection_tests.cpp package/selection.cpp $(SPUTNIK_DYNAMIC_LOADER_LIBS) -pthread -o $@
+
+.PHONY: test-package-native-registry
+test-package-native-registry: $(BUILD_DIR)/sputnik $(BUILD_DIR)/package_selection_tests $(BUILD_DIR)/package_store_tests
+	$(BUILD_DIR)/package_selection_tests
+	python3 tests/package_native_registry_cli_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/package_store_tests
+test: test-package-native-registry
+
+.PHONY: test-package-registry
+test-package-registry: $(BUILD_DIR)/sputnik
+	python3 tests/package_registry_cli_test.py $(BUILD_DIR)/sputnik
+	python3 tests/package_registry_query_cli_test.py $(BUILD_DIR)/sputnik
+test: test-package-registry
+
+.PHONY: test-package-distribution
+test-package-distribution: $(BUILD_DIR)/package_distribution_tests
+	$(BUILD_DIR)/package_distribution_tests
+$(BUILD_DIR)/package_distribution_tests: $(BUILD_DIR)/obj/tests/package_distribution_tests.o $(BUILD_DIR)/libsputnik.a | $(BUILD_DIR)/.dir
+	$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -pthread -o $@
+test: test-package-distribution
+
+.PHONY: test-package-store
+test-package-store: $(BUILD_DIR)/sputnik $(BUILD_DIR)/package_store_tests
+	$(BUILD_DIR)/package_store_tests
+	python3 tests/package_store_cli_smoke.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/package_store_tests
+test: test-package-store
+
+.PHONY: test-import-replacements
+test-import-replacements: $(BUILD_DIR)/sputnik $(BUILD_DIR)/binder_tests $(BUILD_DIR)/graph_linker_tests $(BUILD_DIR)/isputnik_tests $(BUILD_DIR)/package_store_tests
+	$(BUILD_DIR)/binder_tests
+	$(BUILD_DIR)/graph_linker_tests
+	$(BUILD_DIR)/isputnik_tests
+	python3 tests/import_replacement_cli_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/package_store_tests
+test: test-import-replacements
+
+.PHONY: test-package-directory-install
+test-package-directory-install: $(BUILD_DIR)/sputnik
+	python3 tests/package_directory_install_cli_test.py $(BUILD_DIR)/sputnik
+test: test-package-directory-install
+
+.PHONY: test-package-remove
+test-package-remove: $(BUILD_DIR)/sputnik
+	python3 tests/package_remove_cli_test.py $(BUILD_DIR)/sputnik
+test: test-package-remove
 FRONTEND_SRCS := $(LEXER_SRCS) $(AST_SRCS) $(PARSER_SRCS) $(PATTERN_SRCS) $(BINDER_SRCS) $(CHECKER_SRCS) $(HIR_SRCS)
 CORE_SRCS := $(PROFILE_SRCS) $(BUILD_SRCS) $(FRONTEND_SRCS) $(MIR_SRCS) $(NATIVE_SRCS) $(BYTECODE_SRCS)
 SPUTNIK_SRCS := tools/sputnik/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS)
@@ -38,6 +91,11 @@ LIB_SRCS := $(sort $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS) $
 LIB_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/obj/%.o,$(LIB_SRCS))
 LIBRARY := $(BUILD_DIR)/libsputnik.a
 runtime: $(LIBRARY)
+.PHONY: test-config-document
+$(BUILD_DIR)/config_document_tests: $(BUILD_DIR)/obj/tests/config_document_tests.o $(LIBRARY)
+	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) -o $@
+test-config-document: $(BUILD_DIR)/config_document_tests
+	$(BUILD_DIR)/config_document_tests
 $(BUILD_DIR)/obj/%.o: %.cpp
 	@mkdir -p "$(@D)"
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
@@ -183,6 +241,7 @@ FORMAT_FILES := \
 	runtime/stdlib_digest.cpp \
 	runtime/stdlib_signature.cpp \
 	runtime/stdlib_benchmark.cpp \
+	runtime/stdlib_notebook_ui.cpp \
 	runtime/stdlib_secure_random.cpp \
 	runtime/stdlib_bool.cpp \
 	runtime/stdlib_bool.h \
@@ -195,11 +254,21 @@ FORMAT_FILES := \
 	runtime/stdlib_url.h \
 	runtime/stdlib_url.cpp \
 	runtime/stdlib_yaml.cpp \
+	runtime/config_document.h \
+	runtime/config_document.cpp \
+	third_party/tomlplusplus/toml.hpp \
 	runtime/sputnik_ext.h \
 	runtime/sputnik_ext_runtime.h \
 	runtime/sputnik_ext.cpp \
 	package/package.cpp \
 	package/package.h \
+	package/store.cpp \
+	package/store.h \
+	package/registry.cpp \
+	package/registry.h \
+	package/registry_json.h \
+	package/selection.h \
+	package/selection.cpp \
 	tools/sputnik/main.cpp \
 	tools/sputniktest/main.cpp \
 	tests/lexer_tests.cpp \
@@ -571,6 +640,10 @@ test: build-tests
 	grep -q 'runtime_http_server_read_body_chunk' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
 	$(BUILD_DIR)/native-http-server-core/native.http_server_core > $(BUILD_DIR)/native-http-server-core.out
 	grep -q '^7$$' $(BUILD_DIR)/native-http-server-core.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_http_reader/main.s --target native --require-full-native --grant fs.read --grant fs.write --grant fs.metadata --grant random.secure --grant net.listen --grant net.connect -o $(BUILD_DIR)/native-http-reader > $(BUILD_DIR)/native-http-reader-build.json
+	grep -q '"native_vm_independent": true' $(BUILD_DIR)/native-http-reader-build.json
+	$(BUILD_DIR)/native-http-reader > $(BUILD_DIR)/native-http-reader.out
+	grep -q '^true$$' $(BUILD_DIR)/native-http-reader.out
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-lifetime
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-checkpoint-loop tests/fixtures/native_cycle_checkpoint_loop/main.s
 	python3 tests/native_scalar_safepoint_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-scalar-safepoint
@@ -755,6 +828,20 @@ test-bool-parse: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR
 	grep -q 'ArgParser.InvalidValue' $(BUILD_DIR)/bool-parse-invalid-flag.out
 
 .PHONY: test-native-language-idioms
+test: test-times-counter
+.PHONY: test-times-counter
+test-times-counter: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_collections_tests
+	$(BUILD_DIR)/stdlib_collections_tests
+	mkdir -p $(BUILD_DIR)/times-counter
+	$(BUILD_DIR)/sputnik tests/fixtures/times_counter/main.s > $(BUILD_DIR)/times-counter/vm.out
+	grep -q '^PASS times counter and explicit materialization$$' $(BUILD_DIR)/times-counter/vm.out
+	$(BUILD_DIR)/sputnik tests/fixtures/times_counter/vm_control.s > $(BUILD_DIR)/times-counter/vm-control.out
+	grep -q '^PASS times counter throw and ensure$$' $(BUILD_DIR)/times-counter/vm-control.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/times_counter/main.s --entry init --require-full-native -o $(BUILD_DIR)/times-counter/native > $(BUILD_DIR)/times-counter/build.json
+	grep -q '"native_full_coverage": true' $(BUILD_DIR)/times-counter/build.json
+	$(BUILD_DIR)/times-counter/native > $(BUILD_DIR)/times-counter/native.out
+	cmp $(BUILD_DIR)/times-counter/vm.out $(BUILD_DIR)/times-counter/native.out
+
 test: test-native-language-idioms test-native-call-buffers test-native-dispatch-cache test-native-trivial-methods
 test: test-native-blocking
 
@@ -808,6 +895,35 @@ test-native-trivial-methods: $(BUILD_DIR)/sputnik
 	cmp $(BUILD_DIR)/native_trivial_methods/forward-vm.out $(BUILD_DIR)/native_trivial_methods/forward-native.out
 
 .PHONY: test-native-dispatch-cache
+test: test-super test-remote-io
+
+.PHONY: test-super test-remote-io
+test-super: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/super-tests
+	$(BUILD_DIR)/sputnik run tests/super_backend.s > $(BUILD_DIR)/super-tests/vm.out
+	$(BUILD_DIR)/sputnik build tests/super_backend.s --target native --require-full-native -o $(BUILD_DIR)/super-tests/native > $(BUILD_DIR)/super-tests/build.json
+	$(BUILD_DIR)/super-tests/native > $(BUILD_DIR)/super-tests/native.out
+	cmp $(BUILD_DIR)/super-tests/vm.out $(BUILD_DIR)/super-tests/native.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/super_graph/sputnik.build.json > $(BUILD_DIR)/super-tests/graph-vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/super_graph/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/super-tests/graph > $(BUILD_DIR)/super-tests/graph-build.json
+	$(BUILD_DIR)/super-tests/graph/test.super_graph > $(BUILD_DIR)/super-tests/graph-native.out
+	cmp $(BUILD_DIR)/super-tests/graph-vm.out $(BUILD_DIR)/super-tests/graph-native.out
+
+REMOTE_IO_GRANTS := --grant fs.read --grant fs.write --grant fs.metadata --grant net.listen --grant net.connect --grant random.secure --grant process.spawn
+test-remote-io: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/remote-io-tests
+	$(BUILD_DIR)/sputnik run tests/remote_io_api.s $(REMOTE_IO_GRANTS) > $(BUILD_DIR)/remote-io-tests/vm.out
+	$(BUILD_DIR)/sputnik build tests/remote_io_api.s --target native --require-full-native -o $(BUILD_DIR)/remote-io-tests/native $(REMOTE_IO_GRANTS) > $(BUILD_DIR)/remote-io-tests/build.json
+	$(BUILD_DIR)/remote-io-tests/native > $(BUILD_DIR)/remote-io-tests/native.out
+	cmp $(BUILD_DIR)/remote-io-tests/vm.out $(BUILD_DIR)/remote-io-tests/native.out
+	$(BUILD_DIR)/sputnik build tests/remote_io_denied.s --target native --require-full-native -o $(BUILD_DIR)/remote-io-tests/denied > $(BUILD_DIR)/remote-io-tests/denied-build.json
+	@for operation in atomic sync entries lock listen connect; do \
+	  ! $(BUILD_DIR)/sputnik run tests/remote_io_denied.s -- --operation "$$operation" > $(BUILD_DIR)/remote-io-tests/denied-vm.out 2>&1 && \
+	  grep -q CapabilityError $(BUILD_DIR)/remote-io-tests/denied-vm.out && \
+	  ! $(BUILD_DIR)/remote-io-tests/denied --operation "$$operation" > $(BUILD_DIR)/remote-io-tests/denied-native.out 2>&1 && \
+	  grep -q CapabilityError $(BUILD_DIR)/remote-io-tests/denied-native.out || exit 1; \
+	done
+
 test-native-dispatch-cache: $(BUILD_DIR)/sputnik
 	mkdir -p $(BUILD_DIR)/native_dispatch_cache
 	$(BUILD_DIR)/sputnik build tests/fixtures/native_dispatch_cache/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_dispatch_cache/native > $(BUILD_DIR)/native_dispatch_cache/build.json
@@ -868,6 +984,16 @@ backend-equivalence: $(BUILD_DIR)/sputnik
 spec-sync-check:
 	python3 tools/spec_sync.py check
 
+.PHONY: test-conditional-assignment
+test: test-conditional-assignment
+test-conditional-assignment: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/conditional_assignment
+	$(BUILD_DIR)/sputnik tests/fixtures/conditional_assignment/main.s > $(BUILD_DIR)/conditional_assignment/vm.out
+	rg -q '^PASS conditional assignment$$' $(BUILD_DIR)/conditional_assignment/vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/conditional_assignment/main.s --entry main --require-full-native -o $(BUILD_DIR)/conditional_assignment/native > $(BUILD_DIR)/conditional_assignment/build.json
+	$(BUILD_DIR)/conditional_assignment/native > $(BUILD_DIR)/conditional_assignment/native.out
+	cmp $(BUILD_DIR)/conditional_assignment/vm.out $(BUILD_DIR)/conditional_assignment/native.out
+
 fmt:
 	@if command -v clang-format >/dev/null 2>&1; then \
 		clang-format -i $(FORMAT_FILES); \
@@ -896,3 +1022,15 @@ test-module-aliases: $(BUILD_DIR)/sputnik $(BUILD_DIR)/graph_linker_tests
 	$(BUILD_DIR)/sputnik build tests/fixtures/native_module_aliases/sputnik.build.json --target native --out-dir $(BUILD_DIR)/native-module-aliases --require-full-native > $(BUILD_DIR)/module-aliases-build.json
 	$(BUILD_DIR)/native-module-aliases/alias.main > $(BUILD_DIR)/module-aliases-native.out
 	cmp $(BUILD_DIR)/module-aliases-vm.out $(BUILD_DIR)/module-aliases-native.out
+
+# Optional integration checks: configure the sibling interpreter packages first.
+.PHONY: test-foreign-bridges
+test-foreign-bridges: $(BUILD_DIR)/sputnik
+	python3 ../pycall/test/run.py --sputnik $(abspath $(BUILD_DIR)/sputnik)
+	python3 ../rbcall/test/run.py --sputnik $(abspath $(BUILD_DIR)/sputnik)
+	python3 tests/foreign_bridges_cli_test.py $(BUILD_DIR)/sputnik
+	python3 tests/foreign_environment_cli_test.py $(BUILD_DIR)/sputnik
+
+.PHONY: test-native-system-spread
+test-native-system-spread: $(BUILD_DIR)/sputnik
+	python3 tests/native_system_spread_cli_test.py $(BUILD_DIR)/sputnik

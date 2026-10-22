@@ -59,6 +59,10 @@ gets a host native executable at `<out-dir>/<root-module>`. Use
 `--target bytecode` for bytecode-only builds.
 
 `sputnik run <manifest>` always executes the Sputnik graph in the bytecode VM.
+Missing source-module dependencies are resolved from the adjacent `packages/`
+directory and `SPUTNIK_PKG_HOME`; explicit manifest modules take priority.
+An optional `dependencies` object pins package names to exact versions. See
+[the package store](package-store-v1.md) for installation and lockfiles.
 Native definitions use their Sputnik fallback bodies unless the consumer passes
 `--grant ffi`. That alias grants both `ffi.load` and `ffi.call`: `sputnik`
 compiles the manifest extension units into a temporary `.dylib`/`.so`, checks
@@ -83,6 +87,31 @@ a `vm-stdlib-send-v1` bridge can no longer be reported as fully native. Use
 `--require-native-body-coverage` for the former contract and
 `--require-full-native` for the latter. Both result schemas also report the
 final native binary size in bytes.
+
+### Parallel optimized native builds on Linux
+
+With Clang 19 or newer and matching `llvm-dis`, `llvm-as`, `llvm-split`, `opt`
+and `ld.lld` tools installed, graphs with at least 512 code objects automatically
+use parallel LLVM compilation. The C++ frontend runs once; LLVM optimization
+runs on partitions, followed by ThinLTO linking with cross-partition inlining.
+Generated code and the cached runtime retain `-O2`. Native extension units retain
+their existing `-O3` setting. Generated program semantics and coverage selection
+are unchanged.
+
+For Debian 12, install `clang-19 llvm-19 lld-19`, then set
+`SPUTNIK_NATIVE_CXX=clang++-19`. `SPUTNIK_NATIVE_JOBS=0` (the default) selects up
+to eight workers automatically, `1` selects serial compilation, and `2` through
+`64` explicitly select the worker count and require a compatible toolchain.
+Automatic selection falls back to serial compilation when tools are unavailable;
+small programs and macOS keep the existing serial path. Explicit parallel builds
+also work for small programs, which is useful for equivalence tests.
+
+The driver writes `<generated-source>.compile.json` with the compilation mode,
+optimization level, worker/partition counts and compile/link wall time. LLVM
+intermediates and the ThinLTO cache live under `<generated-source>.llvm/` in the
+build directory. The build remains usable without Python; the optional
+`make test-native-parallel` gate uses Python to compare serial and parallel
+executables, exercise FFI/closures/exceptions and verify large-graph selection.
 
 ## Conformance
 

@@ -64,12 +64,18 @@
         const auto generation = notebook_cell_context_.live_generation ? notebook_cell_context_.live_generation : NotebookLiveScope::cell_generation();
         *out = Value::integer(static_cast<std::int64_t>(sink->begin_chart(cell, generation, std::move(style))));
       } else {
-        if (!kw_args.empty() || args.empty() || !args[0].is_integer() || args[0].as_integer() <= 0)
-          throw std::invalid_argument("invalid chart handle");
-        const auto handle = static_cast<std::uint64_t>(args[0].as_integer());
-        if (selector == "chart_point" && args.size() == 3) sink->append_chart(handle, {number(args[1]), number(args[2])});
-        else if (selector == "chart_end" && args.size() == 1) sink->end_chart(handle);
-        else throw std::invalid_argument("chart_point accepts handle,x,y; chart_end accepts handle");
+        if (!kw_args.empty()) throw std::invalid_argument("chart publication does not accept keywords");
+        if (selector == "chart_point" && args.size() == 3 && args[0].is_string()) {
+          const std::string id = string_text_from_value(args[0]).value_or("");
+          const auto cell = notebook_cell_context_.live_cell_id ? notebook_cell_context_.live_cell_id : NotebookLiveScope::current_cell_id();
+          const auto generation = notebook_cell_context_.live_generation ? notebook_cell_context_.live_generation : NotebookLiveScope::cell_generation();
+          sink->append_board_chart(cell, generation, id, {number(args[1]), number(args[2])});
+        } else if (selector == "chart_point" && args.size() == 3 && args[0].is_integer() && args[0].as_integer() > 0) {
+          // Compatibility path for existing LiveChart handles.
+          sink->append_chart(static_cast<std::uint64_t>(args[0].as_integer()), {number(args[1]), number(args[2])});
+        } else if (selector == "chart_end" && args.size() == 1 && args[0].is_integer() && args[0].as_integer() > 0) {
+          sink->end_chart(static_cast<std::uint64_t>(args[0].as_integer()));
+        } else throw std::invalid_argument("chart_point accepts chart_id,x,y; chart_end accepts a chart handle");
         *out = Value::null();
       }
       return SendStatus::Matched;

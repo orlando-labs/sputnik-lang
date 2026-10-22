@@ -94,8 +94,9 @@ static NativeValue native_threaded_create(
     const NativeKeywordArgsView &kwargs, NativeValue block) {
   using Policy = sputnik::runtime::RuntimeFlowPartitionPolicy;
   if (receiver.tag != NativeValue::Tag::List &&
-      receiver.tag != NativeValue::Tag::Tuple && receiver.tag != NativeValue::Tag::Set)
-    throw NativeRaised{native_named_error("TypeError", "threaded requires Array, Tuple, or Set")};
+      receiver.tag != NativeValue::Tag::Tuple && receiver.tag != NativeValue::Tag::Set &&
+      !(receiver.tag == NativeValue::Tag::Range && as_range(receiver).times))
+    throw NativeRaised{native_named_error("TypeError", "threaded requires Array, Tuple, Set, or times enumerable")};
   if (block.tag != NativeValue::Tag::Null)
     throw NativeRaised{native_named_error("TypeError", "threaded does not accept block")};
   if (args.size() > 1U || (!args.empty() &&

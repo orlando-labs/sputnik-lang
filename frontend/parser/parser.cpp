@@ -725,6 +725,8 @@ bool is_chain_comparison_op(const std::string &op) {
 
 bool token_can_precede_assignment_delimiter(lexer::TokenKind kind) {
   switch (kind) {
+  case lexer::TokenKind::Question:
+  case lexer::TokenKind::KeywordOr:
   case lexer::TokenKind::Plus:
   case lexer::TokenKind::Minus:
   case lexer::TokenKind::Star:
@@ -1230,7 +1232,7 @@ std::unique_ptr<ast::Expr> Parser::parse_import_decl() {
   const std::string module_path = parse_module_path();
   std::string alias;
   if (match_contextual("as")) {
-    alias = consume_identifier_text("expected import alias after 'as'");
+    alias = parse_module_path();
   }
 
   auto node = ast::make_expr("AstImportStmt",
@@ -2916,7 +2918,11 @@ std::unique_ptr<ast::Expr> Parser::parse_do_while_expr() {
 std::unique_ptr<ast::Expr> Parser::parse_break_expr() {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> value;
-  if (!is_stop_token(StopMode::Normal)) {
+  // A colon terminates an expression after its value, but can also start a
+  // symbol value here (`break :done`).
+  if (!is_stop_token(StopMode::Normal) ||
+      (check(lexer::TokenKind::Colon) &&
+       peek(1).kind == lexer::TokenKind::Identifier)) {
     value = parse_expression(1, StopMode::Normal);
   }
   auto node = ast::make_expr("AstBreak",
@@ -3244,6 +3250,9 @@ std::string Parser::consume_method_name_text(const std::string &message) {
     if (match(lexer::TokenKind::Equal)) {
       return "[]=";
     }
+    if (match(lexer::TokenKind::Question)) {
+      return "[]?";
+    }
     return "[]";
   }
   if (is_identifier_like_token(current().kind) ||
@@ -3453,7 +3462,8 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       }
     }
 
-    if (check(lexer::TokenKind::Question)) {
+    if (check(lexer::TokenKind::Question) &&
+        peek().kind != lexer::TokenKind::Equal) {
       const lexer::Token question = advance();
       error_code(question, "AMB-SYN-INLINE-TERNARY-CSTYLE",
                  "C-style ternary operator is not supported; use `if cond "
@@ -5025,7 +5035,8 @@ Parser::parse_call_arg_list(lexer::TokenKind closing_kind, StopMode stop_mode) {
     }
     const bool positional =
         arg != nullptr &&
-        (arg->kind != "AstKeywordArg" && arg->kind != "AstKeywordSpreadArg");
+        (arg->kind != "AstKeywordArg" && arg->kind != "AstKeywordSpreadArg" &&
+         arg->kind != "AstBlockPass");
     const bool keyword = arg != nullptr && (arg->kind == "AstKeywordArg" ||
                                             arg->kind == "AstKeywordSpreadArg");
     if (positional && saw_keyword) {
@@ -5586,6 +5597,12 @@ bool Parser::infix_info(lexer::TokenKind kind, InfixInfo *info) const {
 bool Parser::compound_assignment_op(lexer::TokenKind kind,
                                     const char **op) const {
   switch (kind) {
+  case lexer::TokenKind::Question:
+    *op = "?=";
+    return true;
+  case lexer::TokenKind::KeywordOr:
+    *op = "or=";
+    return true;
   case lexer::TokenKind::Plus:
     *op = "+=";
     return true;

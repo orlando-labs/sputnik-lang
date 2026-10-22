@@ -1,6 +1,7 @@
 #pragma once
 
 #include "bytecode/format.h"
+#include "frontend/import_aliases.h"
 
 #include <cstdint>
 #include <functional>
@@ -23,7 +24,14 @@ struct GraphModule {
 // Bump when merged-image semantics or the linker-visible bytecode ABI changes.
 // Consumers use this to invalidate cached linked graphs independently of the
 // source-module artifact cache.
-inline constexpr std::uint32_t kGraphLinkerAbiVersion = 4U;
+inline constexpr std::uint32_t kGraphLinkerAbiVersion = 6U;
+
+// Persisted source-level import-as declarations, independent of local slots.
+frontend::ImportAliases module_import_aliases(const BcModule &module);
+// Redirect only semantic module/path references; literal strings and the
+// module's own identity are preserved. Safe to apply again to canonical input.
+void redirect_module_imports(BcModule *module,
+                             const frontend::ImportAliases &aliases);
 
 struct GraphExport {
   std::string provider;
@@ -71,7 +79,8 @@ using ExternalNamespacePredicate =
 GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
                            const std::string &root_module,
                            ExternalNamespacePredicate is_external_namespace =
-                               {});
+                               {},
+                           const std::optional<frontend::ImportAliases> &aliases = std::nullopt);
 
 // Links all roots and their transitive bytecode dependencies into one image.
 // Roots are visited in the order supplied; each root's dependencies are
@@ -79,6 +88,7 @@ GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
 GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
                            const std::vector<std::string> &root_modules,
                            ExternalNamespacePredicate is_external_namespace =
-                               {});
+                               {},
+                           const std::optional<frontend::ImportAliases> &aliases = std::nullopt);
 
 } // namespace sputnik::bytecode

@@ -283,6 +283,27 @@ private:
 };
 
 class RuntimeFile;
+class RuntimeFileLock;
+
+struct RuntimeFileLockResult : RuntimeIoStatus {
+  std::shared_ptr<RuntimeFileLock> lock;
+};
+
+class RuntimeFileLock final : public RuntimeIoResource {
+public:
+  ~RuntimeFileLock() override;
+  const char *type_name() const override { return "fs.Lock"; }
+  static RuntimeFileLockResult acquire(const RuntimePath &path, bool exclusive,
+                                       bool nonblock);
+  RuntimeIoStatus close() override;
+private:
+  explicit RuntimeFileLock(int fd) : fd_(fd) {}
+  int fd_ = -1;
+};
+
+RuntimeIoStatus runtime_fs_atomic_write(const RuntimePath &path,
+                                       const std::string &bytes, bool durable);
+RuntimeIoStatus runtime_fs_sync(const RuntimePath &path);
 
 struct RuntimeFileOpenResult : RuntimeIoStatus {
   std::shared_ptr<RuntimeFile> file;
@@ -501,12 +522,17 @@ struct RuntimeTcpAcceptResult : RuntimeIoStatus {
 class RuntimeTcpStream final : public RuntimeIoResource {
 public:
   ~RuntimeTcpStream() override;
-  const char *type_name() const override { return "net.TcpStream"; }
+  const char *type_name() const override { return unix_ ? "net.UnixStream" : "net.TcpStream"; }
 
   static RuntimeTcpConnectResult
   connect(const RuntimeEndpoint &endpoint,
           std::chrono::milliseconds timeout = std::chrono::milliseconds::max(),
           RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
+  static RuntimeTcpConnectResult connect_unix(const std::string &path,
+      std::chrono::milliseconds timeout = std::chrono::milliseconds::max(),
+      RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
+  std::string local_path() const;
+  std::string remote_path() const;
 
   RuntimeIoStatus
   read(RuntimeByteBuffer &buffer,
@@ -542,6 +568,8 @@ private:
       int fd, RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
   int fd_ = -1;
 
+  bool unix_ = false;
+
   std::unique_ptr<RuntimeTlsSession> tls_;
   RuntimeIoStatus tls_wait(bool write,
       std::optional<std::chrono::steady_clock::time_point> deadline);
@@ -552,12 +580,15 @@ private:
 class RuntimeTcpListener final : public RuntimeIoResource {
 public:
   ~RuntimeTcpListener() override;
-  const char *type_name() const override { return "net.TcpListener"; }
+  const char *type_name() const override { return unix_path_.empty() ? "net.TcpListener" : "net.UnixListener"; }
 
   static RuntimeTcpListenResult
   listen(const RuntimeEndpoint &endpoint, int backlog = 128,
          bool reuse_addr = false,
          RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
+  static RuntimeTcpListenResult listen_unix(const std::string &path, int backlog,
+      RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
+  const std::string &local_path() const { return unix_path_; }
   RuntimeTcpAcceptResult
   accept(std::chrono::milliseconds timeout = std::chrono::milliseconds::max());
   RuntimeTcpAcceptResult try_accept();
@@ -576,6 +607,8 @@ private:
   explicit RuntimeTcpListener(
       int fd, RuntimeIsolationMode isolation = RuntimeIsolationMode::Checked);
   int fd_ = -1;
+  std::string unix_path_;
+  std::uint64_t unix_device_ = 0, unix_inode_ = 0;
 };
 
 struct RuntimeUdpBindResult : RuntimeIoStatus {

@@ -584,6 +584,7 @@ void register_builtin_stdlib(NativeRegistry &registry) {
   register_digest(registry);
   register_signature(registry);
   register_benchmark(registry);
+  register_notebook_ui(registry);
   register_secure_random(registry);
   register_argparser(registry);
   register_regexp(registry);
@@ -609,6 +610,7 @@ void register_builtin_runtime_modules(RuntimeModuleRegistry &modules,
   register_digest_runtime_module(modules, dispatch, types);
   register_signature_runtime_module(modules, dispatch, types, errors);
   register_benchmark_runtime_module(modules, dispatch, types, errors);
+  register_notebook_ui_runtime_module(modules, dispatch, types);
   register_secure_random_runtime_module(modules, dispatch, types, errors);
   register_argparser_runtime_module(modules, dispatch, types, errors);
   register_regexp_runtime_module(modules, dispatch, types, errors);

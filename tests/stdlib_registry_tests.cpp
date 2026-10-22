@@ -244,6 +244,17 @@ struct MockHost : StdlibHost {
                             bool /*report_fault*/) override {
     return false;
   }
+  bool stdlib_fs_atomic_write(const void *, const std::string &,
+                              const std::string &, bool) override { return false; }
+  bool stdlib_fs_sync(const void *, const std::string &) override { return false; }
+  bool stdlib_fs_entries(const void *, const std::string &,
+                        std::vector<std::string> *) override { return false; }
+  bool stdlib_fs_lock(const void *, const std::string &, bool, bool,
+                     Value *) override { return false; }
+  bool stdlib_net_unix_open(const void *, const std::string &, bool, int,
+                           std::chrono::milliseconds,
+                           sputnik::runtime::RuntimeIsolationMode,
+                           Value *) override { return false; }
   bool stdlib_net_udp_bind(const void * /*frame*/,
                            const sputnik::runtime::RuntimeEndpoint & /*endpoint*/,
                            sputnik::runtime::RuntimeIsolationMode /*isolation*/,

@@ -1,3 +1,4 @@
+#include "frontend/foreign_import.h"
 #include "frontend/source_path.h"
 #include "buildsys/build.h"
 #include "bytecode/emitter.h"
@@ -14,6 +15,9 @@
 #include "optimizer/mir.h"
 #include "optimizer/native.h"
 #include "package/package.h"
+#include "package/distribution.h"
+#include "package/store.h"
+#include "package/registry.h"
 #include "profile/data.h"
 #include "profile/modern.h"
 #include "profile/replay.h"
@@ -28,6 +32,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdint>
@@ -81,6 +86,20 @@ void usage(std::ostream &out) {
   out << "  sputnik <file.s>\n";
   out << "  sputnik run <source|manifest|file.sputnikbc> "
          "[--grant <cap[=target]>...] [-- <program-args>...]\n";
+  out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend cpu|cuda|mps] [--bundle none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE]\n";
+  out << "  sputnik pkg login [--namespace <name>] [--registry <url>] [--credentials <file>]\n";
+  out << "  sputnik pkg versions <name> [--registry URL] [--credentials FILE] [--json]\n";
+  out << "  sputnik pkg variants <name>@<version> [--registry URL] [--credentials FILE] [--json]\n";
+  out << "  sputnik pkg whoami|logout [--registry <url>] [--credentials <file>]\n";
+  out << "  sputnik pkg publish <file.sputnikpkg> [--registry <url>] [--credentials <file>] [--session <file>] [--allow-native-large]\n";
+  out << "  sputnik pkg uninstall|remove <name> [--version V] [--variant ID]\n";
+  out << "  sputnik pkg build <directory|manifest> --out <file.sputnikpkg> "
+         "[--version V] [--variant ID] [--modules source|bytecode|mixed] "
+         "[--bytecode-module module]...\n";
+  out << "  sputnik pkg inspect|verify <file.sputnikpkg>\n";
+  out << "  sputnik pkg extract <file.sputnikpkg> <new-directory>\n";
+  out << "  sputnik pkg env\n";
+  out << "  sputnik pkg lock <source|manifest> [--backend cpu|cuda|mps] [--variant ref=ID]...\n";
   out << "  sputnik build <file.s> [-o <path>] [--out-dir <dir>] "
          "[--target native|native-debug|bytecode-wrapper] "
          "[--entry auto|init|main|main-only] [--grant <cap[=target]>...] "
@@ -237,28 +256,7 @@ std::vector<std::uint8_t> read_bytes(const std::string &path) {
 }
 
 std::string native_target_triple() {
-#if defined(__x86_64__) || defined(_M_X64)
-  const std::string arch = "x86_64";
-#elif defined(__aarch64__) || defined(_M_ARM64)
-  const std::string arch = "aarch64";
-#elif defined(__arm__) || defined(_M_ARM)
-  const std::string arch = "arm";
-#elif defined(__i386__) || defined(_M_IX86)
-  const std::string arch = "i386";
-#else
-  const std::string arch = "unknown";
-#endif
-
-#if defined(__APPLE__)
-  const std::string os = "apple-darwin";
-#elif defined(__linux__)
-  const std::string os = "unknown-linux";
-#elif defined(_WIN32)
-  const std::string os = "pc-windows";
-#else
-  const std::string os = "unknown-unknown";
-#endif
-  return arch + "-" + os;
+  return sputnik::pkg::package_host_target();
 }
 
 std::vector<sputnik::pkg::PackageNativeBlob> collect_native_blobs(
@@ -626,6 +624,10 @@ CompiledModuleArtifact compile_source_to_module_artifact(
   return {bytes, std::move(native_module)};
 }
 
+sputnik::macros::MacroProviderMap installed_macro_providers(
+    const std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
+    const std::string &path);
+
 sputnik::bytecode::BcModule compile_source_text_to_module(
     const std::string &source, const std::string &source_path,
     const std::string &expected_module_name,
@@ -905,13 +907,18 @@ struct RunnableModuleArtifact {
   std::uint32_t entry_main_code_id = 0;
   bool whole_graph_native = false;
   std::size_t graph_module_count = 1;
+  std::vector<sputnik::pkg::PackageNativeExtension> package_extensions;
+  std::vector<sputnik::pkg::LocatedPackage> package_locations;
 };
+
+RunnableModuleArtifact resolve_runnable_packages(RunnableModuleArtifact artifact,
+                                                 const std::string &path);
 
 RunnableModuleArtifact compile_source_to_runnable_module(
     const std::string &path,
     const std::optional<EntryExecutionMode> forced_entry_mode = std::nullopt,
     const std::vector<sputnik::capability::CapabilityRequest> &capabilities =
-        {}) {
+        {}, bool resolve_packages = true) {
   const std::string source = read_file(path);
   sputnik::lexer::LexResult lex_result = lex_source(source, path);
   if (!lex_result.ok()) {
@@ -930,7 +937,8 @@ RunnableModuleArtifact compile_source_to_runnable_module(
   {
     const sputnik::macros::ExpandResult macro_result =
         sputnik::macros::expand_macros(parse_result.items,
-                                     parse_result.module_name, source);
+                                     parse_result.module_name, source,
+                                     installed_macro_providers(parse_result.items, path));
     if (!macro_result.ok) {
       throw std::runtime_error("macro expansion error: " + macro_result.error);
     }
@@ -998,7 +1006,8 @@ RunnableModuleArtifact compile_source_to_runnable_module(
     artifact.has_entry_main_code_id = true;
     artifact.entry_main_code_id = main_method->entry_code_id;
   }
-  return artifact;
+  return resolve_packages ? resolve_runnable_packages(std::move(artifact), path)
+                          : std::move(artifact);
 }
 
 // Current resident set size of this process in bytes, or 0 if unavailable.
@@ -1784,7 +1793,8 @@ bool native_cpp_user_method_selector(const sputnik::bytecode::BcModule &module,
   }
   for (const sputnik::bytecode::BcMethod &method : module.methods) {
     if (method.selector_sym_id < module.symbols.size() &&
-        module.symbols[method.selector_sym_id] == selector &&
+        (module.symbols[method.selector_sym_id] == selector ||
+         module.symbols[method.selector_sym_id] == "method_missing") &&
         native_cpp_clause_dispatch_supported(module, method)) {
       return true;
     }
@@ -1797,6 +1807,16 @@ bool native_cpp_user_method_selector(const sputnik::bytecode::BcModule &module,
 // lane still emits normal user-object dispatch; on a non-user receiver it
 // raises the same NoMethodError as the VM instead of retaining bytecode solely
 // because the current graph has no implementation.
+bool native_cpp_system_selector(const std::string &selector) {
+  static const std::set<std::string> selectors{
+      "command", "shell", "__template", "with", "argv", "program", "cwd",
+      "capture", "output", "run", "spawn", "communicate", "wait", "close",
+      "stdin", "stdout", "stderr", "stdin_value", "stdout_value", "stderr_value",
+      "pid", "running?", "status", "success?", "exit_code", "signal", "signaled?",
+      "terminate", "kill", "read!", "read_all!", "each_chunk", "write!", "write_all!"};
+  return selectors.count(selector) != 0;
+}
+
 bool native_cpp_open_protocol_selector(const std::string &selector) {
   return selector == "around_controller" || selector == "start" ||
          selector == "ready?" || selector == "stop";
@@ -2048,7 +2068,7 @@ bool native_cpp_lookup_const_supported(
   const std::string path_text =
       native_cpp_constant_path_text(module, path_const_id);
   static const std::set<std::string> native_stdlib_bridge_paths = {
-      "net", "net.http", "net.http.Client", "net.http.Server",
+      "net", "net.unix", "fs.Path", "net.http", "net.http.Client", "net.http.Server",
       "net.http.Request", "net.http.RequestBody", "net.http.ServerRequest",
       "net.http.ServerResponse"};
   if (native_stdlib_bridge_paths.find(path_text) !=
@@ -2264,6 +2284,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
     case Opcode::TripleEq:
     case Opcode::Raise:
       break;
+    case Opcode::BreakForeign:
+      break;
     case Opcode::PBind: {
       std::uint32_t ignored_slot = 0;
       std::uint32_t value_reg = 0;
@@ -2449,7 +2471,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       const std::string &selector = module.symbols[selector_id];
       if (!native_cpp_user_constructor_shape(module, selector) &&
           !native_cpp_user_method_selector(module, selector) &&
-          !native_cpp_package_member_selector(module, selector)) {
+          !native_cpp_package_member_selector(module, selector) &&
+          !native_cpp_system_selector(selector)) {
         *reason = "SEND_SPREAD selector `" + selector +
                   "` is not a native user-code send";
         return false;
@@ -2693,13 +2716,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
             return false;
           }
           const std::string &kw_name = module.symbols[kw_symbol_id];
-          if ((selector == "bytes" || selector == "hex") ||
-              kw_name != "padding") {
-            *reason = "unsupported SecureRandom keyword shape";
-            return false;
-          }
-        }
-        random_send = true;
+          random_send = selector != "bytes" && selector != "hex" && kw_name == "padding";
+        } else random_send = true;
       } else if (selector == "uuid" && pos_count == 0U && kw_count == 0U &&
                  no_block) {
         random_send = true;
@@ -2886,6 +2904,12 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
           kw_count == 0U && no_block;
       const bool fs_read_send = selector == "read_bytes" && pos_count == 1U &&
                                 no_block && kw_allowed({"limit"});
+      const bool fs_direct_send = std::set<std::string>{
+          "File", "open", "sync!", "read_text", "write_text", "write_bytes", "atomic_write_text", "atomic_write_bytes",
+          "entries", "exists?", "file?", "dir?", "metadata", "symlink?", "mkdir", "mkdir_p", "remove", "rename", "copy", "lock", "sync",
+          "unix", "listen", "connect", "local_path", "remote_path", "accept!", "try_accept!", "read_line!", "read_exact!", "closed?", "close!", "shutdown!", "close_read!", "close_write!", "flush!"
+        }.count(selector) != 0 && kw_allowed({"limit", "encoding", "create", "truncate", "append", "permissions", "durable", "exclusive", "nonblock", "isolation", "backlog", "timeout"});
+      if (selector == "parse" && pos_count == 1 && no_block && kw_allowed({"map", "strict", "duplicate_keys"})) json_send = true;
       const bool atomic_send =
           kw_count == 0U &&
           ((selector == "new" && pos_count == 1U && no_block) ||
@@ -2959,6 +2983,10 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
                  pos_count == 1U) {
         http_send = kw_allowed(
             {"headers", "body", "timeout", "pool_timeout"});
+      } else if (selector == "from_reader" && pos_count == 1U && no_block) {
+        http_send = kw_allowed({"length"});
+      } else if (selector == "text" && pos_count == 1U && no_block) {
+        http_send = kw_allowed({"status", "headers"});
       } else if (selector == "send" && pos_count == 1U && no_block) {
         http_send = kw_allowed({"timeout", "pool_timeout"});
       } else if (selector == "write_all!" && pos_count == 1U &&
@@ -3069,17 +3097,12 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       const bool triple_eq_send = selector == "===" && pos_count == 1U &&
                                   kw_count == 0U && no_block;
       const bool user_send =
+          (selector == "__super_dispatch__" && pos_count >= 2U) ||
           native_cpp_user_constructor_shape(module, selector) ||
           native_cpp_user_method_selector(module, selector) ||
           native_cpp_open_protocol_selector(selector) ||
           native_cpp_package_member_selector(module, selector);
-      const bool system_send = std::set<std::string>{
-          "command", "shell", "__template", "with", "argv", "program", "cwd",
-          "capture", "output", "run", "spawn", "communicate", "wait", "close",
-          "stdin", "stdout", "stderr", "stdin_value", "stdout_value", "stderr_value",
-          "pid", "running?", "status", "success?", "exit_code", "signal", "signaled?",
-          "terminate", "kill", "read!", "read_all!", "each_chunk", "write!", "write_all!"
-      }.count(selector) != 0;
+      const bool system_send = native_cpp_system_selector(selector);
       const bool threaded_send = selector == "threaded" || selector == "parallel";
       if (!scalar && !native_cpp_collection_selector(selector, pos_count) &&
           !native_cpp_collection_mutator_selector(selector, pos_count) &&
@@ -3092,7 +3115,7 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
           !range_send &&
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
-          !argparser_send && !fs_path_send && !fs_read_send && !atomic_send && !mutex_send &&
+          !argparser_send && !fs_path_send && !fs_read_send && !fs_direct_send && !atomic_send && !mutex_send &&
           !channel_send && !io_send && !task_send && !http_send &&
           !system_send && !threaded_send && !sputnik_send && !result_send &&
           !error_send &&
@@ -3105,7 +3128,7 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
           !range_send &&
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
-          !argparser_send && !fs_path_send && !fs_read_send && !atomic_send && !mutex_send &&
+          !argparser_send && !fs_path_send && !fs_read_send && !fs_direct_send && !atomic_send && !mutex_send &&
           !channel_send && !io_send && !task_send && !http_send &&
           !system_send && !threaded_send && !sputnik_send && !result_send &&
           !error_send &&
@@ -4015,7 +4038,8 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
         enqueue(pc + 1U, next);
       }
     } else if (instruction.opcode != Opcode::Return &&
-               instruction.opcode != Opcode::ReturnNonlocal) {
+               instruction.opcode != Opcode::ReturnNonlocal &&
+               instruction.opcode != Opcode::BreakForeign) {
       enqueue(pc + 1U, next);
     }
   }
@@ -4084,7 +4108,8 @@ native_cpp_live_registers_at_pc(const sputnik::bytecode::BcCode &code) {
           merge_successor(pc + 1U);
         }
       } else if (instruction.opcode != Opcode::Return &&
-                 instruction.opcode != Opcode::ReturnNonlocal) {
+                 instruction.opcode != Opcode::ReturnNonlocal &&
+               instruction.opcode != Opcode::BreakForeign) {
         merge_successor(pc + 1U);
       }
 
@@ -4351,6 +4376,7 @@ native_cpp_live_registers_at_pc(const sputnik::bytecode::BcCode &code) {
       case Opcode::JumpIfNull:
       case Opcode::Return:
       case Opcode::ReturnNonlocal:
+      case Opcode::BreakForeign:
       case Opcode::Raise:
         use_operand(0);
         break;
@@ -4455,6 +4481,7 @@ bool native_cpp_compact_registers_supported(
     case Opcode::Raise:
     case Opcode::Safepoint:
     case Opcode::ReturnNonlocal:
+    case Opcode::BreakForeign:
     case Opcode::PTripleEq:
     case Opcode::PCheckEq:
     case Opcode::PBind:
@@ -5003,6 +5030,11 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
   }
   if (needs_outer_try) {
     out << "  try {\n";
+  }
+  if (code.kind == sputnik::bytecode::CodeKind::Block &&
+      (code.flags & sputnik::bytecode::kCodeFlagRubyBreakBlock) != 0U) {
+    out << "  if (!sputnik_ruby_callback_active()) native_raise(native_named_error("
+           "\"LocalJumpError\", \"block break requires an active Ruby call\"));\n";
   }
   if ((code.kind == sputnik::bytecode::CodeKind::Block &&
        (code.flags & sputnik::bytecode::kCodeFlagNonlocalReturnBlock) != 0U) ||
@@ -5573,6 +5605,10 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
             // example, a protocol-specific Range class).
             native_module_expr = "NativeValue::class_object(" +
                                  std::to_string(*declared_class_index) + "U)";
+          } else if (path_text == "net.unix") {
+            native_module_expr = "NativeValue::runtime_handle(sputnik::runtime::Value::native_type(sputnik::runtime::RuntimeNativeTypeKind::NetUnix))";
+          } else if (path_text == "fs.Path") {
+            native_module_expr = "NativeValue::runtime_handle(sputnik::runtime::Value::native_type(sputnik::runtime::RuntimeNativeTypeKind::FsPath))";
           } else if (path_text == "net") {
             native_module_expr =
                 "NativeValue::runtime_handle(sputnik::runtime::Value::"
@@ -6003,9 +6039,9 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         send_spread_site_flags =
             code.call_site_table[send_spread_site_id].flags;
       }
-      out << "  if (!native_value_is_user_receiver("
-          << read_reg_expr(receiver) << ") && " << read_reg_expr(receiver)
-          << ".tag != NativeValue::Tag::PackageModule) native_bailout();\n";
+      out << "  if (native_value_is_user_receiver(" << read_reg_expr(receiver)
+          << ") || " << read_reg_expr(receiver)
+          << ".tag == NativeValue::Tag::PackageModule) {\n";
       write_reg_stmt(dst, "native_user_send(" + read_reg_expr(receiver) +
                               ", native_symbol_text(" +
                               std::to_string(selector_id) +
@@ -6016,6 +6052,12 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                               "], " +
                               std::to_string(send_spread_site_flags) +
                               "U)");
+      out << "  } else if (native_value_is_special_receiver("
+          << read_reg_expr(receiver) << ")) {\n";
+      write_reg_stmt(dst, "native_special_send(" + read_reg_expr(receiver) +
+                              ", native_symbol_text(" + std::to_string(selector_id) +
+                              "U), spread_positional, spread_keywords, " + block_expr + ")");
+      out << "  } else native_bailout();\n";
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -6592,7 +6634,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                                 read_reg_expr(arg) + ")");
       } else if (selector == "each") {
         if (!has_block) {
-          out << "  native_bailout();\n";
+          write_reg_stmt(dst, "native_each(" + read_reg_expr(recv) +
+                                  ", NativeValue::nullv())");
         } else if (direct_chars_each_block_code_id.has_value()) {
           out << "  {\n";
           out << "    NativeClosure *invocation = as_closure("
@@ -6952,8 +6995,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         write_reg_stmt(dst, "native_time_from_unix_ns(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
       } else if (selector == "parse") {
-        write_reg_stmt(dst, "native_parse_value(" + read_reg_expr(recv) + ", " +
-                                read_reg_expr(arg) + ")");
+        write_reg_stmt(dst, "native_parse_options(" + read_reg_expr(recv) + ", " +
+                                read_reg_expr(arg) + ", " + call_kw_args_expr() + ")");
       } else if (selector == "build") {
         write_reg_stmt(dst, "native_url_build(" + read_reg_expr(recv) + ", " +
                                 read_reg_expr(arg) + ")");
@@ -7777,6 +7820,12 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
           << read_reg_expr(src) << "};\n";
       break;
     }
+    case Opcode::BreakForeign: {
+      std::uint32_t value = 0;
+      operand_u32_value(instruction, 0, &value);
+      out << "  throw NativeNonlocalReturn{nullptr, " << read_reg_expr(value) << "};\n";
+      break;
+    }
     case Opcode::Raise: {
       std::uint32_t src = 0;
       operand_u32_value(instruction, 0, &src);
@@ -8295,6 +8344,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
     const std::string path = native_cpp_constant_path_text(module, const_id);
     if (path == "system") plan.uses_native_system_runtime = true;
     if (path == "net.http.Client" ||
+        (path == "net.http.RequestBody" && has_symbol("from_reader")) ||
         path == "net.http.Server" ||
         path == "net.http.ServerRequest" ||
         path == "net.http.ServerRequestBody" ||
@@ -8308,6 +8358,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
       uses_ambiguous_net_namespace = true;
       continue;
     }
+    if (path == "net.unix") continue;
     if (path.rfind("net.", 0) == 0) {
       plan.uses_native_stdlib_bridge = true;
     }
@@ -8319,7 +8370,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
     plan.uses_native_http_runtime = true;
   }
   if (uses_ambiguous_net_namespace &&
-      !plan.uses_native_http_runtime) {
+      !plan.uses_native_http_runtime && !has_symbol("unix")) {
     plan.uses_native_stdlib_bridge = true;
   }
   // Executable request producers and the richer client helpers still use the
@@ -8551,6 +8602,11 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
               : reason->second;
     }
     plan.coverage.push_back(std::move(record));
+  }
+  if (std::getenv("SPUTNIK_NATIVE_DUMP_COVERAGE")) {
+    for (const auto &record : plan.coverage)
+      if (record.mode == "fallback" || record.mode == "vm-bridge")
+        std::cerr << "c" << record.code_id << ": " << record.reason << '\n';
   }
   plan.uses_bytecode_fallback =
       !plan.entry_native || !plan.vm_callable_code_ids.empty() ||
@@ -9029,6 +9085,7 @@ private:
   out << "  bool has_start = true;\n";
   out << "  bool has_finish = true;\n";
   out << "  bool inclusive_end = true;\n";
+  out << "  bool times = false;\n";
   out << "};\n";
   out << "struct NativeFsPath : NativeRcHeader {\n";
   out << "  std::string path;\n";
@@ -9151,6 +9208,7 @@ private:
   out << "  bool shared_owner = false;\n";
   out << "};\n";
   out << "struct NativeRuntimeHandle : NativeRcHeader {\n";
+  out << "  std::string io_pending;\n";
   out << "  sputnik::runtime::Value value = sputnik::runtime::Value::null();\n";
   out << "  bool http_server_request_snapshot_checked = false;\n";
   out << "  std::unique_ptr<sputnik::runtime::"
@@ -11053,7 +11111,8 @@ static void native_collect_finished_cycles() {
   out << "static bool native_value_is_special_receiver("
          "const NativeValue &value) {\n";
   out << "  switch (value.tag) {\n";
-  out << "  case NativeValue::Tag::AtomicModule:\n"
+  out << "  case NativeValue::Tag::FsModule:\n"
+         "  case NativeValue::Tag::AtomicModule:\n"
          "  case NativeValue::Tag::Atomic:\n"
          "  case NativeValue::Tag::MutexModule:\n"
          "  case NativeValue::Tag::Mutex:\n"
@@ -14520,6 +14579,16 @@ static NativeValue native_contains(const NativeValue &value,
 
 static NativeValue native_each(const NativeValue &value,
                                const NativeValue &block_value) {
+  if (value.tag == NativeValue::Tag::Range && as_range(value).times) {
+    std::vector<NativeValue> items = native_range_items(value);
+    if (block_value.tag != NativeValue::Tag::Null) {
+      for (const NativeValue &item : items) {
+        (void)sputnik_native_call_closure(block_value, {item});
+      }
+    }
+    return NativeValue::list(std::move(items));
+  }
+  if (block_value.tag == NativeValue::Tag::Null) throw NativeBailout();
   if (value.tag == NativeValue::Tag::Map) {
     const auto entries = as_map(value).entries;
     for (const auto &entry : entries) {
@@ -14550,14 +14619,11 @@ static NativeValue native_integer_times(const NativeValue &value,
   if (value.tag != NativeValue::Tag::Integer) throw NativeBailout();
   const std::int64_t count = value.scalar_value;
   if (!has_block) {
-    std::vector<NativeValue> indices;
-    if (count > 0) {
-      indices.reserve(static_cast<std::size_t>(count));
-      for (std::int64_t index = 0; index < count; ++index) {
-        indices.push_back(NativeValue::integer(index));
-      }
-    }
-    return NativeValue::list(std::move(indices));
+    NativeRange range;
+    range.finish = std::max<std::int64_t>(count, 0);
+    range.inclusive_end = false;
+    range.times = true;
+    return NativeValue::range(range);
   }
   for (std::int64_t index = 0; index < count; ++index) {
     (void)sputnik_native_call_closure(
@@ -16336,7 +16402,7 @@ static NativeValue native_json_generate_value(const NativeValue &value, bool pre
 
 class NativeJsonParser {
 public:
-  explicit NativeJsonParser(const std::string &text) : text_(text) {}
+  explicit NativeJsonParser(const std::string &text, bool strict = false, bool reject = false) : text_(text), strict_(strict), reject_(reject) {}
 
   NativeValue parse_document() {
     skip_ws();
@@ -16349,10 +16415,12 @@ public:
 private:
   const std::string &text_;
   std::size_t pos_ = 0;
+  bool strict_ = false, reject_ = false;
+  unsigned depth_ = 0;
 
   void skip_ws() {
     while (pos_ < text_.size() &&
-           std::isspace(static_cast<unsigned char>(text_[pos_]))) {
+           (text_[pos_] == ' ' || text_[pos_] == '\t' || text_[pos_] == '\n' || text_[pos_] == '\r')) {
       ++pos_;
     }
   }
@@ -16371,6 +16439,8 @@ private:
   }
 
   NativeValue parse_value() {
+    if (++depth_ > 513) throw NativeBailout();
+    struct Depth { unsigned &value; ~Depth() { --value; } } depth{depth_};
     skip_ws();
     if (pos_ >= text_.size()) throw NativeBailout();
     const char ch = text_[pos_];
@@ -16410,9 +16480,34 @@ private:
         case 'n': out.push_back('\n'); break;
         case 'r': out.push_back('\r'); break;
         case 't': out.push_back('\t'); break;
+        case 'u': {
+          auto hex4 = [&]() {
+            std::uint32_t cp = 0;
+            for (unsigned i = 0; i < 4; ++i) {
+              if (pos_ == text_.size()) throw NativeBailout();
+              const auto c = text_[pos_++];
+              const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1;
+              if (digit < 0) throw NativeBailout(); cp = (cp << 4) | digit;
+            }
+            return cp;
+          };
+          auto cp = hex4();
+          if (cp >= 0xd800 && cp <= 0xdbff) {
+            if (pos_ + 2 > text_.size() || text_[pos_] != '\\' || text_[pos_ + 1] != 'u') throw NativeBailout();
+            pos_ += 2; auto low = hex4();
+            if (low < 0xdc00 || low > 0xdfff) throw NativeBailout();
+            cp = 0x10000 + ((cp - 0xd800) << 10) + low - 0xdc00;
+          } else if (cp >= 0xdc00 && cp <= 0xdfff) throw NativeBailout();
+          if (cp < 0x80) out += static_cast<char>(cp);
+          else if (cp < 0x800) { out += static_cast<char>(0xc0 | (cp >> 6)); out += static_cast<char>(0x80 | (cp & 63)); }
+          else if (cp < 0x10000) { out += static_cast<char>(0xe0 | (cp >> 12)); out += static_cast<char>(0x80 | ((cp >> 6) & 63)); out += static_cast<char>(0x80 | (cp & 63)); }
+          else { out += static_cast<char>(0xf0 | (cp >> 18)); out += static_cast<char>(0x80 | ((cp >> 12) & 63)); out += static_cast<char>(0x80 | ((cp >> 6) & 63)); out += static_cast<char>(0x80 | (cp & 63)); }
+          break;
+        }
         default: throw NativeBailout();
         }
       } else {
+        if (static_cast<unsigned char>(ch) < 32) throw NativeBailout();
         out.push_back(ch);
       }
     }
@@ -16436,19 +16531,21 @@ private:
   NativeValue parse_object() {
     expect('{');
     std::vector<std::pair<NativeValue, NativeValue>> entries;
+    std::unordered_set<std::string> keys;
     skip_ws();
-    if (consume('}')) return NativeValue::map_entries(std::move(entries));
+    if (consume('}')) return NativeValue::map_entries(std::move(entries), strict_);
     while (true) {
       skip_ws();
-      NativeValue key =
-          NativeValue::heap_string(parse_string());
+      auto text = parse_string();
+      if (reject_ && !keys.insert(text).second) throw NativeBailout();
+      NativeValue key = NativeValue::heap_string(std::move(text));
       expect(':');
-      native_map_store(entries, std::move(key), parse_value(), false);
+      native_map_store(entries, std::move(key), parse_value(), strict_);
       skip_ws();
       if (consume('}')) break;
       expect(',');
     }
-    return NativeValue::map_entries(std::move(entries));
+    return NativeValue::map_entries(std::move(entries), strict_);
   }
 
   NativeValue parse_number() {
@@ -16458,27 +16555,24 @@ private:
         !std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
       throw NativeBailout();
     }
-    while (pos_ < text_.size() &&
-           std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
-      ++pos_;
-    }
+    const auto digits_start = pos_;
+    while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
+    if (pos_ - digits_start > 1 && text_[digits_start] == '0') throw NativeBailout();
     bool floating = false;
     if (pos_ < text_.size() && text_[pos_] == '.') {
       floating = true;
       ++pos_;
-      while (pos_ < text_.size() &&
-             std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
-        ++pos_;
-      }
+      auto digits = pos_;
+      while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
+      if (pos_ == digits) throw NativeBailout();
     }
     if (pos_ < text_.size() && (text_[pos_] == 'e' || text_[pos_] == 'E')) {
       floating = true;
       ++pos_;
       if (pos_ < text_.size() && (text_[pos_] == '+' || text_[pos_] == '-')) ++pos_;
-      while (pos_ < text_.size() &&
-             std::isdigit(static_cast<unsigned char>(text_[pos_]))) {
-        ++pos_;
-      }
+      auto digits = pos_;
+      while (pos_ < text_.size() && std::isdigit(static_cast<unsigned char>(text_[pos_]))) ++pos_;
+      if (pos_ == digits) throw NativeBailout();
     }
     if (!floating) {
       const bool negative = text_[start] == '-';
@@ -16487,12 +16581,14 @@ private:
           static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max());
       const std::uint64_t limit = negative ? kInt64Max + 1U : kInt64Max;
       std::uint64_t magnitude = 0;
+      bool overflow = false;
       for (std::size_t i = digits_begin; i < pos_; ++i) {
         const std::uint64_t digit =
             static_cast<std::uint64_t>(text_[i] - '0');
-        if (magnitude > (limit - digit) / 10U) throw NativeBailout();
+        if (magnitude > (limit - digit) / 10U) { overflow = true; break; }
         magnitude = magnitude * 10U + digit;
       }
+      if (!overflow) {
       if (negative) {
         if (magnitude == limit) {
           return NativeValue::integer(std::numeric_limits<std::int64_t>::min());
@@ -16500,12 +16596,10 @@ private:
         return NativeValue::integer(-static_cast<std::int64_t>(magnitude));
       }
       return NativeValue::integer(static_cast<std::int64_t>(magnitude));
+      }
     }
-    try {
-      return NativeValue::floating(std::stod(text_.substr(start, pos_ - start)));
-    } catch (const std::exception &) {
-      throw NativeBailout();
-    }
+    const auto token = text_.substr(start, pos_ - start);
+    return NativeValue::floating(std::strtod(token.c_str(), nullptr));
   }
 };
 
@@ -17831,6 +17925,39 @@ static NativeValue native_parse_value(const NativeValue &module,
     return native_yaml_parse_value(text_value);
   }
   return native_json_parse_value(text_value);
+}
+
+static NativeValue native_parse_options(const NativeValue &module, const NativeValue &text,
+                                        const NativeKeywordArgsView &kwargs) {
+  if (module.tag != NativeValue::Tag::JsonModule) {
+    if (!kwargs.empty()) throw NativeRaised{native_named_error("ArgumentError", "parse does not accept these keywords")};
+    return native_parse_value(module, text);
+  }
+  if (!native_value_is_string(text)) throw NativeRaised{native_named_error("TypeError", "Json.parse expects Str")};
+  bool strict = false, reject = false;
+  std::optional<bool> map_strict;
+  for (const auto &entry : kwargs) {
+    if (entry.name == "map") {
+      if (entry.value.tag != NativeValue::Tag::MapType && entry.value.tag != NativeValue::Tag::StrictMapType)
+        throw NativeRaised{native_named_error("ArgumentError", "map must be Map or StrictMap")};
+      map_strict = entry.value.tag == NativeValue::Tag::StrictMapType;
+    } else if (entry.name == "strict") {
+      if (entry.value.tag != NativeValue::Tag::Bool) throw NativeRaised{native_named_error("TypeError", "strict must be Bool")};
+      strict = entry.value.scalar_value != 0;
+    } else if (entry.name == "duplicate_keys") {
+      const auto mode = entry.value.tag == NativeValue::Tag::Symbol ? native_symbol_text(entry.value.scalar_value)
+        : native_value_is_string(entry.value) ? native_string_text(entry.value) : "";
+      if (mode != "reject" && mode != "last") throw NativeRaised{native_named_error("ArgumentError", "duplicate_keys must be :reject or :last")};
+      reject = mode == "reject";
+    } else throw NativeRaised{native_named_error("ArgumentError", "unknown parse keyword")};
+  }
+  if (map_strict) strict = *map_strict;
+  try {
+    NativeJsonParser parser(native_string_text(text), strict, reject);
+    return parser.parse_document();
+  } catch (const NativeBailout &) {
+    throw NativeRaised{native_named_error("JsonParseError", "malformed JSON or duplicate object key")};
+  }
 }
 
 // Dispatch `Json.generate` / `Yaml.generate` on the receiver module tag; a
@@ -21246,6 +21373,14 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "static NativeValue sputnik_native_call_closure("
          "const NativeValue &value, const NativeArgsView &args) "
          "{\n";
+  out << "  if (value.tag == NativeValue::Tag::Closure) {\n";
+  out << "    switch (as_closure(value)->code_id) {\n";
+  for (const auto &candidate : module.code_objects) {
+    if ((candidate.flags & sputnik::bytecode::kCodeFlagRubyBreakBlock) != 0U)
+      out << "    case " << candidate.code_id << "U: native_raise(native_named_error("
+             "\"LocalJumpError\", \"break is forbidden in Sputnik iterator blocks\"));\n";
+  }
+  out << "    default: break;\n    }\n  }\n";
   out << "  return sputnik_native_call_closure_with_keywords("
          "value, args, {}, NativeValue::nullv());\n";
   out << "}\n\n";
@@ -21397,8 +21532,8 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
     out << R"SPUTNIKPP(class SputnikNativeHttpBlock final
     : public sputnik::runtime::RuntimeNativeBlock {
 public:
-  explicit SputnikNativeHttpBlock(NativeValue block)
-      : block_(std::move(block)) {}
+  explicit SputnikNativeHttpBlock(NativeValue block, bool producer = false)
+      : block_(std::move(block)), producer_(producer) {}
 
   sputnik::runtime::Value invoke(
       const std::vector<sputnik::runtime::Value> &args) override {
@@ -21417,6 +21552,11 @@ public:
       }
       NativeValue result =
           sputnik_native_call_closure(block_, native_args);
+      // A response producer is used for its writes. Its final expression may
+      // be a StreamBody or telemetry event, neither of which crosses the HTTP
+      // runtime boundary. Converting that unused result used to abort an
+      // otherwise complete response and break the next keep-alive request.
+      if (producer_) return sputnik::runtime::Value::null();
       sputnik::runtime::Value direct_result;
       if (!direct_native_value(result, &direct_result)) {
         throw sputnik::runtime::RuntimeTaskFailure(
@@ -21575,6 +21715,7 @@ private:
   }
 
   NativeValue block_;
+  bool producer_;
 };
 
 )SPUTNIKPP";
@@ -23017,6 +23158,29 @@ static NativeValue native_channel_send(
                 keyword.value, &response->trailer_names)) {
           valid = false;
         }
+      } else if (keyword.name == "on_complete") {
+        if (keyword.value.tag != NativeValue::Tag::Null) {
+          if (keyword.value.tag != NativeValue::Tag::Closure) {
+            throw NativeRaised{native_named_error(
+                "ArgumentError", "on_complete must be a block or null")};
+          }
+          auto observer = std::make_shared<SputnikNativeHttpBlock>(
+              keyword.value, true);
+          response->on_complete = [observer](bool success, std::uint64_t bytes) {
+            observer->invoke({sputnik::runtime::Value::boolean(success),
+                sputnik::runtime::Value::integer(static_cast<std::int64_t>(bytes))});
+          };
+        }
+      } else if (keyword.name == "length") {
+        if (keyword.value.tag != NativeValue::Tag::Null) {
+          if (keyword.value.tag != NativeValue::Tag::Integer ||
+              keyword.value.scalar_value < 0) {
+            throw NativeRaised{native_named_error(
+                "ArgumentError", "length must be a nonnegative Int or null")};
+          }
+          response->stream_length =
+              static_cast<std::uint64_t>(keyword.value.scalar_value);
+        }
       } else {
         valid = false;
       }
@@ -23032,14 +23196,20 @@ static NativeValue native_channel_send(
     }
     if (valid &&
         (response->headers.contains("content-length") ||
-         response->headers.contains("transfer-encoding"))) {
+         response->headers.contains("transfer-encoding") ||
+         response->headers.contains("trailer"))) {
       throw NativeRaised{native_named_error(
           "InvalidHeaderError",
-          "streaming response owns Content-Length/Transfer-Encoding")};
+          "streaming response owns Content-Length/Transfer-Encoding/Trailer")};
+    }
+    if (valid && response->stream_length.has_value() &&
+        !response->trailer_names.empty()) {
+      throw NativeRaised{native_named_error(
+          "InvalidHeaderError", "fixed-length response does not permit trailers")};
     }
     if (valid) {
       auto producer =
-          std::make_shared<SputnikNativeHttpBlock>(block);
+          std::make_shared<SputnikNativeHttpBlock>(block, true);
       response->producer_factory =
           [producer](std::vector<sputnik::runtime::Value> args) {
             return [producer, args = std::move(args)]() mutable {
@@ -23565,6 +23735,7 @@ static NativeValue native_channel_send(
   // instruction cache.
   out << "#include \"runtime/system_native.inc\"\n";
   out << "#include \"runtime/threaded_native.inc\"\n";
+  out << "#include \"runtime/remote_io_native.inc\"\n";
   out << "static NativeValue native_special_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
@@ -23575,7 +23746,11 @@ static NativeValue native_channel_send(
          "  case NativeValue::Tag::ErrorInstance:\n"
          "  case NativeValue::Tag::ErrorNamespace:\n"
          "    return native_error_send(receiver, selector, args, block);\n"
+         "  case NativeValue::Tag::FsModule:\n"
+         "    return native_fs_direct_send(receiver, selector, args, kwargs, block);\n"
          "  case NativeValue::Tag::RuntimeHandle:\n"
+         "    if (native_host_io_receiver(receiver)) return native_host_io_send(receiver, selector, args, kwargs, block);\n"
+         "    if (as_native_runtime_handle(receiver)->value.is_native_type() && as_native_runtime_handle(receiver)->value.as_native_type().kind == sputnik::runtime::RuntimeNativeTypeKind::Net && selector == \"unix\" && args.empty() && kwargs.empty() && block.tag == NativeValue::Tag::Null) return NativeValue::runtime_handle(sputnik::runtime::Value::native_type(sputnik::runtime::RuntimeNativeTypeKind::NetUnix));\n"
          "    if (native_system_receiver(receiver)) return native_system_send(receiver, selector, args, kwargs, block);\n"
          "    if (as_native_runtime_handle(receiver)->value.is_threaded_collection()) return native_threaded_send(receiver, selector, args, kwargs, block);\n"
          "    return native_http_send(receiver, selector, args, kwargs, block);\n"
@@ -24060,12 +24235,51 @@ static std::string native_named_callable_type_name(
   out << "  (void)sputnik_native_call_shaped_method(method->code_id, args, "
          "&invocation);\n";
   out << "}\n";
-  out << "static NativeValue native_user_send(const NativeValue &receiver, "
-         "const std::string &selector, "
-         "const NativeArgsView &args, "
+  out << "static std::optional<std::uint32_t> native_super_parent(std::uint32_t owner) {\n  switch (owner) {\n";
+  for (std::uint32_t owner = 0; owner < module.classes.size(); ++owner) {
+    const auto &klass = module.classes[owner];
+    const auto parent = klass.has_superclass_ref ? native_cpp_class_index_for_path(module, klass.superclass_ref) : std::nullopt;
+    out << "  case " << owner << "U: return ";
+    if (parent) out << *parent << "U;\n";
+    else out << "std::nullopt;\n";
+  }
+  out << "  default: throw NativeBailout();\n  }\n}\n";
+  out << "static bool native_super_exception(std::uint32_t owner) {\n  switch (owner) {\n";
+  for (std::uint32_t owner = 0; owner < module.classes.size(); ++owner) {
+    out << "  case " << owner << "U: return " << ((module.classes[owner].flags & sputnik::bytecode::kClassFlagException) ? "true" : "false") << ";\n";
+  }
+  out << "  default: return false;\n  }\n}\n";
+  out << "static NativeValue native_user_send("
+         "const NativeValue &receiver, const std::string &selector_input, "
+         "const NativeArgsView &args_input, "
          "const NativeKeywordArgsView &kwargs, "
          "NativeValue block, NativeUserCallSiteCache *call_site, "
          "std::uint32_t call_flags) {\n";
+  out << R"SPUTNIKPP(  std::string super_selector;
+  std::vector<NativeValue> super_args;
+  NativeArgsView args = args_input;
+  std::optional<std::uint32_t> super_parent;
+  if (selector_input == "__super_dispatch__") {
+    if (args.size() < 2 || args[0].tag != NativeValue::Tag::Class || !native_value_is_string(args[1]))
+      throw NativeRaised{native_named_error("TypeError", "invalid super call")};
+    auto owner = static_cast<std::uint32_t>(args[0].scalar_value);
+    super_selector = native_string_text(args[1]);
+    super_parent = native_super_parent(owner);
+    super_args.assign(args.begin() + 2, args.end()); args = NativeArgsView(super_args);
+    call_site = nullptr;
+    if (!super_parent) {
+      if (native_super_exception(owner) && super_selector == "init" && receiver.tag == NativeValue::Tag::Instance) {
+        if (args.size() > 1 || !kwargs.empty() || block.tag != NativeValue::Tag::Null)
+          throw NativeRaised{native_named_error("ArgumentError", "Exception.init accepts an optional message")};
+        auto message = args.empty() ? NativeValue::heap_string("") : NativeValue::heap_string(native_value_to_display_string(args[0]));
+        native_store_ivar(receiver, native_intern_symbol("message"), std::move(message));
+        return NativeValue::nullv();
+      }
+      throw NativeRaised{native_named_error("NoMethodError", "super has no parent method: " + super_selector)};
+    }
+  }
+  const std::string &selector = super_parent ? super_selector : selector_input;
+)SPUTNIKPP";
   out << "  if (receiver.tag == NativeValue::Tag::PackageModule) {\n";
   out << "    if ((call_flags & "
       << sputnik::bytecode::kCallSiteFlagPropertyAssignment
@@ -24194,7 +24408,7 @@ static std::string native_named_callable_type_name(
   out << "  }\n";
   out << "  if (method == nullptr) {\n";
   out << "    const auto found = native_lookup_user_method("
-         "class_index, selector, class_side);\n";
+         "super_parent.value_or(class_index), selector, class_side);\n";
   out << "    if (found.has_value()) "
          "method = &kNativeUserMethods[found->cache_index];\n";
   out << "    if (call_site != nullptr && cacheable_call_site_key && "
@@ -24247,6 +24461,14 @@ static std::string native_named_callable_type_name(
          "(class_side ? receiver.scalar_value == other.scalar_value "
          ": receiver.heap_value == other.heap_value);\n";
   out << "      return NativeValue::boolean(selector == \"==\" ? equal : !equal);\n";
+  out << "    }\n";
+  out << "    if (selector != \"method_missing\" && (call_flags & "
+      << sputnik::bytecode::kCallSiteFlagPropertyAssignment << "U) == 0U && "
+         "native_lookup_user_method(class_index, \"method_missing\", class_side)) {\n";
+  out << "      std::vector<NativeValue> forwarded; forwarded.reserve(args.size() + 1U);\n";
+  out << "      forwarded.push_back(NativeValue::symbol_ref(native_intern_symbol(selector)));\n";
+  out << "      for (const auto &arg : args) forwarded.push_back(arg);\n";
+  out << "      return native_user_send(receiver, \"method_missing\", forwarded, kwargs, block, nullptr, 0U);\n";
   out << "    }\n";
   out << "    if (selector == \"call\") throw NativeRaised{native_named_error("
          "\"TypeError\", \"CALL expects closure, class, or object with call method\")};\n";
@@ -24349,6 +24571,7 @@ static std::string native_named_callable_type_name(
          "as_native_runtime_handle(matcher)->value.is_native_type()) {\n";
   out << "    const sputnik::runtime::RuntimeNativeTypeKind kind = "
          "as_native_runtime_handle(matcher)->value.as_native_type().kind;\n";
+  out << "    if (kind == sputnik::runtime::RuntimeNativeTypeKind::FsPath) return value.tag == NativeValue::Tag::FsPath;\n";
   out << "    if (value.tag == NativeValue::Tag::RuntimeHandle) {\n";
   out << "      const auto direct = "
          "sputnik::runtime::runtime_native_io_type_matches("
@@ -24393,6 +24616,18 @@ static std::string native_named_callable_type_name(
   out << "  if (matcher.tag == NativeValue::Tag::Class) {\n";
   out << "    const std::uint32_t target = "
          "static_cast<std::uint32_t>(matcher.scalar_value);\n";
+  out << "    if (value.tag == NativeValue::Tag::ErrorInstance) {\n";
+  out << "      std::optional<std::uint16_t> error_id;\n      switch (target) {\n";
+  for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
+    const auto &klass = module.classes[index];
+    if ((klass.flags & sputnik::bytecode::kClassFlagNativeError) != 0U &&
+        klass.class_name_sym_id < module.symbols.size()) {
+      out << "      case " << index << "U: error_id = native_error_registry.error_id(native_hex_to_string(\""
+          << string_to_hex_text(module.symbols[klass.class_name_sym_id]) << "\")); break;\n";
+    }
+  }
+  out << "      default: break;\n      }\n";
+  out << "      return error_id && native_error_registry.error_is_a(as_native_error(value).error_id, *error_id);\n    }\n";
   out << "    if (value.tag == NativeValue::Tag::Class) "
          "return static_cast<std::uint32_t>(value.scalar_value) == target;\n";
   out << "    if (value.tag == NativeValue::Tag::ForeignHandle) "
@@ -24902,6 +25137,7 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
     out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetEndpoint:\n";
     out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetTcp:\n";
     out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetUdp:\n";
+    out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetUnix:\n";
     out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetHttp:\n";
     out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetHttpClient:\n";
     out << "    case sputnik::runtime::RuntimeNativeTypeKind::NetHttpRequest:\n";
@@ -25176,6 +25412,22 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
       out << "}\n\n";
     }
     if (!plan.native_extension_code_ids.empty()) {
+      out << "static std::int64_t sputnik_native_block_required_args(const NativeValue &value) {\n";
+      out << "  if (value.tag != NativeValue::Tag::Closure) return -1;\n";
+      out << "  switch (as_closure(value)->code_id) {\n";
+      for (const auto &code : module.code_objects) {
+        if (code.kind != sputnik::bytecode::CodeKind::Block) continue;
+        std::uint32_t count = 0;
+        for (const auto &local : code.local_layout) {
+          if (local.slot != count || local.role_str_id >= module.strings.size() ||
+              module.strings[local.role_str_id] != "param") break;
+          ++count;
+        }
+        if ((code.flags & sputnik::bytecode::kCodeFlagRestParam) != 0U)
+          count = code.flags >> sputnik::bytecode::kCodeRestParamIndexShift;
+        out << "  case " << code.code_id << "U: return " << count << ";\n";
+      }
+      out << "  default: return -1;\n  }\n}\n";
       out << R"SPUTNIKPP(struct SputnikNativeExtensionState {
   sputnik::runtime::NativeCallValueArena<NativeValue> arena;
   std::optional<NativeRaised> raised;
@@ -25454,6 +25706,20 @@ static SputnikStatus sputnik_native_ext_call_block(void *opaque, SputnikValue bl
   }
   return SPUTNIK_ERR;
 }
+static int64_t sputnik_native_ext_block_required_args(void *opaque, SputnikValue block) {
+  return sputnik_native_block_required_args(sputnik_native_ext_state(opaque)->resolve(block));
+}
+static SputnikStatus sputnik_native_ext_call_ruby_block(void *opaque, SputnikValue block,
+    const SputnikValue *args, std::size_t argc, SputnikValue *out) {
+  auto *state = sputnik_native_ext_state(opaque);
+  auto status = sputnik_native_ext_call_block(opaque, block, args, argc, out);
+  if (status == SPUTNIK_ERR && state->nonlocal_return && !state->nonlocal_return->target) {
+    *out = state->push(std::move(state->nonlocal_return->value));
+    state->nonlocal_return.reset();
+    return SPUTNIK_BREAK;
+  }
+  return status;
+}
 static const sputnik::runtime::SputnikExtDirectOps &sputnik_native_ext_ops() {
   static const auto ops = [] {
     sputnik::runtime::SputnikExtDirectOps value;
@@ -25483,6 +25749,8 @@ static const sputnik::runtime::SputnikExtDirectOps &sputnik_native_ext_ops() {
     value.make_handle = &sputnik_native_ext_make_handle;
     value.fault = &sputnik_native_ext_fault;
     value.call_block = &sputnik_native_ext_call_block;
+    value.call_ruby_block = &sputnik_native_ext_call_ruby_block;
+    value.block_required_args = &sputnik_native_ext_block_required_args;
     return value;
   }();
   return ops;
@@ -26237,6 +26505,8 @@ std::filesystem::path detect_native_runtime_root(const std::string &argv0) {
         std::filesystem::absolute(argv0).lexically_normal();
     candidates.push_back(executable.parent_path().parent_path());
     candidates.push_back(executable.parent_path().parent_path().parent_path());
+    const auto resolved = std::filesystem::weakly_canonical(executable);
+    candidates.push_back(resolved.parent_path().parent_path());
   } catch (const std::exception &) {
   }
   for (const std::filesystem::path &candidate : candidates) {
@@ -26326,6 +26596,7 @@ native_runtime_sources(const std::filesystem::path &root) {
       "runtime/stdlib_digest.cpp",
       "runtime/stdlib_signature.cpp",
       "runtime/stdlib_benchmark.cpp",
+      "runtime/stdlib_notebook_ui.cpp",
       "runtime/stdlib_secure_random.cpp",
       "runtime/stdlib_argparser.cpp",
       "runtime/stdlib_regexp.cpp",
@@ -26333,6 +26604,7 @@ native_runtime_sources(const std::filesystem::path &root) {
       "runtime/stdlib_time.cpp",
       "runtime/stdlib_url.cpp",
       "runtime/stdlib_yaml.cpp",
+      "runtime/config_document.cpp",
       "runtime/sputnik_ext.cpp",
       "runtime/module_loader.cpp",
       "runtime/native_bridge.cpp",
@@ -26360,6 +26632,9 @@ const std::vector<std::string> &native_runtime_compile_flags() {
       "-fdata-sections",
 #ifdef SPUTNIK_OPENSSL_INCLUDE_DIR
       "-I" SPUTNIK_OPENSSL_INCLUDE_DIR,
+#endif
+#ifdef SPUTNIK_YAML_INCLUDE_DIR
+      "-I" SPUTNIK_YAML_INCLUDE_DIR,
 #endif
 #ifdef SPUTNIK_HAVE_NETTLE_GOST
       "-DSPUTNIK_HAVE_NETTLE_GOST",
@@ -26428,7 +26703,7 @@ native_runtime_cache_key(const std::string &cxx,
   }
   const std::vector<std::string> header_dirs = {
       "runtime", "bytecode",  "frontend", "profile",
-      "package", "optimizer", "buildsys", "frozen", "spec/registries"};
+      "package", "optimizer", "buildsys", "frozen", "spec/registries", "third_party/tomlplusplus"};
   for (const std::string &dir : header_dirs) {
     const std::filesystem::path root = runtime_root / dir;
     if (!std::filesystem::exists(root)) {
@@ -26438,7 +26713,7 @@ native_runtime_cache_key(const std::string &cxx,
          std::filesystem::recursive_directory_iterator(root)) {
       const std::string extension = entry.path().extension().string();
       if (entry.is_regular_file() &&
-          (extension == ".h" || extension == ".def" || extension == ".inc")) {
+          (extension == ".h" || extension == ".hpp" || extension == ".def" || extension == ".inc")) {
         hashed_files.push_back(entry.path());
       }
     }
@@ -26569,8 +26844,14 @@ bool native_cxxflag_rejected(const std::string &flag) {
 void append_native_library_paths(
     std::vector<std::string> *command,
     const std::vector<sputnik::pkg::PackageNativeExtension> &extensions,
-    const std::filesystem::path &base) {
+    const std::filesystem::path &base,
+    const std::filesystem::path &loader_directory = {}) {
   for (const auto &extension : extensions) {
+    if (extension.kind == "prebuilt") {
+      command->push_back((base / extension.library).lexically_normal().string());
+      command->insert(command->end(), {"-Xlinker", "-rpath", "-Xlinker",
+          (base / extension.library).parent_path().lexically_normal().string()});
+    }
     for (const auto &path : extension.library_dirs) {
       if (path.empty()) throw std::runtime_error("empty native library directory");
       command->insert(command->end(), {"-L", (base / path).lexically_normal().string()});
@@ -26578,11 +26859,25 @@ void append_native_library_paths(
     for (const auto &path : extension.runtime_library_dirs) {
       if (path.empty()) throw std::runtime_error("empty native runtime library directory");
       const bool loader_relative = path.front() == '@' || path.front() == '$';
-      const std::string resolved = loader_relative ? path : (base / path).lexically_normal().string();
+      std::string resolved = loader_relative ? path : (base / path).lexically_normal().string();
+      if (!loader_relative && !loader_directory.empty()) {
+        const auto absolute = std::filesystem::absolute(base / path).lexically_normal();
+        const auto within = absolute.lexically_relative(std::filesystem::absolute(base).lexically_normal());
+        if (!within.empty() && *within.begin() != "..") {
+#if defined(__APPLE__)
+          resolved = "@loader_path/";
+#else
+          resolved = "$ORIGIN/";
+#endif
+          resolved += absolute.lexically_relative(std::filesystem::absolute(loader_directory).lexically_normal()).generic_string();
+        }
+      }
       command->insert(command->end(), {"-Xlinker", "-rpath", "-Xlinker", resolved});
     }
   }
 }
+
+#include "tools/sputnik/native_parallel.h"
 
 NativeExecutableBuildResult build_native_executable(
     const std::string &argv0, const RunnableModuleArtifact &artifact,
@@ -26624,7 +26919,17 @@ NativeExecutableBuildResult build_native_executable(
   command.insert(command.end(), flags.begin(), flags.end());
   command.push_back("-I");
   command.push_back(runtime_root.string());
-  command.push_back(native_source_path.string());
+  const auto compile_started = std::chrono::steady_clock::now();
+  const NativeParallelBuild parallel = prepare_native_parallel_build(
+      cxx, native_source_path, runtime_root, artifact.module.code_objects.size());
+  if (parallel.objects.empty()) {
+    command.push_back(native_source_path.string());
+  } else {
+    command.insert(command.end(), parallel.objects.begin(), parallel.objects.end());
+    command.insert(command.end(), {"-flto=thin", "-fuse-ld=" + parallel.linker,
+        "-Wl,--thinlto-jobs=" + std::to_string(parallel.jobs),
+        "-Xlinker", "--thinlto-cache-dir=" + (parallel.directory / "cache").string()});
+  }
 
   // Native extension sources are pre-compiled to object files in their own
   // invocations so each unit gets correct language/standard flags: a
@@ -26699,6 +27004,18 @@ NativeExecutableBuildResult build_native_executable(
   command.insert(command.end(), extension_objects.begin(),
                  extension_objects.end());
 
+  // Prebuilt extensions resolve the stable C ABI from their executable host.
+  // Unlike source objects, their dynamic lookups do not keep those entry points
+  // alive during dead stripping unless the host exports its globals.
+  if (std::any_of(native_extensions.begin(), native_extensions.end(),
+                  [](const auto &extension) { return extension.kind == "prebuilt"; })) {
+#if defined(__APPLE__)
+    command.push_back("-Wl,-export_dynamic");
+#elif defined(__linux__)
+    command.push_back("-Wl,--export-dynamic");
+#endif
+  }
+
   if (!runtime_archive.empty()) {
 #if defined(__APPLE__)
     command.push_back("-Wl,-force_load," + runtime_archive.string());
@@ -26730,6 +27047,10 @@ NativeExecutableBuildResult build_native_executable(
   command.push_back("-L" SPUTNIK_OPENSSL_LIB_DIR);
 #endif
   command.push_back("-lssl");
+  command.push_back("-lyaml");
+#ifdef SPUTNIK_YAML_LIB_DIR
+  command.push_back("-L" SPUTNIK_YAML_LIB_DIR);
+#endif
   command.push_back("-lcrypto");
 #ifdef SPUTNIK_HAVE_NETTLE_GOST
 #ifdef SPUTNIK_NETTLE_LIB_DIR
@@ -26743,6 +27064,9 @@ NativeExecutableBuildResult build_native_executable(
   command.push_back("-lgmp");
 #endif
   command.push_back("-pthread");
+#if defined(__linux__)
+  command.push_back("-ldl");
+#endif
   command.push_back("-o");
   command.push_back(output_path.string());
 
@@ -26751,6 +27075,17 @@ NativeExecutableBuildResult build_native_executable(
   if (exit_code != 0) {
     throw std::runtime_error("native C++ build failed: " + rendered);
   }
+  const auto compile_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - compile_started).count();
+  std::ostringstream compile_report;
+  compile_report << "{\n  \"schema\": \"sputnik.native.compile.v1\",\n"
+                 << "  \"mode\": \"" << (parallel.objects.empty() ? "serial" : "thinlto") << "\",\n"
+                 << "  \"optimization\": \"O2\",\n"
+                 << "  \"cxx\": \"" << json_escape(cxx) << "\",\n"
+                 << "  \"jobs\": " << parallel.jobs << ",\n"
+                 << "  \"partitions\": " << (parallel.objects.empty() ? 1U : parallel.objects.size()) << ",\n"
+                 << "  \"compile_link_ms\": " << compile_ms << "\n}\n";
+  write_file(native_source_path.string() + ".compile.json", compile_report.str());
 
   // Symbol-presence check: every declared native symbol must be defined in the
   // linked executable, caught here with a clear diagnostic rather than as an
@@ -27146,7 +27481,8 @@ int run_source_build_command(int argc, char **argv) {
       const std::filesystem::path native_source_path =
           output_path.string() + ".native.cpp";
       native_result = build_native_executable(argv[0], artifact, output_path,
-                                              native_source_path);
+                                              native_source_path,
+                                              artifact.package_extensions);
       native_json = &native_result;
       if (options.require_native_body_coverage) {
         const std::string diagnostic =
@@ -27492,6 +27828,56 @@ harvest_macro_exports(const std::string &source, const std::string &path) {
   return sputnik::macros::collect_macro_exports(parse_result.items);
 }
 
+// Imported source providers must be staged before the entry is lowered. A
+// graph pass after bytecode emission cannot recover unexpanded macro syntax.
+sputnik::macros::MacroProviderMap installed_macro_providers(
+    const std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
+    const std::string &path) {
+  sputnik::macros::MacroProviderMap providers;
+  sputnik::pkg::PackageResolver resolver(std::filesystem::absolute(path).parent_path());
+  sputnik::runtime::RuntimeModuleRegistry natives;
+  sputnik::runtime::RuntimeDispatchRegistry dispatch;
+  sputnik::runtime::RuntimeTypeRegistry types;
+  sputnik::runtime::register_builtin_runtime_modules(natives, dispatch, types);
+  sputnik::runtime::register_core_prelude_bindings(natives);
+  std::set<std::string> visited;
+  const auto replacements = sputnik::frontend::collect_import_aliases(items);
+  std::function<void(const std::vector<std::unique_ptr<sputnik::ast::Expr>> &)> visit;
+  visit = [&](const auto &module_items) {
+    const auto local_aliases = sputnik::frontend::collect_import_aliases(module_items);
+    for (const auto &item : module_items) {
+      if (!item || item->kind != "AstImportStmt") continue;
+      const auto field = std::find_if(item->string_fields.begin(), item->string_fields.end(),
+          [](const auto &f) { return f.name == "module_path"; });
+      if (field == item->string_fields.end()) continue;
+      const auto requested = replacements.resolve(local_aliases.resolve(field->value));
+      const auto foreign = sputnik::frontend::foreign_import_provider(requested);
+      const auto name = foreign.empty() ? requested : foreign;
+      if (natives.has_namespace(name)) continue;
+      if (!visited.insert(name).second) {
+        const auto existing = providers.find(name);
+        if (existing != providers.end()) providers[field->value] = existing->second;
+        continue;
+      }
+      const auto resolved = resolver.resolve(name);
+      if (!resolved || resolved->source.empty()) continue;
+      auto lexed = lex_source(resolved->source, resolved->path);
+      if (!lexed.ok()) continue;
+      sputnik::parser::Parser parser(lexed.tokens);
+      auto parsed = parser.parse_module_unit();
+      if (!parsed.ok()) continue;
+      auto exports = sputnik::macros::collect_macro_exports(parsed.items);
+      if (!exports.empty()) {
+        providers[name] = exports;
+        providers[field->value] = std::move(exports);
+      }
+      visit(parsed.items);
+    }
+  };
+  visit(items);
+  return providers;
+}
+
 // Stage a provider from its built artifact's persisted macro section (§11)
 // when the artifact is fresh — its recorded source hash matches the current
 // source — skipping the source re-parse. Returns nullopt when the artifact
@@ -27549,7 +27935,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      "sputnik.build.cache.v1\n" + module.name + "\n" + module.path + "\n" +
+      // v6 records import-as replacements and canonical repeated bindings.
+      "sputnik.build.cache.v6\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
       stdlib_abi_material(stdlib_abis) + macro_material);
   const std::filesystem::path output_path =
@@ -27700,6 +28087,137 @@ link_native_graph(const std::vector<sputnik::bytecode::GraphModule> &modules,
   return result;
 }
 
+std::vector<sputnik::pkg::PackageNativeExtension>
+resolved_native_extensions(const sputnik::pkg::PackageResolver &resolver) {
+  std::vector<sputnik::pkg::PackageNativeExtension> result;
+  for (const auto &package : resolver.selected()) {
+    const char *provider_cache = std::getenv("SPUTNIK_NATIVE_EXT_CACHE");
+    const auto prepared = sputnik::pkg::prepare_native_providers(
+        package.manifest, package.directory, std::filesystem::absolute(
+            provider_cache && *provider_cache ? std::filesystem::path(provider_cache)
+              : package.directory.parent_path() / ".sputnik/native"));
+    for (auto extension : prepared) {
+
+      const auto absolute = [&](std::vector<std::string> *paths,
+                                bool loader_paths = false) {
+        for (auto &path : *paths) {
+          if (loader_paths && !path.empty() &&
+              (path.front() == '@' || path.front() == '$'))
+            continue;
+          path = (package.directory / path).lexically_normal().string();
+        }
+      };
+      absolute(&extension.sources);
+      absolute(&extension.headers);
+      absolute(&extension.include_dirs);
+      absolute(&extension.library_dirs);
+      absolute(&extension.runtime_library_dirs, true);
+      if (!extension.library.empty())
+        extension.library = (package.directory / extension.library).lexically_normal().string();
+      for (auto &library : extension.libraries)
+        library.path = (package.directory / library.path).lexically_normal().string();
+      result.push_back(std::move(extension));
+    }
+  }
+  return result;
+}
+
+void resolve_graph_packages(
+    std::vector<sputnik::bytecode::GraphModule> *modules,
+    const std::string &root, sputnik::pkg::PackageResolver *resolver) {
+  sputnik::runtime::RuntimeModuleRegistry native_modules;
+  sputnik::runtime::RuntimeDispatchRegistry dispatch;
+  sputnik::runtime::RuntimeTypeRegistry types;
+  sputnik::runtime::register_builtin_runtime_modules(native_modules, dispatch,
+                                                     types);
+  sputnik::runtime::register_core_prelude_bindings(native_modules);
+  sputnik::runtime::register_legacy_native_type_paths(native_modules);
+  std::map<std::string, std::size_t> by_name;
+  for (std::size_t i = 0; i < modules->size(); ++i)
+    by_name.emplace(modules->at(i).name, i);
+  const auto root_module = by_name.find(root);
+  const auto replacements = root_module == by_name.end()
+      ? sputnik::frontend::ImportAliases{}
+      : sputnik::bytecode::module_import_aliases(modules->at(root_module->second).module);
+  // Stage installed macro providers once for this graph. Recreating a
+  // resolver for every source module would rehash the same native archive
+  // hundreds of times. Graph members share this immutable provider table.
+  sputnik::macros::MacroProviderMap macro_providers;
+  const auto root_input = by_name.find(root);
+  if (root_input != by_name.end()) {
+    const auto &source_path = modules->at(root_input->second).path;
+    if (is_sputnik_source_path(source_path) && std::filesystem::is_regular_file(source_path)) {
+      auto lexed = lex_source(read_file(source_path), source_path);
+      if (lexed.ok()) {
+        sputnik::parser::Parser parser(lexed.tokens);
+        auto parsed = parser.parse_module_unit();
+        if (parsed.ok()) macro_providers = installed_macro_providers(parsed.items, source_path);
+      }
+    }
+  }
+  std::set<std::string> visited;
+  std::function<void(const std::string &)> visit =
+      [&](const std::string &requested) {
+        const auto name = replacements.resolve(requested);
+        if (native_modules.has_namespace(name) || !visited.insert(name).second)
+          return;
+        auto found = by_name.find(name);
+        if (found == by_name.end()) {
+          auto resolved = resolver->resolve(name);
+          if (!resolved)
+            throw std::runtime_error(
+                "ImportError: module '" + name + "' was not found in " +
+                resolver->search_description() +
+                "; install its package with: sputnik pkg install <package>");
+          sputnik::bytecode::BcModule module;
+          if (!resolved->bytecode.empty()) {
+            auto decoded =
+                sputnik::bytecode::deserialize_module(resolved->bytecode);
+            if (!decoded.ok())
+              throw std::runtime_error(
+                  sputnik::bytecode::verify_errors_to_json(decoded.errors));
+            module = std::move(decoded.module);
+          } else
+            module = compile_source_text_to_module(resolved->source,
+                                                   resolved->path, name, {}, &macro_providers);
+          const auto index = modules->size();
+          modules->push_back({name, resolved->path, std::move(module), false});
+          found = by_name.emplace(name, index).first;
+        }
+        sputnik::bytecode::redirect_module_imports(&modules->at(found->second).module, replacements);
+        // Copy names before recursive resolution grows the module vector.
+        std::vector<std::string> dependencies;
+        const auto &module = modules->at(found->second).module;
+        for (const auto &dep : module.dependencies)
+          dependencies.push_back(module.strings.at(dep.module_name_str_id));
+        for (const auto &dependency : dependencies)
+          visit(dependency);
+      };
+  visit(root);
+}
+
+RunnableModuleArtifact
+resolve_runnable_packages(RunnableModuleArtifact artifact,
+                          const std::string &path) {
+  sputnik::pkg::PackageResolver resolver(
+      std::filesystem::absolute(path).parent_path());
+  std::vector<sputnik::bytecode::GraphModule> modules;
+  modules.push_back({artifact.module_name, path, artifact.module, false});
+  resolve_graph_packages(&modules, artifact.module_name, &resolver);
+  if (modules.size() == 1)
+    return artifact;
+  auto linked =
+      link_native_graph(modules, artifact.module_name, artifact.entry_mode,
+                        artifact.capability_grants);
+  if (!linked.ok)
+    throw std::runtime_error(
+        sputnik::build::diagnostics_to_string(linked.diagnostics));
+  linked.artifact.package_extensions = augment_native_extensions_from_source(
+      resolved_native_extensions(resolver), linked.artifact.module);
+  linked.artifact.package_locations = resolver.selected();
+  return std::move(linked.artifact);
+}
+
 void build_manifest_modules(
     const sputnik::build::BuildManifest &manifest,
     const std::filesystem::path &manifest_dir,
@@ -27836,6 +28354,10 @@ int run_build_command(int argc, char **argv) {
   try {
     build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
                            options.cache_enabled, &summary);
+    auto graph_modules = decode_native_graph_modules(summary);
+    sputnik::pkg::PackageResolver package_resolver(std::filesystem::absolute(manifest_path).parent_path());
+    package_resolver.require(parsed.manifest.dependencies);
+    resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver);
     if (options.target == "native" || options.target == "both") {
       sputnik::build::BuildArtifactRecord *root_record = nullptr;
       for (sputnik::build::BuildArtifactRecord &artifact : summary.artifacts) {
@@ -27859,7 +28381,7 @@ int run_build_command(int argc, char **argv) {
       const EntryExecutionMode entry_mode =
           default_entry_mode_for(true, decoded.module);
       const NativeGraphLinkResult linked_graph =
-          link_native_graph(decode_native_graph_modules(summary),
+          link_native_graph(graph_modules,
                             parsed.manifest.root_module, entry_mode,
                             options.capability_grants);
       if (!linked_graph.ok) {
@@ -27877,9 +28399,12 @@ int run_build_command(int argc, char **argv) {
       const std::filesystem::path native_source_path =
           out_dir /
           (safe_artifact_name(parsed.manifest.root_module) + ".native.cpp");
+      auto combined_extensions = parsed.manifest.native_extensions;
+      const auto package_extensions = resolved_native_extensions(package_resolver);
+      combined_extensions.insert(combined_extensions.end(), package_extensions.begin(), package_extensions.end());
       const std::vector<sputnik::pkg::PackageNativeExtension> native_extensions =
           augment_native_extensions_from_source(
-              parsed.manifest.native_extensions, linked_graph.artifact.module);
+              combined_extensions, linked_graph.artifact.module);
       const std::vector<sputnik::pkg::PackageNativeBlob> native_blobs =
           collect_native_blobs(native_extensions, manifest_dir.string());
       const NativeExecutableBuildResult native_result = build_native_executable(
@@ -28116,6 +28641,9 @@ std::string native_extension_cache_key(
     append_native_cache_atom(&material, "extension");
     append_native_cache_atom(&material, extension.name);
     append_native_cache_atom(&material, extension.language);
+    for (const auto &fingerprint : extension.provider_fingerprints)
+      append_native_cache_atom(&material, fingerprint);
+
     for (const std::string &source : extension.sources) {
       append_native_cache_file(&material, manifest_dir, "source",
                                manifest_dir / source);
@@ -28241,14 +28769,20 @@ std::int64_t native_error_exit_code(const std::string &text) {
   }
 }
 
-void compile_and_load_native_extensions(
+std::filesystem::path prepare_native_extension_library(
     const std::string &argv0,
     const std::vector<sputnik::pkg::PackageNativeExtension> &extensions,
     const sputnik::bytecode::BcModule &module,
     const std::filesystem::path &manifest_dir,
-    const std::filesystem::path &cache_root,
-    ScopedNativeExtensionLibraries *loaded_libraries) {
-  const std::filesystem::path runtime_root = detect_native_runtime_root(argv0);
+    const std::filesystem::path &cache_root) {
+  // Notebook distributions carry the extension SDK beside their compiler.
+  // Installing an extension needs ABI headers, not the full runtime sources.
+  const auto bundled_sdk = std::filesystem::absolute(argv0).parent_path()
+                               .parent_path() / "Resources/sputnik-sdk";
+  const std::filesystem::path runtime_root =
+      std::filesystem::is_regular_file(bundled_sdk / "runtime/sputnik_ext.h")
+          ? bundled_sdk
+          : detect_native_runtime_root(argv0);
   const std::string cxx = choose_native_cxx();
   const std::string cache_key = native_extension_cache_key(
       cxx, runtime_root, extensions, module, manifest_dir);
@@ -28341,7 +28875,7 @@ void compile_and_load_native_extensions(
     link.push_back("-shared");
 #endif
     link.insert(link.end(), objects.begin(), objects.end());
-    append_native_library_paths(&link, extensions, manifest_dir);
+    append_native_library_paths(&link, extensions, manifest_dir, artifact_dir);
     for (const std::string &library : link_libraries) {
       link.push_back("-l" + library);
     }
@@ -28353,6 +28887,36 @@ void compile_and_load_native_extensions(
     }
   }
 
+  return library_path;
+}
+
+std::filesystem::path compile_and_load_native_extensions(
+    const std::string &argv0,
+    const std::vector<sputnik::pkg::PackageNativeExtension> &extensions,
+    const sputnik::bytecode::BcModule &module,
+    const std::filesystem::path &manifest_dir,
+    const std::filesystem::path &cache_root,
+    ScopedNativeExtensionLibraries *loaded_libraries,
+    bool compile_only = false,
+    const std::filesystem::path &prepared_library = {}) {
+  auto library_path = prepared_library;
+  if (library_path.empty()) {
+    const bool prebuilt = std::any_of(extensions.begin(), extensions.end(),
+        [](const auto &extension) { return extension.kind == "prebuilt"; });
+    if (prebuilt) {
+      if (extensions.size() != 1 || extensions.front().kind != "prebuilt")
+        throw std::runtime_error("loading multiple prebuilt native units is not supported yet");
+      library_path = std::filesystem::canonical(manifest_dir / extensions.front().library);
+      const auto relative = library_path.lexically_relative(std::filesystem::canonical(manifest_dir));
+      if ((!extensions.front().provider_prepared &&
+           (relative.empty() || *relative.begin() == "..")) ||
+          !std::filesystem::is_regular_file(library_path))
+        throw std::runtime_error("prebuilt library escapes package directory");
+    } else {
+      library_path = prepare_native_extension_library(argv0, extensions, module, manifest_dir, cache_root);
+    }
+  }
+  if (compile_only) return library_path;
   void *handle = ::dlopen(library_path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (handle == nullptr) {
     const char *error = ::dlerror();
@@ -28457,6 +29021,580 @@ void compile_and_load_native_extensions(
   }
   sputnik::runtime::NativeExtRegistry::global().register_package(
       std::move(package));
+  return library_path;
+}
+
+sputnik::bytecode::BcModule
+package_native_metadata(const sputnik::pkg::LocatedPackage &package) {
+  sputnik::bytecode::BcModule result;
+  const auto append = [&](const sputnik::bytecode::BcModule &module) {
+    for (const auto &attr : module.attrs) {
+      const auto &key = module.strings.at(attr.key_str_id);
+      if (key.rfind("sputnik.native.", 0) == 0)
+        add_module_attr(&result, key, module.strings.at(attr.value_str_id));
+    }
+  };
+  if (package.artifact) {
+    for (const auto &blob : package.artifact->modules) {
+      const auto decoded = sputnik::bytecode::deserialize_module(blob.bytes);
+      if (!decoded.ok())
+        throw std::runtime_error("invalid installed bytecode: " + blob.name);
+      append(decoded.module);
+    }
+  } else {
+    for (const auto &entry : package.manifest.modules) {
+      const auto path = (package.directory / entry.path).string();
+      if (entry.representation == "bytecode") {
+        const auto bytes = read_file(path);
+        const auto decoded = sputnik::bytecode::deserialize_module(
+            std::vector<std::uint8_t>(bytes.begin(), bytes.end()));
+        if (!decoded.ok()) throw std::runtime_error("invalid package bytecode: " + entry.name);
+        append(decoded.module);
+      } else {
+        append(compile_source_text_to_module(read_file(path), path, entry.name));
+      }
+    }
+  }
+  return result;
+}
+
+void load_source_package_extensions(
+    const std::string &argv0,
+    const std::vector<sputnik::pkg::LocatedPackage> &packages,
+    const std::vector<sputnik::capability::CapabilityRequest> &grants,
+    const std::filesystem::path &cache_directory,
+    ScopedNativeExtensionLibraries *libraries) {
+  if (!native_extension_grants_present(grants))
+    return;
+  for (const auto &package : packages) {
+    if (!package.artifact_path.empty() || package.manifest.native_extensions.empty())
+      continue;
+    const auto module = package_native_metadata(package);
+    const auto prepared = sputnik::pkg::prepare_native_providers(
+        package.manifest, package.directory,
+        std::filesystem::absolute(native_extension_cache_root(cache_directory)));
+    const auto extensions = augment_native_extensions_from_source(prepared, module);
+
+    require_native_extension_grants(extensions, module, grants);
+    compile_and_load_native_extensions(
+        argv0, extensions, module, package.directory,
+        native_extension_cache_root(cache_directory), libraries);
+  }
+}
+
+void load_installed_package_extensions(
+    const std::string &argv0,
+    const std::vector<sputnik::pkg::LocatedPackage> &packages,
+    const std::vector<sputnik::capability::CapabilityRequest> &grants,
+    ScopedNativeExtensionLibraries *libraries) {
+  if (!native_extension_grants_present(grants))
+    return;
+  for (const auto &package : packages) {
+    if (package.artifact_path.empty() || package.manifest.native_extensions.empty())
+      continue;
+    const auto module = package_native_metadata(package);
+    const auto extensions = augment_native_extensions_from_source(
+        package.manifest.native_extensions, module);
+    require_native_extension_grants(extensions, module, grants);
+    const auto descriptor = package.directory / "native-library.meta";
+    sputnik::pkg::verify_prepared_native(package);
+    std::istringstream input(read_file(descriptor.string()));
+    std::string target, relative, digest;
+    std::getline(input, target);
+    std::getline(input, relative);
+    std::getline(input, digest);
+    const auto library =
+        std::filesystem::canonical(package.directory / relative);
+    const auto within = library.lexically_relative(package.directory);
+    if (target != native_target_triple() || within.empty() ||
+        *within.begin() == ".." ||
+        digest != sputnik::lexer::sha256_hex(read_file(library.string())))
+      throw std::runtime_error("installed native library changed or targets "
+                               "another platform; reinstall " +
+                               package.manifest.name);
+    compile_and_load_native_extensions(argv0, extensions, module,
+                                       package.directory, {}, libraries, false,
+                                       library);
+  }
+}
+
+int run_distribution_command(int argc, char **argv) {
+  namespace fs = std::filesystem;
+  const std::string verb = argv[2];
+  if (verb == "inspect" || verb == "verify" || verb == "extract") {
+    if ((verb == "extract" && argc != 5) || (verb != "extract" && argc != 4))
+      throw std::runtime_error("usage: sputnik pkg " + verb +
+                               " artifact.sputnikpkg" +
+                               (verb == "extract" ? " destination" : ""));
+    const auto info = verb == "extract"
+                          ? sputnik::pkg::extract_distribution(argv[3], argv[4])
+                          : sputnik::pkg::inspect_distribution(argv[3]);
+    std::cout << sputnik::pkg::distribution_to_json(info);
+    return 0;
+  }
+  if (argc < 4)
+    throw std::runtime_error(
+        "pkg build requires a source directory or manifest");
+  auto input = fs::absolute(argv[3]);
+  if (fs::is_directory(input) && !fs::exists(input / "sputnik.toml")) {
+    fs::path selected;
+    for (const auto *name :
+         {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"}) {
+      if (!fs::is_regular_file(input / name))
+        continue;
+      if (!selected.empty())
+        throw std::runtime_error(
+            "ambiguous build manifests in package directory");
+      selected = input / name;
+    }
+    if (!selected.empty())
+      input = selected;
+  }
+  fs::path output;
+  std::string version;
+  sputnik::pkg::DistributionBuildOptions options;
+  fs::path compiler(argv[0]);
+  if (!fs::exists(compiler) && !compiler.has_parent_path()) {
+    std::istringstream paths(std::getenv("PATH") ? std::getenv("PATH") : "");
+    std::string directory;
+    while (std::getline(paths, directory, ':')) {
+      const auto candidate = fs::path(directory) / compiler;
+      if (::access(candidate.c_str(), X_OK) == 0) {
+        compiler = candidate;
+        break;
+      }
+    }
+  }
+  options.toolchain_revision =
+      sputnik::pkg::file_sha256(fs::canonical(compiler));
+  for (int i = 4; i < argc; ++i) {
+    const std::string flag = argv[i];
+    if (i + 1 >= argc)
+      throw std::runtime_error("missing value for " + flag);
+    const std::string value = argv[++i];
+    if (flag == "--out")
+      output = fs::absolute(value);
+    else if (flag == "--version")
+      version = value;
+    else if (flag == "--variant")
+      options.variant = value;
+    else if (flag == "--modules")
+      options.module_mode = value;
+    else if (flag == "--bytecode-module")
+      options.bytecode_modules.insert(value);
+    else
+      throw std::runtime_error("unknown pkg build option: " + flag);
+  }
+  if (output.empty())
+    throw std::runtime_error("pkg build requires --out <artifact.sputnikpkg>");
+  if (fs::weakly_canonical(output) == fs::canonical(input) ||
+      (fs::is_directory(input) &&
+       fs::weakly_canonical(output) == fs::canonical(input) / "sputnik.toml"))
+    throw std::runtime_error(
+        "package output would overwrite its input manifest");
+  const auto root = fs::is_directory(input)
+                        ? fs::canonical(input)
+                        : fs::canonical(input.parent_path());
+  sputnik::pkg::PackageManifest manifest;
+  if (fs::is_directory(input))
+    manifest = sputnik::pkg::read_source_package(input).manifest;
+  else if (input.extension() == ".toml") {
+    const auto parsed = sputnik::pkg::parse_manifest_toml(
+        read_file(input.string()), input.string());
+    if (!parsed.ok())
+      throw std::runtime_error(
+          package_diagnostics_to_string(parsed.diagnostics));
+    manifest = parsed.manifest;
+  } else {
+    const auto parsed = sputnik::build::parse_build_manifest(
+        read_file(input.string()), input.string());
+    if (!parsed.ok())
+      throw std::runtime_error(
+          sputnik::build::diagnostics_to_string(parsed.diagnostics));
+    if (!parsed.manifest.stdlib_modules.empty() ||
+        !parsed.manifest.profiles.numeric_int.empty() ||
+        !parsed.manifest.profiles.numeric_overflow.empty() ||
+        !parsed.manifest.profiles.forbidden_features.empty() ||
+        std::any_of(parsed.manifest.profiles.required_features.begin(),
+                    parsed.manifest.profiles.required_features.end(),
+                    [](const auto &feature) { return feature != "core.v1" && feature != "ffi.v1"; }))
+      throw std::runtime_error("distribution build requires an explicit "
+                               "package manifest for build-only profiles");
+    manifest.name = parsed.manifest.name;
+    manifest.version = "local";
+    manifest.root_module = parsed.manifest.root_module;
+    manifest.native_extensions = parsed.manifest.native_extensions;
+    manifest.dependencies = parsed.manifest.dependencies;
+    for (const auto &m : parsed.manifest.modules)
+      manifest.modules.push_back({m.name, m.path});
+  }
+  if (!version.empty())
+    manifest.version = version;
+  if (manifest.version.empty() || manifest.version == "local")
+    throw std::runtime_error(
+        "pkg build requires a manifest package version or --version");
+  // Compile with stable package-relative paths. Diagnostics/bytecode must not
+  // encode the caller's working directory or a temporary staging path.
+  for (auto &module : manifest.modules) {
+    if (fs::path(module.path).is_absolute()) {
+      const auto relative = fs::canonical(module.path).lexically_relative(root);
+      if (relative.empty() || *relative.begin() == "..")
+        throw std::runtime_error("module escapes package root");
+      module.path = relative.generic_string();
+    }
+  }
+  const auto previous = fs::current_path();
+  struct Restore {
+    fs::path path;
+    ~Restore() { fs::current_path(path); }
+  } restore{previous};
+  fs::current_path(root);
+  sputnik::macros::MacroProviderMap providers;
+  for (const auto &module : manifest.modules) {
+    if (module.representation == "bytecode")
+      continue;
+    auto exports = harvest_macro_exports(read_file(module.path), module.path);
+    if (!exports.empty())
+      providers[module.name] = std::move(exports);
+  }
+  if (options.module_mode == "mixed" && options.bytecode_modules.empty())
+    for (const auto &module : manifest.modules)
+      if (module.name != manifest.root_module && !providers.count(module.name))
+        options.bytecode_modules.insert(module.name);
+  options.compile = [&](const sputnik::pkg::PackageModule &module) {
+    if (providers.count(module.name))
+      throw std::runtime_error("macro-provider module must retain source: " +
+                               module.name);
+    return compile_source_to_bytecode(module.path, module.name,
+                                      manifest.capabilities, &providers);
+  };
+  std::cout << sputnik::pkg::distribution_to_json(
+      sputnik::pkg::build_distribution(manifest, root, output, options));
+  return 0;
+}
+
+int run_pkg_command(int argc, char **argv) {
+  namespace fs = std::filesystem;
+  if (argc >= 3 && (std::string(argv[2]) == "login" || std::string(argv[2]) == "whoami" ||
+                    std::string(argv[2]) == "logout" || std::string(argv[2]) == "publish" ||
+                    std::string(argv[2]) == "versions" || std::string(argv[2]) == "variants"))
+    return sputnik::pkg::registry_command(argc, argv);
+  if (argc >= 3 && (std::string(argv[2]) == "build" || std::string(argv[2]) == "inspect" ||
+                    std::string(argv[2]) == "verify" || std::string(argv[2]) == "extract"))
+    return run_distribution_command(argc, argv);
+  if (argc == 3 && std::string(argv[2]) == "env") {
+    std::cout << "SPUTNIK_PKG_HOME=" << sputnik::pkg::package_home().string()
+              << '\n';
+    const auto *registry = std::getenv("SPUTNIK_PKG_REGISTRY");
+    std::cout << "SPUTNIK_PKG_REGISTRY="
+              << (registry && *registry ? registry : sputnik::pkg::default_registry) << '\n';
+    return 0;
+  }
+  if (argc >= 4 && (std::string(argv[2]) == "uninstall" ||
+                    std::string(argv[2]) == "remove")) {
+    std::string version, variant;
+    for (int i = 4; i < argc; ++i) {
+      const std::string arg = argv[i];
+      if (arg != "--version" && arg != "--variant")
+        throw std::runtime_error("unknown pkg " + std::string(argv[2]) +
+                                 " option: " + arg);
+      auto &value = arg == "--version" ? version : variant;
+      if (i + 1 >= argc || !value.empty())
+        throw std::runtime_error("pkg " + std::string(argv[2]) +
+                                 " accepts one --version value");
+      value = argv[++i];
+      if (value.empty())
+        throw std::runtime_error("--version requires a nonempty version");
+    }
+    const auto home = sputnik::pkg::package_home();
+    const auto removed = sputnik::pkg::uninstall_from_home(argv[3], home, version, variant);
+    for (const auto &item : removed)
+      std::cout << "Removed " << argv[3] << '@' << item << " from "
+                << home.string() << '\n';
+    return 0;
+  }
+  if (argc >= 4 && std::string(argv[2]) == "lock") {
+    const std::string path = argv[3];
+    const auto directory = fs::absolute(path).parent_path();
+    sputnik::pkg::PackageResolver resolver(directory,
+                                           sputnik::pkg::package_home(), false);
+    for (int i=4; i<argc; ++i) {
+      const std::string flag = argv[i];
+      if (i+1 >= argc) throw std::runtime_error("missing pkg lock option value");
+      const std::string value = argv[++i];
+      if (flag == "--backend" && (value == "cpu" || value == "cuda" || value == "mps")) resolver.prefer_backend(value);
+      else if (flag == "--variant") {
+        const auto equals = value.find('=');
+        if (equals == std::string::npos) throw std::runtime_error("pkg lock --variant requires ref=variant");
+        resolver.prefer_variant(value.substr(0,equals),value.substr(equals+1));
+      } else throw std::runtime_error("invalid pkg lock option: " + flag);
+    }
+    std::vector<sputnik::bytecode::GraphModule> modules;
+    std::string root;
+    if (is_sputnik_source_path(path)) {
+      const auto artifact =
+          compile_source_to_runnable_module(path, std::nullopt, {}, false);
+      root = artifact.module_name;
+      modules.push_back({root, path, artifact.module, false});
+    } else {
+      const auto parsed =
+          sputnik::build::parse_build_manifest(read_file(path), path);
+      if (!parsed.ok())
+        throw std::runtime_error(
+            sputnik::build::diagnostics_to_string(parsed.diagnostics));
+      root = parsed.manifest.root_module;
+      resolver.require(parsed.manifest.dependencies);
+      sputnik::build::BuildSummary summary;
+      const auto cache = vm_build_cache_root(directory);
+      build_manifest_modules(parsed.manifest, directory, cache / "out",
+                             cache / "cache", true, &summary);
+      modules = decode_native_graph_modules(summary);
+    }
+    resolve_graph_packages(&modules, root, &resolver);
+    const auto lock = directory / "sputnik.lock";
+    const auto temporary =
+        directory / (".sputnik.lock." + std::to_string(::getpid()));
+    write_file(temporary.string(), resolver.lockfile());
+    fs::rename(temporary, lock);
+    std::cout << "Locked " << resolver.selected().size() << " packages in "
+              << lock.string() << '\n';
+    return 0;
+  }
+  if (argc < 4 || std::string(argv[2]) != "install") {
+    usage(std::cerr);
+    return 2;
+  }
+  std::string requested_version, registry = sputnik::pkg::default_registry, signing_key, credentials;
+  sputnik::pkg::VariantPolicy policy;
+  bool allow_native_large = false;
+  bool explicit_registry = false;
+  std::string locked_file;
+  if (const auto *value = std::getenv("SPUTNIK_PKG_REGISTRY"))
+    if (*value) registry = value;
+  if (const auto *value = std::getenv("SPUTNIK_PKG_CREDENTIALS"))
+    credentials = value;
+  for (int i = 4; i < argc; ++i) {
+    const std::string arg = argv[i];
+    if (arg == "--allow-native") { policy.allow_native = true; continue; }
+    if (arg == "--build-from-source") { policy.build_from_source = true; continue; }
+    if (arg == "--allow-native-large") { allow_native_large = true; continue; }
+    if (i + 1 >= argc)
+      throw std::runtime_error("missing value for " + arg);
+    if (arg == "--version")
+      requested_version = argv[++i];
+    else if (arg == "--registry") {
+      registry = argv[++i]; explicit_registry = true;
+    }
+    else if (arg == "--signing-key")
+      signing_key = argv[++i];
+    else if (arg == "--credentials")
+      credentials = argv[++i];
+    else if (arg == "--variant") policy.variant = argv[++i];
+    else if (arg == "--backend") policy.backend = argv[++i];
+    else if (arg == "--bundle") policy.bundle = argv[++i];
+    else if (arg == "--locked") locked_file = argv[++i];
+    else
+      throw std::runtime_error("unknown pkg install option: " + arg);
+  }
+  if (policy.backend != "cpu" && policy.backend != "cuda" && policy.backend != "mps") throw std::runtime_error("invalid --backend");
+  if (policy.bundle != "none" && policy.bundle != "runtime" && policy.bundle != "sdk") throw std::runtime_error("invalid --bundle");
+  std::map<std::string, sputnik::pkg::PackagePin> pins;
+  std::map<std::string, sputnik::pkg::PackageNativeRequirement> native_constraints;
+  if (!locked_file.empty()) {
+    pins = sputnik::pkg::read_package_lock(locked_file);
+    auto pin = pins.find(argv[3]);
+    if (pin == pins.end()) throw std::runtime_error("package is missing from sputnik.lock; use its canonical reference");
+    if ((!requested_version.empty() && requested_version != pin->second.version) ||
+        (!policy.variant.empty() && policy.variant != pin->second.variant)) throw std::runtime_error("request differs from sputnik.lock");
+    requested_version = pin->second.version;
+    if (pin->second.source_kind != "registry" || pin->second.source.empty() || pin->second.variant.empty()) throw std::runtime_error("lock entry lacks registry source/variant; relock required");
+    if (explicit_registry && registry != pin->second.source) throw std::runtime_error("registry differs from sputnik.lock");
+    registry = pin->second.source;
+  }
+  const auto install_policy = [&](const std::string &name, bool root) {
+    auto selected = policy;
+    for (const auto &entry : native_constraints) if (entry.second.package == name) selected.native_requirements.push_back(entry.second);
+    if (!root) selected.variant.clear();
+    if (!locked_file.empty()) {
+      const auto pin = pins.find(name);
+      if (pin == pins.end() || pin->second.variant.empty() || pin->second.source != registry) throw std::runtime_error("dependency is missing/differs in sputnik.lock: " + name);
+      selected.variant = pin->second.variant;
+      selected.bundle = "auto";
+    }
+    return selected;
+  };
+  const auto home = sputnik::pkg::package_home();
+  if (credentials.empty() && sputnik::pkg::remote_registry(registry)) {
+    const auto saved = sputnik::pkg::registry_credentials(registry);
+    if (fs::exists(saved)) credentials = saved.string();
+  }
+  struct Downloads {
+    fs::path root;
+    ~Downloads() { if (!root.empty()) { std::error_code error; fs::remove_all(root, error); } }
+  } downloads;
+  const auto download = [&](const std::string &name, const std::string &version, bool root) {
+    if (downloads.root.empty()) {
+      auto pattern = (fs::temp_directory_path() / "sputnik-pkg-XXXXXX").string();
+      const auto temporary = ::mkdtemp(pattern.data());
+      if (!temporary) throw std::runtime_error("cannot create package download directory");
+      downloads.root = temporary;
+    }
+    const auto pin = pins.find(name);
+    return sputnik::pkg::download_registry_package(registry, name, version, downloads.root, credentials,
+        install_policy(name,root), pin == pins.end() ? "" : pin->second.digest, allow_native_large);
+  };
+  std::map<std::string, std::string> installed;
+  std::set<std::string> installing;
+  std::function<void(fs::path, const std::string &, const std::string &)>
+      install = [&](fs::path artifact_path, const std::string &expected_name,
+                    const std::string &expected_version) {
+        auto package = sputnik::pkg::read_package(artifact_path, signing_key);
+        if ((!expected_name.empty() &&
+             package.manifest.name != expected_name) ||
+            (!expected_version.empty() &&
+             package.manifest.version != expected_version))
+          throw std::runtime_error(
+              "registry artifact identity does not match requested package");
+        const auto &name = package.manifest.name;
+        for (const auto &r : package.manifest.native_requirements) {
+          const auto key = r.kind + ":" + r.id;
+          const auto found = native_constraints.find(key);
+          if (found != native_constraints.end() && (found->second.version != r.version || found->second.abi != r.abi ||
+              (!found->second.build_id.empty() && !r.build_id.empty() && found->second.build_id != r.build_id)))
+            throw std::runtime_error("NATIVE_ABI_CONFLICT: " + r.id + " requires incompatible technical dependencies");
+          if (found == native_constraints.end()) native_constraints.emplace(key,r);
+        }
+        const auto selected_policy = install_policy(name, expected_name == argv[3] || (installed.empty() && installing.empty()));
+        const auto incompatible = sputnik::pkg::package_incompatibility(package.manifest, sputnik::pkg::probe_package_host(selected_policy.backend == "cuda" || package.manifest.target.compute_backend == "cuda"), selected_policy);
+        if (!package.artifact && !incompatible.empty()) throw std::runtime_error("NO_COMPATIBLE_ARTIFACT: " + incompatible);
+        const auto pin = pins.find(name);
+        if (pin != pins.end() && (pin->second.version != package.manifest.version || pin->second.variant != package.manifest.variant || pin->second.digest != package.digest))
+          throw std::runtime_error("artifact differs from sputnik.lock: " + name);
+        const auto done = installed.find(name);
+        if (done != installed.end()) {
+          if (done->second != package.manifest.version)
+            throw std::runtime_error("conflicting dependency versions for " +
+                                     name);
+          return;
+        }
+        if (!installing.insert(name).second)
+          throw std::runtime_error("package dependency cycle: " + name);
+        auto dependencies = package.manifest.dependencies;
+        dependencies.insert(dependencies.end(), package.manifest.artifact_dependencies.begin(), package.manifest.artifact_dependencies.end());
+        for (const auto &dependency : dependencies) {
+          fs::path dependency_path;
+          std::string dependency_name = dependency.name;
+          try {
+            dependency_path = sputnik::pkg::find_registry_package(
+                home, dependency.name, dependency.version, install_policy(dependency.name,false));
+          } catch (const std::exception &) {
+            if (sputnik::pkg::remote_registry(registry)) {
+              auto fetched = download(dependency.name, dependency.version,false);
+              dependency_path = fetched.path;
+              dependency_name = fetched.canonical_ref;
+            } else dependency_path = sputnik::pkg::find_registry_package(
+                  registry, dependency.name, dependency.version, install_policy(dependency.name,false));
+          }
+          if (!dependency.checksum.empty()) {
+            const auto candidate = sputnik::pkg::read_package(dependency_path, signing_key);
+            if (!candidate.artifact && candidate.digest != dependency.checksum)
+              throw std::runtime_error("package dependency checksum differs: " + dependency.name);
+          }
+          install(dependency_path, dependency_name, dependency.version);
+        }
+        const auto prepare = [&](const fs::path &directory) {
+          auto prepared_package = package;
+          prepared_package.directory = directory;
+          const auto module = package_native_metadata(prepared_package);
+          const auto prepared = sputnik::pkg::prepare_native_providers(
+              prepared_package.manifest, directory, fs::absolute(directory / ".native"));
+          const auto extensions = augment_native_extensions_from_source(
+              prepared, module);
+          const auto library = compile_and_load_native_extensions(
+              argv[0], extensions, module, directory,
+              directory / ".native", nullptr, true);
+          const auto descriptor =
+              native_target_triple() + "\n" +
+              library.lexically_relative(directory).generic_string() +
+              "\n" + sputnik::lexer::sha256_hex(read_file(library.string())) +
+              "\n";
+          write_file((directory / "native-library.meta").string(),
+                     descriptor);
+          sputnik::pkg::record_prepared_native(prepared_package);
+        };
+        artifact_path = sputnik::pkg::install_in_home(artifact_path, home, signing_key,
+              !downloads.root.empty() && artifact_path.parent_path() == downloads.root ? registry : "",
+              !package.artifact && !package.manifest.native_extensions.empty() ? std::function<void(const fs::path &)>(prepare) : std::function<void(const fs::path &)>{});
+        package = sputnik::pkg::read_package(artifact_path, signing_key);
+        if (package.artifact && !package.manifest.native_extensions.empty()) prepare(package.directory);
+        installing.erase(name);
+        installed[name] = package.manifest.version;
+        std::cout << "Installed " << name << '@' << package.manifest.version
+                  << " in " << package.directory.string() << '\n';
+      };
+  fs::path input(argv[3]);
+  if (fs::is_directory(input)) {
+    auto source = sputnik::pkg::read_source_package(input);
+    if (source.manifest.version == "local") {
+      if (requested_version.empty())
+        throw std::runtime_error(
+            "installing a build-manifest directory requires --version");
+      source.manifest.version = requested_version;
+    } else if (!requested_version.empty() &&
+               source.manifest.version != requested_version)
+      throw std::runtime_error(
+          "source manifest version does not match --version");
+    sputnik::macros::MacroProviderMap providers;
+    for (const auto &module : source.manifest.modules) {
+      auto exports = harvest_macro_exports(
+          read_file((source.directory / module.path).string()), module.path);
+      if (!exports.empty())
+        providers[module.name] = std::move(exports);
+    }
+    std::vector<sputnik::pkg::PackageModuleBlob> blobs;
+    for (const auto &module : source.manifest.modules)
+      blobs.push_back(
+          {module.name,
+           module.path,
+           {},
+           compile_source_to_bytecode((source.directory / module.path).string(),
+                                      module.name, source.manifest.capabilities,
+                                      &providers)});
+    sputnik::pkg::PackageBuildOptions options;
+    options.target_triple = native_target_triple();
+    options.native_blobs = collect_native_blobs(
+        source.manifest.native_extensions, source.directory.string());
+    const auto built =
+        sputnik::pkg::build_package_artifact(source.manifest, blobs, options);
+    if (!built.ok)
+      throw std::runtime_error(
+          package_diagnostics_to_string(built.diagnostics));
+    fs::create_directories(home);
+    const auto temporary =
+        home / (".install-" + std::to_string(::getpid()) + ".sputnikpkg");
+    write_file(temporary.string(), built.serialized);
+    try {
+      install(temporary, source.manifest.name, source.manifest.version);
+    } catch (...) {
+      fs::remove(temporary);
+      throw;
+    }
+    fs::remove(temporary);
+  } else if (fs::is_regular_file(input))
+    install(input, {}, requested_version);
+  else {
+    if (input.is_absolute() || (input.has_parent_path() && !sputnik::pkg::registry_reference(argv[3])) || input == "." ||
+        input == ".." || input.extension() == ".sputnikpkg" || fs::exists(input))
+      throw std::runtime_error(
+          "local package directory or artifact does not exist or is not a regular file: " + input.string());
+    if (sputnik::pkg::remote_registry(registry)) {
+      const auto fetched = download(argv[3], requested_version,true);
+      install(fetched.path, fetched.canonical_ref, fetched.version);
+    } else install(sputnik::pkg::find_registry_package(registry, argv[3],
+                                                requested_version, policy),
+            argv[3], requested_version);
+  }
+  return 0;
 }
 
 int run_command(int argc, char **argv) {
@@ -28471,6 +29609,10 @@ int run_command(int argc, char **argv) {
   if (is_sputnik_source_path(input_path)) {
     const RunnableModuleArtifact artifact = compile_source_to_runnable_module(
         input_path, std::nullopt, options.capability_grants);
+    ScopedNativeExtensionLibraries libraries;
+    load_installed_package_extensions(argv[0], artifact.package_locations, options.capability_grants, &libraries);
+    load_source_package_extensions(argv[0], artifact.package_locations, options.capability_grants,
+        std::filesystem::absolute(input_path).parent_path(), &libraries);
     return run_runnable_module(
         artifact.module_name, artifact.entry_mode, artifact.bytes,
         artifact.has_entry_main_code_id
@@ -28488,14 +29630,31 @@ int run_command(int argc, char **argv) {
     }
     const EntryExecutionMode entry_mode =
         default_entry_mode_for(true, decoded.module);
-    const sputnik::bytecode::BcMethod *main_method =
-        zero_arg_method_by_name(decoded.module, "main");
+    RunnableModuleArtifact raw;
+    raw.module_name = input_path;
+    for (const auto &attr : decoded.module.attrs) {
+      const auto &key = decoded.module.strings.at(attr.key_str_id);
+      if (key == "sputnik.build.module" || key == "sputnik.entry.module")
+        raw.module_name = decoded.module.strings.at(attr.value_str_id);
+    }
+    raw.entry_mode = entry_mode;
+    raw.module = std::move(decoded.module);
+    raw.bytes = sputnik::bytecode::serialize_module(raw.module);
+    raw.capability_grants = options.capability_grants;
+    if (const auto *main = zero_arg_method_by_name(raw.module, "main")) {
+      raw.has_entry_main_code_id = true;
+      raw.entry_main_code_id = main->entry_code_id;
+    }
+    const auto artifact = resolve_runnable_packages(std::move(raw), input_path);
+    ScopedNativeExtensionLibraries libraries;
+    load_installed_package_extensions(argv[0], artifact.package_locations, options.capability_grants, &libraries);
+    load_source_package_extensions(argv[0], artifact.package_locations, options.capability_grants,
+        std::filesystem::absolute(input_path).parent_path(), &libraries);
     return run_runnable_module(
-        input_path, entry_mode,
-        sputnik::bytecode::serialize_module(decoded.module),
-        main_method == nullptr
+        artifact.module_name, artifact.entry_mode, artifact.bytes,
+        !artifact.has_entry_main_code_id
             ? std::nullopt
-            : std::optional<std::uint32_t>(main_method->entry_code_id),
+            : std::optional<std::uint32_t>(artifact.entry_main_code_id),
         options.capability_grants);
   }
 
@@ -28505,10 +29664,6 @@ int run_command(int argc, char **argv) {
     std::cerr << sputnik::build::diagnostics_to_string(parsed.diagnostics);
     return 1;
   }
-  const bool load_native_extensions =
-      !parsed.manifest.native_extensions.empty() &&
-      native_extension_grants_present(options.capability_grants);
-
   const std::filesystem::path manifest_dir =
       std::filesystem::path(dirname(input_path));
   const std::filesystem::path vm_cache_root =
@@ -28527,6 +29682,10 @@ int run_command(int argc, char **argv) {
   summary.profiles = parsed.manifest.profiles;
   build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
                          true, &summary);
+  auto graph_modules = decode_native_graph_modules(summary);
+  sputnik::pkg::PackageResolver package_resolver(std::filesystem::absolute(input_path).parent_path());
+  package_resolver.require(parsed.manifest.dependencies);
+  resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver);
 
   const sputnik::build::BuildArtifactRecord *root_record = nullptr;
   for (const sputnik::build::BuildArtifactRecord &artifact : summary.artifacts) {
@@ -28539,8 +29698,11 @@ int run_command(int argc, char **argv) {
     throw std::runtime_error("root build artifact is missing: " +
                              parsed.manifest.root_module);
   }
-  const std::string graph_key = vm_graph_cache_key(
-      summary, parsed.manifest.root_module, options.capability_grants);
+  std::string package_cache_material = package_resolver.lockfile();
+  for (const auto &package : package_resolver.selected())
+    package_cache_material += "\n" + package.directory.string();
+  const std::string graph_key = sputnik::lexer::sha256_hex(vm_graph_cache_key(
+      summary, parsed.manifest.root_module, options.capability_grants) + package_cache_material);
   const std::filesystem::path graph_path =
       vm_cache_root / "graph" / (graph_key + ".sputnikbc");
   const std::filesystem::path graph_metadata_path =
@@ -28563,7 +29725,7 @@ int run_command(int argc, char **argv) {
               entry_main_code_id >> graph_module_count) ||
             (has_entry_main_code_id != 0 && has_entry_main_code_id != 1) ||
             graph_module_count == 0U ||
-            graph_module_count > summary.artifacts.size()) {
+            graph_module_count > graph_modules.size()) {
           throw std::runtime_error("invalid cached VM graph metadata");
         }
         const EntryExecutionMode entry_mode =
@@ -28591,7 +29753,7 @@ int run_command(int argc, char **argv) {
     }
     const EntryExecutionMode entry_mode =
         default_entry_mode_for(true, root_decoded.module);
-    linked_graph = link_native_graph(decode_native_graph_modules(summary),
+    linked_graph = link_native_graph(graph_modules,
                                      parsed.manifest.root_module, entry_mode,
                                      options.capability_grants);
     if (!linked_graph.ok) {
@@ -28611,15 +29773,28 @@ int run_command(int argc, char **argv) {
   }
 
   ScopedNativeExtensionLibraries loaded_libraries;
-  if (load_native_extensions) {
+  load_installed_package_extensions(argv[0], package_resolver.selected(), options.capability_grants, &loaded_libraries);
+  load_source_package_extensions(argv[0], package_resolver.selected(), options.capability_grants,
+      manifest_dir, &loaded_libraries);
+  if (!parsed.manifest.native_extensions.empty() && native_extension_grants_present(options.capability_grants)) {
+    sputnik::bytecode::BcModule application_metadata;
+    for (const auto &module : graph_modules) {
+      if (std::none_of(summary.artifacts.begin(), summary.artifacts.end(),
+          [&](const auto &entry) { return entry.name == module.name; })) continue;
+      for (const auto &attr : module.module.attrs) {
+        const auto &key = module.module.strings.at(attr.key_str_id);
+        if (key.rfind("sputnik.native.", 0) == 0)
+          add_module_attr(&application_metadata, key, module.module.strings.at(attr.value_str_id));
+      }
+    }
     const std::vector<sputnik::pkg::PackageNativeExtension> native_extensions =
         augment_native_extensions_from_source(
-            parsed.manifest.native_extensions, linked_graph.artifact.module);
+            parsed.manifest.native_extensions, application_metadata);
     require_native_extension_grants(native_extensions,
-                                    linked_graph.artifact.module,
+                                    application_metadata,
                                     options.capability_grants);
     compile_and_load_native_extensions(
-        argv[0], native_extensions, linked_graph.artifact.module, manifest_dir,
+        argv[0], native_extensions, application_metadata, manifest_dir,
         native_extension_cache_root(manifest_dir), &loaded_libraries);
   }
 
@@ -28916,6 +30091,7 @@ int main(int argc, char **argv) {
     if (argc >= 2 && std::string(argv[1]) == "run") {
       return run_command(argc, argv);
     }
+    if (argc >= 2 && std::string(argv[1]) == "pkg") return run_pkg_command(argc, argv);
     if (argc == 2 && is_sputnik_source_path(argv[1])) {
       return run_source_file_command(argv[1]);
     }

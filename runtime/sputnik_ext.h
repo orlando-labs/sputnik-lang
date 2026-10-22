@@ -43,7 +43,8 @@ typedef struct SputnikValueObj *SputnikValue;
  * recorded via sputnik_fault (or a propagating exception is pending). */
 typedef enum SputnikStatus {
   SPUTNIK_OK = 0,
-  SPUTNIK_ERR = 1
+  SPUTNIK_ERR = 1,
+  SPUTNIK_BREAK = 2
 } SputnikStatus;
 
 /* ---- value predicates (1 = yes, 0 = no) -------------------------------- */
@@ -107,6 +108,16 @@ SputnikStatus sputnik_fault(SputnikCtx *cx, const char *error_class,
 SputnikStatus sputnik_call_block(SputnikCtx *cx, SputnikValue block,
                              const SputnikValue *args, size_t argc,
                              SputnikValue *out);
+
+/* Ruby callback boundary. A foreign break is returned separately from ordinary
+ * return and exception propagation. SPUTNIK_BREAK sets *out to its raw value.
+ * Call only for blocks passed to an active Ruby invocation. */
+SputnikStatus sputnik_call_ruby_block(SputnikCtx *cx, SputnikValue block,
+    const SputnikValue *args, size_t argc, SputnikValue *out);
+int sputnik_ruby_callback_active(void);
+/* Minimum positional parameters for a block, or -1 for other callables.
+ * Used by foreign adapters to implement their own argument binding rules. */
+int64_t sputnik_block_required_args(SputnikCtx *cx, SputnikValue block);
 
 /* True when the logical Sputnik task executing this thunk has been cancelled.
  * Blocking thunks should poll this at bounded intervals and return a

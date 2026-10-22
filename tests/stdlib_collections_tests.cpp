@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <string>
 #include <utility>
@@ -942,25 +943,51 @@ void test_std002_range_exclusive_and_open_end_edges() {
 }
 
 void test_std002_int_times() {
-  const sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  sputnik::bytecode::BcModule module = make_sequence_protocol_module();
+  module.code_objects.push_back(
+      make_send_code(46, symbol_id_or_die(module, "each"), false));
   const sputnik::runtime::Value inc = make_closure_value(100);
 
   sputnik::runtime::ExecutionResult result =
       sputnik::runtime::execute_code(module, 42,
                                    {sputnik::runtime::Value::integer(5)});
   expect_ok(result, "Int#times enumerable");
+  expect(!result.value.is_list(),
+         "Int#times must not materialize an array");
+  const sputnik::runtime::Value times = result.value;
+  result = sputnik::runtime::execute_code(module, 41, {times});
+  expect_ok(result, "Int#times to_array");
+  expect_integer_list(result.value, {0, 1, 2, 3, 4}, "Int#times to_array");
+
+  result = sputnik::runtime::execute_code(module, 1, {times, inc});
+  expect_ok(result, "Int#times each with block");
   expect_integer_list(result.value, {0, 1, 2, 3, 4},
-                      "Int#times enumerable");
+                      "Int#times each returns indices, not block results");
+
+  result = sputnik::runtime::execute_code(module, 46, {times});
+  expect_ok(result, "Int#times each without block");
+  expect_integer_list(result.value, {0, 1, 2, 3, 4},
+                      "Int#times each materializes indices");
+
+  result = sputnik::runtime::execute_code(module, 2, {times, inc});
+  expect_ok(result, "Int#times map");
+  expect_integer_list(result.value, {1, 2, 3, 4, 5}, "Int#times map");
 
   result = sputnik::runtime::execute_code(module, 42,
                                         {sputnik::runtime::Value::integer(0)});
   expect_ok(result, "zero Int#times enumerable");
-  expect_integer_list(result.value, {}, "zero Int#times enumerable");
+  expect(!result.value.is_list(), "zero Int#times stays lazy");
+  result = sputnik::runtime::execute_code(module, 41, {result.value});
+  expect_ok(result, "zero Int#times to_array");
+  expect_integer_list(result.value, {}, "zero Int#times to_array");
 
   result = sputnik::runtime::execute_code(module, 42,
                                         {sputnik::runtime::Value::integer(-3)});
   expect_ok(result, "negative Int#times enumerable");
-  expect_integer_list(result.value, {}, "negative Int#times enumerable");
+  expect(!result.value.is_list(), "negative Int#times stays lazy");
+  result = sputnik::runtime::execute_code(module, 41, {result.value});
+  expect_ok(result, "negative Int#times to_array");
+  expect_integer_list(result.value, {}, "negative Int#times to_array");
 
   result = sputnik::runtime::execute_code(module, 43,
                                         {sputnik::runtime::Value::integer(3),
@@ -968,13 +995,25 @@ void test_std002_int_times() {
   expect_ok(result, "direct block Int#times");
   expect(result.value.is_null(), "direct block Int#times returns null");
 
-  const sputnik::runtime::Value times =
-      sputnik::runtime::make_list_value({sputnik::runtime::Value::integer(0),
-                                       sputnik::runtime::Value::integer(1),
-                                       sputnik::runtime::Value::integer(2)});
-  result = sputnik::runtime::execute_code(module, 2, {times, inc});
-  expect_ok(result, "times map equivalent");
-  expect_integer_list(result.value, {1, 2, 3}, "times map equivalent");
+  for (const std::int64_t count : {std::int64_t{0}, std::int64_t{-3},
+                                  std::numeric_limits<std::int64_t>::min()}) {
+    result = sputnik::runtime::execute_code(
+        module, 43, {sputnik::runtime::Value::integer(count),
+                     make_closure_value(107)});
+    expect_ok(result, "nonpositive Int#times must not invoke block");
+    expect(result.value.is_null(), "nonpositive Int#times returns null");
+  }
+
+  // Neither constructing the enumerable nor entering the first iterations
+  // may allocate storage proportional to the count.
+  const auto huge = sputnik::runtime::Value::integer(
+      std::numeric_limits<std::int64_t>::max());
+  result = sputnik::runtime::execute_code(module, 42, {huge});
+  expect_ok(result, "huge Int#times enumerable");
+  expect(!result.value.is_list(), "huge Int#times stays lazy");
+  result = sputnik::runtime::execute_code(
+      module, 43, {huge, make_closure_value(107)});
+  expect_fault(result, "Boom", "huge Int#times reaches block without allocation");
 }
 
 void test_std003_lazy_pipeline_and_materialization() {

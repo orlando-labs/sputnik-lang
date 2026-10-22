@@ -10,6 +10,7 @@
 #include "frontend/ast/expr.h"
 #include "runtime/macro_expander.h"
 #include "runtime/value_display.h"
+#include "tools/isputnik/result_table.h"
 #include "runtime/context.h"
 #include "runtime/stdlib_registry.h"
 
@@ -41,6 +42,7 @@ struct SessionBackend {
   std::shared_ptr<const sputnik::bytecode::BcModule> environment_image;
   std::map<std::string, std::string> ambient_constant_paths;
   std::map<std::string, std::map<std::string, std::string>> import_paths;
+  sputnik::frontend::ImportAliases import_aliases;
   std::vector<BundledModuleSource> bundled_sources;
   // The curses session and its progress callbacks run on the UI thread.
   // These flags prevent recursive pumping there; they are not a cross-thread
@@ -665,6 +667,24 @@ void append_compile_diagnostics(
   }
 }
 
+bool has_package_imports(const std::vector<sputnik::notebook::CellSource> &sources) {
+  sputnik::runtime::RuntimeModuleRegistry modules;
+  sputnik::runtime::RuntimeDispatchRegistry dispatch;
+  sputnik::runtime::RuntimeTypeRegistry types;
+  sputnik::runtime::register_builtin_runtime_modules(modules, dispatch, types);
+  sputnik::runtime::register_core_prelude_bindings(modules);
+  sputnik::runtime::register_legacy_native_type_paths(modules);
+  for (const auto &source : sources) {
+    const auto analysis = sputnik::notebook::analyze_cell(source);
+    for (const auto &item : analysis.items) {
+      if (!item || item->kind != "AstImportStmt") continue;
+      for (const auto &field : item->string_fields)
+        if (field.name == "module_path" && !modules.has_namespace(field.value)) return true;
+    }
+  }
+  return false;
+}
+
 struct BackendBuildResult {
   std::unique_ptr<SessionBackend> backend;
   std::size_t error_index = 0;
@@ -697,6 +717,7 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
     candidate->environment_image = environment->image;
     candidate->ambient_constant_paths = environment->ambient_constant_paths;
     candidate->import_paths = environment->import_paths;
+    candidate->import_aliases = environment->import_aliases;
     for (const auto &entry : candidate->ambient_constant_paths)
       ambient_names.insert(entry.first);
   }
@@ -733,6 +754,7 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
     }
     options.module_name = "isputnik.notebook";
     options.import_paths = candidate->import_paths;
+    options.import_aliases = candidate->import_aliases;
     options.ambient_constant_paths.insert(
         candidate->ambient_constant_paths.begin(),
         candidate->ambient_constant_paths.end());
@@ -837,9 +859,23 @@ std::size_t cell_index_for_id(const std::vector<Cell> &cells,
              : static_cast<std::size_t>(std::distance(cells.begin(), found));
 }
 
+std::shared_ptr<const sputnik::runtime::NotebookImageInputs> image_inputs_for_cell(const Session &session) {
+  auto result = std::make_shared<sputnik::runtime::NotebookImageInputs>();
+  if (session.project_images) *result = *session.project_images;
+  for (const auto &cell : session.cells) for (const auto &images : cell.images) {
+    const auto found = result->find(images.id);
+    if (found == result->end()) continue;
+    found->second.images = images.images; found->second.caption = images.caption;
+  }
+  return result;
+}
+
 EvalView evaluate_backend_cell(SessionBackend *backend,
                                sputnik::notebook::CellId id,
                                std::shared_ptr<const sputnik::runtime::NotebookInputSnapshot> project_inputs,
+                               std::shared_ptr<const sputnik::runtime::NotebookImageInputs> project_images,
+                               std::shared_ptr<const std::vector<sputnik::runtime::NotebookAudioComponent>> project_audio,
+                               std::shared_ptr<const sputnik::runtime::NotebookAudioInputs> audio_inputs,
                                const SessionOutputObserver &output_observer) {
   EvalView view;
   if (backend == nullptr || backend->kernel == nullptr ||
@@ -860,6 +896,9 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
       backend->world.get(), manifest->code_id, manifest->descriptors,
       manifest->cell_id);
   adapter.set_project_inputs(std::move(project_inputs));
+  adapter.set_project_images(std::move(project_images));
+  adapter.set_project_audio(std::move(project_audio));
+  adapter.set_audio_inputs(std::move(audio_inputs));
   sputnik::notebook::VmCellExecutionReport report;
   const std::shared_ptr<sputnik::runtime::RuntimeTextWriter> stdout_sink =
       sputnik::runtime::RuntimeTextWriter::cell_stream("stdout");
@@ -877,6 +916,9 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
   }
   view.output_events = merge_output_events(stdout_sink, stderr_sink);
   view.progress = std::move(report.progress);
+  view.charts = std::move(report.charts);
+  view.images = std::move(report.images);
+  view.audio = std::move(report.audio); view.audio_controls = std::move(report.audio_controls);
   if (!run.ok) {
     view.error = run.error.empty() ? "notebook cell failed" : run.error;
     return view;
@@ -888,6 +930,7 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
       backend->module.get(), &report.runtime_strings, &report.runtime_symbols);
   view.result = std::move(preview.text);
   view.result_format.truncated = preview.truncated;
+  view.result_format.table_json = notebook_result_table(report.value, backend->module.get(), &report.runtime_strings, &report.runtime_symbols);
   view.result_format.is_container = report.value.is_list() || report.value.is_map() ||
       report.value.is_tuple() || report.value.is_set();
   if (view.result_format.is_container) {
@@ -1035,7 +1078,7 @@ execute_automatic_plan(Session *session, SessionBackend *backend,
         progress(session, index);
       }
     }
-    EvalView view = evaluate_backend_cell(backend, step.id, session->project_inputs, session->output_observer);
+    EvalView view = evaluate_backend_cell(backend, step.id, session->project_inputs, image_inputs_for_cell(*session), session->project_audio, session->project_audio_inputs, session->output_observer);
     const bool ok = view.ok;
     apply_eval(session, index, std::move(view));
     if (!ok) {
@@ -1286,7 +1329,7 @@ void evaluate_rebuilt_backend(
         progress(session, index);
       }
     }
-    EvalView view = evaluate_backend_cell(active, step.id, session->project_inputs, session->output_observer);
+    EvalView view = evaluate_backend_cell(active, step.id, session->project_inputs, image_inputs_for_cell(*session), session->project_audio, session->project_audio_inputs, session->output_observer);
     if (!view.ok) {
       unavailable.insert(step.id);
     }
@@ -1309,7 +1352,8 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
                                   const std::string &source, bool *compiled_ok,
                                   const std::string &source_path = "<isputnik>",
                                   const std::string &module_name_override = {},
-                                  bool direct_source_mapping = false) {
+                                  bool direct_source_mapping = false,
+                                  Session *owner = nullptr) {
   EvalView view;
   if (compiled_ok != nullptr) {
     *compiled_ok = false;
@@ -1338,6 +1382,38 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
           ? module_name_override
           : (compiled.module_name.empty() ? "isputnik.session"
                                           : compiled.module_name);
+  if (owner) {
+    std::vector<std::string> imports;
+    const auto analysis = sputnik::notebook::analyze_cell({cells[end_index].id, source, source_path});
+    for (const auto &item : analysis.items) if (item && item->kind == "AstImportStmt")
+      for (const auto &field : item->string_fields) if (field.name == "module_path") imports.push_back(field.value);
+    sputnik::frontend::ImportAliases aliases;
+    try { aliases = sputnik::frontend::collect_import_aliases(analysis.items); }
+    catch (const std::exception &error) { view.error = error.what(); return view; }
+    const auto prepared = prepare_bundled_environment(owner->bundled_modules, imports, owner->package_search_directory, aliases);
+    if (!prepared.ok) {
+      for (const auto &diagnostic : prepared.diagnostics) view.error += diagnostic.message + "\n";
+      return view;
+    }
+    if (!prepared.modules.empty()) {
+      std::vector<sputnik::bytecode::GraphModule> modules;
+      for (const auto &module : prepared.modules) modules.push_back({module.id, module.path, module.module, false});
+      modules.push_back({module_name, source_path, compiled.module, false});
+      sputnik::runtime::RuntimeModuleRegistry native_modules;
+      sputnik::runtime::RuntimeDispatchRegistry native_dispatch;
+      sputnik::runtime::RuntimeTypeRegistry native_types;
+      sputnik::runtime::register_builtin_runtime_modules(native_modules, native_dispatch, native_types);
+      sputnik::runtime::register_core_prelude_bindings(native_modules);
+      sputnik::runtime::register_legacy_native_type_paths(native_modules);
+      auto linked = sputnik::bytecode::link_graph(modules, module_name,
+          [&](const auto &name) { return native_modules.has_namespace(name); }, prepared.import_aliases);
+      if (!linked.ok) {
+        for (const auto &diagnostic : linked.diagnostics) view.error += diagnostic.message + "\n";
+        return view;
+      }
+      compiled.module = std::move(linked.module);
+    }
+  }
   sputnik::runtime::RuntimeModuleLoader loader;
   const std::vector<std::uint8_t> bytes =
       sputnik::bytecode::serialize_module(compiled.module);
@@ -1361,7 +1437,39 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
   sputnik::runtime::RuntimeModuleLoadResult initialized;
   {
     sputnik::runtime::RuntimeOutputScope output_scope(stdout_sink, stderr_sink);
-    initialized = loader.initialize_module(module_name);
+    if (owner) {
+      if (owner->output_observer) owner->output_observer(cells[end_index].id, stdout_sink, stderr_sink);
+      const auto store = sputnik::runtime::NotebookLiveScope::store();
+      if (store) store->reset_cell(cells[end_index].id);
+      sputnik::runtime::NotebookLiveScope live_scope(store, cells[end_index].id);
+      compiled.module.capabilities.insert(compiled.module.capabilities.end(),
+          owner->runtime_capability_grants.begin(), owner->runtime_capability_grants.end());
+      std::string error;
+      const auto image = verified_notebook_image(compiled.module, &error);
+      if (!image) { view.error = error; return view; }
+      if (owner->prepare_runtime) owner->prepare_runtime(*image);
+      sputnik::runtime::RuntimeWorldOptions options;
+      options.capability_grants = owner->runtime_capability_grants;
+      // Retain scratch module worlds through the worker's run drain, just
+      // like sheet backends. Child tasks and late output keep their owner.
+      owner->module_world = std::make_unique<sputnik::runtime::RuntimeWorld>(image, std::move(options));
+      const auto report = owner->module_world->execute(image->init.entry_code_id);
+      if (!report.ok()) {
+        view.error = "ModuleInitError: " + module_name + ": " + report.fault->error_name + ": " + report.fault->message;
+        for (const auto &frame : report.fault->trace) if (frame.file == source_path && frame.line > 0) {
+          CodeErrorRange range;
+          range.start_line = range.end_line = static_cast<int>(frame.line - 1);
+          range.start_column = zero_based_column(frame.column); range.end_column = range.start_column + 1;
+          view.error_ranges.push_back({end_index, range});
+        }
+        view.output_events = merge_output_events(stdout_sink, stderr_sink);
+        return view;
+      }
+      initialized.ok = initialized.has_execution_result = true;
+      initialized.value = report.value; initialized.locals = report.locals;
+      initialized.runtime_strings = report.runtime_strings; initialized.runtime_symbols = report.runtime_symbols;
+      initialized.watch_epoch = report.watch_epoch; initialized.watch_events = report.watch_events;
+    } else initialized = loader.initialize_module(module_name);
   }
   view.output_events = output_events_for_cell(
       merge_output_events(stdout_sink, stderr_sink), cells, end_index);
@@ -1386,6 +1494,7 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
       &compiled.module, &initialized.runtime_strings, &initialized.runtime_symbols);
   view.result = std::move(preview.text);
   view.result_format.truncated = preview.truncated;
+  view.result_format.table_json = notebook_result_table(initialized.value, &compiled.module, &initialized.runtime_strings, &initialized.runtime_symbols);
   view.result_format.is_container = initialized.value.is_list() || initialized.value.is_map() ||
       initialized.value.is_tuple() || initialized.value.is_set();
   if (view.result_format.is_container) {
@@ -1490,7 +1599,21 @@ bool evaluate_console_cells(
     session->status = "console source run failed: " + message;
     return false;
   };
-  const auto prepared = prepare_bundled_environment(bundled_sources, imports);
+  sputnik::frontend::ImportAliases aliases;
+  try {
+    for (std::size_t i = 0; i <= end; ++i) {
+      if (generated[i].kind != "code") continue;
+      const auto analysis = sputnik::notebook::analyze_cell(
+          {generated[i].id, generated[i].source, "<isputnik>"});
+      aliases.merge(sputnik::frontend::collect_import_aliases(analysis.items));
+    }
+    aliases.validate();
+  } catch (const std::exception &error) {
+    EvalView view;
+    view.error = error.what();
+    return fail(std::move(view), start);
+  }
+  const auto prepared = prepare_bundled_environment(bundled_sources, imports, session->package_search_directory, aliases);
   if (!prepared.ok) {
     EvalView view;
     for (const auto &diagnostic : prepared.diagnostics) {
@@ -1531,7 +1654,7 @@ bool evaluate_console_cells(
     sputnik::runtime::register_legacy_native_type_paths(native_modules);
     auto linked = sputnik::bytecode::link_graph(
         modules, compiled.module_name,
-        [&](const auto &name) { return native_modules.has_namespace(name); });
+        [&](const auto &name) { return native_modules.has_namespace(name); }, prepared.import_aliases);
     if (!linked.ok) {
       EvalView view;
       for (const auto &diagnostic : linked.diagnostics)
@@ -1659,6 +1782,7 @@ bool evaluate_console_cells(
         image.get(), &report.runtime_strings, &report.runtime_symbols);
     view.result = std::move(preview.text);
     view.result_format.truncated = preview.truncated;
+    view.result_format.table_json = notebook_result_table(found->value, image.get(), &report.runtime_strings, &report.runtime_symbols);
     view.result_format.is_container =
         found->value.is_list() || found->value.is_map() ||
         found->value.is_tuple() || found->value.is_set();
@@ -2030,6 +2154,7 @@ void apply_eval(Session *session, std::size_t index, EvalView view) {
   if (session == nullptr || index >= session->cells.size()) {
     return;
   }
+  if (session->execution_finished) session->execution_finished(session->cells[index].id);
   const std::vector<std::string> messages = error_lines(view.error);
   clear_error_ranges_until(session, index);
   for (std::size_t i = 0; i < view.error_ranges.size(); ++i) {
@@ -2060,6 +2185,10 @@ void apply_eval(Session *session, std::size_t index, EvalView view) {
   cell->locals = std::move(view.locals);
   cell->output_events = std::move(view.output_events);
   cell->progress = std::move(view.progress);
+  cell->charts = std::move(view.charts);
+  cell->images = std::move(view.images);
+  if (view.ok || !view.audio.empty()) cell->audio = std::move(view.audio);
+  cell->audio_controls = std::move(view.audio_controls);
   cell->watch_epoch = view.watch_epoch;
   cell->watch_event_count = view.watch_event_count;
   if (view.ok) {
@@ -2101,7 +2230,7 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
         session->cells, 0U, session->cells.front().source, nullptr,
         session->project_module_path.empty() ? "<isputnik-module>"
                                              : session->project_module_path,
-        session->project_module_id, true);
+        session->project_module_id, true, session);
     const bool ok = view.ok;
     apply_eval(session, 0U, std::move(view));
     session->status =
@@ -2155,7 +2284,7 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
 
   const std::vector<sputnik::notebook::CellSource> sources =
       notebook_sources(session->cells);
-  const bool composite = !session->bundled_modules.empty() ||
+  const bool composite = !session->bundled_modules.empty() || has_package_imports(sources) ||
       (session->backend != nullptr && session->backend->environment_image);
   if (composite && (session->backend == nullptr ||
                    !same_cell_sources(session->backend->sources, sources))) {
@@ -2244,7 +2373,7 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
         progress(session, i);
       }
     }
-    EvalView view = evaluate_backend_cell(session->backend.get(), id, session->project_inputs, session->output_observer);
+    EvalView view = evaluate_backend_cell(session->backend.get(), id, session->project_inputs, image_inputs_for_cell(*session), session->project_audio, session->project_audio_inputs, session->output_observer);
     const bool ok = view.ok;
     apply_eval(session, i, std::move(view));
     if (!ok) {
@@ -2344,10 +2473,12 @@ bool apply_bundled_environment(
     }
     next_sources = notebook_sources(next_cells);
     std::vector<std::string> explicit_imports;
+    sputnik::frontend::ImportAliases aliases;
     // Imports are compile-time, cell-local declarations. Native imports keep
     // their existing behavior; source modules become roots of this generation.
     for (const auto &source : next_sources) {
       const auto analysis = sputnik::notebook::analyze_cell(source);
+      aliases.merge(sputnik::frontend::collect_import_aliases(analysis.items));
       for (const auto &item : analysis.items) {
         if (item && item->kind == "AstImportStmt") {
           for (const auto &field : item->string_fields)
@@ -2356,7 +2487,7 @@ bool apply_bundled_environment(
       }
     }
     const BundledEnvironmentPreparation prepared =
-        prepare_bundled_environment(next_bundled, explicit_imports);
+        prepare_bundled_environment(next_bundled, explicit_imports, session->package_search_directory, aliases);
     if (!prepared.ok) {
       std::string message;
       for (const auto &error : prepared.diagnostics) {
@@ -2437,6 +2568,22 @@ void evaluate_from(Session *session, std::size_t start, bool force_all,
                    bool edit_mode, bool show_running) {
   (void)edit_mode;
   evaluate_from_with_progress(session, start, force_all, show_running, {});
+}
+
+void invalidate_project_input_changes(Session *session, const std::set<std::string> &keys) {
+  if (!session || keys.empty()) return;
+  if (session->evaluation_active) throw std::runtime_error("cannot change inputs during evaluation");
+  // The desktop host has presentation snapshots but no in-process kernel.
+  // Its isolated worker owns the precise dependency read set. Conservatively
+  // mark outputs stale here until that worker accepts the new input snapshot.
+  if (!session->backend) {
+    for (auto &cell : session->cells) if (cell.kind == "code") cell.dirty = true;
+    return;
+  }
+  for (const auto &step : session->backend->kernel->plan_input_changes(keys)) {
+    const auto index = cell_index_for_id(session->cells, step.id);
+    if (index < session->cells.size()) session->cells[index].dirty = true;
+  }
 }
 
 void apply_project_input_changes(Session *session, const std::set<std::string> &keys) {

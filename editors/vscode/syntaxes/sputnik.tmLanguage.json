@@ -42,7 +42,7 @@
     },
     "macro-definition": {
       "name": "meta.definition.macro.sputnik",
-      "begin": "^([ \\t]*)(?:(string_tag)\\s+)?(macro)\\s+(def)\\s+([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+      "begin": "^([ \\t]*)(?:(string_tag)\\s+)?(macro)\\s+(def)\\s+([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
       "end": "^(?!\\1[ \\t])(?!\\s*#)(?=\\s*\\S)",
       "beginCaptures": {
         "2": { "name": "storage.modifier.string-tag.sputnik" },
@@ -279,7 +279,7 @@
       "patterns": [
         {
           "name": "meta.function.reference.unbound.sputnik",
-          "match": "(&)((?:[\\p{L}_][\\p{L}\\p{N}_]*\\.)*[\\p{L}_][\\p{L}\\p{N}_]*)(#)([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+          "match": "(&)((?:[\\p{L}_][\\p{L}\\p{N}_]*\\.)*[\\p{L}_][\\p{L}\\p{N}_]*)(#)([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
           "captures": {
             "1": { "name": "keyword.operator.reference.sputnik" },
             "2": { "name": "entity.name.type.receiver.sputnik" },
@@ -289,7 +289,7 @@
         },
         {
           "name": "meta.function.reference.bound.sputnik",
-          "match": "(&)((?:[\\p{L}_][\\p{L}\\p{N}_]*\\.)+)([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+          "match": "(&)((?:[\\p{L}_][\\p{L}\\p{N}_]*\\.)+)([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
           "captures": {
             "1": { "name": "keyword.operator.reference.sputnik" },
             "2": { "name": "entity.name.namespace.sputnik" },
@@ -298,7 +298,7 @@
         },
         {
           "name": "meta.function.reference.binding.sputnik",
-          "match": "(&)([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+          "match": "(&)([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
           "captures": {
             "1": { "name": "keyword.operator.reference.sputnik" },
             "2": { "name": "entity.name.function.reference.sputnik" }
@@ -307,7 +307,7 @@
       ]
     },
     "definition-function": {
-      "match": "(?<![\\p{L}\\p{N}_])(def)(?![\\p{L}\\p{N}_?!])\\s+(\\[\\]=?|\\*\\*|//|<=>|===|=~|!~|==|!=|<=|>=|<<|>>|[-+*/%&|^<>]|[\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+      "match": "(?<![\\p{L}\\p{N}_])(def)(?![\\p{L}\\p{N}_?!])\\s+(\\[\\][=?]?|\\*\\*|//|<=>|===|=~|!~|==|!=|<=|>=|<<|>>|[-+*/%&|^<>]|[\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
       "captures": {
         "1": { "name": "storage.type.function.sputnik" },
         "2": { "name": "entity.name.function.sputnik" }
@@ -336,14 +336,14 @@
     "definition-property": {
       "patterns": [
         {
-          "match": "(?<![\\p{L}\\p{N}_])(prop|class_prop)(?![\\p{L}\\p{N}_?!])\\s+([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+          "match": "(?<![\\p{L}\\p{N}_])(prop|class_prop)(?![\\p{L}\\p{N}_?!])\\s+([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
           "captures": {
             "1": { "name": "storage.type.property.sputnik" },
             "2": { "name": "entity.name.function.property.sputnik" }
           }
         },
         {
-          "match": "(?<![\\p{L}\\p{N}_])(attr)(?![\\p{L}\\p{N}_?!])(?:\\s+(var|set)(?![\\p{L}\\p{N}_?!]))?\\s+([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+          "match": "(?<![\\p{L}\\p{N}_])(attr)(?![\\p{L}\\p{N}_?!])(?:\\s+(var|set)(?![\\p{L}\\p{N}_?!]))?\\s+([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
           "captures": {
             "1": { "name": "storage.type.property.sputnik" },
             "2": { "name": "storage.modifier.property.sputnik" },
@@ -353,25 +353,25 @@
       ]
     },
     "member-call": {
-      "match": "(?<=\\.)([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)(?=\\s*\\()",
+      "match": "(?<=\\.)([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.member.sputnik" }
       }
     },
     "member-access": {
-      "match": "(?<=\\.)([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+      "match": "(?<=\\.)([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
       "captures": {
         "1": { "name": "variable.other.member.sputnik" }
       }
     },
     "function-call": {
-      "match": "([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)(?=\\s*\\()",
+      "match": "([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)(?=\\s*\\()",
       "captures": {
         "1": { "name": "entity.name.function.call.sputnik" }
       }
     },
     "command-call": {
-      "match": "^\\s*((?!(?:and|attr|break|case!|case|catch|class|class_method|class_prop|def|do|elif|else|elsif|ensure|export|extend|false|from|if|import|in|include|loop|mixin|not|null|or|package|prop|raise|rescue|return|throw|true|try|unless|until|when|while)(?![\\p{L}\\p{N}_?!]))[\\p{L}_][\\p{L}\\p{N}_]*[?!]?)(?=\\s+(?:[\"'0-9:@$&\\[{]|true(?![\\p{L}\\p{N}_])|false(?![\\p{L}\\p{N}_])|null(?![\\p{L}\\p{N}_])))",
+      "match": "^\\s*((?!(?:and|attr|break|case!|case|catch|class|class_method|class_prop|def|do|elif|else|elsif|ensure|export|extend|false|from|if|import|in|include|loop|mixin|not|null|or|package|prop|raise|rescue|return|throw|true|try|unless|until|when|while)(?![\\p{L}\\p{N}_?!]))[\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)(?=\\s+(?:[\"'0-9:@$&\\[{]|true(?![\\p{L}\\p{N}_])|false(?![\\p{L}\\p{N}_])|null(?![\\p{L}\\p{N}_])))",
       "captures": {
         "1": { "name": "entity.name.function.call.sputnik" }
       }
@@ -436,7 +436,7 @@
       "patterns": [
         {
           "name": "keyword.operator.logical.sputnik",
-          "match": "(?<![\\p{L}\\p{N}_])(?:and|or|not)(?![\\p{L}\\p{N}_?!])"
+          "match": "(?<![\\p{L}\\p{N}_])(?:or=|(?:and|or|not)(?![\\p{L}\\p{N}_?!]))"
         },
         {
           "name": "keyword.operator.relational.sputnik",
@@ -468,16 +468,16 @@
       "patterns": [
         {
           "name": "variable.other.class.sputnik",
-          "match": "@@[\\p{L}_][\\p{L}\\p{N}_]*[?!]?"
+          "match": "@@[\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?"
         },
         {
           "name": "variable.other.member.sputnik",
-          "match": "@[\\p{L}_][\\p{L}\\p{N}_]*[?!]?"
+          "match": "@[\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?"
         }
       ]
     },
     "symbols": {
-      "match": "(:(?!:))([\\p{L}_][\\p{L}\\p{N}_]*[?!]?)",
+      "match": "(:(?!:))([\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
       "captures": {
         "1": { "name": "punctuation.definition.constant.symbol.sputnik" },
         "2": { "name": "constant.other.symbol.sputnik" }
@@ -507,7 +507,7 @@
         },
         {
           "name": "keyword.operator.sputnik",
-          "match": "//=|\\+=|-=|\\*=|/=|%=|===|<=>|<<|>>|\\*\\*|//|=~|!~|==|!=|<=|>=|->|\\?\\?|[-+*/%<>=&|^]"
+          "match": "\\?=|//=|\\+=|-=|\\*=|/=|%=|===|<=>|<<|>>|\\*\\*|//|=~|!~|==|!=|<=|>=|->|\\?\\?|[-+*/%<>=&|^]"
         }
       ]
     },

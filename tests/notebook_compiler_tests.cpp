@@ -156,6 +156,22 @@ void test_literal_assignment_and_external_read() {
 }
 
 void test_compound_assignment_uses_previous_version() {
+  for (const std::string &op : {std::string("?="), std::string("or=")}) {
+    const CellSource previous = cell(10, "a = false\n");
+    const CellSource conditional = cell(11, "a " + op + " 7\na\n");
+    const DependencyGraph graph({previous, conditional});
+    NotebookImage image;
+    expect(sputnik::notebook::compile_cell(previous, graph, image).ok,
+           "conditional predecessor compiles");
+    const auto result =
+        sputnik::notebook::compile_cell(conditional, graph, image);
+    expect(result.ok && result.inputs.size() == 1 && result.outputs.size() == 1,
+           "conditional assignment consumes and publishes a binding version");
+    const BcCode &code = code_for(image, result.code_id);
+    expect(has_opcode(code, Opcode::LoadNotebookSlot) &&
+               has_opcode(code, Opcode::StoreNotebookSlot),
+           "conditional notebook assignment has version load and publish");
+  }
   const CellSource previous = cell(10, "a = 5\n");
   const CellSource increment = cell(11, "a = a + 1\n");
   const DependencyGraph graph({previous, increment});
@@ -340,16 +356,119 @@ void test_duplicate_code_ids_and_diagnostics() {
 }
 
 void test_definitions_are_rejected_deterministically() {
-  const CellSource source = cell(50, "def f():\n  1\n", "defs.s");
+  for (const std::string &declaration : {
+           std::string("def f():\n  1\n"),
+           std::string("class Box:\n  def init(@value)\n"),
+           std::string("mixin Named:\n  def name(): \"box\"\n")}) {
+    const CellSource source = cell(50, declaration, "defs.s");
+    const DependencyGraph graph({source});
+    NotebookImage image;
+    const auto result = sputnik::notebook::compile_cell(source, graph, image);
+    expect(!result.ok && result.diagnostics.size() == 1U,
+           "definitions should be rejected by the persistent cell profile");
+    const auto &error = result.diagnostics.front();
+    expect(error.code == "NB1002" && error.span.file == "defs.s" &&
+               error.span.start.line == 1 && error.span.start.col == 1,
+           "unsupported definition should identify its source declaration");
+    expect(error.message.find("project module") != std::string::npos &&
+               error.message.find("Ast") == std::string::npos &&
+               error.message.find("construct") == std::string::npos,
+           "definition errors should describe source syntax and a remedy");
+    if (declaration.find("class Box") == 0U) {
+      expect(error.message.find("class declaration 'Box'") != std::string::npos &&
+                 error.message.find("Creating instances in cells is supported") !=
+                     std::string::npos,
+             "class errors must distinguish declarations from construction");
+    }
+    expect(image.descriptors().empty() && image.module().code_objects.empty(),
+           "rejected declarations must not mutate the notebook image");
+  }
+}
+
+void test_unresolved_imports_have_actionable_diagnostics() {
+  for (const std::string &statement : {
+           std::string("import ProgressBar"),
+           std::string("from progressbar import ProgressBar"),
+           std::string("from task import Missing")}) {
+    const CellSource source = cell(51, "import task\n" + statement + "\n",
+                                   "imports.s");
+    const DependencyGraph graph({source});
+    NotebookImage image;
+    const auto result = sputnik::notebook::compile_cell(source, graph, image);
+    expect(!result.ok && result.diagnostics.size() == 1U,
+           "an unresolved import should report one import error");
+    const auto &error = result.diagnostics.front();
+    expect(error.code == "NB1008" && error.span.file == "imports.s" &&
+               error.span.start.line == 2 && error.span.start.col == 1,
+           "import errors should identify the failing import, not a construct");
+    expect(error.message.find("dependencies") != std::string::npos &&
+               error.message.find("AstImportStmt") == std::string::npos,
+           "import errors should explain environment resolution");
+    if (statement == "import ProgressBar") {
+      expect(error.message.find("'ProgressBar'") != std::string::npos &&
+                 error.message.find("from <module> import <name>") != std::string::npos,
+             "a class-shaped module import should explain named imports");
+    } else {
+      expect(error.message.find(statement == "from task import Missing"
+                                    ? "'Missing'" : "'ProgressBar'") != std::string::npos,
+             "a failed named import should name the requested export");
+    }
+    expect(image.descriptors().empty() && image.module().code_objects.empty(),
+           "failed imports must not mutate the notebook image");
+  }
+
+  const CellSource source = cell(52, "from models import Missing\n", "export.s");
   const DependencyGraph graph({source});
   NotebookImage image;
-  const auto result = sputnik::notebook::compile_cell(source, graph, image);
-  expect(!result.ok && !result.diagnostics.empty(),
-         "definitions should be rejected by the first cell profile");
-  expect(result.diagnostics.front().code == "NB1002",
-         "unsupported definition should use a notebook diagnostic");
-  expect(image.descriptors().empty(),
-         "rejected notebook profile constructs must not mutate the image");
+  NotebookCompileOptions options;
+  options.import_paths["models"]["Box"] = "models.Box";
+  const auto result = sputnik::notebook::compile_cell(source, graph, image, options);
+  expect(!result.ok && result.diagnostics.size() == 1U &&
+             result.diagnostics.front().code == "NB1008" &&
+             result.diagnostics.front().message ==
+                 "module 'models' has no public export 'Missing'",
+         "known modules should retain precise public-export diagnostics");
+}
+
+void test_foreign_imports_are_initialized_in_cells() {
+  const CellSource source = cell(55,
+      "import pycall.numpy as np\n"
+      "from rbcall.json import JSON\n"
+      "values = [1].map |x|: np.array([x])\n"
+      "JSON.generate([1])\n", "foreign.s");
+  const DependencyGraph graph({source});
+  NotebookImage image;
+  NotebookCompileOptions options;
+  options.import_paths["pycall"]["import_module"] = "pycall.import_module";
+  options.import_paths["rbcall"]["import_name"] = "rbcall.import_name";
+  const auto result = sputnik::notebook::compile_cell(source, graph, image, options);
+  if (!result.ok) std::cerr << sputnik::lexer::diagnostics_to_json(result.diagnostics);
+  expect(result.ok, "foreign imports should initialize cell-local proxy slots before block captures");
+  const auto verified = sputnik::bytecode::deserialize_module(
+      sputnik::bytecode::serialize_module(image.module()));
+  expect(verified.ok(), "cell image with captured foreign imports must verify: " +
+      sputnik::bytecode::verify_errors_to_json(verified.errors));
+}
+
+void test_imported_classes_can_be_instantiated_in_cells() {
+  for (const std::string &source_text : {
+           std::string("from models import Box\nbox = Box(17)\nbox\n"),
+           std::string("import models as m\nbox = m.Box(17)\nbox\n")}) {
+    const CellSource source = cell(53, source_text);
+    const DependencyGraph graph({source});
+    NotebookImage image;
+    NotebookCompileOptions options;
+    options.import_paths["models"]["Box"] = "models.Box";
+    const auto result = sputnik::notebook::compile_cell(source, graph, image, options);
+    expect(result.ok && result.inputs.empty() && result.outputs.size() == 1U &&
+               result.outputs.front().descriptor.name == "box",
+           "constructing an imported class should publish an ordinary cell value");
+    expect(has_opcode(code_for(image, result.code_id), Opcode::LookupConst),
+           "cell constructors should resolve the module's existing class");
+    const auto verified = sputnik::bytecode::deserialize_module(
+        sputnik::bytecode::serialize_module(*image.snapshot()));
+    expect(verified.ok(), "a cell constructing a module class should verify");
+  }
 }
 
 void test_replacement_image_preserves_runtime_name_prefix() {
@@ -538,6 +657,9 @@ int main() {
   test_malformed_ambient_path_is_diagnostic();
   test_duplicate_code_ids_and_diagnostics();
   test_definitions_are_rejected_deterministically();
+  test_unresolved_imports_have_actionable_diagnostics();
+  test_imported_classes_can_be_instantiated_in_cells();
+  test_foreign_imports_are_initialized_in_cells();
   test_replacement_image_preserves_runtime_name_prefix();
   test_composite_image_preserves_ordinary_base_module();
   test_snapshot_contains_self_describing_cell_manifest();

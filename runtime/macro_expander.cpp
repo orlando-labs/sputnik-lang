@@ -1,4 +1,5 @@
 #include "runtime/macro_expander.h"
+#include "frontend/import_aliases.h"
 
 #include "bytecode/emitter.h"
 #include "bytecode/format.h"
@@ -1727,7 +1728,7 @@ std::string module_import_alias(const ast::Expr &item) {
   }
   const std::string *alias = string_field(item, "alias");
   if (alias != nullptr && !alias->empty()) {
-    return *alias;
+    return default_module_alias(*alias);
   }
   return default_module_alias(*module_path);
 }
@@ -1738,9 +1739,11 @@ std::string module_import_alias(const ast::Expr &item) {
 // compiled into the macro module but never registered as trigger names.
 std::vector<ImportedMacroDef>
 imported_macro_defs(const std::vector<std::unique_ptr<ast::Expr>> &items,
-                    const MacroProviderMap &providers) {
+                    const MacroProviderMap &providers,
+                    const frontend::ImportAliases &aliases) {
   std::vector<ImportedMacroDef> imported;
   std::set<std::string> helper_keys;
+  std::set<std::string> imported_keys;
   for (const std::unique_ptr<ast::Expr> &item : items) {
     if (!item || item->kind != "AstImportStmt") {
       continue;
@@ -1751,7 +1754,8 @@ imported_macro_defs(const std::vector<std::unique_ptr<ast::Expr>> &items,
         module_path == nullptr) {
       continue;
     }
-    const auto provider = providers.find(*module_path);
+    const auto canonical = aliases.resolve(*module_path);
+    const auto provider = providers.find(canonical);
     if (provider == providers.end()) {
       continue;
     }
@@ -1774,6 +1778,8 @@ imported_macro_defs(const std::vector<std::unique_ptr<ast::Expr>> &items,
             entry.def == nullptr) {
           continue;
         }
+        const auto key = *local_name + "\n" + canonical + "\n" + *source_name;
+        if (!imported_keys.insert(key).second) break;
         std::unique_ptr<ast::Expr> def = ast::clone_expr(*entry.def);
         for (ast::StringField &field : def->string_fields) {
           if (field.name == "name") {
@@ -1796,7 +1802,7 @@ imported_macro_defs(const std::vector<std::unique_ptr<ast::Expr>> &items,
       if (name == nullptr) {
         continue;
       }
-      const std::string key = *module_path + "\n" + *name;
+      const std::string key = canonical + "\n" + *name;
       if (helper_keys.find(key) != helper_keys.end()) {
         continue;
       }
@@ -2115,6 +2121,9 @@ export macro cmd
   }();
   MacroProviderMap providers = supplied_providers;
   providers.emplace("system", system_exports);
+  frontend::ImportAliases aliases;
+  try { aliases = frontend::collect_import_aliases(items); }
+  catch (const std::exception &error) { return ExpandResult{false, error.what()}; }
   std::vector<const ast::Expr *> macro_defs;
   MacroNameTable macro_names;
   // string_tag macros are invocable only via `name"""…"""`.
@@ -2139,7 +2148,7 @@ export macro cmd
   // compile-time namespace next to local defs. Private provider macro helpers
   // are compiled too, but are not registered as trigger names.
   const std::vector<ImportedMacroDef> imported =
-      imported_macro_defs(items, providers);
+      imported_macro_defs(items, providers, aliases);
   for (const ImportedMacroDef &entry : imported) {
     const std::string *name = string_field(*entry.def, "name");
     if (name == nullptr) {
@@ -2166,6 +2175,7 @@ export macro cmd
   std::vector<std::unique_ptr<ast::Expr>> alias_imported;
   std::set<std::string> macro_bound_aliases;
   std::set<std::string> alias_helper_keys;
+  std::map<std::string, std::string> alias_providers;
   for (const std::unique_ptr<ast::Expr> &item : items) {
     if (!item || item->kind != "AstImportStmt") {
       continue;
@@ -2180,10 +2190,13 @@ export macro cmd
     if (alias.empty()) {
       continue;
     }
-    const auto provider = providers.find(*module_path);
+    const auto canonical = aliases.resolve(*module_path);
+    const auto provider = providers.find(canonical);
     if (provider == providers.end()) {
       continue;
     }
+    const auto existing = alias_providers.emplace(alias, canonical);
+    if (!existing.second && existing.first->second == canonical) continue;
     bool has_public_export = false;
     for (const MacroExport &entry : provider->second) {
       has_public_export = has_public_export || entry.public_export;
@@ -2221,7 +2234,7 @@ export macro cmd
       if (name == nullptr) {
         continue;
       }
-      const std::string key = *module_path + "\n" + *name;
+      const std::string key = canonical + "\n" + *name;
       if (alias_helper_keys.find(key) != alias_helper_keys.end()) {
         continue;
       }
@@ -2278,7 +2291,7 @@ export macro cmd
         module_path == nullptr) {
       continue;
     }
-    const auto provider = providers.find(*module_path);
+    const auto provider = providers.find(aliases.resolve(*module_path));
     if (provider == providers.end()) {
       continue;
     }
@@ -2311,7 +2324,9 @@ export macro cmd
   // expansion was a compile-time-only import: every dotted use was a macro
   // trigger, so the runtime module keeps no alias binding (and stays eligible
   // for build lanes that do not support runtime module aliases). An alias
-  // with surviving references is a runtime import as before.
+  // with surviving references is a runtime import as before. Explicit `as`
+  // declarations also remain: their graph-wide replacement is observable
+  // inside dependencies even if no local namespace value is referenced.
   for (std::unique_ptr<ast::Expr> &item : items) {
     if (!item || item->kind != "AstImportStmt") {
       continue;
@@ -2320,6 +2335,8 @@ export macro cmd
     if (import_kind == nullptr || *import_kind != "module") {
       continue;
     }
+    const auto *replacement = string_field(*item, "alias");
+    if (replacement && !replacement->empty()) continue;
     const std::string alias = module_import_alias(*item);
     if (alias.empty() || macro_bound_aliases.count(alias) == 0) {
       continue;

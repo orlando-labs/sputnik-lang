@@ -408,6 +408,40 @@ SputnikStatus sputnik_call_block(SputnikCtx *cx, SputnikValue block,
   return SPUTNIK_ERR; // a fault/throw has already been recorded on the frame.
 }
 
+int64_t sputnik_block_required_args(SputnikCtx *cx, SputnikValue block) {
+  if (cx->direct_ops)
+    return cx->direct_ops->block_required_args
+        ? cx->direct_ops->block_required_args(cx->direct_state, block) : -1;
+  return cx->host->stdlib_block_required_args(cx->resolve(block));
+}
+
+static thread_local unsigned ruby_callback_depth = 0;
+int sputnik_ruby_callback_active(void) { return ruby_callback_depth != 0; }
+SputnikStatus sputnik_call_ruby_block(SputnikCtx *cx, SputnikValue block,
+    const SputnikValue *args, size_t argc, SputnikValue *out) {
+  struct Scope {
+    Scope() { ++ruby_callback_depth; }
+    ~Scope() { --ruby_callback_depth; }
+  } scope;
+  if (cx->direct_ops != nullptr) {
+    if (!cx->direct_ops->call_ruby_block)
+      return sputnik_fault(cx, "NativeError", "host has no Ruby callback ABI");
+    return cx->direct_ops->call_ruby_block(cx->direct_state, block, args, argc, out);
+  }
+  std::vector<Value> values;
+  for (size_t i = 0; i < argc; ++i) values.push_back(cx->resolve(args[i]));
+  auto result = cx->host->stdlib_call_ruby_block(cx->frame, cx->resolve(block), std::move(values));
+  if (result.status == sputnik::runtime::StdlibBlockStatus::Stopped ||
+      result.status == sputnik::runtime::StdlibBlockStatus::Returned) {
+    *out = cx->push(std::move(result.value));
+    return result.status == sputnik::runtime::StdlibBlockStatus::Stopped
+      ? SPUTNIK_BREAK : SPUTNIK_OK;
+  }
+  if (result.status == sputnik::runtime::StdlibBlockStatus::Raised)
+    cx->host->stdlib_raise_exception(cx->frame, std::move(result.exception));
+  return SPUTNIK_ERR;
+}
+
 int sputnik_task_cancelled(SputnikCtx *cx) {
   (void)cx;
   return sputnik::runtime::current_runtime_task_cancel_requested() ? 1 : 0;

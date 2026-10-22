@@ -1,3 +1,4 @@
+#include "frontend/foreign_import.h"
 #include "frontend/hir/hir.h"
 #include "frontend/pattern/pattern.h"
 
@@ -419,6 +420,7 @@ public:
     module_procedure_id_ = module_proc;
     std::vector<std::unique_ptr<Node>> module_items = lower_module_items();
     materialize_module_function_bindings(module_proc, module_items);
+    materialize_foreign_imports(module_proc);
 
     auto root = make_node("HModule", module_span());
     root->string_field("module_name", module_name_);
@@ -454,6 +456,8 @@ public:
     const int module_scope = find_scope_index("module", module_span(), "");
     const std::string procedure_id = lower_module_procedure(
         module_scope, collect_module_exec_items(), "notebook_cell");
+    module_procedure_id_ = procedure_id;
+    materialize_foreign_imports(procedure_id);
     for (Procedure &procedure : procedures_) {
       if (procedure.id == procedure_id) {
         result.procedure = std::make_unique<Procedure>(std::move(procedure));
@@ -507,12 +511,18 @@ private:
     if (diagnostics == nullptr) {
       return;
     }
-    const std::set<std::string> unsupported = {
-        "AstAttrDef",
-        "AstClassDef",    "AstClassMethodDef", "AstClassPropDef",
-        "AstClauseDef",   "AstDefStmt",        "AstExportStmt",
-        "AstImportStmt",  "AstMixinDef",       "AstNumericProfile",
-        "AstPackageDecl", "AstPropDef"};
+    const std::map<std::string, std::string> unsupported = {
+        {"AstAttrDef", "attribute declarations"},
+        {"AstClassDef", "class declarations"},
+        {"AstClassMethodDef", "class method declarations"},
+        {"AstClassPropDef", "class property declarations"},
+        {"AstClauseDef", "clause declarations"},
+        {"AstDefStmt", "function declarations"},
+        {"AstExportStmt", "export declarations"},
+        {"AstMixinDef", "mixin declarations"},
+        {"AstNumericProfile", "numeric profile declarations"},
+        {"AstPackageDecl", "package declarations"},
+        {"AstPropDef", "property declarations"}};
     std::function<void(const ast::Expr &)> visit = [&](const ast::Expr &expr) {
       if (expr.kind == "AstBlock" && bool_value(expr, "lambda_literal")) {
         diagnostics->push_back({"NB1002", "error", "hir",
@@ -522,7 +532,12 @@ private:
       if (expr.kind == "AstImportStmt") {
         // Imports resolve only against native constants or the exact public
         // export map of the environment image prepared by the host.
-        const auto module = string_value(expr, "module_path");
+        const auto module = graph_.import_aliases.resolve(string_value(expr, "module_path"));
+        const auto provider = foreign_provider(module);
+        if (!provider.empty()) {
+          const auto factory = string_value(expr, "import_kind") == "module" ? "import_module" : "import_name";
+          if (!notebook_export_path(provider, factory).empty()) return;
+        }
         if (notebook_options_ && notebook_options_->import_paths &&
             notebook_options_->import_paths->count(module)) {
           if (string_value(expr, "import_kind") == "module") return;
@@ -547,16 +562,44 @@ private:
               (!import_alias_constant_path(binding).empty() || notebook_module_import(binding));
         }
         if (found && resolved_imports) return;
+        std::string message;
+        if (string_value(expr, "import_kind") == "module") {
+          message = "cannot resolve module import '" + module +
+              "' in the notebook environment; add its package to project "
+              "dependencies. To import a class or function, use "
+              "'from <module> import <name>'";
+        } else {
+          std::string imported_names;
+          if (const auto *names = list_field(expr, "names")) {
+            for (const auto &name : names->values) {
+              if (!imported_names.empty()) imported_names += ", ";
+              imported_names += string_value(*name, "source_name");
+            }
+          }
+          message = "cannot resolve import of '" + imported_names +
+              "' from module '" + module +
+              "' in the notebook environment; check the module's public "
+              "exports and project dependencies";
+        }
+        diagnostics->push_back({"NB1008", "error", "hir", message, expr.span});
+        return;
       }
       if (expr.kind == "AstName" && notebook_namespace_binding(expr)) {
         diagnostics->push_back({"NB1008", "error", "hir", "a module namespace is not a runtime value; use module.export or from-import", expr.span});
         return;
       }
-      if (unsupported.count(expr.kind) != 0U) {
+      if (const auto restriction = unsupported.find(expr.kind);
+          restriction != unsupported.end()) {
+        std::string message = restriction->second +
+            " are not supported in notebook cells; move the declaration to "
+            "a project module";
+        if (expr.kind == "AstClassDef") {
+          message = "class declaration '" + string_value(expr, "name") +
+              "' is not supported in notebook cells; define the class in a "
+              "project module. Creating instances in cells is supported";
+        }
         diagnostics->push_back(
-            {"NB1002", "error", "hir",
-             "unsupported construct in notebook cell profile: " + expr.kind,
-             expr.span});
+            {"NB1002", "error", "hir", message, expr.span});
         return;
       }
       if (expr.kind == "AstIvar" || expr.kind == "AstCvar" ||
@@ -1019,6 +1062,57 @@ private:
     items->values = std::move(reordered);
   }
 
+  // Foreign imports depend on the bridge package, not on a Sputnik module
+  // named after the foreign library. Their immutable binder slots are filled
+  // during module initialization before user closures capture them.
+  static std::string foreign_provider(const std::string &path) {
+    return sputnik::frontend::foreign_import_provider(path);
+  }
+
+  void materialize_foreign_imports(const std::string &module_proc) {
+    auto *procedure = mutable_procedure_by_id(module_proc);
+    if (!procedure || !procedure->body) return;
+    auto *body = mutable_list_field(*procedure->body, "items");
+    if (!body) return;
+    std::vector<std::unique_ptr<Node>> initializers;
+    for (const auto &binding : graph_.bindings) {
+      if (binding.kind != "import_alias") continue;
+      const auto colon = binding.source.find(':');
+      const std::string path = binding.source.substr(0, colon);
+      const auto provider = foreign_provider(path);
+      if (provider.empty()) continue;
+      const std::string slot = module_local_slot_for_binding(binding);
+      if (slot.empty()) continue;
+      const auto factory = colon == std::string::npos ? "import_module" : "import_name";
+      auto receiver = make_node("HLoadConst", binding.span);
+      receiver->string_field("path", notebook_options_ ? notebook_export_path(provider, factory) : provider);
+      auto call = make_node(notebook_options_ ? "HCall" : "HSend", binding.span);
+      call->node_field(notebook_options_ ? "callable" : "receiver", std::move(receiver));
+      if (!notebook_options_) {
+        call->string_field("selector", factory);
+        call->bool_field("property_access", false);
+      }
+      std::vector<std::unique_ptr<Node>> args;
+      auto text = [&](const std::string &value) {
+        auto node = make_node("HConstStr", binding.span);
+        node->string_field("value", value);
+        return node;
+      };
+      args.push_back(text(path.substr(provider.size() + 1)));
+      if (colon != std::string::npos)
+        args.push_back(text(binding.source.substr(colon + 1)));
+      call->list_field("pos_args", std::move(args));
+      call->list_field("kw_args", {});
+      auto store = make_node("HStoreLocal", binding.span);
+      store->string_field("slot", slot);
+      store->bool_field("import_init", true);
+      store->node_field("expr", std::move(call));
+      initializers.push_back(std::move(store));
+    }
+    for (auto &item : body->values) initializers.push_back(std::move(item));
+    body->values = std::move(initializers);
+  }
+
   std::vector<std::unique_ptr<Node>> lower_imports() {
     std::vector<std::unique_ptr<Node>> nodes;
     for (const std::unique_ptr<ast::Expr> &item : items_) {
@@ -1026,10 +1120,20 @@ private:
         continue;
       }
       const std::string import_kind = string_value(*item, "import_kind");
+      const auto module = graph_.import_aliases.resolve(string_value(*item, "module_path"));
+      const auto provider = foreign_provider(module);
+      if (!provider.empty()) {
+        auto node = make_node("HImportForeign", item->span);
+        node->string_field("module_id", provider);
+        nodes.push_back(std::move(node));
+        continue;
+      }
       if (import_kind == "module") {
         auto node = make_node("HImportModule", item->span);
-        node->string_field("module_id", string_value(*item, "module_path"));
-        node->string_field("local_name", string_value(*item, "alias"));
+        node->string_field("module_id", module);
+        node->string_field("redirect_path", string_value(*item, "alias"));
+        node->string_field("redirect_target", string_value(*item, "module_path"));
+        node->string_field("local_name", last_path_segment(string_value(*item, "alias")));
         if (string_value(*item, "alias").empty()) {
           node->string_field("local_name", last_path_segment(string_value(
                                                *item, "module_path")));
@@ -1038,7 +1142,7 @@ private:
         continue;
       }
       auto node = make_node("HImportNames", item->span);
-      node->string_field("module_id", string_value(*item, "module_path"));
+      node->string_field("module_id", module);
       std::vector<std::unique_ptr<Node>> names;
       if (const ast::ListField *list = list_field(*item, "names")) {
         for (const std::unique_ptr<ast::Expr> &name : list->values) {
@@ -2498,6 +2602,109 @@ private:
     return node;
   }
 
+  std::unique_ptr<Node> lower_conditional_assign(const ast::Expr &expr,
+                                                 const ast::Expr &left,
+                                                 const ast::Expr &right) {
+    std::vector<std::unique_ptr<Node>> bindings;
+    auto bind_temp = [&](std::unique_ptr<Node> value) {
+      const std::string slot = allocate_temp_local(value->span);
+      auto binding = make_node("HStoreLocal", value->span);
+      binding->string_field("slot", slot);
+      binding->node_field("expr", std::move(value));
+      bindings.push_back(std::move(binding));
+      return slot;
+    };
+    std::unique_ptr<Node> read;
+    std::unique_ptr<Node> write;
+    if (left.kind == "AstPostfixChain") {
+      const ast::ListField *tails = list_field(left, "tails");
+      const ast::Expr &tail = *tails->values.back();
+      const std::string receiver_slot = bind_temp(
+          lower_postfix_chain_with_limit(left, tails->values.size() - 1U));
+      auto setter = make_node("HSend", expr.span);
+      setter->node_field("receiver", make_load_local(receiver_slot, left.span));
+      std::vector<std::unique_ptr<Node>> args;
+      if (tail.kind == "AstTailIndex") {
+        const std::string index_slot =
+            bind_temp(lower_expr(*node_field_required(tail, "index_expr")));
+        read = make_node("HIndex", left.span);
+        read->node_field("receiver", make_load_local(receiver_slot, left.span));
+        read->node_field("index_expr", make_load_local(index_slot, tail.span));
+        read->bool_field("optional", true);
+        setter->string_field("selector", "[]=");
+        args.push_back(make_load_local(index_slot, tail.span));
+      } else {
+        read = make_node("HSend", left.span);
+        read->node_field("receiver", make_load_local(receiver_slot, left.span));
+        read->string_field("selector", string_value(tail, "name"));
+        read->bool_field("property_access", true);
+        read->list_field("pos_args", {});
+        read->list_field("kw_args", {});
+        setter->string_field("selector", string_value(tail, "name") + "=");
+        setter->bool_field("property_assignment", true);
+      }
+      // Preserve the original RHS even when a user-defined setter returns
+      // another value. These internal bindings must not update `$_`.
+      const std::string value_slot = allocate_temp_local(right.span);
+      auto value_binding = make_node("HStoreLocal", right.span);
+      value_binding->string_field("slot", value_slot);
+      value_binding->node_field("expr", lower_expr(right));
+      args.push_back(make_load_local(value_slot, right.span));
+      setter->list_field("pos_args", std::move(args));
+      setter->list_field("kw_args", {});
+      auto set_then_value = make_node("HLet", expr.span);
+      set_then_value->node_field("binding", std::move(setter));
+      set_then_value->node_field("body",
+                                 make_load_local(value_slot, expr.span));
+      write = make_node("HLet", expr.span);
+      write->node_field("binding", std::move(value_binding));
+      write->node_field("body", std::move(set_then_value));
+    } else {
+      read = lower_expr(left);
+      auto assignment = ast::make_expr("AstAssign", expr.span);
+      assignment->string_field("op", "=");
+      assignment->node_field("left", ast::clone_expr(left));
+      assignment->node_field("right", ast::clone_expr(right));
+      write = lower_assign(*assignment);
+    }
+    const std::string old_slot = bind_temp(std::move(read));
+    auto keep = make_load_local(old_slot, expr.span);
+    // A notebook cell still publishes its output version when it retains a
+    // previous cell's value, and initializes its local for later reads.
+    if (write->kind == "HStoreNotebookSlot") {
+      const Node *local = node_field(*write, "expr");
+      if (local != nullptr && local->kind == "HStoreLocal") {
+        auto store = make_node("HStoreLocal", expr.span);
+        store->string_field("slot", string_value(*local, "slot"));
+        store->node_field("expr", std::move(keep));
+        auto publish = make_node("HStoreNotebookSlot", expr.span);
+        publish->string_field("descriptor", string_value(*write, "descriptor"));
+        publish->node_field("expr", std::move(store));
+        keep = std::move(publish);
+      }
+    }
+    auto condition = make_load_local(old_slot, left.span);
+    if (string_value(expr, "op") == "?=") {
+      auto is_null = make_node("HIsNull", left.span);
+      is_null->node_field("expr", std::move(condition));
+      condition = std::move(is_null);
+    } else {
+      std::swap(write, keep);
+    }
+    auto branch = make_node("HIf", expr.span);
+    branch->node_field("cond", std::move(condition));
+    branch->node_field("then_body", make_expr_body(std::move(write)));
+    branch->node_field("else_body", make_expr_body(std::move(keep)));
+    std::unique_ptr<Node> result = std::move(branch);
+    for (auto it = bindings.rbegin(); it != bindings.rend(); ++it) {
+      auto let = make_node("HLet", expr.span);
+      let->node_field("binding", std::move(*it));
+      let->node_field("body", std::move(result));
+      result = std::move(let);
+    }
+    return result;
+  }
+
   std::unique_ptr<Node> lower_assign(const ast::Expr &expr) {
     const ast::Expr *left = node_field(expr, "left");
     const ast::Expr *right = node_field(expr, "right");
@@ -2508,6 +2715,9 @@ private:
     }
 
     const std::string assign_op = string_value(expr, "op");
+    if (assign_op == "?=" || assign_op == "or=") {
+      return lower_conditional_assign(expr, *left, *right);
+    }
     const bool compound = assign_op != "=";
     const std::string binary_op =
         compound ? compound_assignment_binary_op(assign_op) : "";
@@ -2973,9 +3183,35 @@ private:
     std::vector<std::unique_ptr<Node>> pos_args;
     std::vector<std::unique_ptr<Node>> kw_args;
     collect_call_args(tail, &pos_args, &kw_args, &block);
+    const bool super_call = binding == nullptr && string_value(base, "name") == "super";
+    if (super_call) {
+      // Encode lexical ownership as a class value, so linking relocates it like
+      // every other class reference. Closures retain the enclosing method's
+      // scope, even after its activation returns or dispatch starts on a child.
+      int scope = current_proc_->scope_index;
+      int method = -1, owner = -1;
+      while (scope >= 0) {
+        const auto &candidate = graph_.scopes[scope];
+        const int parent = candidate.parent_index;
+        if ((candidate.kind == "function" || candidate.kind == "class_method") && parent >= 0 &&
+            (graph_.scopes[parent].kind == "class" || graph_.scopes[parent].kind == "mixin")) {
+          method = scope; owner = parent; break;
+        }
+        scope = parent;
+      }
+      if (owner < 0) {
+        auto unsupported = make_node("HUnsupported", base.span);
+        unsupported->string_field("source_kind", "super outside an object method");
+        return unsupported;
+      }
+      auto class_ref = make_node("HLoadName", base.span);
+      class_ref->string_field("name", graph_.scopes[owner].owner);
+      pos_args.insert(pos_args.begin(), make_const_str(graph_.scopes[method].owner, base.span));
+      pos_args.insert(pos_args.begin(), std::move(class_ref));
+    }
     auto node = make_node("HSend", ast::join_spans(base.span, tail.span));
     node->node_field("receiver", make_node("HSelf", base.span));
-    node->string_field("selector", binding != nullptr
+    node->string_field("selector", super_call ? "__super_dispatch__" : binding != nullptr
                                        ? binding->name
                                        : string_value(base, "name"));
     node->list_field("pos_args", std::move(pos_args));
@@ -3420,7 +3656,11 @@ private:
     const auto found = notebook_options_->import_paths->find(module);
     if (found == notebook_options_->import_paths->end()) return {};
     const auto value = found->second.find(name);
-    return value == found->second.end() ? std::string{} : value->second;
+    if (value != found->second.end()) return value->second;
+    binder::Binding binding;
+    binding.role = "from_import";
+    binding.source = module + ":" + name;
+    return stdlib_import_alias_constant_path(binding);
   }
 
   std::string import_alias_constant_path(const binder::Binding &binding) const {
@@ -3464,6 +3704,12 @@ private:
     }
     if (binding.role != "from_import") {
       return "";
+    }
+    if (binding.source == "notebook.ui:AudioCodec") {
+      return "notebook.ui.AudioCodec";
+    }
+    if (binding.source == "notebook.ui:Stopwatch") {
+      return "notebook.ui.Stopwatch";
     }
     if (binding.source == "sync:Channel") {
       return "sync.Channel";

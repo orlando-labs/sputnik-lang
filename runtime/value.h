@@ -276,7 +276,10 @@ enum class RuntimeNativeTypeKind {
   Yaml,
   System,
   Signature,
-  Notebook
+  Notebook,
+  NetUnix,
+  NotebookStopwatch,
+  AudioCodec
 };
 
 struct NativeTypeValue {

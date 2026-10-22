@@ -1,6 +1,14 @@
 # Polyglot benchmark
 
-This benchmark compares identical workloads across:
+Benchmark-equivalence fixes and runtime recovery:
+[2026-10-14 recovery results](RESULTS_RECOVERY_2026-10-14.md), with full generic
+JSON, checked/generic C++ controls, process/body timing and saved/current pairs.
+
+Latest complete rerun: [2026-10-13–14 results](RESULTS_2026-10-13.md),
+covering all ten micro workloads, all four raw/Orbit VM/native HTTP series,
+and the VM/heap diagnostics on a fresh O2 build of the current source tree.
+
+This benchmark compares checksum-matched workloads across:
 
 - Sputnik interpreted: `build/isputnik --eval-file`
 - Sputnik built native executable: `sputnik build <file.s>` first, then the
@@ -11,12 +19,61 @@ This benchmark compares identical workloads across:
 - Go when `go` is available in `PATH`
 - Rust compiled with `rustc -O` when `rustc` is available in `PATH`
 
-The Rust implementations use only the standard library. Workloads that need
+The legacy Rust implementations use only the standard library. Workloads that need
 primitives Rust std does not ship (digests, base64/hex codecs, civil-calendar
 time math) hand-roll them in the workload source, mirroring how the C++ rows
 link the Sputnik runtime's own `runtime/digest.cpp` or carry their own helpers.
 OS entropy for `secure-random` and `uuid` comes from a single `/dev/urandom`
 handle opened once per process.
+
+`json-full-api` is a separate equivalent-work lane: all implementations create
+generic JSON objects/arrays, generate and parse 1,000 compact documents, do 20
+pretty-generation/parse round trips, and materialize 20,000 JSONL rows. Every
+field, including array elements and names excluded from the legacy checksum,
+is checked. The runner additionally admits the observed operation counts.
+C++ uses `json-c` located by `pkg-config` (the measured version and shared
+library hash are recorded); Rust uses `serde_json = 1.0.145` and the committed
+Cargo.lock. Fetch these dependencies before building; timing runs are offline:
+
+```sh
+cargo fetch --locked --manifest-path bench/polyglot/rust/json-full-api/Cargo.toml
+python3 bench/polyglot/run_benchmark.py --workload json-full-api --prepare-only
+python3 bench/polyglot/run_benchmark.py --workload json-full-api --no-build --repeats 7
+```
+
+The existing `json` C++/Rust rows remain field-extraction references. Its Go
+row uses typed structs. Neither is the generic DOM comparison above. Serializer
+formatting/key order and JSON number representation remain library choices;
+the full lane compares the same operations and decoded payloads.
+
+Arithmetic also reports `cpp-checked`, with an Int64 overflow check for each
+addition/subtraction, including intermediate results. Its overflow action is
+abort, so it is a valid-input compute reference rather than an exception/trace
+equivalence test. Calls/collections reports `cpp-generic`: mutable heap arrays
+of variant values with checked type and index reads. Its callees remain typed
+C++ functions, making it a representation control.
+
+For arithmetic and full JSON, `--timing body --body-iterations 5` generates
+instrumented entries in the selected build directory. One in-process warmup
+precedes the timed batch. The report retains full process wall and adds body
+time per invocation and time outside the batch. Outside-body time includes
+the warmup, runtime/import/module initialization, reporting and teardown; it
+must not be labelled pure startup. C++ uses an opaque function pointer and Rust
+`black_box` to prevent folding repeated workload calls. Keep process and body
+artifacts in distinct directories:
+
+```sh
+python3 bench/polyglot/run_benchmark.py --workload arithmetic --timing body \
+  --build-dir bench/polyglot/build/body-arithmetic --prepare-only
+python3 bench/polyglot/run_benchmark.py --workload arithmetic --timing body \
+  --build-dir bench/polyglot/build/body-arithmetic --no-build --repeats 15
+```
+
+Pin executables with `--sputnik`, `--isputnik`, `--python`, `--ruby`, `--cxx`,
+`--go`, `--rustc` and `--cargo`. Explicit Sputnik paths are never rebuilt by
+the runner. Builds save an admission manifest with commands/flags, source and
+tool/dependency hashes. `--no-build` rejects mismatched source, timing options
+or artifacts. Every measured series verifies identity again afterwards.
 
 The Sputnik built path intentionally runs an already generated executable, so
 compile time is not included in the measured run. The runner still builds fresh
@@ -49,7 +106,7 @@ pin Ruby explicitly; otherwise the newest discoverable RVM Ruby is preferred
 over the system Ruby.
 
 The HTTP RPS benchmark is a separate server-side comparison. It uses one
-explicitly pinned Sputnik client from the sibling Ember checkout, built with
+explicitly pinned Sputnik client from the sibling Orbit checkout, built with
 complete generated native-body coverage, with the soak workload's default four
 clients against raw Sputnik `net.http`, Go, Rust, and Python servers. The runner
 never rebuilds this client implicitly: use `--refresh-client-pin` once when the
@@ -70,15 +127,15 @@ python3 bench/polyglot/run_http_rps.py --stack raw --duration 60 --clients 4 \
 ```
 
 The raw lane is deliberately framework-free in every language and is the VM /
-HTTP-runtime optimization target. The complete Ember request pipeline remains
+HTTP-runtime optimization target. The complete Orbit request pipeline remains
 a separate lane:
 
 ```sh
-python3 bench/polyglot/run_http_rps.py --stack ember --duration 60 --clients 4 \
+python3 bench/polyglot/run_http_rps.py --stack orbit --duration 60 --clients 4 \
   --repeats 5 --order-seed 0
 ```
 
-This framework lane compares the complete Ember pipeline with Rails API 8 on
+This framework lane compares the complete Orbit pipeline with Rails API 8 on
 Puma. It rejects manual raw servers; conversely, the raw lane rejects Rails.
 Both framework servers persist the catalog with ORM models over a shared
 process-local SQLite `:memory:` database, so the timed table includes model
@@ -86,7 +143,7 @@ lifecycle, SQL generation, pooling, and SQLite execution without an external
 database. They serialize SQLite-backed actions to keep lock-retry policy from
 changing the common HTTP contract. Rails request whitelisting uses Rails 8
 Strong Parameters (`expect` for replacement payloads and `permit` for PATCH),
-with the same strict unknown-field contract as Ember. Set `SPUTNIK_BENCH_RUBY`
+with the same strict unknown-field contract as Orbit. Set `SPUTNIK_BENCH_RUBY`
 when Rails and Puma are installed under a Ruby that is not discoverable through
 RVM or `PATH`.
 The HTTP runner writes machine-readable JSON and a Markdown comparison table
@@ -121,6 +178,13 @@ profile the same file-I/O path under the capability-aware runtime world. The
 runner requires full direct-native coverage for this workload; the generated
 launcher still contains its ordinary bailout VM fallback, but the measured path
 does not use it.
+
+The current C++ and Rust JSON references extract selected integer fields from
+strings and omit the pretty-generation round trip. Their matching checksum
+does not establish equal parsing/materialization work. Treat those rows as
+specialized field-extraction references, not full JSON API comparisons; the
+[2026-10-14 performance plan](../../PLAN-performance-recovery-2026-10-14.md)
+includes a separate equivalent-work JSON lane.
 
 The `codecs` workload exercises `Bytes.new`, `Base64`, `Base64Url`, and `Hex`
 encode/decode round-trips, including lenient base64/hex branches. The runner

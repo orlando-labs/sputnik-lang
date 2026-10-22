@@ -9,6 +9,7 @@
 #include "runtime/notebook_display.h"
 #include "runtime/notebook_live.h"
 #include "runtime/notebook_inputs.h"
+#include "runtime/notebook_image.h"
 
 #include <chrono>
 #include <cstddef>
@@ -330,6 +331,9 @@ struct RuntimeNotebookCellContext {
   // from a prior execution is rejected when it carries an old generation.
   std::uint64_t live_generation = 0;
   std::shared_ptr<const NotebookInputSnapshot> project_inputs;
+  std::shared_ptr<const NotebookImageInputs> project_images;
+  std::shared_ptr<const NotebookAudioInputs> project_audio_inputs;
+  std::shared_ptr<const std::vector<NotebookAudioComponent>> project_audio;
   // World-owned run-local reader; not an externally supplied callback.
   std::shared_ptr<NotebookInputCapture> input_capture;
 };

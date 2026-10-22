@@ -91,6 +91,18 @@ bool is_empty_seq_expr(const ast::Expr *expr) {
   return items == nullptr || items->values.empty();
 }
 
+bool contains_foreign_break(const ast::Expr *node, unsigned loops = 0) {
+  if (!node || node->kind == "HClosure") return false;
+  if (node->kind == "HLoop") ++loops;
+  if (node->kind == "HBreak") return loops == 0;
+  for (const auto &field : node->node_fields)
+    if (contains_foreign_break(field.value.get(), loops)) return true;
+  for (const auto &field : node->list_fields)
+    for (const auto &item : field.values)
+      if (contains_foreign_break(item.get(), loops)) return true;
+  return false;
+}
+
 bool contains_hir_kind(const ast::Expr *expr, const std::string &kind) {
   if (expr == nullptr) {
     return false;
@@ -804,6 +816,11 @@ public:
         continue;
       }
       if (import_kind == "HImportModule") {
+        const auto redirect = string_field(*item, "redirect_path");
+        if (!redirect.empty()) {
+          module_.attrs.push_back({intern_string("sputnik.import.redirect:" + redirect),
+                                  intern_string(string_field(*item, "redirect_target"))});
+        }
         const std::string local_name = string_field(*item, "local_name");
         const std::optional<std::uint32_t> slot =
             module_init_local_slot(local_name);
@@ -1058,6 +1075,9 @@ public:
   }
 
   std::uint32_t intern_lookup_path(const std::string &name) {
+    const auto ancestry = class_ancestry_flags_.find(name);
+    if (ancestry != class_ancestry_flags_.end() && (ancestry->second & kClassFlagNativeError) != 0U)
+      return intern_path_ref(qualified_native_error_name(name));
     return intern_path_ref(name);
   }
 
@@ -1853,6 +1873,8 @@ CodeEmitter::CodeEmitter(Emitter *owner, const hir::Procedure *procedure,
   const ast::Expr *body =
       body_override_ != nullptr ? body_override_ : procedure_->body.get();
   analyze_integer_locals();
+  if (code_.kind == CodeKind::Block && contains_foreign_break(body))
+    code_.flags |= kCodeFlagRubyBreakBlock;
   preserve_last_result_ = contains_hir_kind(body, "HLastGet");
   for (const std::unique_ptr<ast::Expr> &pattern : procedure_->param_patterns) {
     preserve_last_result_ =
@@ -2391,6 +2413,12 @@ void CodeEmitter::compile_seq_to_reg(const ast::Expr &seq, std::uint32_t dst,
 void CodeEmitter::compile_stmt(const ast::Expr &stmt, bool want_result) {
   if (stmt.kind == "HSeq") {
     compile_seq(stmt, want_result);
+    return;
+  }
+  if (stmt.kind == "HStoreLocal" && bool_field(stmt, "import_init")) {
+    const auto saved_last = last_value_reg_;
+    compile_expr(stmt);
+    last_value_reg_ = saved_last;
     return;
   }
   if (stmt.kind == "HLastSet") {
@@ -3642,6 +3670,15 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
     if (receiver == nullptr) {
       diag(expr.span, "BC2001", "HSend is missing receiver");
       return dst;
+    }
+    const auto *block = node_field(expr, "block");
+    const bool known_collection = receiver->kind == "HListLiteral" ||
+        receiver->kind == "HTupleLiteral" || receiver->kind == "HSetLiteral" ||
+        receiver->kind == "HMapLiteral";
+    if (known_collection && block && block->kind == "HClosure") {
+      const auto *procedure = owner_->procedure_by_id(string_field(*block, "procedure"));
+      if (procedure && contains_foreign_break(procedure->body.get()))
+        diag(block->span, "BC2001", "break is forbidden in Sputnik iterator blocks; use find/any?/take_while or throw/catch");
     }
     const std::uint32_t recv_reg = compile_expr(*receiver);
     operands.push_back({recv_reg, false});
@@ -4970,13 +5007,14 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
   }
   if (expr.kind == "HBreak") {
     if (loops_.empty()) {
-      if (code_.kind == CodeKind::Block) {
-        diag(
-            expr.span, "BC2001",
-            "`break` is not allowed in an iterator block; use a short-circuit "
-            "combinator (find / any? / take_while / take / .lazy...first) or a "
-            "`while`/`loop` for imperative iteration. (`next` is allowed and "
-            "finishes the current block invocation.)");
+      if (code_.kind == CodeKind::Block || code_.kind == CodeKind::Ensure ||
+          code_.kind == CodeKind::Rescue) {
+        code_.flags |= kCodeFlagRubyBreakBlock;
+        auto value_reg = alloc_temp();
+        if (const auto *value = node_field(expr, "value"))
+          value_reg = compile_expr(*value);
+        else emit_instruction(Opcode::LoadNull, {{value_reg, false}}, expr.span);
+        emit_instruction(Opcode::BreakForeign, {{value_reg, false}}, expr.span);
       } else {
         diag(expr.span, "BC2001", "break outside loop in bytecode emitter");
       }

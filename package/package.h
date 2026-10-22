@@ -24,6 +24,40 @@ struct PackageDependency {
 struct PackageModule {
   std::string name;
   std::string path;
+  std::string representation = "source";
+};
+
+struct PackageNativeLibrary {
+  std::string path;
+  std::string role = "dependency";
+  std::string abi;
+};
+
+struct PackageNativeRequirement {
+  std::string id, kind, version, abi, build_id;
+  std::string provider = "external";
+  std::string runtime, package;
+  std::vector<std::string> libraries;
+};
+
+struct PackageNativeProvider {
+  std::string id, kind, version, abi, build_id, runtime_build_id;
+  std::vector<std::string> include_dirs, library_dirs, link_libraries, files;
+  std::vector<PackageNativeLibrary> libraries;
+};
+
+struct PackageTarget {
+  std::string os = "any";
+  std::string arch = "any";
+  std::string min_os;
+  std::string libc;
+  std::string min_libc;
+  std::string compute_backend = "none";
+  std::vector<std::string> cpu_features;
+  std::vector<std::string> compute_backends;
+  std::string cuda_version;
+  std::string min_cuda_driver;
+  std::vector<std::string> cuda_architectures;
 };
 
 // A `[native.symbols]` entry: the logical name a `native def`/`native class`
@@ -58,6 +92,15 @@ struct PackageNativeError {
 struct PackageNativeExtension {
   std::string name;
   std::string language;
+  std::string kind = "source";
+  std::string library;
+  std::uint32_t sputnik_ext_abi_version = 1;
+  std::vector<std::string> required_runtime_features;
+  std::vector<std::string> requirements;
+  // Derived local preparation facts; never serialized in a distribution.
+  std::vector<std::string> provider_fingerprints;
+  bool provider_prepared = false;
+  std::vector<PackageNativeLibrary> libraries;
   std::vector<std::string> sources;
   std::vector<std::string> headers;
   std::vector<std::string> include_dirs;
@@ -85,6 +128,19 @@ struct PackageManifest {
   std::vector<PackageDependency> dependencies;
   std::vector<capability::CapabilityRequest> capabilities;
   std::vector<PackageNativeExtension> native_extensions;
+  std::string schema;
+  std::string variant = "source";
+  std::string limit_profile = "standard";
+  PackageTarget target;
+  std::vector<std::string> files;
+  std::vector<PackageDependency> artifact_dependencies;
+  std::string kind = "library";
+  std::string bundle = "none";
+  std::vector<PackageDependency> artifact_build_dependencies;
+  std::vector<PackageNativeRequirement> native_requirements;
+  std::vector<PackageNativeProvider> native_providers;
+  // Derived registry metadata when module payloads have not been downloaded.
+  bool has_bytecode_delivery = false;
 };
 
 struct PackageManifestResult {

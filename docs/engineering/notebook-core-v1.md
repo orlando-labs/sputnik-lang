@@ -103,10 +103,21 @@ captures before a worker closure is created. Helpers use reserved code IDs and
 are included in the verified image, including on reactive rebuilds. Native
 stdlib imports resolve directly to runtime namespaces.
 
-The compiler profile still rejects definitions, classes, standalone lambda
+Cells can instantiate classes from the prepared module environment, assign those
+objects to notebook slots, and call their methods. For example,
+`from progressbar import ProgressBar` followed by
+`bar = ProgressBar(total: 100)` is valid when the `progressbar` package is a
+project dependency. `import ProgressBar` instead requests a module named
+`ProgressBar`; it does not import a class by name. Unresolved imports use NB1008
+with the module/export name and source span.
+
+The compiler profile still rejects function/class/mixin declarations, standalone lambda
 literals, ivar/cvar access, pattern assignment, and member/index assignment. These need
 stable code/image identity or a more complete mutation contract before they can
-be persisted safely.
+be persisted safely. Declaration errors use NB1002 with the source-language
+declaration and guidance to move it to a project module. Constructing an object
+does not declare or replace its class: rerunning the cell creates a new instance
+of the class already loaded in the environment.
 
 ## Runtime transaction
 

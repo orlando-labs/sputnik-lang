@@ -166,6 +166,8 @@ opcodes:
     byte: 0x37
   - name: RETURN_NONLOCAL
     byte: 0x38
+  - name: BREAK_FOREIGN
+    byte: 0x39
   - name: P_PREP_SEQ
     byte: 0x40
   - name: P_PREP_MAP

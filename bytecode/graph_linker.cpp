@@ -143,8 +143,8 @@ struct GraphModuleState {
 
 class GraphModuleBuilder {
 public:
-  explicit GraphModuleBuilder(std::vector<GraphModule> order)
-      : order_(std::move(order)) {
+  explicit GraphModuleBuilder(std::vector<GraphModule> order, ExternalNamespacePredicate external)
+      : order_(std::move(order)), external_(std::move(external)) {
     if (!order_.empty()) {
       out_.format_version = order_.front().module.format_version;
       out_.language_version = order_.front().module.language_version;
@@ -795,7 +795,8 @@ private:
       const std::optional<GraphExportRef> target =
           resolve_import(fields[1], fields[2]);
       if (!target.has_value()) {
-        if (states_.find(fields[1]) == states_.end()) {
+        if (states_.find(fields[1]) == states_.end() ||
+            (external_ && external_(fields[1] + "." + fields[2]))) {
           const std::uint32_t const_id =
               intern_path_constant(fields[1] + "." + fields[2]);
           seeds.push_back({Opcode::LookupConst,
@@ -1376,6 +1377,7 @@ private:
   }
 
   std::vector<GraphModule> order_;
+  ExternalNamespacePredicate external_;
   BcModule out_;
   std::unordered_map<std::string, GraphModuleState> states_;
   std::unordered_map<std::string, std::uint32_t> string_ids_;
@@ -1502,17 +1504,113 @@ bool validate_reachable_dependencies(
 
 } // namespace
 
+frontend::ImportAliases module_import_aliases(const BcModule &module) {
+  frontend::ImportAliases aliases;
+  const std::string prefix = "sputnik.import.redirect:";
+  for (const auto &attr : module.attrs) {
+    const auto key = bc_string_or_empty(module, attr.key_str_id);
+    if (key.rfind(prefix, 0) == 0)
+      aliases.add(key.substr(prefix.size()), bc_string_or_empty(module, attr.value_str_id));
+  }
+  aliases.validate();
+  return aliases;
+}
+
+void redirect_module_imports(BcModule *module,
+                             const frontend::ImportAliases &aliases) {
+  if (aliases.empty()) return;
+  std::set<std::string> lexical_paths;
+  for (const auto &klass : module->classes)
+    lexical_paths.insert(bc_symbol_or_empty(*module, klass.class_name_sym_id));
+  const auto intern = [](auto &table, const std::string &value) {
+    const auto found = std::find(table.begin(), table.end(), value);
+    if (found != table.end()) return static_cast<std::uint32_t>(found - table.begin());
+    table.push_back(value);
+    return static_cast<std::uint32_t>(table.size() - 1U);
+  };
+  for (auto &dep : module->dependencies) {
+    const auto original = module->strings.at(dep.module_name_str_id);
+    const auto target = aliases.resolve(original);
+    if (target == original) continue;
+    dep.module_name_str_id = intern(module->strings, target);
+    // The caller explicitly selected a different provider. Its own verified
+    // ABI replaces the original provider's exact identity requirement.
+    dep.has_abi_requirement = false;
+    dep.abi_requirement = {};
+  }
+  for (auto &entry : module->exports)
+    if (entry.has_reexport_module_name)
+      entry.reexport_module_name_str_id = intern(module->strings,
+          aliases.resolve(module->strings.at(entry.reexport_module_name_str_id)));
+  for (auto &attr : module->attrs) {
+    const auto key = bc_string_or_empty(*module, attr.key_str_id);
+    if (key.rfind("sputnik.import.alias:", 0) != 0) continue;
+    const auto local = key.rfind('\t');
+    if (local != std::string::npos) lexical_paths.insert(key.substr(local + 1));
+    auto fields = split_tab_fields(bc_string_or_empty(*module, attr.value_str_id));
+    if (fields.size() < 2U) continue;
+    fields[1] = aliases.resolve(fields[1]);
+    std::string value;
+    for (const auto &field : fields) {
+      if (!value.empty()) value += '\t';
+      value += field;
+    }
+    attr.value_str_id = intern(module->strings, value);
+  }
+  for (auto &constant : module->const_pool) {
+    if (constant.kind != ConstantKind::Path) continue;
+    std::string path;
+    for (auto symbol : constant.items) {
+      if (!path.empty()) path += '.';
+      path += module->symbols.at(symbol);
+    }
+    // Module replacements must not capture a dependency's own lexical
+    // namespace alias or class. The linker qualifies those through that
+    // module's import table and class table instead.
+    if (std::any_of(lexical_paths.begin(), lexical_paths.end(),
+                    [&](const auto &local) { return frontend::ImportAliases::prefix(path, local); }))
+      continue;
+    const auto target = aliases.resolve(path);
+    if (target == path) continue;
+    constant.items.clear();
+    std::size_t start = 0;
+    for (;;) {
+      const auto dot = target.find('.', start);
+      constant.items.push_back(intern(module->symbols, target.substr(start, dot - start)));
+      if (dot == std::string::npos) break;
+      start = dot + 1;
+    }
+  }
+}
+
 GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
                            const std::vector<std::string> &roots,
-                           ExternalNamespacePredicate is_external_namespace) {
+                           ExternalNamespacePredicate is_external_namespace,
+                           const std::optional<frontend::ImportAliases> &aliases) {
   GraphLinkResult result;
   if (roots.empty()) {
     result.diagnostics.push_back(graph_error("native graph has no roots"));
     return result;
   }
 
+  frontend::ImportAliases replacements = aliases.value_or(frontend::ImportAliases{});
+  std::vector<GraphModule> redirected;
+  try {
+    for (const auto &module : modules)
+      if (!aliases && std::find(roots.begin(), roots.end(), module.name) != roots.end())
+        replacements.merge(module_import_aliases(module.module));
+    replacements.validate();
+    if (!replacements.empty()) {
+      redirected = modules;
+      for (auto &module : redirected)
+        redirect_module_imports(&module.module, replacements);
+    }
+  } catch (const std::exception &error) {
+    result.diagnostics.push_back(graph_error(error.what(), roots.front()));
+    return result;
+  }
   std::map<std::string, const GraphModule *> by_name;
-  for (const GraphModule &module : modules) {
+  for (const GraphModule &module : replacements.empty() ? modules : redirected) {
     if (module.name.empty()) {
       result.diagnostics.push_back(graph_error("native graph contains a module with an empty name"));
       continue;
@@ -1623,7 +1721,7 @@ GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
   }
 
   try {
-    return GraphModuleBuilder(std::move(order)).build(roots.front());
+    return GraphModuleBuilder(std::move(order), std::move(is_external_namespace)).build(roots.front());
   } catch (const std::exception &error) {
     result.diagnostics.push_back(graph_error(error.what(), roots.front()));
     return result;
@@ -1632,9 +1730,10 @@ GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
 
 GraphLinkResult link_graph(const std::vector<GraphModule> &modules,
                            const std::string &root,
-                           ExternalNamespacePredicate is_external_namespace) {
+                           ExternalNamespacePredicate is_external_namespace,
+                           const std::optional<frontend::ImportAliases> &aliases) {
   return link_graph(modules, std::vector<std::string>{root},
-                    std::move(is_external_namespace));
+                    std::move(is_external_namespace), aliases);
 }
 
 } // namespace sputnik::bytecode

@@ -18,9 +18,12 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/file.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <thread>
 
 namespace sputnik::runtime {
 
@@ -300,11 +303,14 @@ RuntimeIoStatus fd_write_all(int fd, const std::string &bytes,
         fd_write_once(fd, bytes.substr(offset), false, deadline, operation,
                       socket, resource_id, resource);
     if (!result.ok) {
+      result.count += offset;
       return result;
     }
     if (result.count == 0) {
-      return io_error("IOError",
-                      std::string(operation) + " made no write progress");
+      auto failed = io_error("IOError",
+                             std::string(operation) + " made no write progress");
+      failed.count = offset;
+      return failed;
     }
     offset += result.count;
   }
@@ -921,6 +927,111 @@ RuntimeFile::RuntimeFile(int fd, RuntimeFileMode mode, std::string path,
       path_(std::move(path)) {}
 
 RuntimeFile::~RuntimeFile() { (void)close(); }
+
+RuntimeIoStatus runtime_fs_atomic_write(const RuntimePath &path,
+                                        const std::string &bytes, bool durable) {
+  if (path.string().empty() || path.string().find('\0') != std::string::npos)
+    return io_error("ArgumentError", "invalid atomic write path");
+  std::string temporary = path.string() + ".tmp-XXXXXX";
+  const int fd = ::mkstemp(temporary.data());
+  if (fd < 0) return errno_status("atomic write create");
+  RuntimeIoStatus result = io_ok();
+  bool renamed = false;
+  if (::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0) result = errno_status("atomic write cloexec");
+  std::size_t offset = 0;
+  while (result.ok && offset < bytes.size()) {
+    if (current_runtime_task_cancel_requested()) { result = io_cancelled("atomic write"); break; }
+    const auto count = ::write(fd, bytes.data() + offset, bytes.size() - offset);
+    if (count < 0 && errno == EINTR) continue;
+    if (count <= 0) { result = errno_status("atomic write"); break; }
+    offset += static_cast<std::size_t>(count);
+  }
+  if (result.ok && durable && ::fsync(fd) != 0) result = errno_status("atomic write fsync");
+  if (::close(fd) != 0 && result.ok) result = errno_status("atomic write close");
+  if (result.ok) {
+    if (::rename(temporary.c_str(), path.string().c_str()) != 0) result = errno_status("atomic write rename");
+    else renamed = true;
+  }
+  if (renamed && durable) {
+    auto parent = std::filesystem::path(path.string()).parent_path();
+    if (parent.empty()) parent = ".";
+    const int directory = ::open(parent.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (directory < 0) result = errno_status("atomic write open directory");
+    else {
+      if (::fsync(directory) != 0) result = errno_status("atomic write directory fsync");
+      if (::close(directory) != 0 && result.ok) result = errno_status("atomic write directory close");
+    }
+  }
+  if (!renamed) (void)::unlink(temporary.c_str());
+  return result;
+}
+
+RuntimeIoStatus runtime_fs_sync(const RuntimePath &path) {
+  if (path.string().empty() || path.string().find('\0') != std::string::npos)
+    return io_error("ArgumentError", "invalid sync path");
+  // Never create a target or block opening a FIFO. Reject final symlinks so
+  // callers sealing a tree cannot accidentally sync an unrelated object.
+  int fd;
+  do {
+    if (current_runtime_task_cancel_requested()) return io_cancelled("fs.sync");
+    fd = ::open(path.string().c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);
+  } while (fd < 0 && errno == EINTR);
+  if (fd < 0) return errno_status("fs.sync open");
+  RuntimeIoStatus result = io_ok();
+  struct stat info{};
+  if (::fstat(fd, &info) != 0) result = errno_status("fs.sync stat");
+  else if (!S_ISREG(info.st_mode) && !S_ISDIR(info.st_mode))
+    result = io_error("ArgumentError", "fs.sync requires a regular file or directory");
+  while (result.ok) {
+    if (current_runtime_task_cancel_requested()) { result = io_cancelled("fs.sync"); break; }
+    if (::fsync(fd) == 0) break;
+    if (errno != EINTR) { result = errno_status("fs.sync"); break; }
+  }
+  if (::close(fd) != 0 && result.ok) result = errno_status("fs.sync close");
+  return result;
+}
+
+RuntimeFileLock::~RuntimeFileLock() { if (fd_ >= 0) (void)::close(fd_); }
+RuntimeFileLockResult RuntimeFileLock::acquire(const RuntimePath &path,
+                                              bool exclusive, bool nonblock) {
+  RuntimeFileLockResult result;
+  if (path.string().empty() || path.string().find('\0') != std::string::npos) {
+    static_cast<RuntimeIoStatus &>(result) = io_error("ArgumentError", "invalid lock path");
+    return result;
+  }
+  const int fd = ::open(path.string().c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+  if (fd < 0) { static_cast<RuntimeIoStatus &>(result) = errno_status("lock open"); return result; }
+  struct stat info{};
+  if (::fstat(fd, &info) != 0 || !S_ISREG(info.st_mode)) {
+    ::close(fd);
+    static_cast<RuntimeIoStatus &>(result) = io_error("ArgumentError", "lock requires a regular file");
+    return result;
+  }
+  while (::flock(fd, (exclusive ? LOCK_EX : LOCK_SH) | LOCK_NB) != 0) {
+    const int error = errno;
+    if (error == EINTR) continue;
+    if (error != EAGAIN && error != EWOULDBLOCK) {
+      ::close(fd); static_cast<RuntimeIoStatus &>(result) = errno_status("flock", error); return result;
+    }
+    if (nonblock || current_runtime_task_cancel_requested()) {
+      ::close(fd);
+      static_cast<RuntimeIoStatus &>(result) = nonblock
+        ? io_error("ResourceBusyError", "file is already locked") : io_cancelled("file lock");
+      return result;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  result.ok = true;
+  result.lock = std::shared_ptr<RuntimeFileLock>(new RuntimeFileLock(fd));
+  return result;
+}
+RuntimeIoStatus RuntimeFileLock::close() {
+  if (closed()) return io_ok();
+  const auto access = check_access();
+  if (!access.ok) return access;
+  const int fd = fd_; fd_ = -1; mark_closed();
+  return fd < 0 || ::close(fd) == 0 ? io_ok() : errno_status("lock close");
+}
 
 RuntimeFileOpenResult RuntimeFile::open(const RuntimePath &path,
                                         RuntimeFileMode mode,
@@ -1744,6 +1855,48 @@ RuntimeTcpStream::RuntimeTcpStream(int fd, RuntimeIsolationMode isolation)
 
 RuntimeTcpStream::~RuntimeTcpStream() { (void)close(); }
 
+namespace {
+RuntimeIoStatus unix_address(const std::string &path, sockaddr_un *address) {
+  if (path.empty() || path.find('\0') != std::string::npos || path.size() >= sizeof(address->sun_path))
+    return io_error("ArgumentError", "invalid or overlong Unix socket path");
+  *address = {}; address->sun_family = AF_UNIX;
+  std::memcpy(address->sun_path, path.c_str(), path.size() + 1);
+  return io_ok();
+}
+std::string unix_socket_path(int fd, bool peer) {
+  sockaddr_un address{}; socklen_t length = sizeof(address);
+  const int rc = peer ? ::getpeername(fd, reinterpret_cast<sockaddr *>(&address), &length)
+                      : ::getsockname(fd, reinterpret_cast<sockaddr *>(&address), &length);
+  if (rc != 0 || address.sun_family != AF_UNIX) return {};
+  return std::string(address.sun_path, strnlen(address.sun_path, sizeof(address.sun_path)));
+}
+}
+RuntimeTcpConnectResult RuntimeTcpStream::connect_unix(const std::string &path,
+    std::chrono::milliseconds timeout, RuntimeIsolationMode isolation) {
+  RuntimeTcpConnectResult result;
+  sockaddr_un address{};
+  auto status = unix_address(path, &address);
+  if (!status.ok) { static_cast<RuntimeIoStatus &>(result) = status; return result; }
+  const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) { static_cast<RuntimeIoStatus &>(result) = errno_status("Unix socket"); return result; }
+  if (::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 || !set_nonblocking(fd)) status = errno_status("Unix socket flags");
+  else if (::connect(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) {
+    if (errno == EINPROGRESS) {
+      status = wait_fd(fd, POLLOUT, make_deadline(timeout), "Unix connect");
+      int error = 0; socklen_t length = sizeof(error);
+      if (status.ok && (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) != 0 || error))
+        status = errno_status("Unix connect", error ? error : errno);
+    } else status = errno_status("Unix connect");
+  }
+  if (!status.ok) { ::close(fd); static_cast<RuntimeIoStatus &>(result) = status; return result; }
+  result.ok = true;
+  result.stream = std::shared_ptr<RuntimeTcpStream>(new RuntimeTcpStream(fd, isolation));
+  result.stream->unix_ = true;
+  return result;
+}
+std::string RuntimeTcpStream::local_path() const { return unix_socket_path(fd_, false); }
+std::string RuntimeTcpStream::remote_path() const { return unix_socket_path(fd_, true); }
+
 RuntimeTcpConnectResult
 RuntimeTcpStream::connect(const RuntimeEndpoint &endpoint,
                           std::chrono::milliseconds timeout,
@@ -2043,6 +2196,33 @@ RuntimeTcpListener::RuntimeTcpListener(int fd, RuntimeIsolationMode isolation)
 
 RuntimeTcpListener::~RuntimeTcpListener() { (void)close(); }
 
+RuntimeTcpListenResult RuntimeTcpListener::listen_unix(const std::string &path,
+    int backlog, RuntimeIsolationMode isolation) {
+  RuntimeTcpListenResult result;
+  sockaddr_un address{};
+  auto status = unix_address(path, &address);
+  if (status.ok && backlog <= 0) status = io_error("ArgumentError", "backlog must be positive");
+  if (!status.ok) { static_cast<RuntimeIoStatus &>(result) = status; return result; }
+  const int fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+  if (fd < 0) { static_cast<RuntimeIoStatus &>(result) = errno_status("Unix socket"); return result; }
+  if (::fcntl(fd, F_SETFD, FD_CLOEXEC) < 0 || !set_nonblocking(fd)) status = errno_status("Unix listener flags");
+  else if (::bind(fd, reinterpret_cast<sockaddr *>(&address), sizeof(address)) != 0) status = errno_status("Unix bind");
+  else {
+    struct stat info{};
+    if (::lstat(path.c_str(), &info) != 0) status = errno_status("Unix socket stat");
+    else {
+      auto listener = std::shared_ptr<RuntimeTcpListener>(new RuntimeTcpListener(fd, isolation));
+      listener->unix_path_ = path; listener->unix_device_ = info.st_dev; listener->unix_inode_ = info.st_ino;
+      if (::chmod(path.c_str(), 0600) != 0) status = errno_status("Unix socket chmod");
+      else if (::listen(fd, backlog) != 0) status = errno_status("Unix listen");
+      else { result.ok = true; result.listener = std::move(listener); return result; }
+      (void)listener->close();
+      static_cast<RuntimeIoStatus &>(result) = status; return result;
+    }
+  }
+  ::close(fd); static_cast<RuntimeIoStatus &>(result) = status; return result;
+}
+
 RuntimeTcpListenResult
 RuntimeTcpListener::listen(const RuntimeEndpoint &endpoint, int backlog,
                            bool reuse_addr, RuntimeIsolationMode isolation) {
@@ -2103,6 +2283,7 @@ RuntimeTcpListener::accept(std::chrono::milliseconds timeout) {
       result.ok = true;
       result.stream = std::shared_ptr<RuntimeTcpStream>(
           new RuntimeTcpStream(client, isolation_mode_));
+      result.stream->unix_ = !unix_path_.empty();
       if (tls_context_ != nullptr) {
         RuntimeIoStatus status = result.stream->start_tls(tls_context_);
         if (!status.ok) {
@@ -2206,6 +2387,13 @@ RuntimeIoStatus RuntimeTcpListener::close() {
   mark_closed();
   if (fd >= 0) {
     RuntimeReactor::instance().notify_closed(fd);
+  }
+  if (!unix_path_.empty()) {
+    struct stat info{};
+    if (::lstat(unix_path_.c_str(), &info) == 0 && S_ISSOCK(info.st_mode) &&
+        static_cast<std::uint64_t>(info.st_dev) == unix_device_ &&
+        static_cast<std::uint64_t>(info.st_ino) == unix_inode_)
+      (void)::unlink(unix_path_.c_str());
   }
   return fd < 0 || ::close(fd) == 0 ? io_ok() : errno_status("close");
 }

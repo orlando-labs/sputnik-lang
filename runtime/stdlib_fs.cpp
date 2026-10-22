@@ -533,6 +533,57 @@ SendStatus fs_file_type_send(NativeStdlibCall &call) {
 }
 
 SendStatus fs_namespace_send(NativeStdlibCall &call) {
+  if (call.selector == "sync") {
+    if (!call.require_arity(1) || !call.require_no_block()) return SendStatus::Faulted;
+    if (!call.kw_args.empty()) return call.fault("TypeError", "fs.sync does not accept keywords");
+    auto path = path_from_value(call, call.args[0]);
+    if (!path) return SendStatus::Faulted;
+    if (!call.host.stdlib_fs_sync(call.frame, path->string())) return SendStatus::Faulted;
+    *call.out = Value::null(); return SendStatus::Matched;
+  }
+  if (call.selector == "entries") {
+    if (!call.require_arity(1) || !call.kw_args.empty() || !call.require_no_block()) return SendStatus::Faulted;
+    auto path = path_from_value(call, call.args[0]);
+    if (!path) return SendStatus::Faulted;
+    std::vector<std::string> paths;
+    if (!call.host.stdlib_fs_entries(call.frame, path->string(), &paths)) return SendStatus::Faulted;
+    std::vector<Value> items;
+    for (auto &entry : paths) items.push_back(Value::io_value(std::make_shared<RuntimePath>(std::move(entry))));
+    *call.out = call.make_list(std::move(items)); return SendStatus::Matched;
+  }
+  if (call.selector == "atomic_write_text" || call.selector == "atomic_write_bytes") {
+    if (!call.require_arity(2) || !call.require_no_block() ||
+        !call.reject_unknown_keywords({"durable"})) return SendStatus::Faulted;
+    auto path = path_from_value(call, call.args[0]);
+    if (!path) return SendStatus::Faulted;
+    bool durable = true;
+    if (!call.bool_keyword("durable", true, &durable)) return SendStatus::Faulted;
+    std::optional<std::string> bytes;
+    if (call.selector == "atomic_write_text") {
+      if (!call.args[1].is_string()) return call.fault("TypeError", "atomic_write_text expects Str");
+      bytes = call.text_of(call.args[1]);
+    } else bytes = call.bytes_of(call.args[1]);
+    if (!bytes) return call.fault("TypeError", "atomic_write_bytes expects Bytes");
+    if (!call.host.stdlib_fs_atomic_write(call.frame, path->string(), *bytes, durable)) return SendStatus::Faulted;
+    *call.out = Value::null(); return SendStatus::Matched;
+  }
+  if (call.selector == "lock") {
+    if (!call.require_arity(1) || !call.reject_unknown_keywords({"exclusive", "nonblock"})) return SendStatus::Faulted;
+    auto path = path_from_value(call, call.args[0]);
+    bool exclusive = true, nonblock = true;
+    if (!path || !call.bool_keyword("exclusive", true, &exclusive) ||
+        !call.bool_keyword("nonblock", true, &nonblock)) return SendStatus::Faulted;
+    Value resource;
+    if (!call.host.stdlib_fs_lock(call.frame, path->string(), exclusive, nonblock, &resource)) return SendStatus::Faulted;
+    if (call.block.is_null()) { *call.out = resource; return SendStatus::Matched; }
+    auto lock = std::dynamic_pointer_cast<RuntimeFileLock>(resource.as_io_value());
+    auto result = call.call_block(call.block, {resource});
+    auto closed = lock->close();
+    if (result.status == StdlibBlockStatus::Raised) return call.raise(result.exception);
+    if (result.status != StdlibBlockStatus::Returned) return SendStatus::Faulted;
+    if (!set_fault_from_io_status(call, closed)) return SendStatus::Faulted;
+    *call.out = result.value; return SendStatus::Matched;
+  }
   if (const SendStatus status = fs_metadata_send(call);
       status != SendStatus::NotHandled) {
     return status;
@@ -585,7 +636,15 @@ RuntimeNativeModuleDescriptor fs_module_descriptor() {
        {RuntimeNativeTypeKind::FsFile, fs_file_type_send}},
       {{"fs.Path", RuntimeNativeTypeKind::FsPath, fs_path_instance_send},
        {"fs.File", RuntimeNativeTypeKind::FsFile, fs_file_instance_send},
-       {"fs.Metadata", RuntimeNativeTypeKind::Fs, fs_metadata_instance_send}},
+       {"fs.Metadata", RuntimeNativeTypeKind::Fs, fs_metadata_instance_send},
+       {"fs.Lock", RuntimeNativeTypeKind::Fs, [](NativeStdlibCall &call) {
+         auto lock = std::dynamic_pointer_cast<RuntimeFileLock>(call.receiver.as_io_value());
+         if (!lock || (call.selector != "close!" && call.selector != "closed?")) return SendStatus::NotHandled;
+         if (!call.require_arity(0) || !call.kw_args.empty() || !call.require_no_block()) return SendStatus::Faulted;
+         if (call.selector == "closed?") *call.out = Value::boolean(lock->closed());
+         else { if (!set_fault_from_io_status(call, lock->close())) return SendStatus::Faulted; *call.out = Value::null(); }
+         return SendStatus::Matched;
+       }}},
       {{RuntimeNativeTypeKind::FsPath, "new"}},
       {}};
 }

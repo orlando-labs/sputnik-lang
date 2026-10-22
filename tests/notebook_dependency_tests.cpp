@@ -28,7 +28,8 @@ static const std::string manifest =
 static std::string body(int answer) {
   return "package calc\nfrom helper import increment\nexport answer as value, Box\n"
          "def answer(): increment(" + std::to_string(answer - 1) + ")\n"
-         "class Box:\n  def init(@value)\n  def value(): @value\n";
+         "class Box:\n  def init(@value)\n  def value(): @value\n"
+         "  def increment!(): @value = @value + 1\n";
 }
 static void result(Session &session, const std::string &source, const std::string &expected) {
   session.cells[0].source = source;
@@ -60,6 +61,23 @@ int main() {
   result(session, "import calc as c\nc.value()\n", "42");
   result(session, "from calc import value as answer\nanswer()\n", "42");
   result(session, "import calc\ncalc.Box(17).value()\n", "17");
+  const std::string construction =
+      "from calc import Box\nbox = Box(17)\nbox.increment!()\nbox.value()\n";
+  result(session, construction, "18");
+  const auto *construction_backend = session.backend.get();
+  evaluate_from(&session, 0, true, false, false);
+  require(session.cells[0].ok && session.cells[0].result == "18" &&
+              session.backend.get() == construction_backend,
+          "rerunning a constructor creates a fresh instance in the existing world");
+  session.cells[0].source = "class Local:\n  def value(): 1\n";
+  session.cells[0].dirty = true;
+  evaluate_from(&session, 0, true, false, false);
+  require(session.cells[0].result == "18" &&
+              session.environment_error.find("NB1002") != std::string::npos &&
+              session.environment_error.find("class declaration 'Local'") != std::string::npos &&
+              session.backend.get() == construction_backend,
+          "class declarations remain forbidden without replacing the active world: " +
+              session.environment_error);
   result(session, "import calc\n[1].map |n|: calc.value() + n\n", "[43]");
   result(session, "from calc import value\n[1].map |n|: value() + n\n", "[43]");
   result(session, "import calc\nf = calc.value\nf()\n", "42");
@@ -126,6 +144,9 @@ int main() {
   require(!prepare_bundled_environment(duplicate, {"calc"}).ok, "duplicate module identities rejected");
   auto conflict = sources; conflict[0].id = "math";
   require(!prepare_bundled_environment(conflict, {"math"}).ok, "native module names cannot be replaced");
+  require(!prepare_bundled_environment({{"notebook.ui", "ui.s",
+      "package notebook.ui\nexport Stopwatch\nclass Stopwatch\n", false, {}}}, {"notebook.ui"}).ok,
+      "source helpers cannot replace native notebook.ui.Stopwatch");
 
   // Use only manifest-listed files, with traversal and escaping symlinks blocked.
   write(package / "sputnik.build.yaml", "schema: sputnik.build.v1\nname: calc\nroot: calc\nmodules:\n  - name: calc\n    path: ../outside.s\n");

@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import datetime as dt
 import json
 import os
 import platform
 import shutil
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
+from body_timing import prepare as prepare_body_sources
 
 from benchmark_support import (
     balanced_orders,
@@ -43,6 +45,9 @@ class Workload:
 
 JSON_RECORDS = 20000
 JSON_FIXTURE_RELATIVE = Path("bench/polyglot/build/json/events.jsonl")
+TOOLS = {}
+SOURCE_OVERRIDES = {}
+BUILD_RECORDS = []
 
 
 WORKLOADS = {
@@ -201,6 +206,26 @@ WORKLOADS = {
     ),
 }
 
+WORKLOADS["json-full-api"] = replace(
+    WORKLOADS["json"], name="json-full-api", sputnik_module="bench.polyglot.json_full_api",
+    sputnik_source="json_full_api.s", sputnik_entry="__init__", python_source="json_full_api.py",
+    ruby_source="json_full_api.rb", cpp_source="json_full_api.cpp", cpp_binary="json_full_api",
+    go_source="json_full_api.go", go_binary="json_full_api",
+    rust_source="json_full_api.rs", rust_binary="json_full_api",
+)
+
+
+def tool(name: str, root: Path):
+    return TOOLS.get(name, root / "build" / name)
+
+
+def source_path(root: Path, workload: Workload, language: str) -> Path:
+    if language in SOURCE_OVERRIDES:
+        return SOURCE_OVERRIDES[language]
+    base = root / "bench/polyglot" / language
+    if language == "sputnik": base /= "src"
+    return base / getattr(workload, f"{language}_source")
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
@@ -221,6 +246,9 @@ def run_command(
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE if capture else None,
     )
+    BUILD_RECORDS.append({"command": list(map(str, command)), "cwd": str(cwd),
+                          "environment": {k: str(v) for k, v in (env or {}).items()}, "returncode": completed.returncode,
+                          "stdout": completed.stdout, "stderr": completed.stderr})
     if completed.returncode != 0:
         stdout = completed.stdout or ""
         stderr = completed.stderr or ""
@@ -272,7 +300,8 @@ def choose_ruby() -> str:
 def ensure_sputnik_tools(root: Path) -> None:
     # Let make verify source timestamps even when both tools already exist.
     # A merely present isputnik may predate the VM changes being benchmarked.
-    run_command(["make", "build/sputnik", "build/isputnik"], root, capture=False)
+    if "sputnik" not in TOOLS and "isputnik" not in TOOLS:
+        run_command(["make", "build/sputnik", "build/isputnik"], root, capture=False)
 
 
 def prepare_json_fixture(root: Path) -> Path:
@@ -312,7 +341,7 @@ def build_sputnik_bytecode(root: Path, build_dir: Path) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     run_command(
         [
-            root / "build" / "sputnik",
+            tool("sputnik", root),
             "build",
             root / "bench" / "polyglot" / "sputnik" / "sputnik.build.json",
             "--out-dir",
@@ -337,10 +366,10 @@ def build_sputnik_native_executable(
 ) -> Path:
     output = sputnik_native_path(build_dir, workload)
     output.parent.mkdir(parents=True, exist_ok=True)
-    source = root / "bench" / "polyglot" / "sputnik" / "src" / workload.sputnik_source
-    entry = "init" if workload.sputnik_entry == "__init__" else "main-only"
+    source = source_path(root, workload, "sputnik")
+    entry = "init" if workload.sputnik_entry == "__init__" or "sputnik" in SOURCE_OVERRIDES else "main-only"
     command = [
-        root / "build" / "sputnik",
+        tool("sputnik", root),
         "build",
         source,
         "-o",
@@ -382,15 +411,22 @@ def build_sputnik_native_executable(
 
 
 def compile_cpp_program(
-    root: Path, build_dir: Path, cxx: str, workload: Workload
+    root: Path, build_dir: Path, cxx: str, workload: Workload, *, reference=None
 ) -> Path:
     output = build_dir / "cpp" / workload.cpp_binary
+    if reference: output = output.with_name(output.name + "-" + reference)
     output.parent.mkdir(parents=True, exist_ok=True)
-    sources = [root / "bench" / "polyglot" / "cpp" / workload.cpp_source]
+    sources = [source_path(root, workload, "cpp")]
     extra_args = []
+    if reference == "checked": extra_args.append("-DSPUTNIK_BENCH_CHECKED_INTS")
+    if reference == "generic": extra_args.append("-DSPUTNIK_BENCH_GENERIC_ARRAYS")
     if workload.name == "sha-digest":
         sources.append(root / "runtime" / "digest.cpp")
         extra_args.extend(["-I", root])
+    json_libs = []
+    if workload.name == "json-full-api":
+        extra_args += shlex.split(run_command(["pkg-config", "--cflags", "json-c"], root).stdout)
+        json_libs = shlex.split(run_command(["pkg-config", "--libs", "json-c"], root).stdout)
     run_command(
         [
             cxx,
@@ -399,6 +435,7 @@ def compile_cpp_program(
             "-pipe",
             *extra_args,
             *sources,
+            *json_libs,
             "-o",
             output,
         ],
@@ -418,7 +455,7 @@ def compile_go_program(root: Path, build_dir: Path, go: str, workload: Workload)
             "build",
             "-o",
             output,
-            root / "bench" / "polyglot" / "go" / workload.go_source,
+            source_path(root, workload, "go"),
         ],
         root,
         env={"GOCACHE": cache_dir},
@@ -431,6 +468,21 @@ def compile_rust_program(
 ) -> Path:
     output = build_dir / "rust" / workload.rust_binary
     output.parent.mkdir(parents=True, exist_ok=True)
+    if workload.name == "json-full-api":
+        crate = build_dir / "rust-crate"
+        crate.mkdir(parents=True, exist_ok=True)
+        original = root / "bench/polyglot/rust/json-full-api"
+        manifest = (original / "Cargo.toml").read_text().replace(
+            'path = "../json_full_api.rs"', 'path = ' + json.dumps(str(source_path(root, workload, "rust"))))
+        (crate / "Cargo.toml").write_text(manifest)
+        shutil.copyfile(original / "Cargo.lock", crate / "Cargo.lock")
+        cargo = TOOLS.get("cargo") or shutil.which("cargo")
+        if not cargo: raise RuntimeError("json-full-api requires cargo and locked serde_json dependencies")
+        run_command([cargo, "build", "--release", "--locked", "--offline", "--manifest-path", crate / "Cargo.toml",
+                     "--target-dir", build_dir / "rust-target"], root,
+                    env={"RUSTC": rustc})
+        shutil.copy2(build_dir / "rust-target/release/json_full_api", output)
+        return output
     run_command(
         [
             rustc,
@@ -439,7 +491,7 @@ def compile_rust_program(
             "2021",
             "-o",
             output,
-            root / "bench" / "polyglot" / "rust" / workload.rust_source,
+            source_path(root, workload, "rust"),
         ],
         root,
     )
@@ -546,6 +598,31 @@ def extract_checksum(name: str, stdout: str) -> str:
     return ""
 
 
+def extract_record(stdout: str, marker: str) -> dict:
+    records = [json.loads(line[len(marker):]) for line in stdout.splitlines() if line.startswith(marker)]
+    if len(records) != 1:
+        raise RuntimeError(f"expected exactly one {marker.strip()} record, got {len(records)}")
+    return records[0]
+
+
+def validate_sample(sample: dict, workload: Workload, timing: str, iterations: int) -> None:
+    if sample["returncode"] != 0:
+        raise RuntimeError(f"program failed: {sample['stdout']}\n{sample['stderr']}")
+    if workload.name == "json-full-api":
+        record = extract_record(sample["stdout"], "BENCH_WORK ")
+        expected = {"checksum": int(workload.expected_checksum), "documents": 1000, "pretty": 20, "rows": JSON_RECORDS}
+        if record != expected:
+            raise RuntimeError(f"full JSON operation/shape admission failed: {record!r}")
+        sample["work"] = record
+    if timing == "body":
+        record = extract_record(sample["stdout"], "BENCH_BODY ")
+        if record.get("iterations") != iterations or record.get("warmups") != 1 or record.get("elapsed_ns", 0) <= 0:
+            raise RuntimeError(f"invalid body timing record: {record!r}")
+        sample["body_s"] = record["elapsed_ns"] / 1e9 / iterations
+        sample["body_record"] = record
+        sample["outside_body_s"] = sample["elapsed_s"] - record["elapsed_ns"] / 1e9
+
+
 def aggregate(
     name: str, command, samples: list[dict], expected_checksum: str
 ) -> dict:
@@ -573,7 +650,7 @@ def aggregate(
     ]
     timing = summary_stats(elapsed)
     rss = summary_stats(rss_values)
-    return {
+    result = {
         "name": name,
         "command": [str(part) for part in command],
         "available": True,
@@ -589,6 +666,10 @@ def aggregate(
         "best_s": timing["min"],
         "peak_rss_mb": rss["max"],
     }
+    if good and "body_s" in good[0]:
+        result["body_timing_s"] = summary_stats([sample["body_s"] for sample in good])
+        result["outside_body_s"] = summary_stats([sample["outside_body_s"] for sample in good])
+    return result
 
 
 def unavailable_result(name: str, reason: str) -> dict:
@@ -686,6 +767,10 @@ def micro_comparisons(
                     "paired_throughput_ratio": summary_stats(ratios),
                 }
             )
+            if baseline_samples and "body_s" in baseline_samples[0]:
+                body_baseline = {s["repeat_index"]: s["body_s"] for s in baseline_samples}
+                comparisons[-1]["paired_body_ratio"] = summary_stats(
+                    [body_baseline[s["repeat_index"]] / s["body_s"] for s in samples_by_name[name]])
     return comparisons
 
 
@@ -718,8 +803,8 @@ def micro_provenance(
     ruby: str,
 ) -> dict:
     artifacts = {
-        "sputnik": file_provenance(root / "build/sputnik"),
-        "isputnik": file_provenance(root / "build/isputnik"),
+        "sputnik": file_provenance(Path(tool("sputnik", root))),
+        "isputnik": file_provenance(Path(tool("isputnik", root))),
     }
     for name, command in programs:
         for part in command:
@@ -729,6 +814,7 @@ def micro_provenance(
     sources = [
         root / "bench/polyglot/run_benchmark.py",
         root / "bench/polyglot/benchmark_support.py",
+        root / "bench/polyglot/body_timing.py",
         root / "bench/polyglot/sputnik/sputnik.build.json",
         root / "bench/polyglot/sputnik/src" / workload.sputnik_source,
         root / "bench/polyglot/python" / workload.python_source,
@@ -737,22 +823,36 @@ def micro_provenance(
         root / "bench/polyglot/go" / workload.go_source,
         root / "bench/polyglot/rust" / workload.rust_source,
     ]
+    sources += list(SOURCE_OVERRIDES.values())
+    for name, executable in (("cxx", cxx), ("go", go), ("rustc", rust), ("ruby", ruby),
+                             ("python", TOOLS.get("python", sys.executable)), ("cargo", TOOLS.get("cargo"))):
+        if executable: artifacts[f"tool:{name}"] = file_provenance(Path(shutil.which(str(executable)) or executable))
+    if workload.name == "json-full-api":
+        sources += [root / "bench/polyglot/rust/json-full-api/Cargo.toml", root / "bench/polyglot/rust/json-full-api/Cargo.lock",
+                    root / JSON_FIXTURE_RELATIVE]
+        libdir = run_command(["pkg-config", "--variable=libdir", "json-c"], root).stdout.strip()
+        library = Path(libdir) / ("libjson-c.dylib" if sys.platform == "darwin" else "libjson-c.so")
+        artifacts["json-c"] = file_provenance(library)
     return {
         "host": host_provenance(),
         "repositories": {"sputnik": git_provenance(root)},
         "artifacts": artifacts,
         "source_tree": tree_provenance(sources, relative_to=root),
+        "compiler_runtime_tree": tree_provenance([root / name for name in
+            ("runtime", "frontend", "bytecode", "optimizer", "profile", "package", "tools/sputnik", "tools/isputnik", "mk", "Makefile")], relative_to=root),
+        "build_commands": BUILD_RECORDS,
         "build_dir": str(build_dir.resolve()),
         "versions": {
-            "sputnik": version_line([root / "build/sputnik", "--version"], root),
-            "python": platform.python_version(),
+            "sputnik": version_line([tool("sputnik", root), "--version"], root),
+            "python": version_line([TOOLS.get("python", sys.executable), "--version"], root),
             "ruby": version_line([ruby, "--version"], root),
             "cxx": version_line([cxx, "--version"], root),
             "go": version_line([go, "version"], root) if go else None,
             "rust": version_line([rust, "--version"], root) if rust else None,
+            "json-c": version_line(["pkg-config", "--modversion", "json-c"], root) if workload.name == "json-full-api" else None,
         },
         "environment": relevant_environment(
-            ["CXX", "CC", "RUSTFLAGS", "GOFLAGS", "SPUTNIK_BENCH_RUBY"]
+            ["CXX", "CC", "RUSTFLAGS", "GOFLAGS", "SPUTNIK_BENCH_RUBY", "SPUTNIK_NATIVE_RT_CACHE", "CARGO_HOME"]
         ),
         "argv": sys.argv,
     }
@@ -815,6 +915,15 @@ def markdown_report(payload: dict) -> str:
             )
         )
     lines += ["", "## Measured run order", ""]
+    if payload.get("timing_mode") == "body":
+        lines += ["", "## In-process body (per invocation)", "",
+                  "One in-process warmup is outside the timed batch. Process wall includes this warmup, imports/init, printing and teardown; outside-body time is not startup alone.", "",
+                  "| Program | Body median, ms | CV | Process median, ms | Outside timed batch, ms |",
+                  "|---|---:|---:|---:|---:|"]
+        for row in payload["results"]:
+            if row["available"]:
+                body = row["body_timing_s"]
+                lines.append(f"| {row['name']} | {body['median']*1000:.4f} | {body['cv_percent']:.2f}% | {row['median_s']*1000:.4f} | {row['outside_body_s']['median']*1000:.4f} |")
     for index, order in enumerate(payload["run_orders"], start=1):
         lines.append(f"- repeat {index}: `{' → '.join(order)}`")
     lines += ["", "## Provenance", ""]
@@ -844,6 +953,11 @@ def main() -> int:
         description="Run the Sputnik/Python/Ruby/C++/Go/Rust polyglot benchmark."
     )
     parser.add_argument("--repeats", type=int, default=5)
+    for name in ("sputnik", "isputnik", "python", "ruby", "cxx", "go", "rustc", "cargo"):
+        parser.add_argument("--" + name, help="explicit executable path (recorded and hashed)")
+    parser.add_argument("--timing", choices=("process", "body"), default="process")
+    parser.add_argument("--body-iterations", type=int, default=5)
+    parser.add_argument("--prepare-only", action="store_true", help="build and save admission/provenance without timing")
     parser.add_argument(
         "--warmups",
         type=int,
@@ -894,6 +1008,13 @@ def main() -> int:
         help="write a Markdown statistical report",
     )
     args = parser.parse_args()
+    for name in ("sputnik", "isputnik", "python", "ruby", "cxx", "go", "rustc", "cargo"):
+        value = getattr(args, name)
+        if value:
+            path = Path(shutil.which(value) or value).expanduser().resolve()
+            if not path.is_file() or not os.access(path, os.X_OK): raise RuntimeError(f"invalid --{name}: {value}")
+            TOOLS[name] = str(path)
+    if args.body_iterations < 1: raise RuntimeError("--body-iterations must be positive")
     if args.repeats < 1:
         raise RuntimeError("--repeats must be at least 1")
     if args.warmups < 0:
@@ -909,12 +1030,14 @@ def main() -> int:
     if not build_dir.is_absolute():
         build_dir = root / build_dir
     build_dir.mkdir(parents=True, exist_ok=True)
-    if workload.name == "json":
+    if workload.name in ("json", "json-full-api"):
         prepare_json_fixture(root)
+    if args.timing == "body":
+        SOURCE_OVERRIDES.update(prepare_body_sources(root, build_dir, workload, args.body_iterations))
 
-    cxx = choose_cxx()
-    go = choose_go()
-    rust = choose_rust()
+    cxx = TOOLS.get("cxx") or choose_cxx()
+    go = TOOLS.get("go") or choose_go()
+    rust = TOOLS.get("rustc") or choose_rust()
     go_unavailable_reason = None
     rust_unavailable_reason = None
     if args.no_build:
@@ -952,28 +1075,23 @@ def main() -> int:
         else:
             rust_binary = compile_rust_program(root, build_dir, rust, workload)
 
-    ruby = choose_ruby()
+    ruby = TOOLS.get("ruby") or choose_ruby()
 
     all_programs = [
         (
             "sputnik-interpreted",
             [
-                root / "build" / "isputnik",
+                tool("isputnik", root),
                 "--eval-file",
-                root
-                / "bench"
-                / "polyglot"
-                / "sputnik"
-                / "src"
-                / workload.sputnik_source,
+                source_path(root, workload, "sputnik"),
             ],
         ),
         ("sputnik-built", sputnik_built_command),
         (
             "python",
             [
-                sys.executable,
-                root / "bench" / "polyglot" / "python" / workload.python_source,
+                TOOLS.get("python", sys.executable),
+                source_path(root, workload, "python"),
             ],
         ),
         (
@@ -981,7 +1099,7 @@ def main() -> int:
             [
                 ruby,
                 "--disable=gems",
-                root / "bench" / "polyglot" / "ruby" / workload.ruby_source,
+                source_path(root, workload, "ruby"),
             ],
         ),
         ("cpp", [cpp_binary]),
@@ -990,6 +1108,32 @@ def main() -> int:
         all_programs.append(("go", [go_binary]))
     if rust_unavailable_reason is None:
         all_programs.append(("rust", [rust_binary]))
+    reference = {"arithmetic": "checked", "calls-collections": "generic"}.get(workload.name)
+    if reference:
+        reference_binary = build_dir / "cpp" / (workload.cpp_binary + "-" + reference)
+        if not args.no_build: compile_cpp_program(root, build_dir, cxx, workload, reference=reference)
+        if not reference_binary.is_file(): raise RuntimeError(f"missing C++ control: {reference_binary}")
+        all_programs.append(("cpp-" + reference, [reference_binary]))
+
+    provenance_before = micro_provenance(root, build_dir, workload, all_programs, cxx, go, rust, ruby)
+    admission_path = build_dir / f"{workload.name}-{args.timing}-admission.json"
+    identity = {"timing_mode": args.timing, "body_iterations": args.body_iterations,
+                "source_tree": provenance_before["source_tree"], "artifacts": provenance_before["artifacts"]}
+    if args.no_build:
+        saved = json.loads(admission_path.read_text())
+        for key in ("timing_mode", "body_iterations"):
+            if saved[key] != identity[key]: raise RuntimeError(f"saved build {key} mismatch")
+        if saved["source_tree"]["sha256"] != identity["source_tree"]["sha256"]:
+            raise RuntimeError("benchmark sources changed since build; rebuild required")
+        for key, artifact in identity["artifacts"].items():
+            if saved["artifacts"].get(key, {}).get("sha256") != artifact["sha256"]:
+                raise RuntimeError(f"saved executable/dependency changed: {key}")
+    else:
+        identity["build_commands"] = BUILD_RECORDS.copy()
+        admission_path.write_text(json.dumps(identity, indent=2))
+    if args.prepare_only:
+        print(f"Prepared {workload.name}/{args.timing}: {admission_path}")
+        return 0
 
     program_map = {name: command for name, command in all_programs}
     initial_program_names = [name for name, _command in all_programs]
@@ -1010,6 +1154,7 @@ def main() -> int:
                 continue
             try:
                 sample = measure(program_map[name], root)
+                validate_sample(sample, workload, args.timing, args.body_iterations)
                 aggregate(
                     name,
                     program_map[name],
@@ -1039,6 +1184,7 @@ def main() -> int:
         )
         for order_position, name in enumerate(order):
             sample = measure(program_map[name], root)
+            validate_sample(sample, workload, args.timing, args.body_iterations)
             sample["repeat_index"] = repeat_index + 1
             sample["order_position"] = order_position + 1
             samples_by_name[name].append(sample)
@@ -1070,6 +1216,7 @@ def main() -> int:
         for name in (
             "sputnik-interpreted", "sputnik-built", "python", "ruby",
             "cpp", "go", "rust",
+            "cpp-checked", "cpp-generic",
         )
         if name in results_by_name
     ]
@@ -1078,6 +1225,15 @@ def main() -> int:
     provenance = micro_provenance(
         root, build_dir, workload, all_programs, cxx, go, rust, ruby
     )
+    for key, artifact in provenance_before["artifacts"].items():
+        if provenance["artifacts"][key]["sha256"] != artifact["sha256"]:
+            raise RuntimeError(f"executable/dependency changed during measurement: {key}")
+    if provenance["source_tree"]["sha256"] != provenance_before["source_tree"]["sha256"]:
+        raise RuntimeError("benchmark sources changed during measurement")
+    if provenance["compiler_runtime_tree"]["sha256"] != provenance_before["compiler_runtime_tree"]["sha256"]:
+        raise RuntimeError("compiler/runtime source tree changed during measurement")
+    provenance["build_commands"] = json.loads(admission_path.read_text()).get("build_commands", [])
+    provenance["identity_verified_before_after"] = True
     stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d-%H%M%S-%z")
     results_dir = root / "bench/polyglot/results"
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -1091,9 +1247,12 @@ def main() -> int:
     except ValueError:
         json_result = str(json_out)
     payload = {
-        "schema": "sputnik.polyglot.micro.v2",
+        "schema": "sputnik.polyglot.micro.v3",
         "timestamp": dt.datetime.now().astimezone().isoformat(),
         "workload": workload.name,
+        "timing_mode": args.timing,
+        "body_iterations": args.body_iterations if args.timing == "body" else None,
+        "work_contract": "generic-json-dom-v1" if workload.name == "json-full-api" else "legacy-checksum-v1",
         "expected_checksum": workload.expected_checksum,
         "repeats": args.repeats,
         "warmups": args.warmups,

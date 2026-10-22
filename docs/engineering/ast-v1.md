@@ -88,3 +88,7 @@ consequent, alternative)`. The parser deliberately rejects C-style
 - the normalized many-def `base_signature` is synthetic positional
   `__arg0..__argN`, so clause-local names remain part of the clause pattern
   rather than the method signature.
+
+Conditional assignment uses `AstAssign` with `op = "?="` or `op = "or="`,
+ordinary assignable `left` and lazy `right`. It has assignment precedence
+and right associativity; optional bracket nodes remain read-only.

@@ -1,0 +1,8 @@
+{
+  "name": "progressbar",
+  "version": "0.1.0",
+  "root": "progressbar",
+  "sources": [
+    "src/*.s"
+  ]
+}

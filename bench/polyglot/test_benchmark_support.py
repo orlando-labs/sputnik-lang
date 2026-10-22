@@ -35,7 +35,7 @@ class BenchmarkSupportTests(unittest.TestCase):
             path = Path(directory) / "artifact"
             path.write_bytes(b"sputnik")
             record = file_provenance(path)
-            self.assertEqual(5, record["size_bytes"])
+            self.assertEqual(7, record["size_bytes"])
             self.assertEqual(64, len(record["sha256"]))
 
 

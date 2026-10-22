@@ -28,6 +28,8 @@ Only `false` and `null` are falsy: `0`, `""`, `[]`, `{}` are truthy. Names may e
 | Membership | `x in xs`; `key in map`; `"sub" in text` → receiver's `contains?` |
 | Default only for null | `value ?? fallback` (preserves `false` and `0`; specified, but see local binary note below) |
 | Default for falsy | `value or fallback` |
+| Assign a null default | `value ?= fallback`; preserves `false`, `0`, empty strings and collections |
+| Assign a falsy default | `value or= fallback`; replaces `false` and `null` |
 | Explicit absence | `text.trimmed.presence() or "anonymous"`; `xs.nonempty() or defaults`; `n.nonzero() or 100` |
 | Last result | `$_` is read-only, scoped to the current callable/block; expression statements **including assignments and logging** update it |
 
@@ -50,6 +52,9 @@ xs[-1]                             # last element; invalid index → IndexError
 xs[?99]                            # optional index → null on absence
 user[:name]                        # strict lookup; missing key → KeyError
 user[?:email]                      # optional key → null on absence
+user[:email] ?= "unknown"          # insert a missing key or replace null
+xs[0] ?= 10                        # replace only a null element
+xs[1] or= 20                       # replace false or null
 maybe_user.?.[?:email]              # tolerate BOTH null receiver and missing key
 
 (1..5:2).array                     # [1, 3, 5]; inclusive end
@@ -65,6 +70,8 @@ Array.filled(3, 0)                 # repeated value; objects share one reference
 `{}` is an empty Map; `{x}` is a one-element Set. Ordinary Map treats `:name` and `"name"` as the same key and exports name keys as strings. `StrictMap` distinguishes them. Duplicate map keys overwrite the value; sets deduplicate. `Map{…}` / `Set{…}` are explicit constructors; `HashMap{…}`, `StrictHashMap{…}`, `HashSet{…}` also have spellings, but hash-backed performance is not guaranteed by the current reference profile.
 
 `[?key]` handles absence, not arbitrary errors, and is read-only syntax. Use `contains?(key)` / `has_index?(i)` to distinguish missing entries from stored `null`. `.?.` guards only a null receiver; protect each nullable step. Open ranges (`1..`, `1..:2`) need a finite bound before materialization/spread; slicing supplies one. Step zero is invalid.
+
+`?=` and `or=` evaluate the target once and evaluate the RHS only when a write is needed; they return the retained or assigned value. Indexed targets use optional lookup and ordinary assignment: a missing map key can be inserted, while an out-of-bounds array write raises `IndexError`. `a?=b` means `a ?= b`; use `ready? = false` to assign to a predicate-suffixed name.
 
 ## 3. Blocks and chains — spaces matter
 
@@ -145,6 +152,8 @@ u.name = "Grace"                    # property setter
 `@field` is storage, not a public accessor; expose it with `attr`/`prop`. `class_prop` and `@@field` are class-side. Property arms must not suspend. Inside object methods, lexical names win; an unresolved name falls back to `self.name`.
 
 Reopen with another `class User:` / `mixin Named:`. `include A, B` mixes into instances; `extend FactoryMixin` in a class mixes into its class object. Local methods win, then later mixins, then superclass. Runtime method tools: `define_method(User, :greet) |name|: …`, `send(user, :greet, "Ada")`, and `def method_missing(selector, …): …` (signature depends on handled calls). Changes to classes/method tables require an open dispatch world. Custom indexing uses `def [](key): …` and `def []=(key, value): …`.
+
+Inside a method defined in a class, `super(args...)` calls the same method on the lexical superclass with the original receiver. Use `super()` for no arguments and `super(value, option: option, &block)` for explicit forwarding. This also works in constructors, `class_method` bodies, and nested closures. See [superclass calls](engineering/super-dispatch.md).
 
 ## 6. Pattern matching and multi-clause functions
 
@@ -308,6 +317,8 @@ export display, Person as User       # private by default; explicit re-export
 ```
 
 Imports are static, top-level, before ordinary declarations/statements. Imported names are live, read-only aliases. `.s`, `.spu`, and `.sputnik` source files are accepted. From the repository root: `build/sputnik program.s` runs a file; `build/sputnik parse program.s` inspects syntax.
+
+`import my.orm as orm` replaces the module path throughout the graph: `import orm`, `from orm import Model`, and dependency imports all use `my.orm`. Qualified aliases such as `import my.orm as vendor.orm` and submodule suffixes work too. Repeated imports of the same binding are allowed; the module initializes once. Scripts and notebook cells need no additional manifest.
 
 ## 12. Optional profiles and reference additions
 

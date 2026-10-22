@@ -27,6 +27,31 @@ CPPFLAGS += '-DSPUTNIK_OPENSSL_LIB_DIR="$(OPENSSL_LIB_DIR)"'
 endif
 LDFLAGS += -lssl -lcrypto
 
+# Notebook config codecs use LibYAML's event parser on every execution host.
+YAML_PREFIX ?= $(firstword $(wildcard /opt/homebrew/opt/libyaml /usr/local/opt/libyaml))
+YAML_INCLUDE_DIR ?= $(if $(strip $(YAML_PREFIX)),$(YAML_PREFIX)/include,$(shell pkg-config --variable=includedir yaml-0.1 2>/dev/null))
+YAML_LIB_DIR ?= $(if $(strip $(YAML_PREFIX)),$(YAML_PREFIX)/lib,$(shell pkg-config --variable=libdir yaml-0.1 2>/dev/null))
+ifneq ($(strip $(YAML_INCLUDE_DIR)),)
+CPPFLAGS += -I$(YAML_INCLUDE_DIR) '-DSPUTNIK_YAML_INCLUDE_DIR="$(YAML_INCLUDE_DIR)"'
+endif
+ifneq ($(strip $(YAML_LIB_DIR)),)
+CPPFLAGS += '-DSPUTNIK_YAML_LIB_DIR="$(YAML_LIB_DIR)"'
+LDFLAGS += -L$(YAML_LIB_DIR)
+endif
+LDFLAGS += -lyaml
+
+# Public package distributions use a streaming tar/gzip backend. Homebrew's
+# libarchive is keg-only; explicit ARCHIVE_PREFIX also supports other layouts.
+ARCHIVE_PREFIX ?= $(firstword $(wildcard /opt/homebrew/opt/libarchive /usr/local/opt/libarchive))
+ifneq ($(strip $(ARCHIVE_PREFIX)),)
+CPPFLAGS += -I$(ARCHIVE_PREFIX)/include
+LDFLAGS += -L$(ARCHIVE_PREFIX)/lib
+else
+CPPFLAGS += $(shell pkg-config --cflags libarchive 2>/dev/null)
+LDFLAGS += $(shell pkg-config --libs-only-L libarchive 2>/dev/null)
+endif
+LDFLAGS += -larchive -lz
+
 # GOST R 34.10-2012 needs Nettle's supported TC26 curves. Other signature
 # algorithms remain available when this optional backend is not installed.
 NETTLE_GOST_LIBS := $(shell pkg-config --libs hogweed nettle gmp 2>/dev/null)
@@ -54,6 +79,9 @@ endif
 # Use SPUTNIK_HEAP_STATS=1 on a run to print the §9 RSS / live-bytes line.
 MALLOC ?= system
 UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+LDFLAGS += -pthread
+endif
 
 # `sputnik run <manifest> --grant ffi` loads package thunks into the interpreter
 # with dlopen. Export the stable sputnik_ext.h ABI from the main executable so a

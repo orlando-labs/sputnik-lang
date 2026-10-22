@@ -147,6 +147,26 @@ void test_precedence() {
 }
 
 void test_compound_assignment() {
+  for (const std::string &op : {std::string("?="), std::string("or=")}) {
+    auto conditional = parse_ok("x " + op + " y " + op + " z or 1\n");
+    expect(conditional->kind == "AstAssign" &&
+               string_field(*conditional, "op") == op,
+           "conditional assignment parses");
+    const Expr &right = node_field(*conditional, "right");
+    expect(right.kind == "AstAssign" && string_field(right, "op") == op,
+           "conditional assignment associates right");
+    expect(node_field(right, "right").kind == "AstBinary",
+           "or binds tighter than conditional assignment");
+    auto module = parse_module_raw("xs[i] " + op + " 1\n");
+    expect(module.ok(), "indexed conditional assignment module parses");
+    auto optional = parse_raw("xs[?i] " + op + " 1\n");
+    expect(has_diagnostic(optional, "E_OPTIONAL_BRACKET_ASSIGNMENT"),
+           "optional bracket remains read-only for conditional assignment");
+    expect(!parse_raw("1 " + op + " 2\n").ok(),
+           "conditional assignment requires an assignable target");
+  }
+  expect(parse_module_raw("a?=1\nready? = false\nready??=true\n").ok(),
+         "compact null assignment and predicate bindings parse");
   std::unique_ptr<Expr> expr = parse_ok("x += 1\n");
   expect(expr->kind == "AstAssign", "compound assignment parses");
   expect(string_field(*expr, "op") == "+=", "compound assignment op");
@@ -1330,6 +1350,18 @@ void test_property_keywords_are_contextual_names() {
          "member named attr parses as expression statement");
 }
 
+void test_break_symbol_value() {
+  auto expr = parse_ok("break :done\n");
+  expect(expr->kind == "AstBreak", "symbol-valued break");
+  const Expr &value = node_field(*expr, "value");
+  expect(value.kind == "AstLiteral" && string_field(value, "token") == "SYMBOL" &&
+             string_field(value, "value") == "done",
+         "break retains its symbol value");
+  expect(parse_module_raw("items.each |x|:\n"
+                          "  break :done if x == 2\n").ok(),
+         "symbol-valued break accepts a postfix condition");
+}
+
 void test_control_flow_forms() {
   const std::string source = "def choose(x):\n"
                              "  if x > 10:\n"
@@ -2155,6 +2187,8 @@ void test_v20_9_named_multiblock_surface() {
 }
 
 void test_v20_9_named_multiblock_parser_diagnostics() {
+  expect(parse_module_raw("call(value, option: 1, &body)\n").ok(),
+         "a trailing block pass is allowed after keyword arguments");
   expect(has_diagnostic(parse_module_raw(
                             "callback with:\n"
                             "  success:\n"
@@ -2239,6 +2273,7 @@ int main() {
   test_property_parameter_diagnostic();
   test_property_grouped_diagnostics_and_context();
   test_property_keywords_are_contextual_names();
+  test_break_symbol_value();
   test_control_flow_forms();
   test_control_header_call_colon_boundary();
   test_one_line_control_tails_after_newline();

@@ -4,6 +4,8 @@
 #include <atomic>
 #include <cerrno>
 #include <cstring>
+#include <functional>
+#include <chrono>
 #include <stdexcept>
 #include <utility>
 
@@ -333,6 +335,94 @@ ProjectDocument module_manifest_snapshot(const LoadedProject &project) {
 }
 
 } // namespace
+
+std::shared_ptr<const runtime::NotebookImageInputs> load_project_image_inputs(
+    const ProjectDocument &document, const std::filesystem::path &directory, const std::string &sheet) {
+  auto result = std::make_shared<runtime::NotebookImageInputs>();
+  auto root = open_directory(directory);
+  std::size_t bytes = 0, text = 0;
+  std::function<void(const std::vector<ProjectComponent> &)> visit = [&](const auto &components) {
+    for (const auto &component : components) {
+      if (component.panels) for (const auto &panel : *component.panels) visit(panel.components);
+      if (component.kind != "image" && component.kind != "image_carousel") continue;
+      const auto id = project_image_channel(component);
+      auto &input = (*result)[id];
+      input.readable = input.readable || project_image_option(component, "image_allow_read");
+      const auto assets = project_image_assets(component);
+      if (component.extra.count("image_items")) {
+        input.images.clear();
+        for (const auto &asset : assets) {
+          runtime::NotebookDisplay image;
+          image.bytes = read_member(root.get(), asset.path, 16U * 1024U * 1024U);
+          image.mime = asset.path.substr(asset.path.size() - 4) == ".png" ? "image/png" : "image/jpeg";
+          image.caption = asset.caption;
+          const auto size = runtime::notebook_image_dimensions(image.bytes, image.mime);
+          image.width = size.first; image.height = size.second;
+          runtime::notebook_validate_image(image);
+          bytes += image.bytes.size(); text += image.caption.size();
+          if (bytes > 64U * 1024U * 1024U || text > 256U * 1024U) throw std::runtime_error("project image inputs exceed limits");
+          input.images.push_back(std::move(image));
+        }
+      }
+      if (const auto found = component.extra.find("image_series_caption"); found != component.extra.end())
+        input.caption = std::get<std::string>(parse_project_input_value(found->second));
+      if (const auto found = component.extra.find("image_revision"); found != component.extra.end())
+        input.revision = std::get<std::string>(parse_project_input_value(found->second));
+      if (const auto found = component.extra.find("image_selection"); found != component.extra.end())
+        input.selected = std::get<std::int64_t>(parse_project_input_value(found->second));
+    }
+  };
+  for (const auto &board : document.boards) if (board.sheet == sheet) visit(board.components);
+  return result;
+}
+
+std::string store_project_image(const LoadedProject &project, const runtime::NotebookDisplay &image) {
+  runtime::notebook_validate_image(image);
+  static std::atomic<std::uint64_t> counter{0};
+  const auto token = std::to_string(::getpid()) + "_" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" + std::to_string(++counter);
+  const auto path = "images/" + token + (image.mime == "image/png" ? ".png" : ".jpg");
+  auto root = open_directory(project.directory);
+  auto parent = open_or_create_member_parent(root.get(), path);
+  StagedMember staged(parent.directory.get(), parent.leaf, image.bytes);
+  staged.create();
+  sync_directory(parent.directory.get()); sync_directory(root.get());
+  return path;
+}
+
+std::shared_ptr<const runtime::NotebookAudioInputs> load_project_audio_inputs(
+    const ProjectDocument &document, const std::filesystem::path &directory, const std::string &sheet) {
+  auto result = std::make_shared<runtime::NotebookAudioInputs>(); auto root = open_directory(directory);
+  std::size_t bytes = 0;
+  std::function<void(const std::vector<ProjectComponent> &)> visit = [&](const auto &components) {
+    for (const auto &c : components) {
+      if (c.panels) for (const auto &panel : *c.panels) visit(panel.components);
+      if (!project_owns_audio_input(c)) continue;
+      const auto channel = project_audio_channel(c), path = project_audio_asset(c);
+      if (result->count(channel)) throw std::runtime_error("duplicate Audio Input channel");
+      runtime::NotebookAudioInput input; input.revision = path;
+      if (const auto name = c.extra.find("audio_name"); name != c.extra.end()) input.name = std::get<std::string>(parse_project_input_value(name->second));
+      if (!path.empty()) {
+        input.audio.format = path.substr(path.rfind('.') + 1);
+        input.audio.bytes = read_member(root.get(), path, runtime::kAudioMaxBytes - 64);
+        (void)runtime::audio_encode(input.audio); bytes += input.audio.bytes.size();
+        if (bytes > 64U * 1024U * 1024U) throw std::runtime_error("accepted audio inputs exceed 64 MiB per sheet");
+      }
+      result->emplace(channel, std::move(input));
+    }
+  };
+  for (const auto &board : document.boards) if (board.sheet == sheet) visit(board.components);
+  return result;
+}
+std::string store_project_audio(const LoadedProject &project, const runtime::AudioDisplay &audio) {
+  (void)runtime::audio_encode(audio);
+  static std::atomic<std::uint64_t> counter{0};
+  const auto token = std::to_string(::getpid()) + "_" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + "_" + std::to_string(++counter);
+  const auto path = "audio/" + token + "." + runtime::audio_format(audio.format);
+  auto root = open_directory(project.directory); auto parent = open_or_create_member_parent(root.get(), path);
+  StagedMember staged(parent.directory.get(), parent.leaf, audio.bytes); staged.create();
+  sync_directory(parent.directory.get()); sync_directory(root.get()); return path;
+}
 
 LoadedProject load_project(const std::filesystem::path &directory) {
   auto root = open_directory(directory);

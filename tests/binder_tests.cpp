@@ -387,6 +387,19 @@ void test_placeholder_diagnostics() {
 }
 
 void test_duplicate_binding_diagnostics() {
+  const auto repeated = bind_any("import my.orm as orm\nimport orm\n"
+                                 "from orm import Model\nfrom my.orm import Model\n");
+  expect(repeated.ok(), "imports of the same canonical binding are idempotent");
+  const auto scoped = bind_any("import my.orm as vendor.orm\nimport vendor.orm\n"
+                               "from vendor.orm import Model\n");
+  expect(scoped.ok(), "qualified import replacement binds its final segment");
+  const auto conflict = bind_any("import my.orm as orm\nimport another.orm as orm\n");
+  expect(!conflict.ok(), "different replacement providers conflict");
+  expect_diagnostic_code(conflict, "B_IMPORT_REPLACEMENT");
+  const auto cycle = bind_any("import a as b\nimport b as a\n");
+  expect(!cycle.ok(), "cyclic replacement paths are rejected");
+  expect_diagnostic_code(cycle, "B_IMPORT_REPLACEMENT");
+
   sputnik::binder::BindResult duplicate_param = bind_any("def f(x, x)\n");
   expect(!duplicate_param.ok(), "duplicate params rejected");
   expect_diagnostic_code(duplicate_param, "B0001");

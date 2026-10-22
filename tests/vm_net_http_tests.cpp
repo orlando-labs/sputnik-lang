@@ -100,7 +100,7 @@ void test_http_server_runtime_state_is_vm_independent() {
       std::make_shared<sputnik::runtime::RuntimeHttpServerRequestBody>();
   fixed->framing =
       sputnik::runtime::RuntimeHttpServerRequestFraming::ContentLength;
-  fixed->content_remaining = 5;
+  fixed->content_remaining = 7;
   fixed->max_body_bytes = 32;
   fixed->buffered = "sputnik";
   const sputnik::runtime::RuntimeHttpServerBodyReadResult fixed_read =
@@ -114,7 +114,7 @@ void test_http_server_runtime_state_is_vm_independent() {
       sputnik::runtime::RuntimeHttpServerRequestFraming::Chunked;
   chunked->max_body_bytes = 32;
   chunked->max_header_bytes = 128;
-  chunked->buffered = "5\r\nsputnik\r\n0\r\nx-check: yes\r\n\r\n";
+  chunked->buffered = "7\r\nsputnik\r\n0\r\nx-check: yes\r\n\r\n";
   const sputnik::runtime::RuntimeHttpServerBodyReadResult chunked_read =
       sputnik::runtime::runtime_http_server_read_body_all(chunked);
   expect(chunked_read.ok && chunked_read.body == "sputnik" &&
@@ -126,7 +126,7 @@ void test_http_server_runtime_state_is_vm_independent() {
       std::make_shared<sputnik::runtime::RuntimeHttpServerRequestBody>();
   fixed_chunks->framing =
       sputnik::runtime::RuntimeHttpServerRequestFraming::ContentLength;
-  fixed_chunks->content_remaining = 5;
+  fixed_chunks->content_remaining = 7;
   fixed_chunks->max_body_bytes = 32;
   fixed_chunks->buffered = "sputnik";
   const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult fixed_first =
@@ -134,9 +134,9 @@ void test_http_server_runtime_state_is_vm_independent() {
   const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult fixed_second =
       sputnik::runtime::runtime_http_server_read_body_chunk(fixed_chunks, 8);
   expect(fixed_first.ok && fixed_first.chunk != nullptr &&
-             fixed_first.chunk->data == "am" && fixed_second.ok &&
+             fixed_first.chunk->data == "sp" && fixed_second.ok &&
              fixed_second.chunk != nullptr &&
-             fixed_second.chunk->data == "ber" && fixed_chunks->closed,
+             fixed_second.chunk->data == "utnik" && fixed_chunks->closed,
          "standalone server core preserves fixed-body chunk boundaries");
 
   auto wire_chunks =
@@ -146,7 +146,7 @@ void test_http_server_runtime_state_is_vm_independent() {
   wire_chunks->max_body_bytes = 32;
   wire_chunks->max_header_bytes = 128;
   wire_chunks->buffered =
-      "5;kind=test\r\nsputnik\r\n0\r\nx-check: yes\r\n\r\n";
+      "7;kind=test\r\nsputnik\r\n0\r\nx-check: yes\r\n\r\n";
   const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult wire_first =
       sputnik::runtime::runtime_http_server_read_body_chunk(wire_chunks, 8);
   const sputnik::runtime::RuntimeHttpServerBodyChunkReadResult wire_eof =
@@ -1762,6 +1762,83 @@ void test_http_server_streaming_response_extensions_and_trailer() {
                  "server streaming response writes chunks and trailer");
 }
 
+void test_http_server_fixed_length_streaming_response() {
+  const auto result = execute_source(R"sputnik(
+import task
+from net.http import Client, Server, ServerResponse
+server = Server(host: "127.0.0.1", port: 0, workers: 1)
+port = server.port()
+runner = task.spawn:
+  server.serve(max_requests: 3) |req|:
+    if req.path() == "/head":
+      ServerResponse.stream(length: 2147483648) |body|:
+        raise ArgumentError("HEAD started producer")
+    elif req.path() == "/empty":
+      ServerResponse.stream(length: 0) |body|:
+        null
+    else:
+      ServerResponse.stream(length: 6) |body|:
+        body.write("one")
+        body.write("two")
+        body.close()
+        body.finish()
+client = Client()
+head = client.head("http://127.0.0.1:#{port}/head", headers: {connection: "close"})
+head_body = head.body_text()
+empty = client.get("http://127.0.0.1:#{port}/empty", headers: {connection: "close"})
+empty_body = empty.body_text()
+data = client.get("http://127.0.0.1:#{port}/data", headers: {connection: "close"})
+text = data.body_text()
+runner.wait()
+head.status == 200 and head_body == "" and head.headers.first("content-length") == "2147483648" and empty_body == "" and empty.headers.first("content-length") == "0" and text == "onetwo" and data.headers.first("content-length") == "6" and data.headers.first("transfer-encoding") == null
+)sputnik");
+  expect_ok_true(result, "fixed-length streams, zero length and HEAD metadata");
+}
+
+void test_http_server_fixed_length_mismatch_closes_connection() {
+  for (const bool overflow : {false, true}) {
+    const std::string second_write = overflow ? "      body.write(\"cde\")\n" : "";
+    const auto result = execute_source(
+        "import net\nimport task\n"
+        "from net.http import Server, ServerResponse\n"
+        "server = Server(host: \"127.0.0.1\", port: 0, workers: 1)\n"
+        "port = server.port()\nrunner = task.spawn:\n"
+        "  server.serve() |req|:\n"
+        "    ServerResponse.stream(length: 4) |body|:\n"
+        "      body.write(\"ab\")\n" + second_write +
+        "socket = net.tcp.connect(\"127.0.0.1\", port)\n"
+        "socket.write_all!(\"GET /bad HTTP/1.1\\r\\nhost: localhost\\r\\n\\r\\n"
+        "GET /next HTTP/1.1\\r\\nhost: localhost\\r\\n\\r\\n\")\n"
+        "wire = socket.read_all!().to_str()\nserver.shutdown!(timeout: 1.0)\nrunner.wait()\n"
+        "wire.contains?(\"content-length: 4\\r\\n\") and "
+        "not wire.contains?(\"transfer-encoding\") and "
+        "wire.ends_with?(\"\\r\\n\\r\\nab\") and wire.split(\"HTTP/1.1\").count == 2\n");
+    expect_ok_true(result, overflow ? "overflow rejected before excess bytes; pipeline closed"
+                                    : "short producer closes without reusing connection");
+  }
+}
+
+void test_http_server_fixed_length_pipeline() {
+  const auto result = execute_source(R"sputnik(
+import net
+import task
+from net.http import Server, ServerResponse
+server = Server(host: "127.0.0.1", port: 0, workers: 1)
+port = server.port()
+runner = task.spawn:
+  server.serve() |req|:
+    ServerResponse.stream(length: 3) |body|:
+      body.write("one")
+socket = net.tcp.connect("127.0.0.1", port)
+socket.write_all!("GET /one HTTP/1.1\r\nhost: localhost\r\n\r\nGET /two HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+wire = socket.read_all!().to_str()
+server.shutdown!(timeout: 1.0)
+runner.wait()
+wire.contains?("\r\n\r\noneHTTP/1.1 200") and wire.ends_with?("\r\n\r\none") and not wire.contains?("transfer-encoding")
+)sputnik");
+  expect_ok_true(result, "fixed-length pipeline has no chunk terminators or extra CRLF");
+}
+
 void test_http_server_reads_chunked_request_by_wire_chunk() {
   const sputnik::runtime::ExecutionResult result = execute_source(
       "import task\n"
@@ -2048,6 +2125,9 @@ int main(int argc, char **argv) {
   test_http_server_allows_cooperative_concurrency_per_worker();
   test_http_server_idle_headers_do_not_occupy_worker();
   test_http_server_streaming_response_extensions_and_trailer();
+  test_http_server_fixed_length_streaming_response();
+  test_http_server_fixed_length_mismatch_closes_connection();
+  test_http_server_fixed_length_pipeline();
   test_http_server_reads_chunked_request_by_wire_chunk();
   test_http_server_streaming_is_full_duplex();
   test_http_server_non_chunked_body_stream_framing();

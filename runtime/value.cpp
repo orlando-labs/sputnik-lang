@@ -65,6 +65,10 @@ const char *native_type_name(RuntimeNativeTypeKind kind) {
     return "Signature";
   case RuntimeNativeTypeKind::Notebook:
     return "notebook";
+  case RuntimeNativeTypeKind::NotebookStopwatch:
+    return "notebook.ui.Stopwatch";
+  case RuntimeNativeTypeKind::AudioCodec:
+    return "notebook.ui.AudioCodec";
   case RuntimeNativeTypeKind::Benchmark:
     return "Benchmark";
   case RuntimeNativeTypeKind::Url:
@@ -143,6 +147,8 @@ const char *native_type_name(RuntimeNativeTypeKind kind) {
     return "net.tcp";
   case RuntimeNativeTypeKind::NetUdp:
     return "net.udp";
+  case RuntimeNativeTypeKind::NetUnix:
+    return "net.unix";
   case RuntimeNativeTypeKind::NetHttp:
     return "net.http";
   case RuntimeNativeTypeKind::NetHttpClient:

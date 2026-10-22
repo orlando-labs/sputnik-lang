@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the Ember soak HTTP contract against raw or framework HTTP servers."""
+"""Run the Orbit soak HTTP contract against raw or framework HTTP servers."""
 
 from __future__ import annotations
 
@@ -31,14 +31,14 @@ from benchmark_support import (
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKSPACE = ROOT.parent
-EMBER = WORKSPACE / "ember"
+ORBIT = WORKSPACE / "orbit"
 BUILD = ROOT / "bench" / "polyglot" / "build" / "http-rps"
 RESULTS = ROOT / "bench" / "polyglot" / "results"
 SPUTNIK_SERVER_NAMES = {
     "raw": "sputnik.bench.polyglot.raw_http_rps_server",
-    "ember": "sputnik.bench.polyglot.http_rps_server",
+    "orbit": "sputnik.bench.polyglot.http_rps_server",
 }
-SPUTNIK_CLIENT_NAME = "ember.example.soak.client"
+SPUTNIK_CLIENT_NAME = "orbit.example.soak.client"
 PINNED_CLIENT = BUILD / "sputnik-client-pinned" / SPUTNIK_CLIENT_NAME
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -82,7 +82,7 @@ def refresh_client_pin(compiler: Path) -> None:
             "--grant",
             "net.connect",
         ],
-        cwd=EMBER,
+        cwd=ORBIT,
     )
 
 
@@ -216,7 +216,7 @@ def rails_ruby() -> Path:
         if probe.returncode == 0:
             return candidate
     raise RuntimeError(
-        "Rails 8 and Puma are required for the Ember framework lane; "
+        "Rails 8 and Puma are required for the Orbit framework lane; "
         "set SPUTNIK_BENCH_RUBY to a suitable Ruby executable"
     )
 
@@ -260,9 +260,9 @@ def parse_client_output(output: str, label: str) -> Dict[str, Any]:
             result = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if result.get("schema") == "ember.soak-client.result.v1":
+        if result.get("schema") == "orbit.soak-client.result.v1":
             return result
-    raise RuntimeError(f"{label} did not emit an Ember soak client result: {output[-1000:]}")
+    raise RuntimeError(f"{label} did not emit an Orbit soak client result: {output[-1000:]}")
 
 
 def client_command(
@@ -353,7 +353,7 @@ def run_one(
         program_args = [
             "--host", "127.0.0.1", "--port", str(port), "--workers", "4"
         ]
-        if stack == "ember":
+        if stack == "orbit":
             program_args += ["--pool-size", str(sputnik_pool_size)]
         if stack == "raw" and server_max_requests_per_connection is not None:
             program_args += [
@@ -518,7 +518,7 @@ def run_one(
                 "contract_smoke_requests": smoke_result["requests"],
                 "sputnik_pool_size": (
                     sputnik_pool_size
-                    if name == "sputnik" and stack == "ember"
+                    if name == "sputnik" and stack == "orbit"
                     else None
                 ),
                 "sample_profile": str(sample_path) if sampler is not None else None,
@@ -613,9 +613,9 @@ def benchmark_provenance(
 ) -> Dict[str, Any]:
     dependency_roots = {
         "sputnik": ROOT,
-        "ember": EMBER,
-        "sputnik_orm": EMBER / ".build/dependencies/sputnik-orm",
-        "sqlite3_sputnik": EMBER / ".build/dependencies/sqlite3-sputnik",
+        "orbit": ORBIT,
+        "sputnik_orm": ORBIT / ".build/dependencies/orm",
+        "sqlite3_sputnik": ORBIT / ".build/dependencies/sqlite3",
     }
     repositories = {
         name: git_provenance(path)
@@ -644,24 +644,24 @@ def benchmark_provenance(
     source_paths = [
         ROOT / "bench/polyglot/run_http_rps.py",
         ROOT / "bench/polyglot/benchmark_support.py",
-        EMBER / "examples/soak/client.s",
-        EMBER / "examples/soak/client.build.yaml",
-        EMBER / "sputnik.lock",
-        EMBER / "release/dependencies.lock.json",
+        ORBIT / "examples/soak/client.s",
+        ORBIT / "examples/soak/client.build.yaml",
+        ORBIT / "sputnik.lock",
+        ORBIT / "release/dependencies.lock.json",
     ]
-    if stack == "ember":
+    if stack == "orbit":
         source_paths.extend(
             [
                 ROOT / "bench/polyglot/sputnik/http_rps_server.s",
                 ROOT / "bench/polyglot/sputnik/http_rps_server.build.yaml",
                 ROOT / "bench/polyglot/rails/config.ru",
                 ROOT / "bench/polyglot/rails/http_rps_app.rb",
-                EMBER / "src/ember.s",
-                EMBER / "src/ember/telemetry.s",
-                EMBER / "packages/ember-orm/src",
-                EMBER / ".build/dependencies/sputnik-orm/src",
-                EMBER / ".build/dependencies/sqlite3-sputnik/src",
-                EMBER / ".build/dependencies/sqlite3-sputnik/native/sqlite3_ext.c",
+                ORBIT / "src/orbit.s",
+                ORBIT / "src/orbit/telemetry.s",
+                ORBIT / "packages/orbit-orm/src",
+                ORBIT / ".build/dependencies/orm/src",
+                ORBIT / ".build/dependencies/sqlite3/src",
+                ORBIT / ".build/dependencies/sqlite3/native/sqlite3_ext.c",
             ]
         )
     else:
@@ -730,13 +730,13 @@ def markdown_report(payload: Dict[str, Any]) -> str:
             (
                 "Sputnik `net.http` (full native; VM-independent server)"
                 if stack == "raw"
-                else "Sputnik + Ember (full native; VM-independent server)"
+                else "Sputnik + Orbit (full native; VM-independent server)"
             )
             if sputnik_execution == "native"
             else (
                 "Sputnik `net.http` (interpreted bytecode VM)"
                 if stack == "raw"
-                else "Sputnik + Ember (interpreted bytecode VM)"
+                else "Sputnik + Orbit (interpreted bytecode VM)"
             )
         ),
         "go": "Go `net/http`",
@@ -745,13 +745,13 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         "rails": "Rails API 8 + Puma",
     }
     storage_method = (
-        "The Ember and Rails framework servers persist the catalog through ORM "
+        "The Orbit and Rails framework servers persist the catalog through ORM "
         "models backed by a process-local shared in-memory SQLite database. "
         "The raw lane keeps its mutex-protected in-memory store. This makes the "
         "framework table include model lifecycle, SQL generation, connection-pool, "
         "and SQLite costs while keeping the database local and deterministic. "
         f"The Sputnik pool contains {sputnik_pool_size} connection(s) for this run."
-        if stack == "ember"
+        if stack == "orbit"
         else "All raw benchmark servers use a process-local, mutex-protected "
         "in-memory store so the table compares HTTP routing, JSON/schema handling, "
         "validation, and concurrency rather than unrelated database drivers."
@@ -760,19 +760,19 @@ def markdown_report(payload: Dict[str, Any]) -> str:
         (
             "# Polyglot raw HTTP RPS benchmark"
             if stack == "raw"
-            else "# Ember request-flow HTTP RPS benchmark"
+            else "# Orbit request-flow HTTP RPS benchmark"
         ),
         "",
         f"Date: `{payload['timestamp']}`<br>",
         f"Host: `{payload['host']}`<br>",
         "Client: pinned native-body-covered Sputnik client from "
-        f"`ember/examples/soak/client.s`; SHA-256 `{payload['client']['sha256']}` "
+        f"`orbit/examples/soak/client.s`; SHA-256 `{payload['client']['sha256']}` "
         "(`vm-stdlib-send-v1` client bridge)<br>",
         f"Stack: `{stack}`<br>",
         f"Sputnik execution: `{sputnik_execution}`<br>",
         (
             f"Sputnik SQLite pool size: `{sputnik_pool_size}`<br>"
-            if stack == "ember"
+            if stack == "orbit"
             else ""
         ),
         f"Load: `{payload['client_count']}` concurrent clients, `{payload['duration_seconds']}` seconds per server, `mixed`, negative suite every 25 iterations.",
@@ -828,7 +828,7 @@ def markdown_report(payload: Dict[str, Any]) -> str:
             else "This run contains only the Sputnik baseline. "
         )
         + (
-            "The raw lane bypasses Ember and isolates language/runtime, HTTP, JSON, validation, and in-memory-store costs."
+            "The raw lane bypasses Orbit and isolates language/runtime, HTTP, JSON, validation, and in-memory-store costs."
             if stack == "raw"
             else "The framework lane includes routing, Strong Parameters-equivalent schema handling, controllers, ORM models, pooling, and SQLite."
         ),
@@ -917,14 +917,14 @@ def parse_args() -> argparse.Namespace:
         "--sputnik-pool-size",
         type=int,
         default=1,
-        help="SQLite pool size for the Sputnik/Ember workload",
+        help="SQLite pool size for the Sputnik/Orbit workload",
     )
     parser.add_argument("--port", type=int, default=3340)
     parser.add_argument(
         "--languages",
-        help="comma-separated servers (default: raw=sputnik,go,rust,python; ember=sputnik,rails)",
+        help="comma-separated servers (default: raw=sputnik,go,rust,python; orbit=sputnik,rails)",
     )
-    parser.add_argument("--stack", choices=("raw", "ember"), default="raw")
+    parser.add_argument("--stack", choices=("raw", "orbit"), default="raw")
     parser.add_argument(
         "--sputnik-execution", choices=("native", "vm"), default="native"
     )
@@ -1050,7 +1050,7 @@ def main() -> None:
         paths, languages, args.stack, args.sputnik_execution, samples
     )
     pool_suffix = (
-        f"-pool{args.sputnik_pool_size}" if args.stack == "ember" else ""
+        f"-pool{args.sputnik_pool_size}" if args.stack == "orbit" else ""
     )
     result_stem = (
         f"{args.stack}-http-rps-{args.sputnik_execution}{pool_suffix}"

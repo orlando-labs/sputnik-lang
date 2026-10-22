@@ -628,7 +628,7 @@ numbers.map: _1.email.downcase().uniq()
 7. сравнения и membership: `== != < <= > >= in`;
 8. `and`;
 9. `or`;
-10. присваивание `=`.
+10. присваивание `=`, составные присваивания и условные `?=` / `or=`.
 
 Ассоциативность:
 
@@ -646,8 +646,10 @@ numbers.map: _1.email.downcase().uniq()
 ```ebnf
 Expr::= AssignExpr
 
-AssignExpr::= Assignable "=" AssignExpr
+AssignExpr::= Assignable AssignOp AssignExpr
  | OrExpr
+
+AssignOp::= "=" | "+=" | "-=" | "*=" | "/=" | "//=" | "%=" | "?=" | "or="
 
 OrExpr::= AndExpr { "or" AndExpr }
 
@@ -1118,6 +1120,7 @@ call_multiclause(defn, passed_pos, passed_kw, self):
 
 - после каждого expression-statement слот обновляется;
 - обычное присваивание кладёт в `$_` присвоенное значение;
+- условные `?=` / `or=` кладут в `$_` сохранённое или присвоенное значение;
 - pattern assignment кладёт в `$_` правое значение при успехе;
 - `pass` / `noop` кладут `null`;
 - неявный return функции/блока возвращает текущее `$_` кадра;

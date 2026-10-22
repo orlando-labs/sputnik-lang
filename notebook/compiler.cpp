@@ -363,7 +363,7 @@ CellCompileResult compile_cell(const CellSource &cell,
   const std::string module_name =
       options.module_name.empty() ? "notebook.cell." + std::to_string(cell.id)
                                   : options.module_name;
-  binder::BindResult bind = binder::bind_module(analysis.items, module_name);
+  binder::BindResult bind = binder::bind_module(analysis.items, module_name, options.import_aliases);
   result.diagnostics = bind.diagnostics;
   if (!bind.ok()) {
     return result;

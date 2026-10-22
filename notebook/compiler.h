@@ -2,6 +2,7 @@
 
 #include "bytecode/emitter.h"
 #include "frontend/lexer/token.h"
+#include "frontend/import_aliases.h"
 #include "notebook/dependency_graph.h"
 
 #include <cstddef>
@@ -97,6 +98,7 @@ struct NotebookCompileOptions {
   // this map.
   std::unordered_map<std::string, std::string> ambient_constant_paths;
   std::map<std::string, std::map<std::string, std::string>> import_paths;
+  frontend::ImportAliases import_aliases;
 };
 
 struct CellCompileResult {

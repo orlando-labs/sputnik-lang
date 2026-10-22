@@ -1168,6 +1168,15 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
                &result.diagnostics);
   read_modules(root, "modules", false, path, &result.manifest.modules,
                &result.diagnostics);
+  if (const auto *dependencies = member(root, "dependencies")) {
+    if (dependencies->kind != JsonValue::Kind::Object)
+      result.diagnostics.push_back(diagnostic("BuildManifestError", "'dependencies' must map package names to exact version strings", path));
+    else for (const auto &entry : dependencies->object_value) {
+      if (entry.first.empty() || entry.second.kind != JsonValue::Kind::String || entry.second.string_value.empty())
+        result.diagnostics.push_back(diagnostic("BuildManifestError", "package dependencies require nonempty names and version strings", path));
+      else result.manifest.dependencies.push_back({entry.first, entry.second.string_value, "registry", {}});
+    }
+  }
   read_native_extensions(root, path, &result.manifest.native_extensions,
                          &result.diagnostics);
 
@@ -1329,6 +1338,15 @@ std::string manifest_to_json(const BuildManifest &manifest) {
   emit_module_array(out, "stdlib", manifest.stdlib_modules, "  ");
   out << ",\n";
   emit_module_array(out, "modules", manifest.modules, "  ");
+  if (!manifest.dependencies.empty()) {
+    out << ",\n  \"dependencies\": {";
+    for (std::size_t i = 0; i < manifest.dependencies.size(); ++i) {
+      if (i) out << ',';
+      out << "\n    \"" << json_escape(manifest.dependencies[i].name) << "\": \""
+          << json_escape(manifest.dependencies[i].version) << "\"";
+    }
+    out << "\n  }";
+  }
   out << "\n}\n";
   return out.str();
 }

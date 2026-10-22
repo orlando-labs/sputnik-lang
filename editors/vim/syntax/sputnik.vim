@@ -13,7 +13,7 @@ syntax case match
 let s:head = '\%(\h\|[^\x00-\x7f]\)'
 let s:part = '\%(\w\|[^\x00-\x7f]\)'
 " Leave optional indexing and effect-row punctuation outside identifiers.
-let s:suffix = '\%(!\%(\s*{\)\@!\|?\%(\s*\[\)\@!\)\?'
+let s:suffix = '\%(!\%(\s*{\)\@!\|?\%(=\|\s*\[\)\@!\)\?'
 let s:name = s:head . s:part . '*' . s:suffix
 let s:before = s:part . '\@1<!'
 let s:after = '\%(' . s:part . '\|[?!]\)\@!'
@@ -27,7 +27,7 @@ endfunction
 " Define general matches first; more specific matches below take priority.
 call s:Match('sputnikIdentifier', s:before . s:name)
 syntax match sputnikDelimiter /[.,:;()[\]{}]/
-syntax match sputnikOperator /\/\/=\|+=\|-=\|\*=\|\/=\|%=\|===\|<=>\|<<\|>>\|\*\*\|\/\/\|=\~\|!\~\|==\|!=\|<=\|>=\|->\|??\|[-+*/%<>=&|^]/
+syntax match sputnikOperator /?=\|\/\/=\|+=\|-=\|\*=\|\/=\|%=\|===\|<=>\|<<\|>>\|\*\*\|\/\/\|=\~\|!\~\|==\|!=\|<=\|>=\|->\|??\|[-+*/%<>=&|^]/
 syntax match sputnikOperator /\.?\./
 syntax match sputnikOperator /\.\.\.\?/
 syntax match sputnikOperator /?\ze\s*\[/
@@ -37,7 +37,7 @@ syntax match sputnikOperator /!\ze\s*{/
 call s:Match('sputnikMember', '\.\@1<=' . s:name)
 call s:Match('sputnikFunctionCall', s:before . s:name . '\ze\s*(')
 " Uppercase ASCII, Greek and Cyrillic type names used by the Sputnik lexer.
-call s:Match('sputnikType', s:before . '[A-ZΑ-ΩА-ЯЁ]' . s:part . '*\%(?\%(\s*\[\)\@!\)\?')
+call s:Match('sputnikType', s:before . '[A-ZΑ-ΩА-ЯЁ]' . s:part . '*\%(?\%(=\|\s*\[\)\@!\)\?')
 call s:Match('sputnikFunctionCall', '^\s*\zs' . s:name
       \ . '\ze\s\+\%(["''0-9:@$&\[{]\|\%(true\|false\|null\)' . s:after . '\)')
 
@@ -66,6 +66,7 @@ call s:Match('sputnikRepeat', s:before . '\%(while\|until\|loop\|do\)' . s:after
 call s:Match('sputnikControl', s:before . '\%(break\|return\)' . s:after)
 call s:Match('sputnikException', s:before . '\%(try\|catch\|rescue\|ensure\|raise\|throw\)' . s:after)
 call s:Match('sputnikWordOperator', s:before . '\%(and\|or\|not\|in\|as\)' . s:after)
+call s:Match('sputnikWordOperator', s:before . 'or=')
 call s:Match('sputnikDeclaration', s:before . '\%(class_method\|class_prop\|def\|class\|mixin\|prop\|attr\|package\|import\|include\|from\|export\|extend\)' . s:after)
 
 " Contextual words remain ordinary identifiers outside these forms.
@@ -82,7 +83,7 @@ call s:Match('sputnikControl', '^\s*\zsnext' . s:after
 
 call s:Match('sputnikDeclaration', s:before . 'def' . s:after,
       \ 'nextgroup=sputnikFunction skipwhite')
-call s:Match('sputnikFunction', '\%(\[\]=\?\|\*\*\|//\|<=>\|===\|=\~\|!\~\|==\|!=\|<=\|>=\|<<\|>>\|[-+*/%&|^<>]\|' . s:name . '\)', 'contained')
+call s:Match('sputnikFunction', '\%(\[\][=?]\?\|\*\*\|//\|<=>\|===\|=\~\|!\~\|==\|!=\|<=\|>=\|<<\|>>\|[-+*/%&|^<>]\|' . s:name . '\)', 'contained')
 call s:Match('sputnikDeclaration', s:before . '\%(class\|mixin\)' . s:after,
       \ 'nextgroup=sputnikClassName skipwhite')
 call s:Match('sputnikClassName', s:head . s:part . '*', 'contained')

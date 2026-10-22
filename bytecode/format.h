@@ -160,6 +160,8 @@ enum class Opcode : std::uint8_t {
   // Return from the concrete callable activation which created this
   // call-site block. Unlike RETURN, this unwinds enclosing ensure handlers.
   ReturnNonlocal = 0x38,
+  // Unwind an rbcall block to its active foreign invocation.
+  BreakForeign = 0x39,
   PPrepSeq = 0x40,
   PPrepMap = 0x41,
   PCheckEq = 0x42,
@@ -338,6 +340,8 @@ inline constexpr std::uint32_t kMethodParamFlagNamedCallableNullable = 0x40U;
 // a code object without a rest parameter.
 inline constexpr std::uint32_t kCodeFlagRestParam = 0x1U;
 inline constexpr std::uint32_t kCodeFlagNonlocalReturnBlock = 0x2U;
+// A block containing foreign break requires an rbcall invocation target.
+inline constexpr std::uint32_t kCodeFlagRubyBreakBlock = 0x4U;
 inline constexpr std::uint32_t kCodeRestParamIndexShift = 8U;
 
 // Sequence-pattern `PGetIndex`: when this bit is set on the index operand, the

@@ -257,6 +257,26 @@ TypeTerm truthy_part(const TypeTerm &term) {
   return term;
 }
 
+TypeTerm non_null_part(const TypeTerm &term) {
+  if (term.kind == "Optional") {
+    return non_null_part(term.args.front());
+  }
+  if (is_null(term)) {
+    return named_type("Never");
+  }
+  if (term.kind == "Union") {
+    std::vector<TypeTerm> parts;
+    for (const TypeTerm &option : term.args) {
+      TypeTerm part = non_null_part(option);
+      if (!is_named(part, "Never")) {
+        parts.push_back(std::move(part));
+      }
+    }
+    return union_type(std::move(parts));
+  }
+  return term;
+}
+
 TypeTerm falsy_part(const TypeTerm &term) {
   if (is_falsey_singleton(term)) {
     return term;
@@ -804,6 +824,20 @@ private:
         env[string_field(*left_expr, "name")] = right;
       }
       return right;
+    }
+    if (op == "?=" || op == "or=") {
+      TypeEnv branch_env = env;
+      const TypeTerm right = right_expr == nullptr
+                                 ? named_type("Any")
+                                 : infer_expr(*right_expr, branch_env);
+      const TypeTerm retained =
+          op == "?=" ? non_null_part(left) : truthy_part(non_null_part(left));
+      const TypeTerm result =
+          is_named(retained, "Never") ? right : union_type({retained, right});
+      if (left_expr != nullptr && left_expr->kind == "AstName") {
+        env[string_field(*left_expr, "name")] = result;
+      }
+      return result;
     }
     const std::string compound_op = compound_assignment_binary_op(op);
     if (!compound_op.empty()) {

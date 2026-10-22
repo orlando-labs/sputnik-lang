@@ -79,7 +79,7 @@ code object's Sputnik fallback body.
 
 Native-extension code objects count toward `native_graph_native_code_count`,
 while `native_graph_vm_fallback_code_count` remains reserved for bytecode
-execution. The sputnik-orm SQLite selftest pins this distinction at 916/916
+execution. The orm SQLite selftest pins this distinction at 916/916
 native code objects: 881 generated C++ bodies, 35 direct SQLite extension
 thunks, 0 VM bridges, and 0 fallback objects. The executable returns `29`.
 The standalone SQLite selftest is 477/477 native and returns `35`.

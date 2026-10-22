@@ -469,6 +469,68 @@ sputnik::bytecode::BcModule valid_notebook_metadata_module() {
   return module;
 }
 
+void test_notebook_handler_slot_ownership() {
+  using namespace sputnik::bytecode;
+  auto fixture = [] {
+    auto module = valid_notebook_metadata_module();
+    auto handler = module.code_objects.back();
+    handler.code_id = 10;
+    handler.kind = CodeKind::Rescue;
+    auto &cell = module.code_objects.back();
+    cell.instructions = {{Opcode::LoadK, {{0, false}, {0, false}}},
+                         {Opcode::Return, {{0, false}}}};
+    cell.handler_table = {{0, 2, 0, 10, 0}};
+    module.code_objects.push_back(handler);
+    return module;
+  };
+  auto decode = [](const auto &module) {
+    return deserialize_module(serialize_module(module));
+  };
+  expect(decode(fixture()).ok(), "cell handler inherits declared slot directions");
+  {
+    auto module = fixture();
+    module.init.has_entry_code_id = true;
+    module.init.entry_code_id = 10;
+    expect(has_error_code(decode(module), "BC1316"),
+           "private handler cannot become an ordinary module entry");
+  }
+  {
+    auto module = fixture();
+    module.code_objects[0].instructions.insert(
+        module.code_objects[0].instructions.begin(),
+        {Opcode::MakeClosure, {{0, false}, {10, false}, {0, false}}});
+    expect(has_error_code(decode(module), "BC1316"),
+           "ordinary closure cannot invoke a private cell handler");
+  }
+  {
+    auto module = fixture();
+    auto nested = module.code_objects.back();
+    nested.code_id = 11; nested.kind = CodeKind::Ensure;
+    auto &parent = module.code_objects.back();
+    parent.instructions = {{Opcode::LoadK, {{0, false}, {0, false}}},
+                           {Opcode::Return, {{0, false}}}};
+    parent.handler_table = {{0, 2, 0, 11, kHandlerKindEnsure}};
+    module.code_objects.push_back(nested);
+    expect(decode(module).ok(), "nested rescue/ensure retains cell ownership");
+  }
+  for (int alteration = 0; alteration < 5; ++alteration) {
+    auto module = fixture();
+    if (alteration == 0) module.code_objects[2].handler_table.clear();
+    if (alteration == 1) module.code_objects[0].handler_table = {{0, 1, 0, 10, 0}};
+    if (alteration == 2) module.code_objects[1].handler_table = {{0, 1, 0, 10, 0}};
+    if (alteration == 3) module.code_objects.back().handler_table = {{0, 2, 0, 10, 0}};
+    if (alteration == 4) module.code_objects.back().kind = CodeKind::Block;
+    expect(has_error_code(decode(module), "BC1317"),
+           "orphan, ordinary, cross-cell, cyclic or closure slot access rejected");
+  }
+  {
+    auto module = fixture();
+    module.code_objects.back().instructions[1].operands[0].value = 17;
+    expect(has_error_code(decode(module), "BC1434"),
+           "handler cannot write another cell's output");
+  }
+}
+
 void test_notebook_metadata_negative_cases() {
   using namespace sputnik::bytecode;
 
@@ -1058,6 +1120,7 @@ int main() {
   test_unknown_code_kind_rejected();
   test_notebook_cell_cannot_be_an_ordinary_entry();
   test_notebook_slot_opcodes_require_notebook_cell();
+  test_notebook_handler_slot_ownership();
   test_notebook_metadata_negative_cases();
   test_disasm_is_stable();
   test_bad_magic_rejected();

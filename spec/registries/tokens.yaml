@@ -106,6 +106,8 @@ tokens:
     - pattern
     - with
   contextual_markers:
+    - "?= conditional assignment: write only for null; QUESTION followed by EQUAL"
+    - "or= conditional assignment: write for false or null; KEYWORD_OR followed by EQUAL"
     - "* spread marker in call arguments and collection literals"
     - "** keyword spread marker in call arguments and map literals"
 identifier_profile:
@@ -125,3 +127,4 @@ identifier_profile:
   suffixes:
     - "?"
     - "!"
+  suffix_disambiguation: "Adjacent ?= is an operator; predicate-suffixed ordinary assignment requires whitespace before =."

@@ -1,10 +1,13 @@
 #include "frontend/source_path.h"
 #include "notebook/project.h"
+#include "runtime/config_document.h"
 
 #include <algorithm>
 #include <cstdint>
+#include <cctype>
 #include <cmath>
 #include <iomanip>
+#include <functional>
 #include <sstream>
 #include <limits>
 #include <set>
@@ -105,9 +108,9 @@ void append_utf8(std::uint32_t codepoint, std::string *output) {
 
 class JsonParser {
 public:
-  explicit JsonParser(const std::string &input) : input_(input) {
-    if (input_.size() > kMaxJsonBytes) {
-      fail("input exceeds 16 MiB limit", kMaxJsonBytes);
+  explicit JsonParser(const std::string &input, std::size_t limit = kMaxJsonBytes) : input_(input) {
+    if (input_.size() > limit) {
+      fail("input exceeds JSON byte limit", limit);
     }
   }
 
@@ -1305,8 +1308,423 @@ void validate_cell(const ProjectCell &cell, std::set<CellId> *cell_ids,
 
 } // namespace
 
+bool project_image_option(const ProjectComponent &component, const std::string &key) {
+  const auto found = component.extra.find(key);
+  if (found == component.extra.end()) return false;
+  const auto value = parse_project_input_value(found->second);
+  if (const auto flag = std::get_if<bool>(&value)) return *flag;
+  throw std::runtime_error("component." + key + " must be a boolean");
+}
+
+std::string project_image_channel(const ProjectComponent &component) {
+  const auto found = component.extra.find("image_id");
+  return found == component.extra.end() ? component.id :
+      std::get<std::string>(parse_project_input_value(found->second));
+}
+
+std::vector<ProjectImageAsset> project_image_assets(const ProjectComponent &component) {
+  const auto found = component.extra.find("image_items");
+  if (found == component.extra.end()) return {};
+  const auto &json = found->second;
+  const auto value = JsonParser(json).parse();
+  std::vector<ProjectImageAsset> result;
+  for (const auto &item : require_array(value, "component.image_items")) {
+    require_object(item, "image asset");
+    ProjectImageAsset asset{require_string(require_member(item, "path", "image asset"), "image path"), ""};
+    if (const auto caption = find_member(item, "caption")) asset.caption = require_string(*caption, "image caption");
+    // Assets are ordinary immutable members of the project, never external links.
+    if (asset.path.rfind("images/", 0) != 0 || asset.path.size() > 256 ||
+        asset.path.find("..") != std::string::npos || asset.path.find('\\') != std::string::npos ||
+        asset.path.find('\0') != std::string::npos || asset.path.find('/', 7) != std::string::npos ||
+        (asset.path.size() < 11 || (asset.path.substr(asset.path.size() - 4) != ".png" && asset.path.substr(asset.path.size() - 4) != ".jpg")))
+      throw std::runtime_error("invalid project image asset path");
+    if (asset.caption.size() > 65536 || result.size() >= 64) throw std::runtime_error("image asset limits exceeded");
+    result.push_back(std::move(asset));
+  }
+  return result;
+}
+
+std::string serialize_project_image_assets(const std::vector<ProjectImageAsset> &assets) {
+  std::string result = "[";
+  for (std::size_t i = 0; i < assets.size(); ++i) {
+    if (i) result += ',';
+    result += "{\"path\":"; write_json_string(assets[i].path, &result);
+    result += ",\"caption\":"; write_json_string(assets[i].caption, &result); result += '}';
+  }
+  return result + ']';
+}
+
+std::string project_component_data_channel(const ProjectComponent &c, const std::string &kind) {
+  const auto field = kind == "selection" ? "selection_id" : "annotation_id";
+  const auto found = c.extra.find(field);
+  const auto channel = found == c.extra.end() ? (kind != "selection" ? c.id + "_labels" : std::string{}) : std::get<std::string>(parse_project_input_value(found->second));
+  if (channel.size() > 256 || channel.find('\0') != std::string::npos || (kind != "selection" && channel.empty()))
+    throw std::runtime_error("invalid component data channel");
+  return channel;
+}
+struct AnnotationAttributeDefinition {
+  std::string title, type;
+  std::set<std::string> options;
+  bool operator==(const AnnotationAttributeDefinition &other) const { return title == other.title && type == other.type && options == other.options; }
+};
+struct AnnotationClassDefinition {
+  std::string title;
+  std::map<std::string, AnnotationAttributeDefinition> attributes;
+  bool operator==(const AnnotationClassDefinition &other) const { return title == other.title && attributes == other.attributes; }
+};
+using AnnotationClassDefinitions = std::map<std::string, AnnotationClassDefinition>;
+static std::string annotation_text(const JsonValue &object, const char *key, std::size_t limit) {
+  const auto value = require_string(require_member(object, key, "annotation metadata"), key);
+  if (value.size() > limit || value.find('\0') != std::string::npos) throw std::runtime_error(std::string("invalid annotation ") + key);
+  return value;
+}
+static bool annotation_nonblank(const std::string &value) { return value.find_first_not_of(" \t\n\r\f\v") != std::string::npos; }
+static AnnotationClassDefinitions parse_annotation_classes(const JsonValue &definitions) {
+  AnnotationClassDefinitions classes;
+  const auto &items = require_array(definitions, "annotation classes");
+  if (items.size() > 32) throw std::runtime_error("annotations exceed 32 classes");
+  for (const auto &definition : items) {
+    require_object(definition, "annotation class");
+    const auto id = annotation_text(definition, "id", 64), title = annotation_text(definition, "title", 128);
+    if (id.empty() || !annotation_nonblank(title) || !classes.emplace(id, AnnotationClassDefinition{title, {}}).second) throw std::runtime_error("invalid/duplicate annotation class");
+    const auto &attributes = require_array(require_member(definition, "attributes", "annotation class"), "attributes");
+    if (attributes.size() > 16) throw std::runtime_error("annotation class exceeds 16 attributes");
+    for (const auto &attribute : attributes) {
+      require_object(attribute, "class attribute");
+      const auto key = annotation_text(attribute, "id", 64), name = annotation_text(attribute, "title", 128), type = annotation_text(attribute, "type", 16);
+      if (key.empty() || !annotation_nonblank(name) || (type != "text" && type != "number" && type != "boolean" && type != "choice")) throw std::runtime_error("invalid annotation class attribute");
+      AnnotationAttributeDefinition spec{name, type, {}};
+      const auto &options = require_array(require_member(attribute, "options", "attribute"), "options");
+      if (options.size() > 64) throw std::runtime_error("too many attribute options");
+      for (const auto &option : options) {
+        const auto value = require_string(option, "attribute option");
+        if (value.empty() || value.size() > 128 || value.find('\0') != std::string::npos || !spec.options.insert(value).second) throw std::runtime_error("invalid attribute option");
+      }
+      if ((type == "choice") != !options.empty() || !classes.at(id).attributes.emplace(key, spec).second) throw std::runtime_error("invalid/duplicate attribute definition");
+    }
+  }
+  return classes;
+}
+static void validate_annotation_region(const std::string &json, const JsonValue &region, const AnnotationClassDefinitions &classes, bool required) {
+  std::set<std::string> assigned;
+  if (const auto values = find_member(region, "classes")) {
+    for (const auto &value : require_array(*values, "region classes")) {
+      const auto key = require_string(value, "class id");
+      if (!classes.count(key) || !assigned.insert(key).second) throw std::runtime_error("unknown/duplicate annotation class");
+    }
+  } else if (required) throw std::runtime_error("annotation region requires classes");
+  const auto attributes = find_member(region, "attributes");
+  if (!attributes) { if (required) throw std::runtime_error("annotation region requires attributes"); return; }
+  require_object(*attributes, "annotation attributes");
+  for (const auto &[class_id, values] : attributes->object) {
+    if (!assigned.count(class_id)) throw std::runtime_error("attributes require an assigned class");
+    require_object(values, "class attribute values");
+    for (const auto &[key, value] : values.object) {
+      const auto &specs = classes.at(class_id).attributes;
+      const auto found = specs.find(key);
+      if (found == specs.end()) throw std::runtime_error("unknown secondary class attribute");
+      const auto scalar = parse_project_input_value(raw_json(json, value)); const auto &type = found->second.type;
+      const auto string = std::get_if<std::string>(&scalar);
+      if (type == "text" && (!string || string->size() > 2048 || string->find('\0') != std::string::npos)) throw std::runtime_error("attribute requires bounded text");
+      if (type == "choice" && (!string || !found->second.options.count(*string))) throw std::runtime_error("unknown attribute choice");
+      if (type == "boolean" && !std::holds_alternative<bool>(scalar)) throw std::runtime_error("attribute requires Bool");
+      if (type == "number" && !std::holds_alternative<double>(scalar) && !std::holds_alternative<std::int64_t>(scalar)) throw std::runtime_error("attribute requires a finite number");
+    }
+  }
+}
+static bool annotation_flag(const ProjectComponent &component, const char *key, bool fallback) {
+  const auto found = component.extra.find(key); if (found == component.extra.end()) return fallback;
+  const auto value = parse_project_input_value(found->second); const auto flag = std::get_if<bool>(&value);
+  if (!flag) throw std::runtime_error(std::string(key) + " must be Bool");
+  return *flag;
+}
+static AnnotationClassDefinitions annotation_configured_classes(const ProjectComponent &component) {
+  if (const auto found = component.extra.find("annotation_classes"); found != component.extra.end()) {
+    return parse_annotation_classes(JsonParser(found->second, 256U * 1024U).parse());
+  }
+  // Read a legacy schema only from already accepted, persisted metadata.
+  const auto found = component.extra.find(component.kind == "audio_annotator" ? "audio_annotations" : "annotations");
+  if (found != component.extra.end() && found->second != "null") {
+    const auto root = JsonParser(found->second, 512U * 1024U).parse();
+    if (const auto classes = find_member(root, "classes")) return parse_annotation_classes(*classes);
+  }
+  return {};
+}
+static void validate_annotation_configuration(const ProjectComponent &component) {
+  (void)annotation_configured_classes(component);
+  if (component.kind != "audio_annotator") return;
+  for (const auto *prefix : {"audio_transcript", "audio_segment_transcript"}) {
+    const std::string allowed = std::string(prefix) + "_allowed", required = std::string(prefix) + "_required";
+    if (annotation_flag(component, required.c_str(), false) && !annotation_flag(component, allowed.c_str(), true)) throw std::runtime_error("a required transcript must also be allowed");
+    (void)annotation_flag(component, allowed.c_str(), true);
+  }
+}
+void validate_project_annotation_data(const ProjectComponent &component, const std::string &kind, const std::string &json) {
+  if (json == "null" || kind == "selection") return;
+  const auto root = JsonParser(json, 512U * 1024U).parse();
+  const auto definitions = find_member(root, "classes");
+  const auto actual = definitions ? parse_annotation_classes(*definitions) : AnnotationClassDefinitions{};
+  if (annotation_configured_classes(component) != actual) throw std::runtime_error("annotation classes/attributes changed; use the schema configured in Board Designer");
+  if (kind != "audio_annotations") return;
+  auto transcript = [&](const JsonValue &object, bool segment) {
+    const auto text = annotation_text(object, "transcript", segment ? 8192 : 65536);
+    const char *allowed = segment ? "audio_segment_transcript_allowed" : "audio_transcript_allowed";
+    const char *required = segment ? "audio_segment_transcript_required" : "audio_transcript_required";
+    if (!annotation_flag(component, allowed, true) && !text.empty()) throw std::runtime_error("transcript is disabled in Board Designer");
+    if (annotation_flag(component, required, false) && !annotation_nonblank(text)) throw std::runtime_error(segment ? "each segment requires a transcript" : "a whole-track transcript is required");
+  };
+  transcript(root, false);
+  for (const auto &segment : require_array(require_member(root, "segments", "audio annotations"), "segments")) transcript(segment, true);
+}
+static void validate_audio_annotations(const std::string &json, const JsonValue &root) {
+  auto text = [&](const JsonValue &object, const char *key, std::size_t limit) {
+    const auto value = require_string(require_member(object, key, "audio annotations"), key);
+    if (value.size() > limit || value.find('\0') != std::string::npos) throw std::runtime_error(std::string("invalid audio annotation ") + key);
+    return value;
+  };
+  auto integer = [&](const JsonValue &object, const char *key, std::int64_t low, std::int64_t high) {
+    const auto value = parse_project_input_value(raw_json(json, require_member(object, key, "audio annotations")));
+    const auto number = std::get_if<std::int64_t>(&value);
+    if (!number || *number < low || *number > high) throw std::runtime_error(std::string("invalid audio annotation ") + key);
+    return *number;
+  };
+  const auto rate = integer(root, "sample_rate", 8000, 192000), channels = integer(root, "channels", 1, 2);
+  const auto frames = integer(root, "frames", 1, (16 * 1024 * 1024 - 64) / (channels * 4));
+  const auto source = text(root, "source", 16), channel = text(root, "channel", 256);
+  const auto cell = integer(root, "cell", 0, INT64_MAX);
+  if (channel.empty() || (source != "input" && source != "cell") || (source == "input" ? cell != 0 : cell == 0)) throw std::runtime_error("invalid audio annotation source");
+  (void)text(root, "transcript", 65536);
+  const auto classes = parse_annotation_classes(require_member(root, "classes", "audio annotations"));
+  const auto &segments = require_array(require_member(root, "segments", "audio annotations"), "segments");
+  if (segments.size() > 1000) throw std::runtime_error("audio annotations exceed 1000 segments");
+  std::set<std::string> ids;
+  for (const auto &segment : segments) {
+    require_object(segment, "audio segment");
+    const auto id = text(segment, "id", 64);
+    if (id.empty() || !ids.insert(id).second) throw std::runtime_error("invalid/duplicate audio segment");
+    (void)text(segment, "title", 256); (void)text(segment, "transcript", 8192);
+    const auto first = integer(segment, "start_frame", 0, frames - 1), last = integer(segment, "end_frame", 1, frames);
+    if (first >= last) throw std::runtime_error("empty/reversed audio segment");
+    const auto low = find_member(segment, "low_hz"), high = find_member(segment, "high_hz");
+    const bool has_low = low && low->kind != JsonKind::Null, has_high = high && high->kind != JsonKind::Null;
+    if (has_low != has_high) throw std::runtime_error("frequency selection requires both bounds");
+    if (has_low) {
+      auto frequency = [&](const JsonValue &value) {
+        const auto scalar = parse_project_input_value(raw_json(json, value));
+        if (const auto v = std::get_if<double>(&scalar)) return *v;
+        if (const auto v = std::get_if<std::int64_t>(&scalar)) return double(*v);
+        throw std::runtime_error("frequency must be numeric");
+      };
+      const auto a = frequency(*low), b = frequency(*high);
+      if (!std::isfinite(a) || !std::isfinite(b) || a < 0 || a >= b || b > double(rate) / 2) throw std::runtime_error("frequency rectangle exceeds Nyquist bounds");
+    }
+    validate_annotation_region(json, segment, classes, true);
+  }
+}
+static void validate_project_component_data_impl(const std::string &kind, const std::string &json, bool whole_image_pixels) {
+  if (kind != "selection" && kind != "annotations" && kind != "audio_annotations") throw std::runtime_error("unknown component data kind");
+  if (json == "null") return;
+  if (json.size() > (kind == "audio_annotations" ? 512U : 256U) * 1024U) throw std::runtime_error("accepted component data exceeds its size limit");
+  const auto root = JsonParser(json, 512U * 1024U).parse(); require_object(root, "component data");
+  const auto version = parse_project_input_value(raw_json(json, require_member(root, "version", "component data")));
+  if (!std::holds_alternative<std::int64_t>(version) || std::get<std::int64_t>(version) != 1) throw std::runtime_error("unsupported component data version");
+  auto hash = [&](const char *key) {
+    const auto value = require_string(require_member(root, key, "component data"), key);
+    if (value.size() != 64 || value.find_first_not_of("0123456789abcdef") != std::string::npos) throw std::runtime_error("invalid component data asset/source identity");
+  };
+  if (kind == "selection") {
+    hash("source"); (void)parse_project_input_value(raw_json(json, require_member(root, "key", "selection")));
+    const auto &row = require_member(root, "row", "selection"); require_object(row, "selected row");
+    if (row.object.size() > 32) throw std::runtime_error("selected row exceeds 32 fields");
+    for (const auto &[name, value] : row.object) {
+      if (name.size() > 1024) throw std::runtime_error("selected column name exceeds limits");
+      if (value.kind == JsonKind::Null) continue;
+      const auto field = parse_project_input_value(raw_json(json, value));
+      if (const auto text = std::get_if<std::string>(&field); text && text->size() > 24576) throw std::runtime_error("selected field exceeds display limits");
+    }
+    return;
+  }
+  if (kind == "audio_annotations") { hash("asset"); validate_audio_annotations(json, root); return; }
+  if (kind != "annotations") throw std::runtime_error("unknown component data kind");
+  hash("asset");
+  const auto channel = require_string(require_member(root, "channel", "annotations"), "channel");
+  if (channel.empty() || channel.size() > 256 || channel.find('\0') != std::string::npos) throw std::runtime_error("invalid annotation image channel");
+  auto number = [&](const JsonValue &object, const char *key) {
+    const auto value = parse_project_input_value(raw_json(json, require_member(object, key, "annotations")));
+    if (const auto n = std::get_if<std::int64_t>(&value)) return double(*n);
+    if (const auto n = std::get_if<double>(&value); n && std::isfinite(*n)) {
+      if (whole_image_pixels && std::floor(*n) != *n) throw std::runtime_error("image annotation coordinates and sizes must be whole pixels");
+      return *n;
+    }
+    throw std::runtime_error("annotation coordinates must be finite numbers");
+  };
+  const auto width = number(root, "width"), height = number(root, "height");
+  if (width < 1 || height < 1 || width > 8192 || height > 8192 || width * height > 16000000 || std::floor(width) != width || std::floor(height) != height)
+    throw std::runtime_error("invalid annotation image size");
+  const auto &shapes = require_array(require_member(root, "shapes", "annotations"), "shapes");
+  const auto definitions = find_member(root, "classes");
+  const auto classes = definitions ? parse_annotation_classes(*definitions) : AnnotationClassDefinitions{};
+  if (shapes.size() > 500) throw std::runtime_error("annotations exceed 500 shapes");
+  std::set<std::string> ids;
+  for (const auto &shape : shapes) {
+    require_object(shape, "shape");
+    validate_annotation_region(json, shape, classes, false);
+    const auto id = require_string(require_member(shape, "id", "shape"), "shape.id"), label = require_string(require_member(shape, "label", "shape"), "shape.label");
+    const auto type = require_string(require_member(shape, "kind", "shape"), "shape.kind");
+    if (id.empty() || id.size() > 64 || id.find('\0') != std::string::npos || label.size() > 128 || label.find('\0') != std::string::npos || !ids.insert(id).second)
+      throw std::runtime_error("invalid annotation identity/label");
+    const auto x = number(shape, "x"), y = number(shape, "y");
+    if (x < 0 || y < 0 || x >= width || y >= height) throw std::runtime_error("annotation lies outside the source image");
+    if (type == "rect") {
+      const auto w = number(shape, "width"), h = number(shape, "height");
+      if (w <= 0 || h <= 0 || x + w > width || y + h > height) throw std::runtime_error("annotation rectangle exceeds the source image");
+    } else if (type != "point") throw std::runtime_error("annotation kind must be point or rect");
+  }
+}
+void validate_project_component_data(const std::string &kind, const std::string &json) {
+  validate_project_component_data_impl(kind, json, true);
+}
+ProjectComponentDataSource project_component_data_source(const std::string &kind, const std::string &json) {
+  // Source identity is also needed to replace images carrying a legacy draft.
+  validate_project_component_data_impl(kind, json, false); ProjectComponentDataSource out; if (json == "null") return out;
+  const auto root = JsonParser(json, 512U * 1024U).parse();
+  out.identity = require_string(require_member(root, kind == "selection" ? "source" : "asset", "data"), "identity");
+  if (kind == "audio_annotations") {
+    out.channel = require_string(require_member(root, "channel", "data"), "channel");
+    out.source = require_string(require_member(root, "source", "data"), "source");
+    auto number = [&](const char *key) { return std::uint64_t(std::get<std::int64_t>(parse_project_input_value(raw_json(json, require_member(root, key, "data"))))); };
+    out.rate = number("sample_rate"); out.channels = number("channels"); out.frames = number("frames"); out.cell = number("cell");
+  }
+  if (kind == "annotations") {
+    out.channel = require_string(require_member(root, "channel", "data"), "channel");
+    const auto number = [&](const char *key) {
+      const auto value = parse_project_input_value(raw_json(json, require_member(root, key, "data")));
+      return std::holds_alternative<double>(value) ? unsigned(std::get<double>(value)) : unsigned(std::get<std::int64_t>(value));
+    };
+    out.width = number("width"); out.height = number("height");
+  }
+  return out;
+}
+ProjectComponentDataEdit parse_project_component_data_edit(const std::string &json) {
+  const auto root = JsonParser(json, 2U * 1024U * 1024U).parse(); require_object(root, "component data edit");
+  ProjectComponentDataEdit edit;
+  edit.board = require_string(require_member(root, "board", "edit"), "board");
+  edit.component = require_string(require_member(root, "component", "edit"), "component");
+  edit.kind = require_string(require_member(root, "kind", "edit"), "kind");
+  edit.json = require_string(require_member(root, "json", "edit"), "json");
+  validate_project_component_data(edit.kind, edit.json); return edit;
+}
+
+std::string project_audio_source(const ProjectComponent &c) {
+  const auto found = c.extra.find("audio_source");
+  const auto source = found == c.extra.end() ? std::string("file") : std::get<std::string>(parse_project_input_value(found->second));
+  if (source != "file" && source != "input" && source != "cell") throw std::runtime_error("invalid audio annotation source mode");
+  return source;
+}
+bool project_owns_audio_input(const ProjectComponent &c) {
+  return c.kind == "audio_input" || (c.kind == "audio_annotator" && project_audio_source(c) == "file");
+}
+std::string project_audio_channel(const ProjectComponent &c) {
+  const auto found = c.extra.find("audio_id");
+  const auto id = found == c.extra.end() ? c.id : std::get<std::string>(parse_project_input_value(found->second));
+  if (id.empty() || id.size() > 256 || id.find('\0') != std::string::npos) throw std::runtime_error("invalid audio input channel");
+  return id;
+}
+std::string project_audio_asset(const ProjectComponent &c) {
+  const auto found = c.extra.find("audio_asset");
+  if (found == c.extra.end()) return {};
+  const auto path = std::get<std::string>(parse_project_input_value(found->second));
+  if (path.empty()) return {};
+  if (path.rfind("audio/", 0) || path.size() > 256 || path.find("..") != std::string::npos ||
+      path.find('\\') != std::string::npos || path.find('\0') != std::string::npos || path.find('/', 6) != std::string::npos)
+    throw std::runtime_error("invalid project audio asset path");
+  const auto dot = path.rfind('.');
+  if (dot == std::string::npos || runtime::audio_format(path.substr(dot + 1)) != path.substr(dot + 1))
+    throw std::runtime_error("audio asset requires a canonical file extension");
+  return path;
+}
+ProjectAudioEdit parse_project_audio_edit(const std::string &json) {
+  const auto value = JsonParser(json, 24U * 1024U * 1024U).parse();
+  require_object(value, "audio edit"); ProjectAudioEdit out;
+  out.board = require_string(require_member(value, "board", "audio edit"), "board");
+  out.component = require_string(require_member(value, "component", "audio edit"), "component");
+  out.name = require_string(require_member(value, "name", "audio edit"), "name");
+  if (out.name.size() > 1024 || out.name.find('\0') != std::string::npos) throw std::runtime_error("invalid audio input name");
+  const auto bytes = runtime::audio_unbase64(require_string(require_member(value, "data", "audio edit"), "data"));
+  if (!bytes.empty()) {
+    runtime::AudioDisplay audio; audio.bytes = bytes;
+    audio.format = runtime::audio_format(require_string(require_member(value, "format", "audio edit"), "format"));
+    (void)runtime::audio_encode(audio); out.audio = std::move(audio);
+  }
+  return out;
+}
+
+ProjectImageEdit parse_project_image_edit(const std::string &json) {
+  const auto value = JsonParser(json, 96U * 1024U * 1024U).parse();
+  require_object(value, "image edit");
+  ProjectImageEdit result;
+  result.board = require_string(require_member(value, "board", "image edit"), "board");
+  result.component = require_string(require_member(value, "component", "image edit"), "component");
+  result.caption = require_string(require_member(value, "caption", "image edit"), "caption");
+  const auto selected = parse_project_input_value(raw_json(json, require_member(value, "selected", "image edit")));
+  if (!std::holds_alternative<std::int64_t>(selected) || std::get<std::int64_t>(selected) < 0)
+    throw std::runtime_error("image selection must be a nonnegative integer");
+  result.selected = std::get<std::int64_t>(selected);
+  std::size_t bytes = 0, text = result.caption.size();
+  for (const auto &item : require_array(require_member(value, "images", "image edit"), "images")) {
+    runtime::NotebookDisplay image;
+    image.mime = require_string(require_member(item, "mime", "image"), "mime");
+    image.caption = require_string(require_member(item, "caption", "image"), "caption");
+    const auto encoded = require_string(require_member(item, "data", "image"), "data");
+    if (encoded.size() > 24U * 1024U * 1024U || encoded.size() % 4) throw std::runtime_error("invalid base64 image size");
+    auto digit = [](char c) -> int {
+      if (c >= 'A' && c <= 'Z') return c - 'A'; if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+      if (c >= '0' && c <= '9') return c - '0' + 52; if (c == '+') return 62; if (c == '/') return 63; return -1;
+    };
+    for (std::size_t i = 0; i < encoded.size(); i += 4) {
+      const int a = digit(encoded[i]), b = digit(encoded[i+1]);
+      const int c = encoded[i+2] == '=' ? 0 : digit(encoded[i+2]), d = encoded[i+3] == '=' ? 0 : digit(encoded[i+3]);
+      const bool pad2 = encoded[i+2] == '=', pad1 = encoded[i+3] == '=';
+      if (a < 0 || b < 0 || c < 0 || d < 0 || (pad2 && !pad1) ||
+          ((pad1 || pad2) && i + 4 != encoded.size()) || (pad2 && (b & 15)) || (pad1 && !pad2 && (c & 3)))
+        throw std::runtime_error("invalid base64 image data");
+      image.bytes += static_cast<char>((a << 2) | (b >> 4));
+      if (!pad2) image.bytes += static_cast<char>((b << 4) | (c >> 2));
+      if (!pad1) image.bytes += static_cast<char>((c << 6) | d);
+    }
+    const auto size = runtime::notebook_image_dimensions(image.bytes, image.mime);
+    image.width = size.first; image.height = size.second;
+    runtime::notebook_validate_image(image);
+    bytes += image.bytes.size(); text += image.caption.size();
+    if (result.images.size() >= 64 || bytes > 64U * 1024U * 1024U || text > 256U * 1024U || result.caption.size() > 65536)
+      throw std::runtime_error("image collection limits exceeded");
+    result.images.push_back(std::move(image));
+  }
+  if (result.selected >= std::max<std::size_t>(1, result.images.size())) throw std::runtime_error("image selection is out of range");
+  return result;
+}
+
 runtime::NotebookInputValue parse_project_input_value(const std::string &json) {
   const auto value = JsonParser(json).parse();
+  if (value.kind == JsonKind::Object) {
+    runtime::NotebookInputRange range;
+    auto number = [&](const char *key) -> runtime::NotebookInputNumber {
+      const auto &field = require_member(value, key, "range");
+      if (field.kind != JsonKind::Number) throw std::runtime_error(std::string("range.") + key + " must be numeric");
+      const auto parsed = parse_project_input_value(raw_json(json, field));
+      if (const auto i = std::get_if<std::int64_t>(&parsed)) return *i;
+      return std::get<double>(parsed);
+    };
+    if (value.object.size() != 4) throw std::runtime_error("range requires start, finish, inclusive_end and step");
+    range.start = number("start"); range.finish = number("finish"); range.step = number("step");
+    const auto &inclusive = require_member(value, "inclusive_end", "range");
+    if (inclusive.kind != JsonKind::Boolean) throw std::runtime_error("range.inclusive_end must be boolean");
+    range.inclusive_end = raw_json(json, inclusive) == "true";
+    const bool integers = std::holds_alternative<std::int64_t>(range.start) && std::holds_alternative<std::int64_t>(range.finish);
+    if (integers && !std::holds_alternative<std::int64_t>(range.step)) throw std::runtime_error("integer range step must be Int64");
+    if (std::visit([](auto n) { return n == 0; }, range.step)) throw std::runtime_error("range step must not be zero");
+    return range;
+  }
   if (value.kind == JsonKind::String) return value.text;
   if (value.kind == JsonKind::Boolean) return raw_json(json, value) == "true";
   if (value.kind == JsonKind::Number) {
@@ -1321,10 +1739,93 @@ runtime::NotebookInputValue parse_project_input_value(const std::string &json) {
       if (!stream.fail() && stream.eof() && std::isfinite(result)) return result;
     } catch (const std::exception &) {}
   }
-  throw std::runtime_error("project input must be a finite number, Int64, boolean or string");
+  throw std::runtime_error("project input must be a finite number, Int64, boolean, string or range");
+}
+
+std::string project_config_json(const std::string &source, bool pretty) {
+  if (source.size() > 65536 || source.find('\0') != std::string::npos)
+    throw std::runtime_error("JSON config must fit 64 KiB and contain no NUL");
+  auto fail = [&](std::size_t offset, const std::string &message) -> void {
+    std::size_t line = 1, column = 1;
+    for (std::size_t i = 0; i < std::min(offset, source.size()); ++i) {
+      if (source[i] == '\n') { ++line; column = 1; }
+      else if ((static_cast<unsigned char>(source[i]) & 0xc0U) != 0x80U) ++column;
+    }
+    throw std::runtime_error("JSON " + std::to_string(line) + ":" + std::to_string(column) + ": " + message);
+  };
+  JsonValue root;
+  try { root = JsonParser(source).parse(); }
+  catch (const std::exception &error) {
+    const std::string message = error.what(), prefix = "project JSON error at byte ";
+    const auto end = message.find(": ", prefix.size());
+    if (message.rfind(prefix, 0) == 0 && end != std::string::npos)
+      fail(std::stoull(message.substr(prefix.size(), end - prefix.size())), message.substr(end + 2));
+    throw;
+  }
+  std::string output;
+  auto newline = [&](unsigned depth) { output += '\n'; output.append(depth * 2, ' '); };
+  std::function<void(const JsonValue &, unsigned)> visit = [&](const auto &value, unsigned depth) {
+    if (value.kind == JsonKind::Number) {
+      try { (void)parse_project_input_value(raw_json(source, value)); }
+      catch (...) { fail(value.begin, "number must fit Int64 or a finite Float"); }
+    }
+    if (value.kind == JsonKind::Array) {
+      if (pretty) output += '[';
+      for (std::size_t i = 0; i < value.array.size(); ++i) {
+        if (pretty) { if (i) output += ','; newline(depth + 1); }
+        visit(value.array[i], depth + 1);
+      }
+      if (pretty) { if (!value.array.empty()) newline(depth); output += ']'; }
+    } else if (value.kind == JsonKind::Object) {
+      if (pretty) output += '{';
+      for (std::size_t i = 0; i < value.object.size(); ++i) {
+        if (pretty) {
+          if (i) output += ',';
+          newline(depth + 1); write_json_string(value.object[i].first, &output); output += ": ";
+        }
+        visit(value.object[i].second, depth + 1);
+      }
+      if (pretty) { if (!value.object.empty()) newline(depth); output += '}'; }
+    } else if (pretty) output += raw_json(source, value);
+    if (output.size() > 65536) throw std::runtime_error("Formatted JSON exceeds 64 KiB");
+  };
+  visit(root, 0);
+  return pretty ? output : source;
+}
+
+std::string project_config_document(const std::string &source, const std::string &format, bool pretty) {
+  if (format == "json") return project_config_json(source, pretty);
+  (void)runtime::config_to_json(source, format);
+  if (pretty) throw std::runtime_error("Format is available for JSON; YAML/TOML source retains comments and layout");
+  return source;
+}
+
+static std::string config_control_format(const std::string &json) {
+  const auto control = JsonParser(json).parse();
+  const auto format = find_member(control, "config_format");
+  return format ? require_string(*format, "control.config_format") : "json";
+}
+
+std::map<std::string, std::string> parse_project_input_edits(const std::string &json) {
+  const auto root = JsonParser(json).parse(); require_object(root, "input edits");
+  if (root.object.size() > 1024) throw std::runtime_error("input batch exceeds 1024 values");
+  std::map<std::string, std::string> result;
+  for (const auto &entry : root.object) {
+    const auto text = require_string(entry.second, "input value JSON");
+    (void)parse_project_input_value(text);
+    if (!result.emplace(entry.first, text).second) throw std::runtime_error("duplicate input in batch");
+  }
+  return result;
 }
 
 std::string serialize_project_input_value(const runtime::NotebookInputValue &value) {
+  if (const auto range = std::get_if<runtime::NotebookInputRange>(&value)) {
+    auto number = [](const runtime::NotebookInputNumber &n) {
+      return std::visit([](auto v) { return serialize_project_input_value(runtime::NotebookInputValue(v)); }, n);
+    };
+    return "{\"start\":" + number(range->start) + ",\"finish\":" + number(range->finish) +
+        ",\"inclusive_end\":" + (range->inclusive_end ? "true" : "false") + ",\"step\":" + number(range->step) + "}";
+  }
   if (const auto text = std::get_if<std::string>(&value)) {
     std::string result; write_json_string(*text, &result); return result;
   }
@@ -1345,7 +1846,8 @@ void validate_project_input_value(const ProjectInput &input, const runtime::Note
       (input.type == "integer" && !std::holds_alternative<std::int64_t>(value)) ||
       (input.type == "boolean" && !std::holds_alternative<bool>(value)) ||
       (input.type == "string" && !std::holds_alternative<std::string>(value)) ||
-      (input.type != "number" && input.type != "integer" && input.type != "boolean" && input.type != "string"))
+      (input.type == "range" && !std::holds_alternative<runtime::NotebookInputRange>(value)) ||
+      (input.type != "number" && input.type != "integer" && input.type != "boolean" && input.type != "string" && input.type != "range"))
     throw std::runtime_error("input " + input.id + ": value does not match " + input.type);
   if (numeric) {
     const long double n = std::holds_alternative<double>(value) ?
@@ -1360,6 +1862,115 @@ void validate_project_input_value(const ProjectInput &input, const runtime::Note
     if (text->size() > 65536 || text->find('\0') != std::string::npos)
       throw std::runtime_error("input string must fit 64 KiB and contain no NUL");
   }
+  if (std::holds_alternative<runtime::NotebookInputRange>(value))
+    (void)parse_project_input_value(serialize_project_input_value(value));
+}
+
+static void validate_range_slider(const std::string &json, const runtime::NotebookInputRange &range, bool check_value) {
+  const auto root = JsonParser(json).parse(); require_object(root, "range control");
+  const auto field = find_member(root, "style");
+  const auto style = field ? require_string(*field, "control.style") : "automatic";
+  if (style == "automatic") return;
+  if (style != "slider" && style != "range_sliders") throw std::runtime_error("Range control requires automatic, slider or range_sliders");
+  const bool integer = std::holds_alternative<std::int64_t>(range.start) && std::holds_alternative<std::int64_t>(range.finish);
+  auto number = [](const runtime::NotebookInputNumber &v) { return std::visit([](auto n) { return static_cast<long double>(n); }, v); };
+  auto setting = [&](const char *key) {
+    const auto parsed = parse_project_input_value(raw_json(json, require_member(root, key, "range control")));
+    long double result;
+    if (const auto n = std::get_if<std::int64_t>(&parsed)) result = *n;
+    else if (const auto n = std::get_if<double>(&parsed)) result = *n;
+    else throw std::runtime_error("range slider bounds/increment must be numeric");
+    if (!std::isfinite(result) || std::abs(result) >= 1e100L ||
+        (integer && (std::floor(result) != result || std::abs(result) > 9007199254740991.0L)))
+      throw std::runtime_error("invalid range slider bounds/increment; integer sliders require whole numbers within 2^53-1");
+    return result;
+  };
+  const bool separate = style == "range_sliders";
+  const auto start_min = setting(separate ? "start_minimum" : "minimum");
+  const auto start_max = setting(separate ? "start_maximum" : "maximum");
+  const auto finish_min = separate ? setting("finish_minimum") : start_min;
+  const auto finish_max = separate ? setting("finish_maximum") : start_max;
+  if (start_min >= start_max || finish_min >= finish_max || start_min > finish_max)
+    throw std::runtime_error("range slider domains must increase and allow finish >= start");
+  if (find_member(root, "step") && setting("step") <= 0) throw std::runtime_error("range slider increment must be positive");
+  if (check_value) {
+    const auto start = number(range.start), finish = number(range.finish);
+    if (start > finish || start < start_min || start > start_max || finish < finish_min || finish > finish_max)
+      throw std::runtime_error("range slider value must satisfy its endpoint bounds and finish >= start");
+  }
+}
+
+void validate_project_control_values(const ProjectDocument &document, const runtime::NotebookInputSnapshot &values) {
+  auto text = [](const ProjectComponent &c, const char *key, const std::string &fallback = std::string{}) {
+    const auto found = c.extra.find(key); if (found == c.extra.end()) return fallback;
+    const auto value = parse_project_input_value(found->second);
+    if (!std::holds_alternative<std::string>(value)) throw std::runtime_error(std::string(key) + " must be text");
+    return std::get<std::string>(value);
+  };
+  auto date = [](const std::string &value, bool time) {
+    if (value.empty()) return true;
+    if (value.size() != (time ? 20U : 10U)) return false;
+    auto digits = [&](unsigned at, unsigned count) {
+      int out = 0; for (unsigned i = 0; i < count; ++i) { const char c = value[at+i]; if (c < '0' || c > '9') return -1; out = out * 10 + c - '0'; } return out;
+    };
+    const int year = digits(0,4), month = digits(5,2), day = digits(8,2);
+    if (value[4] != '-' || value[7] != '-' || year < 1 || month < 1 || month > 12 || day < 1) return false;
+    const int days[] = {31,28,31,30,31,30,31,31,30,31,30,31};
+    const bool leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    if (day > days[month-1] + (month == 2 && leap ? 1 : 0)) return false;
+    if (!time) return true;
+    return value[10] == 'T' && value[13] == ':' && value[16] == ':' && value[19] == 'Z' &&
+        digits(11,2) >= 0 && digits(11,2) < 24 && digits(14,2) >= 0 && digits(14,2) < 60 && digits(17,2) >= 0 && digits(17,2) < 60;
+  };
+  std::function<void(const std::vector<ProjectComponent> &, CellId)> visit = [&](const auto &components, CellId owner) {
+    for (const auto &c : components) {
+      if (c.panels) for (const auto &panel : *c.panels) visit(panel.components, owner);
+      if (c.kind == "range_input") {
+        const auto value = values.find(c.input);
+        if (value == values.end() || !std::holds_alternative<runtime::NotebookInputRange>(value->second))
+          throw std::runtime_error("Range Input requires a Range project input");
+        if (c.cell || !c.binding.empty() || c.extra.count("range_lower") || c.extra.count("range_upper"))
+          throw std::runtime_error("Range Input binds one Range parameter, without cell or numeric parameter bindings");
+      }
+      auto validate_control = [&](const std::string &id, const std::string &control) {
+        const auto value = values.find(owner ? runtime::notebook_cell_input_key(owner, id) : id);
+        const auto parsed = JsonParser(control).parse();
+        const auto style = find_member(parsed, "style");
+        if (style && require_string(*style, "control.style") == "json") {
+          if (value == values.end() || !std::holds_alternative<std::string>(value->second))
+            throw std::runtime_error("Config Editor requires a String input");
+          (void)project_config_document(std::get<std::string>(value->second), config_control_format(control));
+        }
+        if (value != values.end()) if (const auto range = std::get_if<runtime::NotebookInputRange>(&value->second))
+          validate_range_slider(control, *range, true);
+      };
+      if (c.kind == "input" || c.kind == "range_input") {
+        if (const auto control = c.extra.find("control"); control != c.extra.end()) validate_control(c.input, control->second);
+      }
+      if (c.kind == "parameter_form") if (const auto fields = c.extra.find("fields"); fields != c.extra.end()) {
+        const auto parsed = JsonParser(fields->second).parse();
+        for (const auto &item : require_array(parsed, "form.fields")) if (const auto control = find_member(item, "control"))
+          validate_control(require_string(require_member(item, "input", "field"), "field.input"), raw_json(fields->second, *control));
+      }
+      if (c.kind == "date_input") {
+        const auto mode = text(c, "date_mode", "date_time"), zone = text(c, "date_time_zone", "UTC");
+        if (mode != "date" && mode != "date_time") throw std::runtime_error("date_mode must be date or date_time");
+        if (zone.empty() || zone.size() > 128 || zone.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_/-+:") != std::string::npos)
+          throw std::runtime_error("invalid date input time zone");
+        const auto value = values.find(c.input);
+        if (value == values.end() || !std::holds_alternative<std::string>(value->second)) throw std::runtime_error("Date Input requires a String project input");
+        if (!date(std::get<std::string>(value->second), mode == "date_time")) throw std::runtime_error("Date Input requires a valid YYYY-MM-DD date or YYYY-MM-DDTHH:MM:SSZ UTC timestamp");
+      }
+    }
+  };
+  for (const auto &board : document.boards) visit(board.components, 0);
+  for (const auto &sheet : document.sheets) for (const auto &cell : sheet.cells) {
+    if (cell.kind != "code") continue;
+    if (const auto found = cell.extra.find("cell_ui"); found != cell.extra.end()) {
+      const auto ui = parse_project_cell_ui(found->second);
+      visit(ui.pre, cell.id); visit(ui.post, cell.id);
+    }
+  }
 }
 
 std::shared_ptr<const runtime::NotebookInputSnapshot> project_input_defaults(const ProjectDocument &document) {
@@ -1370,6 +1981,114 @@ std::shared_ptr<const runtime::NotebookInputSnapshot> project_input_defaults(con
     if (input.type == "number" && std::holds_alternative<std::int64_t>(value))
       value = static_cast<double>(std::get<std::int64_t>(value));
     result->emplace(input.id, std::move(value));
+  }
+  for (const auto &sheet : document.sheets) for (const auto &cell : sheet.cells) {
+    const auto saved = cell.extra.find("cell_ui");
+    if (cell.kind != "code" || saved == cell.extra.end()) continue;
+    for (const auto &input : parse_project_cell_ui(saved->second).inputs) {
+      auto value = input.initial;
+      if (input.type == "number" && std::holds_alternative<std::int64_t>(value))
+        value = static_cast<double>(std::get<std::int64_t>(value));
+      result->emplace(runtime::notebook_cell_input_key(cell.id, input.id), std::move(value));
+    }
+  }
+  std::function<void(const std::vector<ProjectComponent> &)> audio_inputs = [&](const auto &components) {
+    for (const auto &c : components) {
+      if (c.panels) for (const auto &panel : *c.panels) audio_inputs(panel.components);
+      if (project_owns_audio_input(c)) {
+        const auto key = runtime::audio_input_key(project_audio_channel(c));
+        const auto path = project_audio_asset(c);
+        const auto previous = result->find(key);
+        if (previous != result->end() && previous->second != runtime::NotebookInputValue(path))
+          throw std::runtime_error("Audio Input channels must be unique");
+        (*result)[key] = path;
+      }
+    }
+  };
+  for (const auto &board : document.boards) audio_inputs(board.components);
+  std::function<void(const std::vector<ProjectComponent> &)> accepted_data = [&](const auto &components) {
+    for (const auto &c : components) {
+      if (c.panels) for (const auto &panel : *c.panels) accepted_data(panel.components);
+      for (const auto &kind : {std::string("selection"), std::string("annotations"), std::string("audio_annotations")}) {
+        const bool enabled = kind == "selection" ? c.kind == "table" : kind == "audio_annotations" ? c.kind == "audio_annotator" : (c.kind == "image" || c.kind == "image_carousel") && project_image_option(c, "image_annotator");
+        if (!enabled) continue;
+        const auto channel = project_component_data_channel(c, kind); if (channel.empty()) continue;
+        const auto found = c.extra.find(kind); auto json = found == c.extra.end() ? std::string("null") : found->second;
+        // Preserve valid legacy geometry for repair in the editor, but never
+        // expose fractional image coordinates to notebook consumers.
+        validate_project_component_data_impl(kind, json, false);
+        if (json != "null" && kind != "selection") {
+          try { validate_project_component_data(kind, json); validate_project_annotation_data(c, kind, json); }
+          catch (const std::exception &) { json = "null"; } // Retain the old draft in the manifest for review.
+        }
+        if (kind == "annotations" && json != "null" && project_component_data_source(kind, json).channel != project_image_channel(c)) json = "null";
+        if (kind == "audio_annotations" && json != "null") {
+          const auto source = project_component_data_source(kind, json);
+          if (source.channel != project_audio_channel(c) || source.source != (project_audio_source(c) == "cell" ? "cell" : "input") || source.cell != (project_audio_source(c) == "cell" ? c.cell : 0)) json = "null";
+        }
+        if (!result->emplace(runtime::notebook_component_data_key(kind, channel), json).second) throw std::runtime_error("component data channels must have one owner");
+      }
+    }
+  };
+  for (const auto &board : document.boards) accepted_data(board.components);
+  validate_project_control_values(document, *result);
+  return result;
+}
+
+static std::vector<ProjectBoardRow> parse_board_rows(const JsonValue &rows, const std::string &json) {
+  std::vector<ProjectBoardRow> result;
+  for (const auto &item : require_array(rows, "layout.rows")) {
+    require_object(item, "board row");
+    ProjectBoardRow row;
+    row.id = require_string(require_member(item, "id", "board row"), "row.id");
+    if (const auto height = find_member(item, "height")) {
+      const auto value = parse_project_input_value(raw_json(json, *height));
+      if (const auto n = std::get_if<double>(&value)) row.height = *n;
+      else if (const auto n = std::get_if<std::int64_t>(&value)) row.height = *n;
+      else throw std::runtime_error("row.height must be numeric");
+    }
+    row.extra = parse_extras(item, {"id", "height"}, json);
+    result.push_back(std::move(row));
+  }
+  return result;
+}
+
+static std::vector<ProjectComponent> parse_board_components(const JsonValue &items, const std::string &json, unsigned depth = 0) {
+  if (depth > 8) throw std::runtime_error("tabs nesting exceeds 8 levels");
+  std::vector<ProjectComponent> result;
+  for (const auto &item : require_array(items, "layout.components")) {
+    require_object(item, "component");
+    ProjectComponent component;
+    component.id = require_string(require_member(item, "id", "component"), "component.id");
+    component.kind = require_string(require_member(item, "kind", "component"), "component.kind");
+    component.title = require_string(require_member(item, "title", "component"), "component.title");
+    if (const auto v = find_member(item, "input")) component.input = require_string(*v, "component.input");
+    if (const auto v = find_member(item, "cell")) component.cell = parse_cell_id(*v, "component.cell");
+    if (const auto v = find_member(item, "binding")) component.binding = require_string(*v, "component.binding");
+    if (const auto v = find_member(item, "row")) component.row = require_string(*v, "component.row");
+    if (const auto v = find_member(item, "span")) {
+      const auto value = parse_project_input_value(raw_json(json, *v));
+      const auto n = std::get_if<std::int64_t>(&value);
+      if (!n || *n < 1 || *n > 12) throw std::runtime_error("component.span must be 1..12");
+      component.span = static_cast<unsigned>(*n);
+    }
+    if (const auto v = find_member(item, "h_align")) component.h_align = require_string(*v, "component.h_align");
+    if (const auto v = find_member(item, "v_align")) component.v_align = require_string(*v, "component.v_align");
+    if (const auto panels = find_member(item, "panels")) {
+      component.panels.emplace();
+      for (const auto &panel_item : require_array(*panels, "component.panels")) {
+        require_object(panel_item, "tab panel");
+        ProjectBoardPanel panel;
+        panel.id = require_string(require_member(panel_item, "id", "tab panel"), "panel.id");
+        panel.title = require_string(require_member(panel_item, "title", "tab panel"), "panel.title");
+        panel.rows = parse_board_rows(require_member(panel_item, "rows", "tab panel"), json);
+        panel.components = parse_board_components(require_member(panel_item, "components", "tab panel"), json, depth + 1);
+        panel.extra = parse_extras(panel_item, {"id", "title", "rows", "components"}, json);
+        component.panels->push_back(std::move(panel));
+      }
+    }
+    component.extra = parse_extras(item, {"id", "kind", "title", "input", "cell", "binding", "row", "span", "h_align", "v_align", "panels"}, json);
+    result.push_back(std::move(component));
   }
   return result;
 }
@@ -1386,20 +2105,59 @@ ProjectBoard parse_project_board(const std::string &json) {
     if (!n || *n < 1 || *n > 6) throw std::runtime_error("board columns must be 1..6");
     board.columns = static_cast<unsigned>(*n);
   }
-  for (const auto &item : require_array(require_member(root, "components", "board"), "board.components")) {
-    require_object(item, "component");
-    ProjectComponent component;
-    component.id = require_string(require_member(item, "id", "component"), "component.id");
-    component.kind = require_string(require_member(item, "kind", "component"), "component.kind");
-    component.title = require_string(require_member(item, "title", "component"), "component.title");
-    if (const auto v = find_member(item, "input")) component.input = require_string(*v, "component.input");
-    if (const auto v = find_member(item, "cell")) component.cell = parse_cell_id(*v, "component.cell");
-    if (const auto v = find_member(item, "binding")) component.binding = require_string(*v, "component.binding");
-    component.extra = parse_extras(item, {"id", "kind", "title", "input", "cell", "binding"}, json);
-    board.components.push_back(std::move(component));
-  }
-  board.extra = parse_extras(root, {"id", "title", "sheet", "columns", "components"}, json);
+  if (const auto rows = find_member(root, "rows")) board.rows = parse_board_rows(*rows, json);
+  board.components = parse_board_components(require_member(root, "components", "board"), json);
+  board.extra = parse_extras(root, {"id", "title", "sheet", "columns", "components", "rows"}, json);
   return board;
+}
+
+static std::string serialize_board_rows(const std::vector<ProjectBoardRow> &rows) {
+  std::string out = "[";
+  for (const auto &row : rows) {
+    if (out.back() != '[') out += ',';
+    out += "{\"id\":"; write_json_string(row.id, &out);
+    if (row.height) out += ",\"height\":" + serialize_project_input_value(*row.height);
+    for (const auto &extra : row.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+    out += '}';
+  }
+  return out + ']';
+}
+
+static std::string serialize_board_components(const std::vector<ProjectComponent> &components, unsigned depth = 0) {
+  if (depth > 8) throw std::runtime_error("tabs nesting exceeds 8 levels");
+  std::string out = "[";
+  const auto field = [&](const std::string &key, const std::string &value) {
+    if (out.back() != '{') out += ',';
+    write_json_string(key, &out); out += ':'; write_json_string(value, &out);
+  };
+  for (const auto &c : components) {
+    if (out.back() != '[') out += ',';
+    out += '{';
+    field("id", c.id); field("kind", c.kind); field("title", c.title);
+    if (!c.input.empty()) field("input", c.input);
+    if (c.cell) field("cell", std::to_string(c.cell));
+    if (!c.binding.empty()) field("binding", c.binding);
+    if (!c.row.empty()) {
+      field("row", c.row);
+      out += ",\"span\":" + std::to_string(c.span);
+      field("h_align", c.h_align); field("v_align", c.v_align);
+    }
+    if (c.panels) {
+      out += ",\"panels\":[";
+      for (const auto &panel : *c.panels) {
+        if (out.back() != '[') out += ',';
+        out += '{'; field("id", panel.id); field("title", panel.title);
+        out += ",\"rows\":" + serialize_board_rows(panel.rows);
+        out += ",\"components\":" + serialize_board_components(panel.components, depth + 1);
+        for (const auto &extra : panel.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+        out += '}';
+      }
+      out += ']';
+    }
+    for (const auto &extra : c.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+    out += '}';
+  }
+  return out + ']';
 }
 
 std::string serialize_project_board(const ProjectBoard &board) {
@@ -1409,17 +2167,8 @@ std::string serialize_project_board(const ProjectBoard &board) {
     write_json_string(key, &out); out += ':'; write_json_string(value, &out);
   };
   field("id", board.id); field("title", board.title); field("sheet", board.sheet);
-  out += ",\"columns\":" + std::to_string(board.columns) + ",\"components\":[";
-  for (std::size_t i = 0; i < board.components.size(); ++i) {
-    const auto &c = board.components[i]; if (i) out += ','; out += '{';
-    field("id", c.id); field("kind", c.kind); field("title", c.title);
-    if (!c.input.empty()) field("input", c.input);
-    if (c.cell) field("cell", std::to_string(c.cell));
-    if (!c.binding.empty()) field("binding", c.binding);
-    for (const auto &extra : c.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
-    out += '}';
-  }
-  out += ']';
+  out += ",\"columns\":" + std::to_string(board.columns) + ",\"components\":" + serialize_board_components(board.components);
+  if (board.rows) out += ",\"rows\":" + serialize_board_rows(*board.rows);
   for (const auto &extra : board.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
   return out + '}';
 }
@@ -1444,6 +2193,74 @@ ProjectInput parse_project_input(const std::string &json) {
   }
   input.extra = parse_extras(item, {"id", "title", "type", "default", "minimum", "maximum"}, json);
   return input;
+}
+
+ProjectCellUI parse_project_cell_ui(const std::string &json) {
+  const auto root = JsonParser(json).parse(); require_object(root, "cell_ui");
+  ProjectCellUI ui;
+  for (const auto &item : require_array(require_member(root, "inputs", "cell_ui"), "cell_ui.inputs")) {
+    // Exact scalar JSON strings match the existing form/preset transport.
+    const auto defaults = require_string(require_member(item, "default_json", "cell input"), "default_json");
+    std::string definition = "{";
+    for (const auto &field : item.object) if (field.first != "default_json") {
+      if (definition.back() != '{') definition += ',';
+      write_json_string(field.first, &definition); definition += ':' + raw_json(json, field.second);
+    }
+    definition += ",\"default\":" + defaults + '}';
+    ui.inputs.push_back(parse_project_input(definition));
+  }
+  ui.pre = parse_board_components(require_member(root, "pre", "cell_ui"), json);
+  ui.post = parse_board_components(require_member(root, "post", "cell_ui"), json);
+  ui.extra = parse_extras(root, {"inputs", "pre", "post"}, json);
+  return ui;
+}
+
+std::string serialize_project_cell_ui(const ProjectCellUI &ui) {
+  std::string out = "{\"inputs\":[";
+  for (const auto &input : ui.inputs) {
+    if (out.back() != '[') out += ',';
+    out += "{\"id\":"; write_json_string(input.id, &out);
+    out += ",\"title\":"; write_json_string(input.title, &out);
+    out += ",\"type\":"; write_json_string(input.type, &out);
+    out += ",\"default_json\":"; write_json_string(serialize_project_input_value(input.initial), &out);
+    if (input.minimum) out += ",\"minimum\":" + serialize_project_input_value(*input.minimum);
+    if (input.maximum) out += ",\"maximum\":" + serialize_project_input_value(*input.maximum);
+    for (const auto &extra : input.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+    out += '}';
+  }
+  out += "],\"pre\":" + serialize_board_components(ui.pre) + ",\"post\":" + serialize_board_components(ui.post);
+  for (const auto &extra : ui.extra) { out += ','; write_json_string(extra.first, &out); out += ':' + extra.second; }
+  return out + '}';
+}
+
+void validate_project_cell_ui(const ProjectCellUI &ui, CellId owner) {
+  if (ui.inputs.size() > 128 || ui.pre.size() + ui.post.size() > 64)
+    throw std::runtime_error("cell permits at most 128 inputs and 64 components");
+  ProjectDocument document;
+  document.title = "Cell UI validation"; document.active_sheet = "main";
+  ProjectSheet sheet; sheet.id = "main"; sheet.title = "Cell";
+  document.sheets.push_back(std::move(sheet));
+  document.version = 3; document.inputs = ui.inputs;
+  ProjectBoard board; board.id = "cell_ui"; board.title = "Cell"; board.sheet = document.active_sheet;
+  std::set<std::string> ids;
+  for (const auto *zone : {&ui.pre, &ui.post}) for (auto component : *zone) {
+    if (!ids.insert(component.id).second) throw std::runtime_error("duplicate cell component id");
+    if (component.kind != "input" && component.kind != "parameter_form" && component.kind != "live_chart" &&
+        component.kind != "metric" && component.kind != "image" && component.kind != "table" && component.kind != "audio")
+      throw std::runtime_error("component is not supported in a cell: " + component.kind);
+    if (!component.row.empty() || component.panels || (component.cell && component.cell != owner))
+      throw std::runtime_error("cell components belong to their owner, without board grids");
+    if (component.kind == "image") for (const auto &flag : {"image_allow_read", "image_allow_load"}) {
+      const auto found = component.extra.find(flag);
+      if (found != component.extra.end() && found->second != "false")
+        throw std::runtime_error("cell Image is a display; use a board for image editing");
+    }
+    if (component.kind == "metric" || component.kind == "table" || component.kind == "audio") component.cell = owner;
+    board.components.push_back(std::move(component));
+  }
+  document.boards.push_back(std::move(board));
+  validate_extra_fields(ui.extra, {"inputs", "pre", "post"}, "cell_ui");
+  validate_project_document(document);
 }
 
 ProjectDependency parse_project_dependency(const std::string &json) {
@@ -1474,8 +2291,8 @@ ProjectDocument parse_project_document(const std::string &json) {
   }
   const JsonValue &version = require_member(root, "version", "$");
   if (version.kind != JsonKind::Number ||
-      (raw_json(json, version) != "1" && raw_json(json, version) != "2" && raw_json(json, version) != "3")) {
-    document_error_at("$.version", "version must be 1, 2 or 3",
+      (raw_json(json, version) != "1" && raw_json(json, version) != "2" && raw_json(json, version) != "3" && raw_json(json, version) != "4")) {
+    document_error_at("$.version", "version must be 1, 2, 3 or 4",
                       version.begin);
   }
 
@@ -1527,12 +2344,267 @@ ProjectDocument parse_project_document(const std::string &json) {
                                 {"format", "version", "title", "active_sheet",
                                  "sheets", "modules", "auto_imports", "inputs", "boards", "dependencies"},
                                 json);
+  // Upgrade the old pair-of-scalars widget to a real Range parameter. Keep
+  // the scalar definitions so existing authored code can still read them.
+  std::function<void(std::vector<ProjectComponent> &)> upgrade_ranges = [&](auto &components) {
+    for (auto &c : components) {
+      if (c.panels) for (auto &panel : *c.panels) upgrade_ranges(panel.components);
+      if (c.kind != "range_input" || !c.input.empty()) continue;
+      const auto low = c.extra.find("range_lower"), high = c.extra.find("range_upper");
+      if (low == c.extra.end() || high == c.extra.end()) continue;
+      auto bound = [&](const std::string &json) -> runtime::NotebookInputNumber {
+        const auto id = std::get<std::string>(parse_project_input_value(json));
+        for (const auto &input : document.inputs) if (input.id == id) {
+          if (const auto n = std::get_if<std::int64_t>(&input.initial)) return *n;
+          if (const auto n = std::get_if<double>(&input.initial)) return *n;
+        }
+        throw std::runtime_error("legacy Range Input requires two numeric parameters");
+      };
+      runtime::NotebookInputRange range; range.start = bound(low->second); range.finish = bound(high->second);
+      auto id = c.id;
+      while (std::any_of(document.inputs.begin(), document.inputs.end(), [&](const auto &input) { return input.id == id; })) id += "_range";
+      document.inputs.push_back(ProjectInput{id, c.title, "range", range, {}, {}, {}});
+      c.input = id; c.extra.erase("range_lower"); c.extra.erase("range_upper");
+    }
+  };
+  for (auto &board : document.boards) upgrade_ranges(board.components);
   validate_project_document(document);
   return document;
 }
 
+PeriodicWorkSettings project_periodic_work_settings(const ProjectComponent &component) {
+  PeriodicWorkSettings settings;
+  const auto string = [&](const std::string &key, std::string &target) {
+    const auto found = component.extra.find(key);
+    if (found == component.extra.end()) return;
+    const auto value = parse_project_input_value(found->second);
+    const auto text = std::get_if<std::string>(&value);
+    if (!text) throw std::runtime_error("periodic work " + key + " must be a string");
+    target = *text;
+  };
+  const auto boolean = [&](const std::string &key, bool &target) {
+    const auto found = component.extra.find(key);
+    if (found == component.extra.end()) return;
+    const auto value = parse_project_input_value(found->second);
+    const auto flag = std::get_if<bool>(&value);
+    if (!flag) throw std::runtime_error("periodic work " + key + " must be boolean");
+    target = *flag;
+  };
+  string("module_id", settings.module_id); string("function", settings.function);
+  validate_module_id(settings.module_id, "periodic work module_id");
+  validate_module_id(settings.function, "periodic work function");
+  string("timing", settings.timing); string("retention", settings.retention);
+  if (settings.timing != "fixed_rate" && settings.timing != "fixed_delay")
+    throw std::runtime_error("periodic work timing must be fixed_rate or fixed_delay");
+  if (settings.retention != "none" && settings.retention != "all" && settings.retention != "tail")
+    throw std::runtime_error("periodic work retention must be none, all or tail");
+  if (const auto found = component.extra.find("period_seconds"); found != component.extra.end()) {
+    const auto value = parse_project_input_value(found->second);
+    if (const auto real = std::get_if<double>(&value)) settings.period_seconds = *real;
+    else if (const auto integer = std::get_if<std::int64_t>(&value)) settings.period_seconds = *integer;
+    else throw std::runtime_error("periodic work period_seconds must be numeric");
+  }
+  if (!std::isfinite(settings.period_seconds) || settings.period_seconds < 0.01 || settings.period_seconds > 31536000)
+    throw std::runtime_error("periodic work period must be 0.01..31536000 seconds");
+  if (const auto found = component.extra.find("tail_limit"); found != component.extra.end()) {
+    const auto value = parse_project_input_value(found->second);
+    const auto integer = std::get_if<std::int64_t>(&value);
+    if (!integer || *integer < 1 || *integer > 1000000)
+      throw std::runtime_error("periodic work tail_limit must be 1..1000000");
+    settings.tail_limit = static_cast<unsigned>(*integer);
+  }
+  boolean("store_values", settings.store_values); boolean("store_errors", settings.store_errors);
+  boolean("run_immediately", settings.run_immediately); boolean("stop_on_error", settings.stop_on_error);
+  boolean("pause_when_hidden", settings.pause_when_hidden);
+  return settings;
+}
+
+static void validate_board_input_control(const std::string &json, const ProjectInput &input) {
+  if (input.type == "range") {
+    validate_range_slider(json, std::get<runtime::NotebookInputRange>(input.initial), true);
+    return;
+  }
+  const auto root = JsonParser(json).parse(); require_object(root, "input control");
+  const auto style_value = find_member(root, "style");
+  const auto style = style_value ? require_string(*style_value, "control.style") : "automatic";
+  if (style != "automatic" && style != "number" && style != "slider" && style != "stepper" &&
+      style != "select" && style != "segmented" && style != "radio" && style != "json")
+    throw std::runtime_error("unsupported input control style");
+  if (style == "json") {
+    if (input.type != "string") throw std::runtime_error("Config Editor requires a String input");
+    (void)project_config_document(std::get<std::string>(input.initial), config_control_format(json));
+  }
+  const bool numeric = input.type == "number" || input.type == "integer";
+  if ((style == "number" || style == "slider" || style == "stepper") && !numeric)
+    throw std::runtime_error("numeric control requires a numeric input");
+  std::optional<double> minimum = input.minimum, maximum = input.maximum;
+  for (const auto name : {"minimum", "maximum", "step"}) if (const auto item = find_member(root, name)) {
+    const auto parsed = parse_project_input_value(raw_json(json, *item));
+    double number;
+    if (const auto v = std::get_if<double>(&parsed)) number = *v;
+    else if (const auto v = std::get_if<std::int64_t>(&parsed)) number = *v;
+    else throw std::runtime_error("input control bound/step must be numeric");
+    if (!numeric || !std::isfinite(number) || std::abs(number) >= 1e100)
+      throw std::runtime_error("invalid input control bound/step");
+    if (std::string(name) == "step") {
+      if (number <= 0 || (input.type == "integer" && (std::floor(number) != number || number > 9007199254740991.0)))
+        throw std::runtime_error("invalid input step");
+    } else {
+      if (input.type == "integer" && std::floor(number) != number) throw std::runtime_error("integer bounds must be integral");
+      if (std::string(name) == "minimum") minimum = minimum ? std::max(*minimum, number) : number;
+      else maximum = maximum ? std::min(*maximum, number) : number;
+    }
+  }
+  if (minimum && maximum && *minimum > *maximum) throw std::runtime_error("input control bounds do not overlap");
+  if (style == "slider" && (!minimum || !maximum || *minimum >= *maximum ||
+      (input.type == "integer" && (std::abs(*minimum) > 9007199254740991.0 || std::abs(*maximum) > 9007199254740991.0))))
+    throw std::runtime_error("slider requires increasing finite bounds; use Number or Stepper for large integers");
+  if (const auto precision = find_member(root, "precision")) {
+    const auto p = parse_project_input_value(raw_json(json, *precision));
+    const auto n = std::get_if<std::int64_t>(&p);
+    if (!n || *n < 0 || *n > 12) throw std::runtime_error("precision must be 0..12");
+  }
+  if (const auto unit = find_member(root, "unit")) {
+    const auto text = require_string(*unit, "control.unit");
+    if (text.size() > 256) throw std::runtime_error("unit label is too long");
+  }
+  const bool choice = style == "select" || style == "segmented" || style == "radio";
+  if (choice && input.type != "string" && input.type != "integer") throw std::runtime_error("choice requires a String or Integer input");
+  const auto options = find_member(root, "options");
+  if (choice && !options) throw std::runtime_error("choice requires options");
+  if (options) {
+    const auto &items = require_array(*options, "control.options");
+    if (items.size() > 256 || (choice && items.empty())) throw std::runtime_error("choice requires 1..256 options");
+    std::set<std::string> values;
+    for (const auto &item : items) {
+      require_object(item, "option");
+      if (require_string(require_member(item, "label", "option"), "option.label").size() > 256)
+        throw std::runtime_error("option label is too long");
+      const auto value = parse_project_input_value(require_string(require_member(item, "value_json", "option"), "option.value_json"));
+      validate_project_input_value(input, value);
+      if (!values.insert(serialize_project_input_value(value)).second) throw std::runtime_error("duplicate option value");
+    }
+  }
+}
+
+static const JsonValue *p1_member(const JsonValue &root, const char *key) { return find_member(root, key); }
+
+ProjectActionInvocation project_action_invocation(const ProjectComponent &component,
+    const runtime::NotebookInputSnapshot &inputs) {
+  const auto module = component.extra.find("module_id"), function = component.extra.find("function");
+  if (module == component.extra.end() || function == component.extra.end()) throw std::runtime_error("action requires a module and function");
+  const auto module_id = std::get<std::string>(parse_project_input_value(module->second));
+  const auto function_id = std::get<std::string>(parse_project_input_value(function->second));
+  const auto identifier = [](const std::string &name) {
+    if (name.empty() || name.size() > 256 || !(std::isalpha(static_cast<unsigned char>(name[0])) || name[0] == '_')) return false;
+    return std::all_of(name.begin(), name.end(), [](unsigned char c) { return std::isalnum(c) || c == '_'; });
+  };
+  if (!identifier(module_id) || !identifier(function_id)) throw std::runtime_error("invalid action module/function name");
+  auto snapshot = std::make_shared<runtime::NotebookInputSnapshot>(inputs);
+  std::string source = "import " + module_id + "\n" + module_id + "." + function_id + "(";
+  if (const auto settings = component.extra.find("p1"); settings != component.extra.end()) {
+    const auto root = JsonParser(settings->second).parse(); require_object(root, "p1");
+    if (const auto arguments = find_member(root, "arguments")) {
+      const auto &items = require_array(*arguments, "action.arguments");
+      if (items.size() > 64) throw std::runtime_error("action exceeds 64 arguments");
+      std::set<std::string> names; bool named = false;
+      for (std::size_t i = 0; i < items.size(); ++i) {
+        const auto &item = items[i]; require_object(item, "argument");
+        if (i) source += ", ";
+        if (const auto name = find_member(item, "name"); name && !require_string(*name, "argument.name").empty()) {
+          const auto text = require_string(*name, "argument.name");
+          if (!identifier(text) || !names.insert(text).second) throw std::runtime_error("invalid/duplicate named argument");
+          named = true; source += text + ": ";
+        } else if (named) throw std::runtime_error("positional arguments must precede named arguments");
+        const auto binding = find_member(item, "input"), constant = find_member(item, "value_json");
+        if (bool(binding) == bool(constant)) throw std::runtime_error("argument requires one input or scalar constant");
+        runtime::NotebookInputValue value;
+        if (binding) {
+          const auto id = require_string(*binding, "argument.input");
+          const auto found = inputs.find(id);
+          if (found == inputs.end()) throw std::runtime_error("action input unavailable: " + id);
+          value = found->second;
+        } else value = parse_project_input_value(require_string(*constant, "argument.value_json"));
+        auto key = "__sputnik_action_" + std::to_string(i);
+        while (snapshot->count(key)) key += '_';
+        snapshot->emplace(key, std::move(value));
+        source += "notebook.input(" + serialize_project_input_value(key) + ")";
+      }
+    }
+  }
+  return {source + ")\n", snapshot};
+}
+
+static void validate_p1(const ProjectComponent &c, const ProjectDocument &document) {
+  const auto settings = c.extra.find("p1");
+  if (settings == c.extra.end()) {
+    if (c.kind == "action") (void)project_action_invocation(c, *project_input_defaults(document));
+    return;
+  }
+  const auto root = JsonParser(settings->second).parse(); require_object(root, "p1");
+  const auto string = [&](const char *key, std::size_t limit) {
+    if (const auto item = p1_member(root, key)) {
+      const auto value = require_string(*item, key);
+      if (value.size() > limit || value.find('\0') != std::string::npos) throw std::runtime_error(std::string("invalid p1.") + key);
+      return value;
+    }
+    return std::string();
+  };
+  string("unit", 256); string("extensions", 512); string("target_component", 256);
+  const auto target = string("target_kind", 16);
+  if (!target.empty() && target != "cell" && target != "sheet" && target != "service" && target != "action" && target != "runtime") throw std::runtime_error("invalid execution target");
+  const auto direction = string("improvement", 16);
+  if (!direction.empty() && direction != "higher" && direction != "lower" && direction != "neutral") throw std::runtime_error("invalid metric improvement");
+  for (const auto key : {"percentage", "collapsed"}) if (const auto item = p1_member(root, key))
+    if (!std::holds_alternative<bool>(parse_project_input_value(raw_json(settings->second, *item)))) throw std::runtime_error("p1 flag requires boolean");
+  for (const auto key : {"target", "baseline", "precision"}) if (const auto item = p1_member(root, key)) {
+    const auto value = parse_project_input_value(raw_json(settings->second, *item));
+    double n;
+    if (const auto number = std::get_if<double>(&value)) n = *number;
+    else if (const auto integer = std::get_if<std::int64_t>(&value)) n = *integer;
+    else throw std::runtime_error("metric setting requires a number");
+    if (!std::isfinite(n) || (std::string(key) == "precision" && (n < 0 || n > 12 || std::floor(n) != n))) throw std::runtime_error("invalid metric setting");
+  }
+  if (c.kind == "action") (void)project_action_invocation(c, *project_input_defaults(document));
+  if (const auto series = p1_member(root, "series")) {
+    const auto &items = require_array(*series, "series");
+    if (items.size() > 16) throw std::runtime_error("chart exceeds 16 series");
+    std::set<std::string> ids;
+    for (const auto &item : items) {
+      const auto id = require_string(require_member(item, "id", "series"), "series.id");
+      const auto color = require_string(require_member(item, "stroke", "series"), "series.stroke");
+      if (id.empty() || id.size() > 256 || !ids.insert(id).second || id.find('\0') != std::string::npos ||
+          require_string(require_member(item, "title", "series"), "series.title").size() > 256 ||
+          color.size() != 7 || color[0] != '#' || color.find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos) throw std::runtime_error("invalid chart series");
+    }
+  }
+  std::set<std::string> selection;
+  if (const auto selected = p1_member(root, "preset_inputs")) for (const auto &item : require_array(*selected, "preset inputs")) {
+    const auto id = require_string(item, "preset input");
+    if (!selection.insert(id).second || std::none_of(document.inputs.begin(), document.inputs.end(), [&](const auto &v) { return v.id == id; })) throw std::runtime_error("unknown/duplicate preset input");
+  }
+  if (const auto presets = p1_member(root, "presets")) {
+    const auto &items = require_array(*presets, "presets");
+    if (items.size() > 128) throw std::runtime_error("component exceeds 128 presets");
+    std::set<std::string> ids;
+    for (const auto &item : items) {
+      const auto id = require_string(require_member(item, "id", "preset"), "preset.id");
+      const auto title = require_string(require_member(item, "title", "preset"), "preset.title");
+      if (id.empty() || id.size() > 256 || !ids.insert(id).second || title.empty() || title.size() > 256) throw std::runtime_error("invalid preset name/identity");
+      const auto &values = require_member(item, "values", "preset");
+      const auto edits = parse_project_input_edits(raw_json(settings->second, values));
+      for (const auto &edit : edits) {
+        const auto &input_id = edit.first, &json = edit.second;
+        const auto input = std::find_if(document.inputs.begin(), document.inputs.end(), [&](const auto &v) { return v.id == input_id; });
+        if (input == document.inputs.end() || (!selection.empty() && !selection.count(input_id))) throw std::runtime_error("preset input unavailable");
+        validate_project_input_value(*input, parse_project_input_value(json));
+      }
+    }
+  }
+}
+
 void validate_project_document(const ProjectDocument &document) {
-  if ((document.version < 1 || document.version > 3) ||
+  if ((document.version < 1 || document.version > 4) ||
       (document.version == 1 && (!document.inputs.empty() || !document.boards.empty())))
     throw std::runtime_error("project inputs and boards require schema version 2");
   if (document.version < 3 && !document.dependencies.empty())
@@ -1569,6 +2641,12 @@ void validate_project_document(const ProjectDocument &document) {
     }
     for (std::size_t cell_index = 0U; cell_index < sheet.cells.size();
          ++cell_index) {
+      const auto &cell = sheet.cells[cell_index];
+      if (const auto ui = cell.extra.find("cell_ui"); ui != cell.extra.end()) {
+        if (document.version < 4 || cell.kind != "code")
+          throw std::runtime_error("cell components require a code cell and schema version 4");
+        validate_project_cell_ui(parse_project_cell_ui(ui->second), cell.id);
+      }
       validate_cell(sheet.cells[cell_index], &cell_ids,
                     sheet_path + ".cells[" + std::to_string(cell_index) + "]");
     }
@@ -1628,20 +2706,250 @@ void validate_project_document(const ProjectDocument &document) {
     if (board.columns < 1 || board.columns > 6 || board.components.size() > 256)
       throw std::runtime_error("board requires 1..6 columns and at most 256 components");
     std::set<std::string> components;
-    for (const auto &c : board.components) {
-      validate_module_id(c.id, "component.id"); validate_utf8(c.title, "component.title");
-      validate_utf8(c.binding, "component.binding");
-      if (!components.insert(c.id).second) throw std::runtime_error("duplicate component id");
-      if (c.kind != "input" && c.kind != "text" && c.kind != "plot" && c.kind != "run")
-        throw std::runtime_error("unsupported board component kind: " + c.kind);
-      if (c.kind == "input" && !inputs.count(c.input)) throw std::runtime_error("component references unknown input");
-      // A missing output target remains an explicit broken binding in the UI;
-      // editing a sheet must not become impossible because a board references it.
-      if (c.kind != "input" && c.cell == 0) throw std::runtime_error("output component requires a cell id");
-      validate_extra_fields(c.extra, {"id", "kind", "title", "input", "cell", "binding"}, "component");
-    }
-    validate_extra_fields(board.extra, {"id", "title", "sheet", "columns", "components"}, "board");
+    std::size_t row_count = 0, panel_count = 0;
+    std::function<void(const std::vector<ProjectBoardRow> *, const std::vector<ProjectComponent> &, unsigned)> validate_grid;
+    validate_grid = [&](const auto *rows, const auto &items, unsigned depth) {
+      if (depth > 8) throw std::runtime_error("tabs nesting exceeds 8 levels");
+      std::map<std::string, unsigned> row_spans;
+      if (rows) {
+        if ((row_count += rows->size()) > 256) throw std::runtime_error("board permits at most 256 rows");
+        for (const auto &row : *rows) {
+          validate_module_id(row.id, "row.id");
+          if (!row_spans.emplace(row.id, 0).second) throw std::runtime_error("duplicate board row id");
+          if (row.height && (!std::isfinite(*row.height) || *row.height < 48 || *row.height > 4096))
+            throw std::runtime_error("row height must be 48..4096 points");
+          validate_extra_fields(row.extra, {"id", "height"}, "board row");
+        }
+      }
+      for (const auto &c : items) {
+        validate_module_id(c.id, "component.id"); validate_utf8(c.title, "component.title");
+        validate_utf8(c.binding, "component.binding");
+        if (!components.insert(c.id).second) throw std::runtime_error("duplicate component id");
+        if (components.size() > 256) throw std::runtime_error("board permits at most 256 components across all panels");
+        const bool periodic = c.kind == "periodic_work";
+        if (periodic) {
+          if (depth != 0 || !c.row.empty() || c.cell || !c.input.empty() || !c.binding.empty())
+            throw std::runtime_error("periodic work belongs to the board service tray, without row or cell bindings");
+          (void)project_periodic_work_settings(c);
+        } else if (rows) {
+          const auto row = row_spans.find(c.row);
+          if (row == row_spans.end()) throw std::runtime_error("component references unknown board row");
+          if (c.span < 1 || c.span > 12 || (row->second += c.span) > 12)
+            throw std::runtime_error("board row components must fit 12 columns");
+        } else if (!c.row.empty()) throw std::runtime_error("component row requires board.rows");
+        if (c.h_align != "leading" && c.h_align != "center" && c.h_align != "trailing" && c.h_align != "stretch")
+          throw std::runtime_error("invalid component horizontal alignment");
+        if (c.v_align != "top" && c.v_align != "center" && c.v_align != "bottom" && c.v_align != "stretch")
+          throw std::runtime_error("invalid component vertical alignment");
+        const bool image_component = c.kind == "image" || c.kind == "image_carousel";
+        const bool text_cell = c.kind == "rich_text";
+        const bool form = c.kind == "parameter_form";
+        const bool group = c.kind == "group" || c.kind == "split";
+        const bool independent = c.kind == "parameter_presets" || c.kind == "action" || c.kind == "execution_controls" || c.kind == "status" || c.kind == "stopwatch" || c.kind == "run_history" || c.kind == "experiment_compare" || c.kind == "task_monitor";
+        const bool p1_output = c.kind == "metric" || c.kind == "log" || c.kind == "artifacts";
+        if (!group && !independent && !p1_output && c.kind != "file_input" && c.kind != "audio_input" && c.kind != "audio_annotator" && c.kind != "range_input" && c.kind != "date_input" && c.kind != "input" && !form && c.kind != "audio" && c.kind != "table" && c.kind != "text" && c.kind != "result" && c.kind != "progress" && !text_cell && c.kind != "plot" && c.kind != "live_chart" && c.kind != "run" && c.kind != "tabs" && !image_component && !periodic)
+          throw std::runtime_error("unsupported board component kind: " + c.kind);
+        if ((c.kind == "input" || c.kind == "file_input") && !inputs.count(c.input)) throw std::runtime_error("component references unknown input");
+        validate_p1(c, document);
+        if (c.kind == "file_input") {
+          const auto input = std::find_if(document.inputs.begin(), document.inputs.end(), [&](const auto &v) { return v.id == c.input; });
+          if (input->type != "string") throw std::runtime_error("File Input requires a String project input");
+        }
+        if ((c.kind == "input" || c.kind == "range_input") && c.extra.count("control")) {
+          const auto input = std::find_if(document.inputs.begin(), document.inputs.end(), [&](const auto &v) { return v.id == c.input; });
+          if (input == document.inputs.end()) throw std::runtime_error("component references unknown input");
+          validate_board_input_control(c.extra.at("control"), *input);
+        }
+        if (form) {
+          if (c.cell || !c.input.empty() || !c.binding.empty()) throw std::runtime_error("parameter form owns fields, without cell bindings");
+          const auto fields = c.extra.find("fields");
+          if (fields == c.extra.end()) throw std::runtime_error("parameter form requires fields");
+          const auto parsed = JsonParser(fields->second).parse();
+          const auto &items = require_array(parsed, "form.fields");
+          if (items.size() > 128) throw std::runtime_error("form exceeds 128 fields");
+          std::set<std::string> used;
+          for (const auto &item : items) {
+            require_object(item, "form field");
+            const auto id = require_string(require_member(item, "input", "field"), "field.input");
+            const auto input = std::find_if(document.inputs.begin(), document.inputs.end(), [&](const auto &v) { return v.id == id; });
+            if (input == document.inputs.end() || !used.insert(id).second) throw std::runtime_error("unknown or duplicate form input");
+            if (const auto control = find_member(item, "control")) validate_board_input_control(raw_json(fields->second, *control), *input);
+          }
+        }
+        // A missing output target remains an explicit broken binding in the UI;
+        // editing a sheet must not become impossible because a board references it.
+        if (!group && !independent && c.kind != "file_input" && c.kind != "audio_input" && c.kind != "audio_annotator" && c.kind != "range_input" && c.kind != "date_input" && c.kind != "input" && !form && c.kind != "live_chart" && c.kind != "tabs" && !text_cell && !image_component && !periodic && c.cell == 0) throw std::runtime_error("output component requires a cell id");
+        if (text_cell) {
+          if (c.cell || !c.input.empty() || !c.binding.empty())
+            throw std::runtime_error("text cell owns its source, without cell or input bindings");
+          const auto content = c.extra.find("text_content");
+          if (content == c.extra.end()) throw std::runtime_error("text cell requires text_content");
+          (void)parse_project_text_content(content->second);
+          if (const auto mode = c.extra.find("text_mode"); mode != c.extra.end()) {
+            const auto value = parse_project_input_value(mode->second);
+            const auto text = std::get_if<std::string>(&value);
+            if (!text || (*text != "richtext" && *text != "markdown"))
+              throw std::runtime_error("text_mode must be richtext or markdown");
+          }
+        }
+        for (const auto field : {"selection_id", "selection_key", "selection_asset", "annotation_id"}) {
+          const auto found = c.extra.find(field); if (found == c.extra.end()) continue;
+          const auto value = parse_project_input_value(found->second); const auto text = std::get_if<std::string>(&value);
+          if (!text || text->size() > 256 || text->find('\0') != std::string::npos) throw std::runtime_error("invalid shared selection/annotation field");
+        }
+        if (c.kind == "audio_annotator" || c.kind == "image" || c.kind == "image_carousel") validate_annotation_configuration(c);
+        if (project_owns_audio_input(c)) {
+          if (c.cell || !c.input.empty() || !c.binding.empty()) throw std::runtime_error("Audio Input owns its accepted asset, without cell bindings");
+          (void)project_audio_channel(c); (void)project_audio_asset(c);
+          if (const auto recorder = c.extra.find("audio_recording"); recorder != c.extra.end())
+            if (!std::holds_alternative<bool>(parse_project_input_value(recorder->second))) throw std::runtime_error("audio_recording must be Bool");
+          if (const auto name = c.extra.find("audio_name"); name != c.extra.end()) {
+            const auto value = parse_project_input_value(name->second); const auto text = std::get_if<std::string>(&value);
+            if (!text || text->size() > 1024 || text->find('\0') != std::string::npos) throw std::runtime_error("invalid audio input name");
+          }
+        }
+        if (c.kind == "audio_annotator") {
+          (void)project_audio_channel(c);
+          if (project_audio_source(c) == "cell" && !c.cell) throw std::runtime_error("audio annotator cell source requires a cell id");
+          for (const auto *key : {"audio_view", "audio_fft_size"}) if (const auto field = c.extra.find(key); field != c.extra.end()) {
+            const auto value = parse_project_input_value(field->second);
+            if (std::string(key) == "audio_view") {
+              const auto text = std::get_if<std::string>(&value); if (!text || (*text != "waveform" && *text != "spectrogram")) throw std::runtime_error("invalid audio annotation view");
+            } else {
+              const auto size = std::get_if<std::int64_t>(&value); if (!size || (*size != 256 && *size != 512 && *size != 1024 && *size != 2048 && *size != 4096)) throw std::runtime_error("invalid audio FFT size");
+            }
+          }
+        }
+        if (c.kind == "audio") {
+          if (const auto flag = c.extra.find("show_waveform"); flag != c.extra.end()) {
+            if (!std::holds_alternative<bool>(parse_project_input_value(flag->second)))
+              throw std::runtime_error("show_waveform must be Bool");
+          }
+          if (const auto id = c.extra.find("audio_id"); id != c.extra.end()) {
+            const auto value = parse_project_input_value(id->second);
+            const auto text = std::get_if<std::string>(&value);
+            if (!text || text->size() > 256 || text->find('\0') != std::string::npos)
+              throw std::runtime_error("invalid audio channel id");
+          }
+        }
+        if (c.kind == "table") {
+          if (const auto id = c.extra.find("table_id"); id != c.extra.end()) {
+            const auto value = parse_project_input_value(id->second);
+            const auto text = std::get_if<std::string>(&value);
+            if (!text || text->size() > 256 || text->find('\0') != std::string::npos)
+              throw std::runtime_error("table_id must be text of at most 256 bytes without NUL");
+          }
+        }
+        if (c.kind == "progress" || c.kind == "stopwatch") {
+          if (const auto id = c.extra.find(c.kind == "progress" ? "progress_id" : "stopwatch_id"); id != c.extra.end()) {
+            const auto value = parse_project_input_value(id->second);
+            const auto text = std::get_if<std::string>(&value);
+            if (!text || text->size() > 256 || text->find('\0') != std::string::npos)
+              throw std::runtime_error(std::string(c.kind == "progress" ? "progress_id" : "stopwatch_id") +
+                                       " must be a string of at most 256 bytes without NUL");
+          }
+        }
+        if (c.kind == "tabs" || group) {
+          if (c.kind == "split") {
+            if (!c.panels || c.panels->size() != 2) throw std::runtime_error("Split View requires exactly two panels");
+            auto number = [&](const char *key, double fallback) {
+              const auto found = c.extra.find(key); if (found == c.extra.end()) return fallback;
+              const auto value = parse_project_input_value(found->second);
+              if (auto real = std::get_if<double>(&value)) return *real;
+              if (auto integer = std::get_if<std::int64_t>(&value)) return double(*integer);
+              throw std::runtime_error(std::string(key) + " must be numeric");
+            };
+            const auto fraction = number("split_fraction", 0.5), minimum = number("split_min", 120);
+            if (fraction < 0.1 || fraction > 0.9 || minimum < 48 || minimum > 1024) throw std::runtime_error("invalid Split View ratio or minimum size");
+            if (const auto axis = c.extra.find("split_axis"); axis != c.extra.end()) {
+              const auto value = parse_project_input_value(axis->second); const auto text = std::get_if<std::string>(&value);
+              if (!text || (*text != "horizontal" && *text != "vertical")) throw std::runtime_error("invalid split axis");
+            }
+          }
+          if (c.kind == "group" && (!c.panels || c.panels->size() != 1)) throw std::runtime_error("group requires exactly one grid panel");
+          if (!c.panels || c.panels->empty() || c.panels->size() > 32 || (panel_count += c.panels->size()) > 128)
+            throw std::runtime_error("tabs require 1..32 panels, at most 128 per board");
+          std::set<std::string> panel_ids;
+          for (const auto &panel : *c.panels) {
+            validate_module_id(panel.id, "panel.id"); validate_utf8(panel.title, "panel.title");
+            if (!panel_ids.insert(panel.id).second) throw std::runtime_error("duplicate tab panel id");
+            validate_extra_fields(panel.extra, {"id", "title", "rows", "components"}, "tab panel");
+            validate_grid(&panel.rows, panel.components, depth + 1);
+          }
+        } else if (c.panels) throw std::runtime_error("only tabs and group components may own panels");
+        if (image_component) {
+          for (const auto key : {"image_allow_save", "image_allow_load", "image_allow_read", "image_annotator"})
+            (void)project_image_option(c, key);
+          (void)project_image_assets(c);
+        for (const auto key : {"image_series_caption", "image_revision"}) {
+          if (const auto value = c.extra.find(key); value != c.extra.end()) {
+            const auto parsed = parse_project_input_value(value->second);
+            if (!std::holds_alternative<std::string>(parsed) || std::get<std::string>(parsed).size() > 65536)
+              throw std::runtime_error(std::string("invalid component.") + key);
+          }
+        }
+        if (const auto value = c.extra.find("image_selection"); value != c.extra.end()) {
+          const auto parsed = parse_project_input_value(value->second);
+          if (!std::holds_alternative<std::int64_t>(parsed) || std::get<std::int64_t>(parsed) < 0 || std::get<std::int64_t>(parsed) > 63)
+            throw std::runtime_error("image_selection must be an integer in 0..63");
+        }
+          for (const std::string key : {"image_id", "image_mode", "caption"}) {
+            const auto value = c.extra.find(key);
+            if (value == c.extra.end()) continue;
+            const auto parsed = parse_project_input_value(value->second);
+            const auto text = std::get_if<std::string>(&parsed);
+            if (!text) throw std::runtime_error("component." + key + " must be a string");
+            if (key == "image_id" && (text->empty() || text->size() > 256 || text->find('\0') != std::string::npos))
+              throw std::runtime_error("image requires a valid image_id");
+            if (key == "image_mode" && *text != "fit" && *text != "fill" && *text != "auto-height")
+              throw std::runtime_error("image_mode must be fit, fill or auto-height");
+            if (key == "caption" && text->size() > 65536) throw std::runtime_error("image caption exceeds 64 KiB");
+          }
+        }
+        if (c.kind == "live_chart") {
+          for (const auto &key : {"chart_id", "x_label", "y_label", "stroke", "caption"}) {
+            const auto value = c.extra.find(key);
+            if (value == c.extra.end()) continue;
+            const auto parsed = parse_project_input_value(value->second);
+            const auto text = std::get_if<std::string>(&parsed);
+            if (!text) throw std::runtime_error(std::string("component.") + key + " must be a string");
+            if (std::string(key) == "chart_id" && (text->empty() || text->size() > 256 || text->find('\0') != std::string::npos))
+              throw std::runtime_error("live chart requires a valid chart_id");
+            if ((std::string(key) == "x_label" || std::string(key) == "y_label") && text->size() > 65536)
+              throw std::runtime_error("live chart axis label is too long");
+            if (std::string(key) == "caption" && text->size() > 65536)
+              throw std::runtime_error("live chart caption exceeds 64 KiB");
+            if (std::string(key) == "stroke" && (text->size() != 7 || (*text)[0] != '#' ||
+                text->find_first_not_of("0123456789abcdefABCDEF", 1) != std::string::npos))
+              throw std::runtime_error("live chart stroke must be #rrggbb");
+          }
+          for (const std::string axis : {"x", "y"}) {
+            std::optional<double> minimum, maximum;
+            for (const auto &key : {axis + "_min", axis + "_max"}) {
+              const auto value = c.extra.find(key);
+              if (value == c.extra.end()) continue;
+              const auto parsed = parse_project_input_value(value->second);
+              double number;
+              if (const auto integer = std::get_if<std::int64_t>(&parsed)) number = *integer;
+              else if (const auto real = std::get_if<double>(&parsed)) number = *real;
+              else throw std::runtime_error(std::string("component.") + key + " must be numeric");
+              if (!std::isfinite(number) || std::abs(number) >= 1e100)
+                throw std::runtime_error("live chart axis bound must be finite with magnitude below 1e100");
+              (key == axis + "_min" ? minimum : maximum) = number;
+            }
+            if (minimum && maximum && *maximum - *minimum <= std::max(1e-100, std::max(std::abs(*minimum), std::abs(*maximum)) * 1e-13))
+              throw std::runtime_error("live chart " + axis + "_max must exceed " + axis + "_min with a resolvable interval");
+          }
+        }
+        // Chart settings remain extension fields in ProjectComponent. Only
+        // members parsed into the typed component must be reserved here.
+        validate_extra_fields(c.extra, {"id", "kind", "title", "input", "cell", "binding", "row", "span", "h_align", "v_align", "panels"}, "component");
+      }
+    };
+    validate_grid(board.rows ? &*board.rows : nullptr, board.components, 0);
+    validate_extra_fields(board.extra, {"id", "title", "sheet", "columns", "components", "rows"}, "board");
   }
+  (void)project_input_defaults(document);
 }
 
 std::string serialize_project_document(const ProjectDocument &document) {

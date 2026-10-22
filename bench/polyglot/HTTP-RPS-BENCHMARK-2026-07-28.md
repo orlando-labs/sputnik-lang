@@ -1,26 +1,26 @@
-# Polyglot Ember soak-client HTTP RPS benchmark
+# Polyglot Orbit soak-client HTTP RPS benchmark
 
 Date: `2026-07-28T14:14:13.964959+03:00`
 Host: `Darwin 25.5.0 / arm64 / arm`
-Client: the unchanged native-body-covered Sputnik client from `ember/examples/soak/client.s`
+Client: the unchanged native-body-covered Sputnik client from `orbit/examples/soak/client.s`
 Load: `4` concurrent clients, `60` seconds per server, `mixed`, negative suite every 25 iterations.
 Execution model: generated native bodies with the reported `vm-stdlib-send-v1` bridge; this run was not VM-independent full native.
 
 | Server | RPS | Requests | Valid | Invalid | Peak server RSS | vs Sputnik |
 |---|---:|---:|---:|---:|---:|---:|
-| Sputnik + Ember (native bodies; VM stdlib bridge) | 1301.57 | 78,232 | 48,656 | 29,576 | 66.1 MiB | 1.00× |
+| Sputnik + Orbit (native bodies; VM stdlib bridge) | 1301.57 | 78,232 | 48,656 | 29,576 | 66.1 MiB | 1.00× |
 | Go `net/http` | 12393.54 | 743,648 | 463,184 | 280,464 | 20.6 MiB | 9.52× |
 | Python `ThreadingHTTPServer` | 7774.92 | 466,568 | 290,544 | 176,024 | 17.8 MiB | 5.97× |
 
 ## Reading
 
-On this workload, Go is 9.52x and Python is 5.97x the Sputnik/Ember throughput. Because the timed Sputnik server is already in-memory, SQLite cannot account for this gap; the limiting work is in the Sputnik/Ember request path (HTTP I/O, routing, parameter handling, JSON, validation, telemetry, or native/runtime dispatch). The Sputnik memory result is bounded, but the throughput difference is large enough to justify request-path profiling and optimization.
+On this workload, Go is 9.52x and Python is 5.97x the Sputnik/Orbit throughput. Because the timed Sputnik server is already in-memory, SQLite cannot account for this gap; the limiting work is in the Sputnik/Orbit request path (HTTP I/O, routing, parameter handling, JSON, validation, telemetry, or native/runtime dispatch). The Sputnik memory result is bounded, but the throughput difference is large enough to justify request-path profiling and optimization.
 
 ## Method
 
 This is a server-side polyglot comparison, not a replacement-client microbenchmark. Every row is driven by the same compiled Sputnik executable and therefore performs the same persistent-connection CRUD cycle, JSON checks, schema failures, model-validation failures, optimistic-lock conflicts, method/Host rejection, and oversized-body case.
 
-All three benchmark servers use a process-local, mutex-protected in-memory store so the table compares HTTP routing, JSON/schema handling, validation, and concurrency rather than unrelated database drivers. The production Ember qualification soak remains the separate SQLite-backed workload.
+All three benchmark servers use a process-local, mutex-protected in-memory store so the table compares HTTP routing, JSON/schema handling, validation, and concurrency rather than unrelated database drivers. The production Orbit qualification soak remains the separate SQLite-backed workload.
 
 Before each timed row, the runner executes one complete mixed Sputnik-client iteration (76 requests) and rejects the row on any contract mismatch. Timed RPS is total requests divided by the maximum elapsed time reported by the concurrent Sputnik clients. Server and clients share the same host, so client CPU is part of the available-machine budget; results are comparative for this machine, not universal language rankings.
 

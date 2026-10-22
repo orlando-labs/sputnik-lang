@@ -243,6 +243,16 @@ void test_w13_comments_ranges_and_numbers() {
 }
 
 void test_new_operator_tokens() {
+  expect_kinds("conditional assignment without whitespace", "a?=b or=c\n",
+               {TokenKind::Identifier, TokenKind::Question, TokenKind::Equal,
+                TokenKind::Identifier, TokenKind::KeywordOr, TokenKind::Equal,
+                TokenKind::Identifier, TokenKind::Newline, TokenKind::Eof});
+  expect_identifier_lexemes("predicate suffix with ordinary assignment",
+                            "ready? = false\nready??=true\n",
+                            {"ready?", "ready?"});
+  expect_kinds("placeholder followed by conditional assignment", "$it?=1\n",
+               {TokenKind::Placeholder, TokenKind::Question, TokenKind::Equal,
+                TokenKind::Integer, TokenKind::Newline, TokenKind::Eof});
   expect_kinds("floor division, modulo, spaceship, power, bitwise, shifts",
                "a // b % c <=> d ** e & f ^ g | h << i >> j\n",
                {TokenKind::Identifier, TokenKind::SlashSlash,

@@ -1,3 +1,4 @@
+#include "frontend/foreign_import.h"
 #include "frontend/binder/binder.h"
 #include "frontend/lexer/lexer.h"
 #include "frontend/pattern/pattern.h"
@@ -166,8 +167,17 @@ void collect_default_refs(const ast::Expr &expr,
 
 class Binder {
 public:
-  BindResult bind(const std::vector<std::unique_ptr<ast::Expr>> &items) {
+  BindResult bind(const std::vector<std::unique_ptr<ast::Expr>> &items,
+                  const frontend::ImportAliases &aliases) {
     const lexer::Span span = module_span(items);
+    try {
+      graph_.import_aliases = aliases;
+      graph_.import_aliases.merge(frontend::collect_import_aliases(items));
+      graph_.import_aliases.validate();
+    } catch (const std::exception &error) {
+      diagnostic("B_IMPORT_REPLACEMENT", "error", "binder", error.what(), span);
+      return BindResult{std::move(graph_), std::move(diagnostics_)};
+    }
     const int module_scope = add_scope("module", "", -1, span);
     declare_last_value(module_scope, span);
     predeclare_items(module_scope, items);
@@ -258,6 +268,8 @@ private:
       DuplicatePolicy duplicate_policy = DuplicatePolicy::AllowExisting,
       const std::string &context = "") {
     if (Binding *existing = find_local_binding(scope_index, name, context)) {
+      if (kind == "import_alias" && existing->kind == kind &&
+          existing->role == role && existing->source == source) return existing;
       if (duplicate_policy == DuplicatePolicy::Error) {
         diagnostic("B0001", "error", "binder",
                    "duplicate lexical binding in one scope", span);
@@ -438,11 +450,19 @@ private:
 
   void declare_imports(int scope_index, const ast::Expr &item) {
     const std::string import_kind = string_value(item, "import_kind");
-    const std::string module_path = string_value(item, "module_path");
+    const std::string original_path = string_value(item, "module_path");
+    const std::string module_path = graph_.import_aliases.resolve(original_path);
     if (import_kind == "module") {
+      if (([](const std::string &provider) { return provider == "rbcall" || (provider.size() > 7 && provider.compare(provider.size()-7, 7, ".rbcall") == 0); })(sputnik::frontend::foreign_import_provider(module_path))) {
+        diagnostic("E_FOREIGN_RUBY_IMPORT", "error", "binder",
+                   "a Ruby require path has no module value; use 'from " +
+                       module_path + " import <RubyConstant>'", item.span);
+      }
       std::string local_name = string_value(item, "alias");
       if (local_name.empty()) {
-        local_name = last_path_segment(module_path);
+        local_name = last_path_segment(original_path);
+      } else {
+        local_name = last_path_segment(local_name);
       }
       declare_binding(scope_index, local_name, "import_alias", "module_import",
                       item.span, true, module_path, DuplicatePolicy::Error);
@@ -1747,10 +1767,11 @@ CallBindResult bind_call_shape(const Signature &signature,
 }
 
 BindResult bind_module(const std::vector<std::unique_ptr<ast::Expr>> &items,
-                       const std::string &module_name) {
+                       const std::string &module_name,
+                       const frontend::ImportAliases &aliases) {
   (void)module_name;
   Binder binder;
-  return binder.bind(items);
+  return binder.bind(items, aliases);
 }
 
 std::vector<lexer::Diagnostic> unresolved_name_diagnostics(

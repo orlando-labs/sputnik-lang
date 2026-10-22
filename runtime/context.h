@@ -50,6 +50,18 @@ struct RuntimeRunFailureReceipt {
   const RuntimeRunTaskFailure failure;
   std::atomic<bool> observed{false};
 };
+struct RuntimeRunTaskSnapshot {
+  std::uint64_t id = 0, parent = 0, cell = 0, elapsed_ms = 0;
+  std::string state, error, file;
+  std::uint32_t line = 0;
+};
+struct RuntimeRunTelemetry {
+  std::vector<RuntimeRunTaskSnapshot> tasks;
+  std::uint64_t revision = 0, dropped = 0, active = 0, total = 0, sampled_ms = 0;
+  std::optional<double> cpu_percent;
+  std::optional<std::uint64_t> resident_bytes;
+};
+
 class RuntimeRunState : public std::enable_shared_from_this<RuntimeRunState> {
 public:
   class Task {
@@ -61,11 +73,13 @@ public:
     // the callback immediately. The callback must not retain the scheduler.
     void on_cancel(std::function<void()> callback);
     std::uint64_t id() const noexcept { return id_; }
+    void mark_active();
   private:
     friend class RuntimeRunState;
     explicit Task(std::shared_ptr<RuntimeRunState> run) : run_(std::move(run)) {}
     std::shared_ptr<RuntimeRunState> run_;
     std::uint64_t id_ = 0;
+    int exceptions_ = 0;
   };
 
   bool cancelled() const noexcept { return cancelled_.load(std::memory_order_relaxed); }
@@ -73,6 +87,8 @@ public:
   void request_cancel();
   std::shared_ptr<Task> register_task();
   std::size_t active_tasks() const;
+  RuntimeRunTelemetry telemetry() const;
+  void finish_task(std::uint64_t id, const std::string &state, const std::string &error = {});
   // Root return begins draining. Descendants may still spawn while registered
   // work is alive; once drained the run is sealed against late callbacks.
   void close_root();
@@ -83,6 +99,9 @@ public:
   std::shared_ptr<RuntimeRunFailureReceipt> record_failure(RuntimeRunTaskFailure failure);
   std::vector<RuntimeRunTaskFailure> unobserved_failures() const;
 private:
+  struct TaskRecord { RuntimeRunTaskSnapshot value; std::chrono::steady_clock::time_point start; bool finished = false; };
+  std::map<std::uint64_t, TaskRecord> task_records_;
+  std::uint64_t task_revision_ = 0, task_dropped_ = 0;
   std::atomic<bool> cancelled_{false};
   mutable std::mutex mutex_;
   std::condition_variable idle_;
@@ -90,6 +109,13 @@ private:
   std::uint64_t next_task_ = 1;
   std::map<std::uint64_t, std::function<void()>> tasks_;
   std::map<std::uint64_t, std::shared_ptr<RuntimeRunFailureReceipt>> failures_;
+};
+class RuntimeRunTaskScope {
+public:
+  explicit RuntimeRunTaskScope(const std::shared_ptr<RuntimeRunState::Task> &task);
+  ~RuntimeRunTaskScope();
+private:
+  std::uint64_t previous_ = 0;
 };
 using RuntimeRunCancellation = std::shared_ptr<RuntimeRunState>;
 RuntimeRunCancellation current_runtime_run_cancellation();
@@ -115,6 +141,7 @@ public:
 private:
   RuntimeRunCancellation previous_;
   unsigned previous_mask_;
+  std::uint64_t previous_task_ = 0;
 };
 
 // A VM unwinding cancellation must be allowed to execute ensure bodies. This

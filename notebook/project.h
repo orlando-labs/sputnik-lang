@@ -2,6 +2,8 @@
 
 #include "notebook/model.h"
 #include "runtime/notebook_inputs.h"
+#include "runtime/notebook_image.h"
+#include "runtime/audio.h"
 
 #include <filesystem>
 #include <map>
@@ -55,7 +57,7 @@ struct ProjectModule {
 
 struct ProjectInput {
   std::string id, title;
-  std::string type = "number"; // number, integer, boolean, string
+  std::string type = "number"; // number, integer, boolean, string, range
   runtime::NotebookInputValue initial = 0.0;
   std::optional<double> minimum, maximum;
   ProjectExtraFields extra;
@@ -69,11 +71,40 @@ struct ProjectDependency {
   ProjectExtraFields extra;
 };
 
+struct ProjectBoardPanel;
+
 struct ProjectComponent {
   std::string id, kind, title;
   std::string input; // input component -> project input
-  CellId cell = 0;   // text/plot/run component -> controller sheet cell
+  CellId cell = 0;   // value/result/progress/plot/run -> controller sheet code cell
   std::string binding; // empty text binding -> cell expression result
+  ProjectExtraFields extra;
+  std::string row = {}; // explicit row ID; empty on legacy ordered grids
+  unsigned span = 12;
+  std::string h_align = "stretch", v_align = "top";
+  std::optional<std::vector<ProjectBoardPanel>> panels = std::nullopt; // tabs own independent row grids
+};
+
+// Authored configuration belongs to a stable code-cell identity.
+struct ProjectCellUI {
+  std::vector<ProjectInput> inputs;
+  std::vector<ProjectComponent> pre, post;
+  ProjectExtraFields extra;
+};
+ProjectCellUI parse_project_cell_ui(const std::string &json);
+std::string serialize_project_cell_ui(const ProjectCellUI &ui);
+void validate_project_cell_ui(const ProjectCellUI &ui, CellId owner);
+
+struct ProjectBoardRow {
+  std::string id;
+  std::optional<double> height; // UI points; absent means content height
+  ProjectExtraFields extra;
+};
+
+struct ProjectBoardPanel {
+  std::string id, title;
+  std::vector<ProjectBoardRow> rows;
+  std::vector<ProjectComponent> components;
   ProjectExtraFields extra;
 };
 
@@ -82,7 +113,39 @@ struct ProjectBoard {
   unsigned columns = 2;
   std::vector<ProjectComponent> components;
   ProjectExtraFields extra;
+  std::optional<std::vector<ProjectBoardRow>> rows = std::nullopt;
 };
+
+// Nonvisual board service. Settings use extension fields so older hosts retain
+// their exact JSON spelling even when they do not render the service.
+struct PeriodicWorkSettings {
+  std::string module_id, function;
+  double period_seconds = 60;
+  std::string timing = "fixed_delay", retention = "tail";
+  unsigned tail_limit = 100;
+  bool store_values = true, store_errors = true, run_immediately = true;
+  bool stop_on_error = false, pause_when_hidden = true;
+};
+PeriodicWorkSettings project_periodic_work_settings(const ProjectComponent &);
+
+struct ProjectActionInvocation {
+  std::string source;
+  std::shared_ptr<const runtime::NotebookInputSnapshot> inputs;
+};
+ProjectActionInvocation project_action_invocation(const ProjectComponent &,
+    const runtime::NotebookInputSnapshot &);
+
+struct ProjectImageAsset { std::string path, caption; };
+struct ProjectImageEdit {
+  std::string board, component, caption;
+  std::size_t selected = 0;
+  std::vector<runtime::NotebookDisplay> images;
+};
+std::vector<ProjectImageAsset> project_image_assets(const ProjectComponent &component);
+std::string serialize_project_image_assets(const std::vector<ProjectImageAsset> &assets);
+ProjectImageEdit parse_project_image_edit(const std::string &json);
+bool project_image_option(const ProjectComponent &component, const std::string &key);
+std::string project_image_channel(const ProjectComponent &component);
 
 struct ProjectDocument {
   std::string title;
@@ -100,9 +163,16 @@ struct ProjectDocument {
 };
 
 runtime::NotebookInputValue parse_project_input_value(const std::string &json);
+// Inert Config Editor validation/formatting. Retains number/string lexemes,
+// rejects duplicate keys and numbers outside the runtime's Int64/finite Float.
+// pretty=false validates and returns the original UTF-8 source verbatim.
+std::string project_config_json(const std::string &source, bool pretty = false);
+std::string project_config_document(const std::string &source, const std::string &format, bool pretty = false);
+std::map<std::string, std::string> parse_project_input_edits(const std::string &json);
 ProjectInput parse_project_input(const std::string &json);
 std::string serialize_project_input_value(const runtime::NotebookInputValue &value);
 void validate_project_input_value(const ProjectInput &input, const runtime::NotebookInputValue &value);
+void validate_project_control_values(const ProjectDocument &, const runtime::NotebookInputSnapshot &);
 std::shared_ptr<const runtime::NotebookInputSnapshot> project_input_defaults(const ProjectDocument &document);
 ProjectBoard parse_project_board(const std::string &json);
 std::string serialize_project_board(const ProjectBoard &board);
@@ -123,6 +193,30 @@ struct LoadedProject {
   // Exact disk contents are the optimistic-concurrency baseline for saving.
   std::string baseline;
 };
+
+std::shared_ptr<const runtime::NotebookImageInputs> load_project_image_inputs(
+    const ProjectDocument &, const std::filesystem::path &, const std::string &sheet);
+std::string store_project_image(const LoadedProject &, const runtime::NotebookDisplay &);
+
+struct ProjectComponentDataSource { std::string identity, channel, source; unsigned width = 0, height = 0, rate = 0, channels = 0; std::uint64_t frames = 0, cell = 0; };
+ProjectComponentDataSource project_component_data_source(const std::string &kind, const std::string &json);
+struct ProjectComponentDataEdit { std::string board, component, kind, json; };
+ProjectComponentDataEdit parse_project_component_data_edit(const std::string &);
+std::string project_component_data_channel(const ProjectComponent &, const std::string &kind);
+void validate_project_component_data(const std::string &kind, const std::string &json);
+void validate_project_annotation_data(const ProjectComponent &, const std::string &kind, const std::string &json);
+
+struct ProjectAudioEdit {
+  std::string board, component, name;
+  std::optional<runtime::AudioDisplay> audio;
+};
+ProjectAudioEdit parse_project_audio_edit(const std::string &json);
+std::string project_audio_source(const ProjectComponent &component);
+bool project_owns_audio_input(const ProjectComponent &component);
+std::string project_audio_channel(const ProjectComponent &component);
+std::string project_audio_asset(const ProjectComponent &component);
+std::shared_ptr<const runtime::NotebookAudioInputs> load_project_audio_inputs(const ProjectDocument &, const std::filesystem::path &, const std::string &sheet);
+std::string store_project_audio(const LoadedProject &, const runtime::AudioDisplay &);
 
 struct LoadedProjectModule {
   std::string id;

@@ -4,13 +4,18 @@
 package directories; their source is **not copied into the notebook**. Both
 isputnik and the native macOS host use the same resolver and project format.
 
+Explicit directory links take priority over automatically discovered packages.
+Imports can also use `<project.sputnikbook>/packages/` and `SPUTNIK_PKG_HOME`
+without adding a link. See [shared package installation](package-store-v1.md).
+The limits below describe explicit directory links.
+
 ## Link and import
 
 In the macOS sidebar choose **Dependencies → +**, then select the package
 directory. In isputnik use **F3**:
 
 ```text
-add-dependency /path/to/sputnik-plot
+add-dependency /path/to/plot
 ```
 
 Paths containing spaces are accepted as the remainder of the command; do not
@@ -25,7 +30,7 @@ In a code cell:
 ```sputnik
 import plot
 p = plot.figure(width: 800, height: 480).line([[0, 0], [1, 1], [2, 4]])
-notebook.show(p, caption: "Linked sputnik-plot")
+notebook.show(p, caption: "Linked plot")
 ```
 
 `import plot as p` and `from plot import figure as make_figure` work too. The
@@ -67,7 +72,7 @@ continue to load unchanged. A v3 document additionally requires `inputs`,
 
 ```json
 "dependencies": [
-  {"path": "../../sputnik-plot", "auto_import": false}
+  {"path": "../../plot", "auto_import": false}
 ]
 ```
 
@@ -104,7 +109,7 @@ are portable only when the corresponding directory layout travels with them.
   including unsupported export forms, still apply.
 - Linking grants no new runtime capabilities. Native extension metadata is not
   executed; foreign calls require a renderer/thunk already registered by the
-  host. The native notebook build prelinks sputnik-plot's PNG renderer when its
+  host. The native notebook build prelinks plot's PNG renderer when its
   checkout is available. Changing native C implementation requires rebuilding
   the app; Apply only reloads Sputnik sources. The ordinary isputnik binary does not
   acquire a PNG renderer simply by linking the source package.
@@ -119,7 +124,7 @@ python3 ../sputnik-notebook/tools/notebook-macos/make-plot-sample.py build/noteb
 python3 ../sputnik-notebook/tools/notebook-macos/make-plot-sample.py build/notebook-macos/LinkedBoard.sputnikbook --board
 ```
 
-These create links to the real `../sputnik-plot` checkout and use `import plot`.
+These create links to the real `../plot` checkout and use `import plot`.
 To explicitly copy the Sputnik source for a portable example, add `--bundle`.
 That switch is specific to this sample generator, not a general dependency
 vendoring/export command, and does not bundle the native renderer in the project.

@@ -139,7 +139,7 @@ strand afterward. Production wakeups and work stealing remain unchanged.
 
 ## Downstream use
 
-`sqlite3-sputnik` should allocate one non-inheriting local per pool and bind the
+`sqlite3` should allocate one non-inheriting local per pool and bind the
 checked-out transaction executor with `with`. Nested ORM calls then resolve the
 same executor after suspension/migration, while a child `task.spawn` observes
 no transaction binding and cannot concurrently use the exclusive connection.

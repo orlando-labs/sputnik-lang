@@ -59,6 +59,10 @@ vm_notebook_image_manifest(const bytecode::BcModule &module,
 struct VmCellExecutionReport {
   std::vector<runtime::NotebookDisplay> displays;
   std::vector<runtime::NotebookLiveEvent> progress;
+  std::vector<runtime::NotebookLiveEvent> charts;
+  std::vector<runtime::NotebookLiveEvent> images;
+  std::vector<runtime::NotebookLiveEvent> audio;
+  std::vector<runtime::NotebookLiveEvent> audio_controls;
   runtime::Value value = runtime::Value::null();
   std::vector<runtime::ExecutionLocal> locals;
   std::uint64_t watch_epoch = 0;
@@ -92,6 +96,11 @@ public:
   void set_project_inputs(std::shared_ptr<const runtime::NotebookInputSnapshot> values) {
     project_inputs_ = std::move(values);
   }
+  void set_project_images(std::shared_ptr<const runtime::NotebookImageInputs> values) {
+    project_images_ = std::move(values);
+  }
+  void set_audio_inputs(std::shared_ptr<const runtime::NotebookAudioInputs> values) { project_audio_inputs_ = std::move(values); }
+  void set_project_audio(std::shared_ptr<const std::vector<runtime::NotebookAudioComponent>> values) { project_audio_ = std::move(values); }
   const std::string &validation_error() const noexcept {
     return validation_error_;
   }
@@ -116,6 +125,9 @@ private:
   std::map<std::uint32_t, VmSlotDescriptor> by_descriptor_;
   std::string validation_error_;
   std::shared_ptr<const runtime::NotebookInputSnapshot> project_inputs_;
+  std::shared_ptr<const runtime::NotebookImageInputs> project_images_;
+  std::shared_ptr<const runtime::NotebookAudioInputs> project_audio_inputs_;
+  std::shared_ptr<const std::vector<runtime::NotebookAudioComponent>> project_audio_;
 };
 
 } // namespace sputnik::notebook

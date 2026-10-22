@@ -112,9 +112,25 @@ int main() {
   auto configured = send(
       command({"/bin/sh", "-c", "printf '%s' \"$SPUTNIK_SYSTEM_TEST\"; pwd"}),
       "with", {}, {{"env", env}, {"cwd", SystemValue::str("/tmp")}});
-  const auto configured_output = send(configured, "output").text;
-  assert(configured_output == "special value/tmp\n" ||
-         configured_output == "special value/private/tmp\n");
+#if defined(__GLIBC__)
+#if __GLIBC_PREREQ(2, 29)
+  constexpr bool spawn_cwd_supported = true;
+#else
+  constexpr bool spawn_cwd_supported = false;
+#endif
+#else
+  constexpr bool spawn_cwd_supported = true;
+#endif
+  if (spawn_cwd_supported) {
+    const auto configured_output = send(configured, "output").text;
+    assert(configured_output == "special value/tmp\n" ||
+           configured_output == "special value/private/tmp\n");
+  } else {
+    raises("ProcessSpawnError", [&] { send(configured, "output"); });
+    auto configured_env = send(command({"/bin/sh", "-c", "printf '%s' \"$SPUTNIK_SYSTEM_TEST\""}),
+                               "with", {}, {{"env", env}});
+    assert(send(configured_env, "output").text == "special value");
+  }
   SystemValue module;
   module.kind = K::Module;
   auto template_command =

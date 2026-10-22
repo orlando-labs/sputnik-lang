@@ -17,14 +17,14 @@ Status: active implementation record for the host-native execution path.
 > (including topology preservation and `init_copy`), presence predicates,
 > monotonic time, and focused collection mutation. The
 > `native_object_state` fixture is `--require-full-native`. On the four-module
-> sputnik-orm selftest graph this moved direct coverage from 324/916 to 598/916;
+> orm selftest graph this moved direct coverage from 324/916 to 598/916;
 > the next first fallback is an exception handler table in
 > `Instrumentation#instrument`. Full ORM coverage therefore now depends on
 > the exception/unwind phase and, after it, native task/synchronization, IO,
 > and sqlite extension dispatch. Those effectful slices must not be admitted
 > to the current whole-program restart lane merely to raise the counter.
 
-> 2026-07-13 progress: the four-module sputnik-orm SQLite selftest is now fully
+> 2026-07-13 progress: the four-module orm SQLite selftest is now fully
 > native: 916/916 code objects, comprising 881 generated C++ bodies and 35
 > direct `sputnik_ext.h` extension thunks, with 0 VM bridges and 0 fallback
 > objects. Native-bound leaves use `RuntimeWorld::invoke_native_extension`,
@@ -41,7 +41,7 @@ Status: active implementation record for the host-native execution path.
 > `RuntimeWorld::invoke_native_stdlib_send`, and `Server#serve` no longer holds
 > the world's recursive execution mutex while worker handlers run. A minimal
 > server fixture passes `--require-full-native` at 7/7 bodies and 649,096
-> bytes. The full three-module Ember benchmark passes at 858/858 bodies,
+> bytes. The full three-module Orbit benchmark passes at 858/858 bodies,
 > `native_graph_vm_independent=true`, and 6,734,008 bytes, down from
 > 17,212,120 bytes. Graphs containing HTTP client or other non-server `net`
 > types still report `vm-stdlib-send-v1`; server coverage does not relabel

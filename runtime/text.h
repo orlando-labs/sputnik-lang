@@ -53,6 +53,7 @@ public:
   bool xterm_color_available() const;
   std::string to_string() const;
   std::vector<RuntimeTextOutputEvent> events() const;
+  std::uint64_t revision() const;
   std::string stream_name() const;
 
 private:

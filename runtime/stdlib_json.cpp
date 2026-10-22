@@ -544,6 +544,7 @@ struct Parser {
   std::size_t line_base = 0;
   std::size_t offset_base = 0;
   bool strict_maps = false;
+  bool reject_duplicate_keys = false;
   std::size_t pos = 0;
   bool faulted = false;
 
@@ -862,6 +863,7 @@ struct Parser {
   Value parse_object(int depth, bool *ok) {
     ++pos; // '{'
     std::vector<std::pair<std::string, Value>> entries;
+    std::unordered_set<std::string> keys;
     skip_ws();
     if (pos < src.size() && src[pos] == '}') {
       ++pos;
@@ -876,6 +878,10 @@ struct Parser {
       std::string key;
       if (!parse_string(&key)) {
         *ok = false;
+        return Value::null();
+      }
+      if (reject_duplicate_keys && !keys.insert(key).second) {
+        *ok = fail("duplicate object key: " + key);
         return Value::null();
       }
       skip_ws();
@@ -1345,7 +1351,7 @@ SendStatus json_parse(NativeStdlibCall &call) {
   if (!call.require_no_block() || !call.require_arity(1)) {
     return SendStatus::Faulted;
   }
-  if (!call.reject_unknown_keywords({"strict", "map"})) {
+  if (!call.reject_unknown_keywords({"strict", "map", "duplicate_keys"})) {
     return SendStatus::Faulted;
   }
   bool strict = false;
@@ -1358,6 +1364,12 @@ SendStatus json_parse(NativeStdlibCall &call) {
   }
   Parser parser{call, *text};
   parser.strict_maps = strict;
+  if (auto value = call.keyword("duplicate_keys")) {
+    auto mode = call.text_of(*value);
+    if (!mode || (*mode != "reject" && *mode != "last"))
+      return call.fault("ArgumentError", "duplicate_keys must be :reject or :last");
+    parser.reject_duplicate_keys = *mode == "reject";
+  }
   Value parsed = Value::null();
   if (!parser.parse_document(&parsed)) {
     return SendStatus::Faulted;

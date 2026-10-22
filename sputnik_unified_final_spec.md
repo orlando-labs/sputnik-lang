@@ -240,6 +240,64 @@ valid = Array === tags and tags.count <= 16
 - `A or B` возвращает `A`, если `A` truthy, иначе возвращает `B`;
 - `not A` возвращает булев результат.
 
+#### 3.3.1. Условное присваивание `?=` и `or=`
+
+```sputnik
+name ?= "anonymous"       # запись только при null
+enabled or= true          # запись при false или null
+cache[key] ?= expensive()
+xs[index] or= fallback()
+```
+
+`target ?= value` записывает `value` только если прочитанное значение цели —
+`null`. `false`, `0`, `""` и пустые коллекции сохраняются.
+`target or= value` записывает `value` только если прочитанное значение цели
+falsy (`false` или `null`), по правилам `or`.
+
+Оба оператора имеют приоритет обычного присваивания, ниже `or`, и
+правоассоциативны: `a ?= b or= c` означает `a ?= (b or= c)`.
+Левая часть должна быть обычной assignable-целью: переменной, полем `@` / `@@`,
+свойством или индексным доступом. Деструктуризация и safe-navigation цели не
+поддерживаются; `receiver[?index]` остаётся read-only.
+
+Порядок вычисления нормативен:
+
+1. Вычислить receiver и индекс цели слева направо, каждый ровно один раз.
+2. Прочитать текущее значение цели ровно один раз.
+3. Если условие записи не выполнено, вернуть прочитанное значение без
+   вычисления RHS и без вызова setter.
+4. Иначе вычислить RHS ровно один раз, записать его и вернуть исходное значение
+   RHS; возвращаемое значение пользовательского setter игнорируется.
+
+Для индексных целей чтение использует существующий optional-протокол `[]?`,
+а запись — обычный `[]=`. Поэтому `map[key] ?= value` и `map[key] or= value`
+могут вставить отсутствующий ключ. Это правило применяется и к `Array`:
+существующий элемент заменяется согласно выбранному условию, отрицательный
+индекс следует обычной нормализации; отсутствующий индекс читается как `null`,
+но последующая запись за границы массива даёт обычный `IndexError`.
+Новых правил append, gap-fill или подавления ошибок не вводится.
+Пользовательские классы могут определить `def []?(key)` и `def []=(key, value)`
+для участия в индексном условном присваивании.
+
+Свойства используют обычные getter/setter semantics. Чтение имени следует
+обычным binding rules; оператор не превращает неопределённое имя в `null`.
+Ошибки чтения, неверного индекса/ключа, вычисления RHS и записи распространяются
+обычным образом. Если запись пропущена, frozen receiver допускает чтение;
+если запись нужна, обычная frozen-проверка setter остаётся в силе.
+Операторы не обеспечивают атомарности или синхронизации.
+Их итоговое значение обновляет `$_` как у других expression statements;
+внутренние временные значения не обновляют `$_` перед вычислением RHS.
+
+`Map#get_or_set!` сохраняет отдельную семантику наличия ключа: записанные
+`false` и `null` сохраняются. `?=` заменяет записанный `null`, а `or=` — и
+`false`, и `null`.
+
+Смежное `?=` распознаётся как оператор: `a?=b` означает `a ?= b`.
+Для обычного присваивания имени с predicate-суффиксом нужен разделитель:
+`ready? = false`; условное присваивание такому имени — `ready? ?= false`.
+`or=` состоит из ключевого слова `or` и `=`; новые identifier keywords не
+вводятся.
+
 ### 3.4. Возведение в степень и bitwise XOR
 
 Sputnik фиксирует отдельные surface-операторы для возведения в степень и bitwise XOR:
@@ -394,10 +452,12 @@ klass(args)
 
 ```sputnik
 def [](key): ...
+def []?(key): ...
 def []=(key, value): ...
 ```
 
-`obj[key]` отправляет `[]`, а `obj[key] = value` отправляет `[]=` и передаёт
+`obj[key]` отправляет `[]`, `obj[?key]` отправляет `[]?`,
+а `obj[key] = value` отправляет `[]=` и передаёт
 `value` последним аргументом. Индексное присваивание возвращает присвоенное
 значение согласно обычной семантике assignment.
 
@@ -858,6 +918,16 @@ result = loop:
 
 `break` **не разрешён внутри iterator-блока** (`each` / `map` / `select` / …): блок — это вызываемый объект, а не цикл, поэтому `break` там является compile-time ошибкой с corrective-подсказкой. (`next`, напротив, допустим в блоке: он завершает *текущий вызов блока*, давая своё значение — или `$_` при голой форме — как результат итерации, что удобно в `map` / `select`.)
 
+Дополнение для foreign bridge `rbcall` (2026-10-20): call-site блок,
+переданный Ruby-вызову, может использовать `break value` с целью конкретной
+активации этого вызова. Значение становится результатом Ruby-вызова; при выходе
+исполняются `ensure` обоих runtime. Для динамического получателя компилятор
+сохраняет требование Ruby-цели в метаданных блока. Sputnik iterator отвергает
+такой блок; статически известный Sputnik literal receiver по-прежнему даёт
+compile-time ошибку. `break` в собственном `while`/`loop` внутри блока остаётся
+локальным выходом из этого цикла. Сохранённый Ruby блок не может выполнить
+`break` после завершения исходного вызова: Ruby сообщает `LocalJumpError`.
+
 Ранний выход из цепочки коллекций (`each` → `map` → `select` → `reduce` …) выражается двумя явными, greppable способами — **не** через `break`:
 
 - **short-circuit комбинаторами** — `find` / `detect` (первое совпадение со значением), `any?` / `all?` / `none?`, `take(n)` / `take_while` / `drop(n)` / `drop_while`, `find_index`, а также ленивые последовательности (`.lazy. … .first`). Они покрывают подавляющее большинство случаев, не вводя нелокального управления и сохраняя композицию цепочки;
@@ -1193,7 +1263,10 @@ from net.http import Client as HttpClient
 - `import` и `from... import...` разрешены только на top-level;
 - import-секция идёт после optional `package` и до первого non-import top-level item;
 - bare `import a.b.c` создаёт локальный read-only binding с именем последнего сегмента пути, то есть `c`;
-- `import a.b.c as x` создаёт локальный binding `x`;
+- `import a.b.c as x` создаёт локальный binding `x` и объявляет подмену пути `x -> a.b.c`; после `as` допустим также квалифицированный путь, например `import my.orm as vendor.orm`, с локальным binding `orm`;
+- подмены из entry-скрипта действуют на весь dependency graph, включая `from`, re-export и импорты внутри зависимостей; в ноутбуке таблица собирается из code cells для текущего поколения окружения, без дополнительного манифеста;
+- подмена сохраняет суффиксы подмодулей, выбирает самый длинный совпавший префикс по сегментам и разрешает цепочки; циклы и разные провайдеры одного alias дают ошибку;
+- повторный импорт того же canonical module/export под тем же локальным именем идемпотентен; оба пути используют одну идентичность модуля, классов и функций и одну инициализацию;
 - `from a.b.c import Name as Alias` создаёт локальный read-only binding `Alias`, связанный с export `Name` из целевого модуля;
 - все imports входят в статический dependency graph и сериализуются в `.sputnikbc` через `DEPS`;
 - относительные импорты (`.foo`, `..bar`) в v1 не вводятся;
@@ -8443,7 +8516,13 @@ For `n <= 0`, `n.times` is empty.
 
 `Times` may be implemented as a specialized lightweight enumerable or as a lowered `IntRange`.
 
-Observable behavior must match:
+Calling `n.times` without a block must use constant-size storage for the
+enumerable descriptor and must not allocate or populate an index array.
+Explicit `n.times.each` (with or without a block), `n.times.to_array()` and
+`n.times.array` materialize the index array. Other collection operations retain
+their ordinary result contracts, including `n.times.map` returning mapped values.
+
+The yielded index sequence must match:
 
 ```sputnik
 if n <= 0 then 0...0 else 0...n
@@ -8460,7 +8539,10 @@ n.times |i|:
  body
 ```
 
-lowers to effect iteration over `n.times.each`.
+executes a counter-based effect iteration without materializing an index array
+or constructing an enumerable descriptor. Its block calls are observationally
+equivalent to iteration over `n.times.each`, but it does not create that method's
+array result.
 
 The block receives indices from `0` through `n - 1`.
 
@@ -8501,6 +8583,7 @@ Rationale:
 #### 9.4. `times.each`
 
 `times.each` iterates for effects and returns the materialized index array.
+Without a block it simply returns that array.
 
 ```sputnik
 result = 5.times.each |i|:
@@ -8753,7 +8836,11 @@ n.times.each |i|:
 null
 ```
 
-Important: direct block `times` returns `null` even though `times.each` returns the index array.
+This equivalence specifies block invocation order and the final result, not
+allocation behavior. Direct block `times` must use a counter with constant-size
+iteration state and must not construct the intermediate index array or a
+`Times`/`IntRange` descriptor. It returns `null` even though explicit `times.each`
+materializes and returns the index array.
 
 ---
 
@@ -9208,7 +9295,7 @@ perform lookup at address `i`; if the address is absent, return null instead of 
 
 #### 1.4. Optional bracket access is read-only
 
-The patch does not introduce optional assignment:
+Optional bracket access remains read-only:
 
 ```sputnik
 xs[?i] = value # invalid
@@ -9221,6 +9308,11 @@ Reasoning:
 * optional array assignment is ambiguous: no-op, append, gap-fill or error;
 * map insertion already has ordinary strict assignment syntax;
 * suppressing assignment errors would hide bugs.
+
+Conditional assignment (§3.3.1) is a separate assignable form:
+`xs[i] ?= value`, `xs[i] or= value`, `map[key] ?= value` and
+`map[key] or= value` use optional lookup followed, when needed, by ordinary
+strict assignment. They do not make `xs[?i]` or `map[?key]` writable.
 
 ---
 

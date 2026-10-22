@@ -1,8 +1,8 @@
-# DESIGN - `sputnik-orm` package public API
+# DESIGN - `orm` package public API
 
 Status: P0 implemented; design remains incremental
 Date: 2026-07-09
-Target: external Sputnik package `sputnik-orm`
+Target: external Sputnik package `orm`
 Scope: model declaration surface, schema/attribute layer, dirty tracking,
 validation, persistence Result API, adapter protocol, SQLite glue, tableless
 models, and a minimal lazy query relation
@@ -12,7 +12,7 @@ for every database dialect, and a production migration planner
 
 ## 0. Executive Summary
 
-`sputnik-orm` is a small, ActiveRecord-shaped modeling package for Sputnik. It is
+`orm` is a small, ActiveRecord-shaped modeling package for Sputnik. It is
 not intended to hide SQL or turn database access into runtime magic. Its first
 goal is narrower:
 
@@ -24,16 +24,16 @@ goal is narrower:
 5. Let the same model behavior work without a database through tableless
    execution.
 
-The package should be a separate repository next to `sqlite3-sputnik`:
+The package should be a separate repository next to `sqlite3`:
 
 ```text
 workspace/
   sputnik-lang/
-  sqlite3-sputnik/
-  sputnik-orm/
+  sqlite3/
+  orm/
 ```
 
-The first adapter target is `sqlite3-sputnik`. The core package should not know
+The first adapter target is `sqlite3`. The core package should not know
 about SQLite-specific APIs except in a dedicated `orm.sqlite3` glue module.
 
 The intended user experience is ActiveRecord-ish, but explicit at the edges:
@@ -101,7 +101,7 @@ user.clear_changes!    # mutates local dirty state, returns self
     and tableless attributes share `record[name]`, `record[name] = value`, and
     `assign!`; optional generated accessors remain a later convenience rather
     than a schema-mode distinction.
-11. **SQL remains inspectable.** The SQLite adapter can use `sqlite3-sputnik`'s
+11. **SQL remains inspectable.** The SQLite adapter can use `sqlite3`'s
     safe builders and fragments; the ORM core does not concatenate arbitrary
     user SQL.
 12. **Declarations stay grouped.** `column` belongs to `expect_schema:`,
@@ -1119,7 +1119,7 @@ db.insert(:users,
 ```
 
 If `RETURNING` is available, use it to refresh generated/default columns.
-`sqlite3-sputnik` reports `returning: true` in `features()`, so P0 can rely on it
+`sqlite3` reports `returning: true` in `features()`, so P0 can rely on it
 for the bundled SQLite adapter.
 
 If a future adapter lacks returning, it should use `last_insert_id` plus a
@@ -1235,14 +1235,14 @@ Package name choices:
 
 | Candidate | Pros | Cons |
 | --- | --- | --- |
-| `orm` module, `sputnik-orm` repo | concise import, package name describes ecosystem | generic module id |
+| `orm` module, `orm` repo | concise import, package name describes ecosystem | generic module id |
 | `active_record` | clear inspiration | too Rails-specific, suggests more magic |
 | `model` | simple | too broad |
 
 Recommended:
 
 ```text
-repo: sputnik-orm
+repo: orm
 module: orm
 ```
 
@@ -1266,7 +1266,7 @@ P0 should include:
 - `Result`-returning `save`, `insert`, `update`, `delete`, `find`, `get`;
 - tableless models;
 - minimal lazy `where` queries with map and comparison predicates;
-- SQLite adapter over `sqlite3-sputnik`;
+- SQLite adapter over `sqlite3`;
 - self-test covering tableless and SQLite-backed models.
 
 P0 should not include:
@@ -1430,7 +1430,7 @@ Implement:
 - insert/update/delete/find/get;
 - adapter error wrapping.
 
-Use `sqlite3-sputnik`'s public helpers:
+Use `sqlite3`'s public helpers:
 
 - `db.select`;
 - `db.get`;

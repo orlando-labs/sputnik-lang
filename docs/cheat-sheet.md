@@ -211,13 +211,21 @@ while work?
 found = loop:
   if ready?: break :ok
 
+for x in (0..15:2):
+  if x == 6: break
+  print x
+
+for x with_index i in (1...100500:42):
+  print x, i
+  if i == 2: break
+
 first_big = catch(:found):
   xs.each |x|:
     if x > 100: throw :found, x
   null
 ```
 
-`if`, `case`, and loops are expressions. A loop returns `break value`, otherwise `null`. `break` belongs to native loops, never iterator blocks. Use `find`/`any?`/lazy bounds for routine early exit; `catch`/`throw` crosses nested calls/blocks. `next value` ends only the current block invocation. `return value` in a call-site block exits the **creating method/lambda**; a standalone lambda returns locally. Bare `return` and bare `next` use `$_`, not necessarily `null`.
+`if`, `case`, and loops are expressions. A loop returns `break value`, otherwise `null`. `for` lowers to `for_each`; both, like block-form `times`, always return `null`. Bare `break` ends this effect iteration; `break value` is forbidden here. `break` still cannot exit `each`/`map`/`select`. Use `find`/`any?`/lazy bounds for routine early exit; `catch`/`throw` crosses nested calls/blocks. `next value` ends only the current block invocation. `return value` in a call-site block exits the **creating method/lambda**; a standalone lambda returns locally. Bare `return` and bare `next` use `$_`, not necessarily `null`.
 
 ## 8. Everyday collection recipes
 
@@ -228,6 +236,9 @@ first_big = catch(:found):
 | Transform and discard falsy results | `xs.filter_map: lookup($it)`; removes `false`/`null`, keeps `0`/`""` |
 | Flatten mapped results | `groups.flat_map: $it.members` |
 | Aggregate | `xs.reduce(0): $it1 + $it2`; `xs.sum`; `xs.product` |
+| Iterate for effects | `for x in xs: …`; `xs.for_each \|x\|: …`; `for x with_index i in xs: …` |
+| Value / index / both | `xs.find \|x\|: …`; `xs.find_index \|x\|: …`; `xs.find_with_index \|x\|: …` → `(x, i)` |
+| Index in predicate | `xs.find.with_index \|x, i\|: …` → `x`; `xs.find_with_index.with_index \|x, i\|: …` → `(x, i)` |
 | Find / quantify | `xs.find: $it > 10`; `xs.any?: $it > 10`; also `all?`, `none?` |
 | Group / partition | `users.group: $it.role`; `xs.partition: $it > 0` |
 | Count by value / key | `xs.counts`; `users.counts: $it.role` → Map of counts; `tally` is an alias with the same optional block |
@@ -244,7 +255,7 @@ first_big = catch(:found):
 | Memoize, including false/null | `cache.get_or_set!(key): expensive(key)`; block runs only for absent keys |
 | Copy | `xs.copy` is shallow; `xs.deep_copy` preserves cycles/shared-reference topology |
 
-Collections are eager unless made lazy. Prefer an explicit seed for `reduce` on possibly empty input. `each` returns its receiver; `n.times: …` returns `null`. Map blocks normally receive **key, value**; `transform_values` receives **value, optional key**. Mutation methods include `push!`, `filter_map!` (Array/Set), `compact!`, `flatten!`; pure string forms include `trimmed`, `upcased`, `downcased`, `reversed`.
+Collections are eager unless made lazy. Prefer an explicit seed for `reduce` on possibly empty input. `each` returns its receiver; `for_each`, `for`, and `n.times: …` return `null`. All search forms return `null` on no match. `.with_index` appends a zero-based index to block arguments without changing the method result. `for` preserves the argument/pattern contract of `each`, including `for k, v in map:`; ranges keep `..`/`...`/`:step`. Map blocks normally receive **key, value**; `transform_values` receives **value, optional key**. Mutation methods include `push!`, `filter_map!` (Array/Set), `compact!`, `flatten!`; pure string forms include `trimmed`, `upcased`, `downcased`, `reversed`.
 
 ## 9. Errors, cleanup, and explicit results
 

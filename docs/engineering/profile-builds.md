@@ -84,4 +84,4 @@ Check `native_graph_full_coverage`, `native_bytecode_fallback` and executable
 hashes in the build result, then run the application's own checks and benchmark.
 
 The MNIST investigation and measured limits of this configuration are recorded
-in [sputniktorch stage 5](../../../sputniktorch/docs/mnist-runtime-stage5.md).
+in [sputniktorch stage 5](../../../torch/docs/mnist-runtime-stage5.md).

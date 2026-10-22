@@ -1034,3 +1034,8 @@ test-foreign-bridges: $(BUILD_DIR)/sputnik
 .PHONY: test-native-system-spread
 test-native-system-spread: $(BUILD_DIR)/sputnik
 	python3 tests/native_system_spread_cli_test.py $(BUILD_DIR)/sputnik
+
+.PHONY: test-effect-iteration
+test: test-effect-iteration
+test-effect-iteration: $(BUILD_DIR)/sputnik
+	python3 tests/effect_iteration_test.py $(BUILD_DIR)/sputnik

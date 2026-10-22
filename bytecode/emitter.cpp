@@ -94,7 +94,8 @@ bool is_empty_seq_expr(const ast::Expr *expr) {
 bool contains_foreign_break(const ast::Expr *node, unsigned loops = 0) {
   if (!node || node->kind == "HClosure") return false;
   if (node->kind == "HLoop") ++loops;
-  if (node->kind == "HBreak") return loops == 0;
+  if (node->kind == "HBreak")
+    return loops == 0 && !bool_field(*node, "effect_only");
   for (const auto &field : node->node_fields)
     if (contains_foreign_break(field.value.get(), loops)) return true;
   for (const auto &field : node->list_fields)
@@ -5006,6 +5007,12 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     return compile_pattern_assign(expr);
   }
   if (expr.kind == "HBreak") {
+    if (bool_field(expr, "effect_only")) {
+      diag(expr.span, "BC2001",
+           "break value is forbidden in effect iteration; use bare break "
+           "(result is always null)");
+      return alloc_temp();
+    }
     if (loops_.empty()) {
       if (code_.kind == CodeKind::Block || code_.kind == CodeKind::Ensure ||
           code_.kind == CodeKind::Rescue) {

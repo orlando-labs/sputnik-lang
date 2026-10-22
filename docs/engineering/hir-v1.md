@@ -33,7 +33,7 @@ Current procedure entries contain:
 - `locals` with stable slot ids `l0..lN`: binder declaration order first, then
   lowering-generated synthetic temps in source order;
 - `captures` with stable capture slot ids `u0..uN`, plus
-  `source_kind = local | capture` and `source_slot` for closure materialization;
+  `source_kind = local | capture | value` and `source_slot` for closure materialization;
 - `body` as `HSeq(items[])`.
 
 Currently lowered node families:
@@ -161,3 +161,29 @@ Current implementation notes:
   `single_positional | positional_tuple | named_args_map`;
 - async intrinsics and typed/runtime hooks are not part of this slice yet, but
   executable matcher planning no longer depends on ad hoc surface re-analysis.
+
+## Effect iteration lowering (2026-10-22)
+
+`for` desugars during parsing to a `for_each` call-site block, before binding.
+Its header retains ordinary block parameter patterns and lexical scopes.
+`for ... with_index ...` uses the same `.with_index` modifier as search calls.
+The modifier wraps the block in a rest-parameter adapter that forwards the
+original positional argument packet and appends a zero-based ordinal. The
+receiver is evaluated once, before the block expression.
+
+A bare effect `break` lowers to `HThrow` with a fresh private closure-identity
+tag, caught by an `HCatch` around that concrete call. A value-bearing break
+instead retains `HBreak(effect_only: true)` for a deterministic compile error.
+The traversal stops at nested closures and preserves native loop breaks.
+Existing catch/throw unwinding supplies ensure execution and cleanup through
+user-defined `each` forwarding. Indexed counters, forwarded blocks and private
+break tags use compiler-owned `source_kind = value` captures: their initial
+value is snapshotted into a fresh mutable cell for every closure creation, so
+reusing a caller slot cannot retarget a saved block or share an index counter.
+Ordinary user captures keep their existing reference semantics.
+
+Both the VM and direct C++ backend implement snapshot capture materialization.
+The direct backend supports the private catch/throw packets used by effect
+breaks and never treats a catch entry as a rescue handler or handler-code
+procedure. General source `throw` retains its existing VM fallback, including
+its uncaught-tag error and native callback boundary contracts.

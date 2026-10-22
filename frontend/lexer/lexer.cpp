@@ -1203,6 +1203,7 @@ bool Lexer::is_keyword_text(const std::string &text, TokenKind *kind) {
       {"ensure", TokenKind::KeywordEnsure},
       {"extend", TokenKind::KeywordExtend},
       {"false", TokenKind::KeywordFalse},
+      {"for", TokenKind::KeywordFor},
       {"from", TokenKind::KeywordFrom},
       {"if", TokenKind::KeywordIf},
       {"import", TokenKind::KeywordImport},

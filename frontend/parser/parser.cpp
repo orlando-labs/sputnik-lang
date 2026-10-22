@@ -751,6 +751,7 @@ bool token_starts_control_expression(lexer::TokenKind kind) {
   case lexer::TokenKind::KeywordCase:
   case lexer::TokenKind::KeywordCaseBang:
   case lexer::TokenKind::KeywordCatch:
+  case lexer::TokenKind::KeywordFor:
   case lexer::TokenKind::KeywordDo:
   case lexer::TokenKind::KeywordIf:
   case lexer::TokenKind::KeywordLoop:
@@ -2495,7 +2496,8 @@ std::string Parser::parse_clause_pattern_text() {
   return pattern_text;
 }
 
-std::vector<std::unique_ptr<ast::Expr>> Parser::parse_block_params() {
+std::vector<std::unique_ptr<ast::Expr>>
+Parser::parse_block_params(bool for_header) {
   std::vector<std::unique_ptr<ast::Expr>> params;
   std::string current_pattern;
   const lexer::Token *previous_token = nullptr;
@@ -2504,6 +2506,12 @@ std::vector<std::unique_ptr<ast::Expr>> Parser::parse_block_params() {
   int bracket_depth = 0;
 
   while (!at_end() && !check(lexer::TokenKind::Pipe)) {
+    if (for_header && bracket_depth == 0 &&
+        (check(lexer::TokenKind::KeywordIn) ||
+         (!current_pattern.empty() && check(lexer::TokenKind::Identifier) &&
+          current().lexeme == "with_index") ||
+         check(lexer::TokenKind::Newline) || check(lexer::TokenKind::Colon)))
+      break;
     const lexer::Token &token = current();
     if (token.kind == lexer::TokenKind::Comma && bracket_depth == 0) {
       if (!current_pattern.empty()) {
@@ -2896,6 +2904,48 @@ std::unique_ptr<ast::Expr> Parser::parse_loop_expr(const char *kind) {
   }
   node->list_field("body", std::move(body));
   return node;
+}
+
+std::unique_ptr<ast::Expr> Parser::parse_for_expr() {
+  const lexer::Token start = advance();
+  auto params = parse_block_params(true);
+  if (params.empty())
+    error(current(), "expected block parameter patterns after for");
+  bool indexed = false;
+  if (check(lexer::TokenKind::Identifier) && current().lexeme == "with_index") {
+    advance();
+    const auto index = consume(lexer::TokenKind::Identifier,
+                               "expected index name after with_index");
+    auto param = ast::make_expr("AstPatternParam", index.span);
+    param->string_field("pattern", index.lexeme);
+    params.push_back(std::move(param));
+    indexed = true;
+  }
+  consume(lexer::TokenKind::KeywordIn, "expected in after for parameters");
+  auto receiver = parse_expression(1, StopMode::ControlHeader);
+  consume(lexer::TokenKind::Colon, "expected ':' after for container");
+  auto body = parse_control_body(BodyContext::Def);
+  const auto end = body.empty() ? previous().span : body.back()->span;
+  auto block = ast::make_expr("AstBlock", ast::join_spans(start.span, end));
+  block->list_field("params", std::move(params));
+  block->list_field("body", std::move(body));
+  // Desugar before binding so loop variables obey the ordinary block scope
+  // and pattern/arity contract, including containers yielding several args.
+  auto chain = ensure_postfix_chain(std::move(receiver));
+  auto member = ast::make_expr("AstTailDotMember", start.span);
+  member->string_field("name", "for_each");
+  append_postfix_tail(*chain, std::move(member));
+  if (indexed) {
+    auto modifier = ast::make_expr("AstTailDotMember", start.span);
+    modifier->string_field("name", "with_index");
+    append_postfix_tail(*chain, std::move(modifier));
+  }
+  auto suffix = ast::make_expr("AstTailBlockSuffix", block->span);
+  suffix->node_field("block", std::move(block));
+  append_postfix_tail(*chain, std::move(suffix));
+  chain->bool_field("source_for", true);
+  chain->span = ast::join_spans(start.span, end);
+  return chain;
 }
 
 std::unique_ptr<ast::Expr> Parser::parse_do_while_expr() {
@@ -3766,6 +3816,10 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
   if (token.kind == lexer::TokenKind::KeywordUnless) {
     --current_;
     return parse_unless_expr();
+  }
+  if (token.kind == lexer::TokenKind::KeywordFor) {
+    --current_;
+    return parse_for_expr();
   }
   if (token.kind == lexer::TokenKind::KeywordWhile) {
     --current_;

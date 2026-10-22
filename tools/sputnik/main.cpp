@@ -1446,11 +1446,12 @@ bool native_cpp_collection_selector(const std::string &selector,
          (selector == "times" && pos_count == 0U) ||
          (selector == "[]=" && pos_count == 2U) ||
          (selector == "store!" && pos_count == 2U) ||
-         ((selector == "each" || selector == "each_with_index" ||
-           selector == "map" || selector == "select" ||
-           selector == "reject" || selector == "find" || selector == "any?" ||
-           selector == "all?" || selector == "none?" ||
-           selector == "transform_keys" || selector == "transform_values") &&
+         ((selector == "each" || selector == "for_each" ||
+           selector == "find_with_index" || selector == "each_with_index" ||
+           selector == "map" || selector == "select" || selector == "reject" ||
+           selector == "find" || selector == "any?" || selector == "all?" ||
+           selector == "none?" || selector == "transform_keys" ||
+           selector == "transform_values") &&
           pos_count == 0U) ||
          (selector == "reduce" && (pos_count == 0U || pos_count == 1U)) ||
          ((selector == "count" || selector == "length" || selector == "size" ||
@@ -1460,9 +1461,8 @@ bool native_cpp_collection_selector(const std::string &selector,
            selector == "entries" || selector == "reversed" ||
            selector == "sorted" || selector == "min" || selector == "max" ||
            selector == "minmax" || selector == "init" || selector == "tail" ||
-           selector == "lazy" ||
-           selector == "copy" || selector == "deep_copy" ||
-           selector == "freeze") &&
+           selector == "lazy" || selector == "copy" ||
+           selector == "deep_copy" || selector == "freeze") &&
           pos_count == 0U) ||
          (selector == "first" && (pos_count == 0U || pos_count == 1U)) ||
          (selector == "bytes" && pos_count == 0U) ||
@@ -1473,12 +1473,11 @@ bool native_cpp_collection_selector(const std::string &selector,
          (selector == "deleted" && pos_count == 1U) ||
          ((selector == "take" || selector == "drop") && pos_count == 1U) ||
          ((selector == "contains?" || selector == "includes?" ||
-           selector == "contains_only?" ||
-           selector == "include?" || selector == "member?" ||
-           selector == "has_key?" || selector == "key?" ||
-           selector == "value?" || selector == "has_value?" ||
-           selector == "starts_with?" || selector == "ends_with?" ||
-           selector == "split") &&
+           selector == "contains_only?" || selector == "include?" ||
+           selector == "member?" || selector == "has_key?" ||
+           selector == "key?" || selector == "value?" ||
+           selector == "has_value?" || selector == "starts_with?" ||
+           selector == "ends_with?" || selector == "split") &&
           pos_count == 1U) ||
          ((selector == "union" || selector == "intersection" ||
            selector == "difference" || selector == "left_difference" ||
@@ -2125,8 +2124,9 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
             : sputnik::bytecode::handler_kind(handler.flags);
     if (kind != sputnik::bytecode::kHandlerKindLegacyRescue &&
         kind != sputnik::bytecode::kHandlerKindRescue &&
-        kind != sputnik::bytecode::kHandlerKindEnsure) {
-      *reason = "catch/throw handlers still use VM fallback";
+        kind != sputnik::bytecode::kHandlerKindEnsure &&
+        kind != sputnik::bytecode::kHandlerKindCatch) {
+      *reason = "unsupported native handler kind";
       return false;
     }
   }
@@ -2286,6 +2286,34 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       break;
     case Opcode::BreakForeign:
       break;
+    case Opcode::Throw: {
+      // Only the compiler's private effect-break packet is admitted here.
+      // General source throw retains its existing VM fallback contract,
+      // including rescuable UncaughtThrowError and native callback boundaries.
+      const auto pc = static_cast<std::size_t>(&instruction - code.instructions.data());
+      std::uint32_t tag = 0, value = 0, loaded_tag = 0, capture = 0, null_reg = 0;
+      bool effect_break = pc >= 2U &&
+          operand_u32_value(instruction, 0, &tag) &&
+          operand_u32_value(instruction, 1, &value) &&
+          code.instructions[pc - 2U].opcode == Opcode::LoadUpval &&
+          operand_u32_value(code.instructions[pc - 2U], 0, &loaded_tag) &&
+          operand_u32_value(code.instructions[pc - 2U], 1, &capture) &&
+          loaded_tag == tag && code.instructions[pc - 1U].opcode == Opcode::LoadNull &&
+          operand_u32_value(code.instructions[pc - 1U], 0, &null_reg) &&
+          null_reg == value && capture < code.capture_layout.size();
+      if (effect_break) {
+        const auto &entry = code.capture_layout[capture];
+        effect_break = entry.name_str_id < module.strings.size() &&
+            module.strings[entry.name_str_id] == "__effect_break" &&
+            entry.source_kind_str_id < module.strings.size() &&
+            module.strings[entry.source_kind_str_id] == "value";
+      }
+      if (!effect_break) {
+        *reason = "source throw still uses VM fallback";
+        return false;
+      }
+      break;
+    }
     case Opcode::PBind: {
       std::uint32_t ignored_slot = 0;
       std::uint32_t value_reg = 0;
@@ -2552,7 +2580,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       const bool scalar = (scalar_shape || conversion_property) &&
                           kw_count == 0U && no_block;
       const bool collection_block_send =
-          ((selector == "each" || selector == "each_with_index" ||
+          ((selector == "each" || selector == "for_each" ||
+            selector == "find_with_index" || selector == "each_with_index" ||
             selector == "map" || selector == "collect" ||
             selector == "select" || selector == "filter" ||
             selector == "find_all" || selector == "detect" ||
@@ -2561,17 +2590,15 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
             selector == "flat_map" || selector == "group" ||
             selector == "find_index" || selector == "take_while" ||
             selector == "drop_while" || selector == "partition" ||
-            selector == "count" || selector == "uniq" ||
-            selector == "tally" || selector == "counts" ||
-            selector == "each_pair" || selector == "transform" ||
-            selector == "sorted" || selector == "delete_if!" ||
-            selector == "keep_if!" || selector == "select!" ||
-            selector == "reject!" || selector == "map!" ||
-            selector == "filter_map!" || selector == "sort!" ||
-            selector == "uniq!" || selector == "min" ||
-            selector == "max" || selector == "minmax" ||
-            selector == "merge!" || selector == "update!" ||
-            selector == "transform_keys!" ||
+            selector == "count" || selector == "uniq" || selector == "tally" ||
+            selector == "counts" || selector == "each_pair" ||
+            selector == "transform" || selector == "sorted" ||
+            selector == "delete_if!" || selector == "keep_if!" ||
+            selector == "select!" || selector == "reject!" ||
+            selector == "map!" || selector == "filter_map!" ||
+            selector == "sort!" || selector == "uniq!" || selector == "min" ||
+            selector == "max" || selector == "minmax" || selector == "merge!" ||
+            selector == "update!" || selector == "transform_keys!" ||
             selector == "transform_values!" || selector == "transform_keys" ||
             selector == "transform_values" || selector == "find" ||
             selector == "any?" || selector == "all?" || selector == "none?" ||
@@ -2581,8 +2608,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
            kw_count == 0U && !no_block) ||
           ((selector == "fetch" || selector == "each_cons" ||
             selector == "merge!" || selector == "update!" ||
-            selector == "inject" || selector == "merge" ||
-            selector == "+" || selector == "|" || selector == "each" ||
+            selector == "inject" || selector == "merge" || selector == "+" ||
+            selector == "|" || selector == "each" ||
             selector == "each_slice") &&
            pos_count == 1U && kw_count == 0U && !no_block);
       bool collection_keyword_send = false;
@@ -4039,7 +4066,8 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
       }
     } else if (instruction.opcode != Opcode::Return &&
                instruction.opcode != Opcode::ReturnNonlocal &&
-               instruction.opcode != Opcode::BreakForeign) {
+               instruction.opcode != Opcode::BreakForeign &&
+               instruction.opcode != Opcode::Throw) {
       enqueue(pc + 1U, next);
     }
   }
@@ -4109,7 +4137,8 @@ native_cpp_live_registers_at_pc(const sputnik::bytecode::BcCode &code) {
         }
       } else if (instruction.opcode != Opcode::Return &&
                  instruction.opcode != Opcode::ReturnNonlocal &&
-               instruction.opcode != Opcode::BreakForeign) {
+                 instruction.opcode != Opcode::BreakForeign &&
+                 instruction.opcode != Opcode::Throw) {
         merge_successor(pc + 1U);
       }
 
@@ -4380,6 +4409,10 @@ native_cpp_live_registers_at_pc(const sputnik::bytecode::BcCode &code) {
       case Opcode::Raise:
         use_operand(0);
         break;
+      case Opcode::Throw:
+        use_operand(0);
+        use_operand(1);
+        break;
       case Opcode::PTripleEq:
         use_operand(0);
         use_operand(1);
@@ -4482,6 +4515,7 @@ bool native_cpp_compact_registers_supported(
     case Opcode::Safepoint:
     case Opcode::ReturnNonlocal:
     case Opcode::BreakForeign:
+    case Opcode::Throw:
     case Opcode::PTripleEq:
     case Opcode::PCheckEq:
     case Opcode::PBind:
@@ -5214,6 +5248,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
   if (owns_handlers) {
     out << "  frame.pc = 0U;\n";
     out << "  std::optional<NativeRaised> pending_exception;\n";
+    out << "  std::optional<NativeThrown> pending_throw;\n";
+    out << "  std::optional<NativeNonlocalReturn> pending_return;\n";
     out << "  while (true) {\n";
     out << "    try {\n";
     out << "      if (pending_exception.has_value()) {\n";
@@ -5222,6 +5258,10 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
     out << "        pending_exception.reset();\n";
     out << "        throw reraised;\n";
     out << "      }\n";
+    out << "      if (pending_throw) { auto signal = "
+           "std::move(*pending_throw); pending_throw.reset(); throw signal; "
+           "}\n";
+    out << "      if (pending_return) { auto signal = std::move(*pending_return); pending_return.reset(); throw signal; }\n";
     out << "      switch (frame.pc) {\n";
   } else {
     out << "  goto pc_0;\n";
@@ -5854,7 +5894,20 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         std::uint32_t slot = 0;
         operand_u32_value(instruction, operand_index++, &kind);
         operand_u32_value(instruction, operand_index++, &slot);
-        if (kind == 0U) {
+        const bool snapshot =
+            created_code != nullptr &&
+            capture_i < created_code->capture_layout.size() &&
+            created_code->capture_layout[capture_i].source_kind_str_id <
+                module.strings.size() &&
+            module.strings[created_code->capture_layout[capture_i]
+                               .source_kind_str_id] == "value";
+        if (snapshot) {
+          out << "    { NativeCell *cell = make_native_cell("
+              << (kind == 0U ? "read_reg(frame, " : "read_capture(frame, ")
+              << slot
+              << ")); native_closure_capture(next_closure, cell); "
+                 "native_cell_release(cell); }\n";
+        } else if (kind == 0U) {
           out << "    native_closure_capture(next_closure, "
                  "local_cell(frame, "
               << slot << "));\n";
@@ -6618,8 +6671,17 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                           : "NativeValue::nullv()") +
                      ", " + (has_block ? "true" : "false") + ", " +
                      kw_args_expr() + ")");
+      } else if (selector == "for_each" || selector == "find_with_index" ||
+                 selector == "find" || selector == "find_index") {
+        write_reg_stmt(
+            dst, "native_effect_iteration_or_search(" + read_reg_expr(recv) +
+                     ", " +
+                     (has_block
+                          ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                          : "NativeValue::nullv()") +
+                     ", " + selector_expr + ")");
       } else if (native_cpp_collection_query_selector(selector, pos_count,
-                                                       has_block)) {
+                                                      has_block)) {
         write_reg_stmt(
             dst, "native_collection_query(" + read_reg_expr(recv) +
                      ", " + selector_expr + ", " +
@@ -7820,6 +7882,14 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
           << read_reg_expr(src) << "};\n";
       break;
     }
+    case Opcode::Throw: {
+      std::uint32_t tag = 0, value = 0;
+      operand_u32_value(instruction, 0, &tag);
+      operand_u32_value(instruction, 1, &value);
+      out << "  throw NativeThrown{" << read_reg_expr(tag) << ", "
+          << read_reg_expr(value) << "};\n";
+      break;
+    }
     case Opcode::BreakForeign: {
       std::uint32_t value = 0;
       operand_u32_value(instruction, 0, &value);
@@ -7863,6 +7933,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
           handler.flags == 0U
               ? 0U
               : sputnik::bytecode::handler_result_slot(handler.flags);
+      if (kind == sputnik::bytecode::kHandlerKindCatch)
+        continue;
       out << "      if (frame.pc >= " << handler.protected_from
           << "U && frame.pc < " << handler.protected_to << "U) {\n";
       out << "        std::optional<NativeRaised> next_exception = "
@@ -7877,7 +7949,38 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
     }
     out << "      throw;\n";
     out << "    }\n";
-    out << "    catch (const NativeNonlocalReturn &) {\n";
+    out << "    catch (const NativeThrown &signal) {\n";
+    for (const auto &handler : handlers) {
+      const auto kind = sputnik::bytecode::handler_kind(handler.flags);
+      if (kind != sputnik::bytecode::kHandlerKindCatch &&
+          kind != sputnik::bytecode::kHandlerKindEnsure)
+        continue;
+      const auto tag_slot =
+          sputnik::bytecode::handler_exception_slot(handler.flags);
+      const auto result_slot =
+          sputnik::bytecode::handler_result_slot(handler.flags);
+      out << "      if (frame.pc >= " << handler.protected_from
+          << "U && frame.pc < " << handler.protected_to << "U";
+      if (kind == sputnik::bytecode::kHandlerKindCatch)
+        out << " && native_value_equal(read_reg(frame, " << tag_slot
+            << "U), signal.tag)";
+      out << ") {\n";
+      if (kind == sputnik::bytecode::kHandlerKindEnsure) {
+        out << "        pending_throw = signal;\n";
+        out << "        try { sputnik_native_run_nonlocal_ensure_handler(frame, "
+            << handler.handler_code_id << "U, " << tag_slot << "U); }\n";
+        out << "        catch (const NativeRaised &replacement) { pending_throw.reset(); pending_exception = replacement; }\n";
+        out << "        catch (const NativeThrown &replacement) { pending_throw = replacement; }\n";
+        out << "        catch (const NativeNonlocalReturn &replacement) { pending_throw.reset(); pending_return = replacement; }\n";
+      } else {
+        out << "        write_reg(frame, " << result_slot
+            << "U, signal.value);\n";
+      }
+      out << "        frame.pc = " << handler.handler_pc << "U; continue;\n";
+      out << "      }\n";
+    }
+    out << "      throw;\n    }\n";
+    out << "    catch (const NativeNonlocalReturn &signal) {\n";
     for (const sputnik::bytecode::HandlerEntry &handler : handlers) {
       const std::uint32_t kind =
           handler.flags == 0U
@@ -7890,9 +7993,13 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
           sputnik::bytecode::handler_exception_slot(handler.flags);
       out << "      if (frame.pc >= " << handler.protected_from
           << "U && frame.pc < " << handler.protected_to << "U) {\n";
-      out << "        sputnik_native_run_nonlocal_ensure_handler(frame, "
-          << handler.handler_code_id << "U, " << exception_slot << "U);\n";
-      out << "        throw;\n";
+      out << "        pending_return = signal;\n";
+      out << "        try { sputnik_native_run_nonlocal_ensure_handler(frame, "
+          << handler.handler_code_id << "U, " << exception_slot << "U); }\n";
+      out << "        catch (const NativeRaised &replacement) { pending_return.reset(); pending_exception = replacement; }\n";
+      out << "        catch (const NativeThrown &replacement) { pending_return.reset(); pending_throw = replacement; }\n";
+      out << "        catch (const NativeNonlocalReturn &replacement) { pending_return = replacement; }\n";
+      out << "        frame.pc = " << handler.handler_pc << "U; continue;\n";
       out << "      }\n";
     }
     out << "      throw;\n";
@@ -8451,8 +8558,10 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
       const auto unsupported_handler = std::find_if(
           code.handler_table.begin(), code.handler_table.end(),
           [&plan](const sputnik::bytecode::HandlerEntry &handler) {
-            return plan.native_code_ids.find(handler.handler_code_id) ==
-                   plan.native_code_ids.end();
+            return sputnik::bytecode::handler_kind(handler.flags) !=
+                       sputnik::bytecode::kHandlerKindCatch &&
+                   plan.native_code_ids.find(handler.handler_code_id) ==
+                       plan.native_code_ids.end();
           });
       if (unsupported_handler == code.handler_table.end()) {
         continue;
@@ -9028,6 +9137,7 @@ private:
          "std::uint32_t column = 0; };\n";
   out << "struct NativeRaised { NativeValue exception; "
          "std::vector<NativeTraceFrame> trace; };\n";
+  out << "struct NativeThrown { NativeValue tag; NativeValue value; };\n";
   out << "struct NativeNonlocalReturnTarget { "
          "std::atomic<bool> active{true}; };\n";
   out << "struct NativeNonlocalReturn { "
@@ -14611,6 +14721,56 @@ static NativeValue native_each(const NativeValue &value,
     return value;
   }
   throw NativeBailout();
+}
+
+static NativeValue native_effect_iteration_or_search(
+    const NativeValue &value, const NativeValue &block, const std::string &selector) {
+  if (block.tag == NativeValue::Tag::Null) throw NativeRaised{native_named_error(
+      "ArgumentError", selector + " requires a block and no arguments")};
+  const bool effect = selector == "for_each";
+  if (effect && value.tag == NativeValue::Tag::Map) {
+    const auto entries = as_map(value).entries;
+    for (const auto &entry : entries)
+      (void)sputnik_native_call_closure(block, {entry.first, entry.second});
+    return NativeValue::nullv();
+  }
+  NativeValue result = NativeValue::nullv();
+  std::int64_t ordinal = 0;
+  auto visit = [&](NativeValue item) {
+    const auto predicate = sputnik_native_call_closure(block, {item});
+    if (!effect && native_truthy(predicate)) {
+      result = selector == "find_index" ? NativeValue::integer(ordinal) :
+          selector == "find_with_index" ? NativeValue::tuple({item, NativeValue::integer(ordinal)}) : item;
+      return false;
+    }
+    if (ordinal == std::numeric_limits<std::int64_t>::max()) throw NativeRaised{
+        native_named_error("OverflowError", "iteration index overflows Int")};
+    ++ordinal;
+    return true;
+  };
+  if (value.tag == NativeValue::Tag::Range) {
+    const NativeRange range = as_range(value);
+    if (!range.has_start) throw NativeRaised{native_named_error(
+        "ArgumentError", "beginless Range cannot be iterated")};
+    __int128 current = range.start;
+    const __int128 finish = range.finish;
+    const auto in_bounds = [&]() {
+      return !range.has_finish || (range.step > 0 ?
+          (range.inclusive_end ? current <= finish : current < finish) :
+          (range.inclusive_end ? current >= finish : current > finish));
+    };
+    while (in_bounds()) {
+      if (current < std::numeric_limits<std::int64_t>::min() ||
+          current > std::numeric_limits<std::int64_t>::max()) throw NativeRaised{
+          native_named_error("ArgumentError", "open-ended Range iteration overflows Integer")};
+      if (!visit(NativeValue::integer(static_cast<std::int64_t>(current)))) break;
+      current += range.step;
+    }
+    return result;
+  }
+  if (native_visit_lazy_chars(value, visit)) return result;
+  for (const auto &item : native_sequence_items_copy(value)) if (!visit(item)) break;
+  return result;
 }
 
 static NativeValue native_integer_times(const NativeValue &value,
@@ -24462,6 +24622,14 @@ static std::string native_named_callable_type_name(
          ": receiver.heap_value == other.heap_value);\n";
   out << "      return NativeValue::boolean(selector == \"==\" ? equal : !equal);\n";
   out << "    }\n";
+  out << "    if (selector == \"for_each\" && native_lookup_user_method(class_index, \"each\", class_side).has_value()) {\n";
+  out << "      if (!args.empty() || !kwargs.empty() || block.tag == "
+         "NativeValue::Tag::Null) throw "
+         "NativeRaised{native_named_error(\"ArgumentError\", \"for_each "
+         "requires a block and no arguments\")};\n";
+  out << "      (void)native_user_send(receiver, \"each\", {}, {}, block, "
+         "nullptr, 0U);\n";
+  out << "      return NativeValue::nullv();\n    }\n";
   out << "    if (selector != \"method_missing\" && (call_flags & "
       << sputnik::bytecode::kCallSiteFlagPropertyAssignment << "U) == 0U && "
          "native_lookup_user_method(class_index, \"method_missing\", class_side)) {\n";
@@ -26430,6 +26598,10 @@ static NativeValue sputnik_native_extension_invoke(
   out << "      std::cerr << \"NativeError: \" << "
          "native_value_to_debug_string(raised.exception) << \"\\n\";\n";
   out << "    }\n";
+  out << "    return 1;\n";
+  out << "  } catch (const NativeThrown &signal) {\n";
+  out << "    std::cerr << \"UncaughtThrowError: uncaught throw \" << "
+         "native_value_to_debug_string(signal.tag) << \"\\n\";\n";
   out << "    return 1;\n";
   out << "  } catch (const NativeBailout &bailout) {\n";
   if (plan.uses_bytecode_fallback) {

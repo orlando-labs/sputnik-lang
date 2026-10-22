@@ -122,6 +122,7 @@ private:
   std::unique_ptr<ast::Expr> parse_unless_expr();
   std::unique_ptr<ast::Expr> parse_loop_expr(const char *kind);
   std::unique_ptr<ast::Expr> parse_do_while_expr();
+  std::unique_ptr<ast::Expr> parse_for_expr();
   std::unique_ptr<ast::Expr> parse_numeric_directive();
   std::unique_ptr<ast::Expr> parse_break_expr();
   std::unique_ptr<ast::Expr> parse_next_expr();
@@ -140,7 +141,8 @@ private:
   std::unique_ptr<ast::Expr> try_parse_pattern_assignment();
   std::string parse_module_path();
   std::string parse_clause_pattern_text();
-  std::vector<std::unique_ptr<ast::Expr>> parse_block_params();
+  std::vector<std::unique_ptr<ast::Expr>>
+  parse_block_params(bool for_header = false);
   std::vector<std::string> parse_many_def_patterns(lexer::Span *span_out);
   std::string consume_method_name_text(const std::string &message);
   const lexer::Token &consume_identifier_like(const std::string &message);

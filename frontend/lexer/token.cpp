@@ -207,6 +207,8 @@ const char *token_kind_name(TokenKind kind) {
     return "KEYWORD_EXTEND";
   case TokenKind::KeywordFalse:
     return "KEYWORD_FALSE";
+  case TokenKind::KeywordFor:
+    return "KEYWORD_FOR";
   case TokenKind::KeywordFrom:
     return "KEYWORD_FROM";
   case TokenKind::KeywordIf:

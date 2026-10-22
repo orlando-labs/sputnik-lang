@@ -1,0 +1,81 @@
+--- a/public/syntax-highlight.js
++++ b/public/syntax-highlight.js
+@@ -10 +10 @@
+-    sputnik: words('and as async attr break case case! catch class class_method class_prop def do elif else elsif ensure export extend false from if import in include loop mixin not null or package prop raise rescue return self super then throw true try unless until when while var get set macro quote unquote schema numeric workflow step compensate require invariant property expect pure with frozen'),
++    sputnik: words('and as async attr break case case! catch class class_method class_prop def do elif else elsif ensure export extend false for from if import in include loop mixin not null or package prop raise rescue return self super then throw true try unless until when while var get set macro quote unquote schema numeric workflow step compensate require invariant property expect pure with frozen'),
+--- a/public/guide/content/02-language-core/blocks.ru.md
++++ b/public/guide/content/02-language-core/blocks.ru.md
+@@ -103,0 +104,35 @@
++
++## Обход ради эффектов и индексированный поиск
++
++`for` использует тот же пакет аргументов и те же паттерны, что и `each`
++контейнера. Он понижается в `for_each`; нормальное завершение и голый `break`
++возвращают `null`. `break value` для `for_each` и `times` с блоком запрещён.
++`next` завершает одну итерацию, `return` выходит из создавшего блок метода.
++Вложенный `while` или `loop` сохраняет собственный `break value`.
++
++```sputnik
++for x in (0..15:2):
++  print x
++  if x == 6: break
++
++for x with_index i in (1...100500:42):
++  print x, i
++  if i == 2: break
++
++for key, value with_index i in {a: 10, b: 20}:
++  print key, value, i
++
++found = [10, 20, 30].find_with_index |x|: x > 10
++# (20, 1)
++found = [10, 20, 30].find.with_index |x, i|: i == 2
++# 30
++found = [10, 20, 30].find_with_index.with_index |x, i|: i == 2
++# (30, 2)
++```
++
++`find` возвращает элемент, `find_index` — индекс, `find_with_index` — Tuple
++`(элемент, индекс)`. Все три возвращают `null` без совпадения. `.with_index`
++независимо добавляет порядковый номер с нуля к исходным аргументам предиката.
++Для Map это третий аргумент, после ключа и значения. Индекс считается по
++фактическому обходу после фильтров lazy-последовательности. Диапазоны сохраняют
++свои границы `..`/`...` и `:step`; Python `range` и `enumerate` не вводятся.
+--- a/public/guide/content/02-language-core/blocks.en.md
++++ b/public/guide/content/02-language-core/blocks.en.md
+@@ -104,0 +105,35 @@
++
++## Effect iteration and indexed search
++
++`for` uses the same argument packet and parameter patterns as the container's
++`each`. It lowers to `for_each`; normal completion and bare `break` return
++`null`. `break value` is forbidden for `for_each` and block-form `times`.
++`next` ends one iteration; `return` exits the creating method. A nested
++`while` or `loop` retains its own `break value`.
++
++```sputnik
++for x in (0..15:2):
++  print x
++  if x == 6: break
++
++for x with_index i in (1...100500:42):
++  print x, i
++  if i == 2: break
++
++for key, value with_index i in {a: 10, b: 20}:
++  print key, value, i
++
++found = [10, 20, 30].find_with_index |x|: x > 10
++# (20, 1)
++found = [10, 20, 30].find.with_index |x, i|: i == 2
++# 30
++found = [10, 20, 30].find_with_index.with_index |x, i|: i == 2
++# (30, 2)
++```
++
++`find` returns the element, `find_index` its index, and `find_with_index` a
++Tuple `(element, index)`. All three return `null` on no match. `.with_index`
++independently appends a zero-based ordinal to the original predicate arguments.
++For Map iteration it is the third argument, after key and value. The index
++counts actual visits after lazy filters. Ranges retain their `..`/`...`
++boundaries and `:step`; Python `range` and `enumerate` are not introduced.

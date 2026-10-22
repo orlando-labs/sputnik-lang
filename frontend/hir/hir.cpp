@@ -2851,6 +2851,204 @@ private:
     return node;
   }
 
+  // Effect breaks use a private, fresh identity tag and the existing unwind
+  // machinery. No user catch can name this tag; ensure and nonlocal return
+  // retain their ordinary behavior. Native loops and nested closures keep
+  // their own control-flow contracts.
+  bool rewrite_effect_breaks(Node &node, const std::string &capture,
+                             unsigned loops = 0) {
+    if (node.kind == "HClosure")
+      return false;
+    if (node.kind == "HLoop")
+      ++loops;
+    if (node.kind == "HBreak" && loops == 0) {
+      if (node_field(node, "value")) {
+        node.bool_field("effect_only", true);
+      } else {
+        node.kind = "HThrow";
+        auto tag = make_node("HLoadCapture", node.span);
+        tag->string_field("slot", capture);
+        node.node_field("tag", std::move(tag));
+        node.node_field("value", make_null_const(node.span));
+      }
+      return true;
+    }
+    bool found = false;
+    for (auto &field : node.node_fields)
+      if (field.value)
+        found = rewrite_effect_breaks(*field.value, capture, loops) || found;
+    for (auto &field : node.list_fields)
+      for (auto &item : field.values)
+        found = rewrite_effect_breaks(*item, capture, loops) || found;
+    return found;
+  }
+
+  std::unique_ptr<Node> let_local(const std::string &slot,
+                                  std::unique_ptr<Node> value,
+                                  std::unique_ptr<Node> body) {
+    auto let = make_node("HLet", body->span);
+    auto store = make_node("HStoreLocal", value->span);
+    store->string_field("slot", slot);
+    store->node_field("expr", std::move(value));
+    let->node_field("binding", std::move(store));
+    let->node_field("body", std::move(body));
+    return let;
+  }
+
+  std::unique_ptr<Node> load_capture(const std::string &slot,
+                                     const lexer::Span &span) {
+    auto node = make_node("HLoadCapture", span);
+    node->string_field("slot", slot);
+    return node;
+  }
+
+  // Append the ordinal to the *argument packet*, without packing the values
+  // yielded by Map/custom each into an artificial pair. The adapter uses a
+  // rest parameter and forwards all original positional args unchanged.
+  std::unique_ptr<Node> index_iterator_block(std::unique_ptr<Node> send) {
+    Node *block = nullptr;
+    for (auto &field : send->node_fields)
+      if (field.name == "block")
+        block = field.value.get();
+    if (!block)
+      return send;
+    const auto span = send->span;
+    const auto receiver_slot = allocate_temp_local(span);
+    const auto block_slot = allocate_temp_local(span);
+    const auto index_slot = allocate_temp_local(span);
+    std::unique_ptr<Node> receiver;
+    for (auto &field : send->node_fields)
+      if (field.name == "receiver") {
+        receiver = std::move(field.value);
+        field.value = make_load_local(receiver_slot, span);
+        break;
+      }
+    Procedure adapter;
+    adapter.id = "p" + std::to_string(procedures_.size());
+    adapter.name = "__with_index__";
+    adapter.kind = "closure";
+    adapter.owner = adapter.name;
+    adapter.span = span;
+    adapter.signature = make_node("HSignature", span);
+    auto rest = make_node("HParam", span);
+    rest->string_field("kind", "rest");
+    rest->string_field("local_name", "__args");
+    rest->string_field("external_name", "__args");
+    std::vector<std::unique_ptr<Node>> params;
+    params.push_back(std::move(rest));
+    adapter.signature->list_field("params", std::move(params));
+    adapter.locals = {{"l0", "__args", "param", "synthetic", span},
+                      {"l1", "__index", "temp", "synthetic", span}};
+    adapter.captures = {
+        {"u0", "__block", "value", block_slot, "__block", span},
+        {"u1", "__ordinal", "value", index_slot, "__ordinal", span}};
+    std::vector<std::unique_ptr<Node>> body;
+    auto save = make_node("HStoreLocal", span);
+    save->string_field("slot", "l1");
+    save->node_field("expr", load_capture("u1", span));
+    body.push_back(std::move(save));
+    auto add = make_node("HSend", span);
+    add->string_field("selector", "+");
+    add->node_field("receiver", load_capture("u1", span));
+    auto one = make_node("HConst", span);
+    one->string_field("token", "INTEGER");
+    one->string_field("value", "1");
+    std::vector<std::unique_ptr<Node>> add_args;
+    add_args.push_back(std::move(one));
+    add->list_field("pos_args", std::move(add_args));
+    add->list_field("kw_args", {});
+    auto increment = make_node("HStoreCapture", span);
+    increment->string_field("slot", "u1");
+    increment->node_field("expr", std::move(add));
+    body.push_back(std::move(increment));
+    auto call = make_node("HCall", span);
+    call->node_field("callable", load_capture("u0", span));
+    auto spread = make_node("HCallArgSpread", span);
+    spread->node_field("expr", make_load_local("l0", span));
+    std::vector<std::unique_ptr<Node>> args;
+    args.push_back(std::move(spread));
+    args.push_back(make_load_local("l1", span));
+    call->list_field("pos_args", std::move(args));
+    call->list_field("kw_args", {});
+    auto result = make_node("HLastSet", span);
+    result->node_field("expr", std::move(call));
+    body.push_back(std::move(result));
+    adapter.body = make_node("HSeq", span);
+    adapter.body->list_field("items", std::move(body));
+    const auto id = adapter.id;
+    procedures_.push_back(std::move(adapter));
+    auto wrapper = make_node("HClosure", span);
+    wrapper->string_field("procedure", id);
+    wrapper->list_field("captures", build_capture_nodes_for_procedure(id));
+    std::unique_ptr<Node> original;
+    for (auto &field : send->node_fields)
+      if (field.name == "block") {
+        original = std::move(field.value);
+        field.value = std::move(wrapper);
+        break;
+      }
+    auto zero = make_node("HConst", span);
+    zero->string_field("token", "INTEGER");
+    zero->string_field("value", "0");
+    auto indexed =
+        let_local(block_slot, std::move(original),
+                  let_local(index_slot, std::move(zero), std::move(send)));
+    return let_local(receiver_slot, std::move(receiver), std::move(indexed));
+  }
+
+  std::unique_ptr<Node> finish_iterator_send(std::unique_ptr<Node> send,
+                                             bool indexed = false) {
+    const auto span = send->span;
+    const auto selector = string_value(*send, "selector");
+    Node *block = nullptr;
+    for (auto &field : send->node_fields)
+      if (field.name == "block")
+        block = field.value.get();
+    std::string tag_slot;
+    if ((selector == "for_each" || selector == "times") && block &&
+        block->kind == "HClosure") {
+      const auto id = string_value(*block, "procedure");
+      for (auto &procedure : procedures_)
+        if (procedure.id == id) {
+          const auto capture = "u" + std::to_string(procedure.captures.size());
+          if (rewrite_effect_breaks(*procedure.body, capture)) {
+            tag_slot = allocate_temp_local(span);
+            procedure.captures.push_back({capture, "__effect_break", "value",
+                                          tag_slot, "__effect_break", span});
+            auto captured = make_node("HCapture", span);
+            captured->string_field("slot", capture);
+            captured->string_field("source_kind", "value");
+            captured->string_field("source_slot", tag_slot);
+            mutable_list_field(*block, "captures")
+                ->values.push_back(std::move(captured));
+          }
+          break;
+        }
+    }
+    if (indexed)
+      send = index_iterator_block(std::move(send));
+    if (tag_slot.empty())
+      return send;
+    Procedure tag;
+    tag.id = "p" + std::to_string(procedures_.size());
+    tag.name = "__effect_break_tag__";
+    tag.owner = tag.name;
+    tag.kind = "closure";
+    tag.span = span;
+    tag.signature = make_node("HSignature", span);
+    tag.signature->list_field("params", {});
+    tag.body = make_expr_body(make_null_const(span));
+    const auto id = tag.id;
+    procedures_.push_back(std::move(tag));
+    auto identity = make_node("HClosure", span);
+    identity->string_field("procedure", id);
+    identity->list_field("captures", {});
+    auto guarded = make_node("HCatch", span);
+    guarded->node_field("tag", make_load_local(tag_slot, span));
+    guarded->node_field("body", make_expr_body(std::move(send)));
+    return let_local(tag_slot, std::move(identity), std::move(guarded));
+  }
+
   std::unique_ptr<Node> lower_postfix_chain(const ast::Expr &expr) {
     const ast::ListField *tails = list_field(expr, "tails");
     return lower_postfix_chain_with_limit(
@@ -2950,7 +3148,26 @@ private:
       }
       if (tail.kind == "AstTailDotMember" || tail.kind == "AstTailSafeMember") {
         const bool safe = tail.kind == "AstTailSafeMember";
-        const std::string selector = string_value(tail, "name");
+        std::string selector = string_value(tail, "name");
+        bool indexed_iterator = false;
+        if (!safe && selector == "with_index" && current->kind == "HSend" &&
+            bool_value(*current, "property_access") &&
+            !node_field(*current, "block")) {
+          const auto target = string_value(*current, "selector");
+          if (target == "for_each" || target == "find" ||
+              target == "find_index" || target == "find_with_index" ||
+              target == "each" || target == "map") {
+            selector = target;
+            std::unique_ptr<Node> original_receiver;
+            for (auto &field : current->node_fields)
+              if (field.name == "receiver") {
+                original_receiver = std::move(field.value);
+                break;
+              }
+            current = std::move(original_receiver);
+            indexed_iterator = true;
+          }
+        }
         std::vector<std::unique_ptr<Node>> pos_args;
         std::vector<std::unique_ptr<Node>> kw_args;
         std::unique_ptr<Node> block;
@@ -3000,8 +3217,8 @@ private:
         if (block) {
           node->node_field("block", std::move(block));
         }
-        std::unique_ptr<Node> lowered =
-            lower_kernel_watch_send(*base, std::move(node));
+        std::unique_ptr<Node> lowered = finish_iterator_send(
+            lower_kernel_watch_send(*base, std::move(node)), indexed_iterator);
         current = safe ? wrap_safe_guard(std::move(guard_base), temp_slot,
                                          std::move(lowered), node_span)
                        : std::move(lowered);
@@ -3219,7 +3436,7 @@ private:
     if (block) {
       node->node_field("block", std::move(block));
     }
-    return node;
+    return finish_iterator_send(std::move(node));
   }
 
   bool is_builtin_send_base(const ast::Expr &base) const {
@@ -3274,7 +3491,7 @@ private:
       if (block) {
         node->node_field("block", std::move(block));
       }
-      return node;
+      return finish_iterator_send(std::move(node));
     }
 
     auto node = make_node("HSendDyn", span);

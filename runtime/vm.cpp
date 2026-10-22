@@ -370,12 +370,12 @@ bool keyword_identifier_part(std::uint32_t codepoint) {
 
 bool reserved_keyword_identifier(const std::string &text) {
   static const std::unordered_set<std::string_view> keywords = {
-      "and",        "attr",    "break",   "case",  "class", "class_method",
-      "class_prop", "def",     "do",      "elif",  "else",  "elsif",
-      "export",     "extend",  "false",   "from",  "if",    "import",
-      "in",         "include", "loop",    "mixin", "noop",  "not",
-      "null",       "or",      "package", "pass",  "prop",  "true",
-      "unless",     "until",   "when",    "while"};
+      "and",        "attr",   "break",   "case",    "class", "class_method",
+      "class_prop", "def",    "do",      "elif",    "else",  "elsif",
+      "export",     "extend", "false",   "for",     "from",  "if",
+      "import",     "in",     "include", "loop",    "mixin", "noop",
+      "not",        "null",   "or",      "package", "pass",  "prop",
+      "true",       "unless", "until",   "when",    "while"};
   return keywords.find(text) != keywords.end();
 }
 
@@ -25602,6 +25602,77 @@ private:
 #include "runtime/vm_notebook_chart.inc"
 #include "runtime/vm_notebook_image.inc"
 
+  SendStatus apply_effect_iteration_or_search(
+      Frame &frame, const Value &receiver, const std::string &selector,
+      const std::vector<Value> &args, const Value &block,
+      const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out) {
+    const bool effect = selector == "for_each";
+    const bool sequence = receiver.is_list() || receiver.is_tuple() ||
+                          receiver.is_set() ||
+                          value_is_range_instance(receiver) ||
+                          value_is_lazy_seq_instance(receiver);
+    const bool search =
+        sequence && (selector == "find" || selector == "find_index" ||
+                     selector == "find_with_index");
+    if (!effect && !search)
+      return SendStatus::NotHandled;
+    if (!args.empty() || !kw_args.empty() || block.is_null()) {
+      raise_runtime_error(frame, "ArgumentError",
+                          selector + " requires a block and no arguments");
+      return SendStatus::Faulted;
+    }
+    if (effect && receiver.is_map()) {
+      const auto entries = extract_map_entries(frame, receiver);
+      if (!entries)
+        return SendStatus::Faulted;
+      for (const auto &entry : *entries) {
+        if (!call_block_to_value(frame, block, {entry.key, entry.value}) ||
+            !ensure_lifecycle_access(frame, receiver))
+          return SendStatus::Faulted;
+      }
+      *out = Value::null();
+      return SendStatus::Matched;
+    }
+    if (!sequence)
+      return SendStatus::NotHandled;
+    LazySeqState state;
+    if (value_is_lazy_seq_instance(receiver)) {
+      const auto extracted = extract_lazy_seq_state(frame, receiver);
+      if (!extracted)
+        return SendStatus::Faulted;
+      state = *extracted;
+    } else {
+      state.source = receiver;
+    }
+    std::int64_t ordinal = 0;
+    Value result = Value::null();
+    const auto status = visit_lazy_seq(
+        frame, state, receiver, [&](const Value &item) -> LazySeqVisitStatus {
+          const auto predicate = call_block_to_value(frame, block, {item});
+          if (!predicate || !ensure_lifecycle_access(frame, receiver) ||
+              !ensure_lifecycle_access(frame, state.source))
+            return LazySeqVisitStatus::Faulted;
+          if (search && is_truthy(*predicate)) {
+            result = selector == "find_index" ? Value::integer(ordinal)
+                     : selector == "find_with_index"
+                         ? make_tuple_value({item, Value::integer(ordinal)})
+                         : item;
+            return LazySeqVisitStatus::Stop;
+          }
+          if (ordinal == std::numeric_limits<std::int64_t>::max()) {
+            raise_runtime_error(frame, "OverflowError",
+                                "iteration index overflows Int");
+            return LazySeqVisitStatus::Faulted;
+          }
+          ++ordinal;
+          return LazySeqVisitStatus::Continue;
+        });
+    if (status == LazySeqVisitStatus::Faulted)
+      return SendStatus::Faulted;
+    *out = std::move(result);
+    return SendStatus::Matched;
+  }
+
   SendStatus try_apply_scalar_send(
       Frame &frame, const Value &receiver, const std::string &selector_text,
       const std::vector<Value> &args, const Value &block,
@@ -25609,6 +25680,13 @@ private:
     const SelectorKey selector(selector_text);
     if (!ensure_lifecycle_access(frame, receiver)) {
       return SendStatus::Faulted;
+    }
+    if (selector == "for_each" || selector == "find" ||
+        selector == "find_index" || selector == "find_with_index") {
+      const auto status = apply_effect_iteration_or_search(
+          frame, receiver, selector_text, args, block, kw_args, out);
+      if (status != SendStatus::NotHandled)
+        return status;
     }
     if (receiver.is_native_type() && receiver.as_native_type().kind == RuntimeNativeTypeKind::Notebook)
       return apply_notebook_show(frame, selector_text, args, block, kw_args, out);
@@ -32270,6 +32348,24 @@ private:
       return false;
     }
     if (method == nullptr) {
+      // Any user container exposing each acquires the effect-only adapter.
+      // Execute its ordinary method/block protocol, discarding only its result.
+      if (selector_key == "for_each" && !property_access &&
+          !property_assignment) {
+        if (!args.empty() || !kw_args.empty() || block.is_null()) {
+          raise_runtime_error(frame, "ArgumentError",
+                              "for_each requires a block and no arguments");
+          return false;
+        }
+        const auto *each = find_method_for_dispatch(frame, class_index, "each",
+                                                    dispatch_flags);
+        if (fault_)
+          return false;
+        if (each) {
+          return invoke_method(frame, *each, {}, {}, receiver, block, dst,
+                               std::optional<Value>(Value::null()));
+        }
+      }
       if (selector_key == "new" && receiver.is_class_object() &&
           !property_access && !property_assignment) {
         const auto index = receiver.as_class_object().class_index;
@@ -33748,7 +33844,27 @@ private:
             !operand_u32(frame, insn, operand_index++, &slot)) {
           return;
         }
-        if (kind == 0U) {
+        const bool snapshot =
+            i < closure_code->capture_layout.size() &&
+            closure_code->capture_layout[i].source_kind_str_id <
+                runtime_strings_.size() &&
+            runtime_strings_[closure_code->capture_layout[i]
+                                 .source_kind_str_id] == "value";
+        if (snapshot) {
+          // Compiler-owned per-call state must not share a subsequently reused
+          // caller slot (saved blocks and repeated indexed calls included).
+          if (kind != 0U && slot >= frame.captures.size()) {
+            set_fault(frame, "VMError", "capture slot out of range");
+            return;
+          }
+          const Value value =
+              kind == 0U ? read_reg(frame, slot)
+                         : unwrap_watch_value_for_read(frame.captures[slot]);
+          if (fault_)
+            return;
+          closure->captures.push_back(
+              Value::watch_cell(state_->make_watch_cell(value, "__iterator")));
+        } else if (kind == 0U) {
           if (slot == dst) {
             std::shared_ptr<RuntimeWatchCell> cell =
                 ensure_local_storage_cell(frame, slot, closure_value);

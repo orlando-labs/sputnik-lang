@@ -422,7 +422,7 @@
     },
     "keyword-control": {
       "name": "keyword.control.sputnik",
-      "match": "(?<![\\p{L}\\p{N}_])(?:case!|if|elif|elsif|else|unless|while|until|loop|break|case|when|do|return)(?![\\p{L}\\p{N}_?!])"
+      "match": "(?<![\\p{L}\\p{N}_])(?:case!|if|elif|elsif|else|unless|for|while|until|loop|break|case|when|do|return)(?![\\p{L}\\p{N}_?!])"
     },
     "keyword-declaration": {
       "name": "keyword.declaration.sputnik",

@@ -93,6 +93,7 @@ enum class TokenKind {
   KeywordExport,
   KeywordExtend,
   KeywordFalse,
+  KeywordFor,
   KeywordFrom,
   KeywordIf,
   KeywordImport,

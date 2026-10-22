@@ -62,7 +62,7 @@ call s:Match('sputnikClassVariable', '@@' . s:name)
 call s:Match('sputnikSymbol', ':\%(:\)\@!' . s:name)
 
 call s:Match('sputnikConditional', s:before . '\%(case!\|if\|elif\|elsif\|else\|unless\|case\|when\)' . s:after)
-call s:Match('sputnikRepeat', s:before . '\%(while\|until\|loop\|do\)' . s:after)
+call s:Match('sputnikRepeat', s:before . '\%(for\|while\|until\|loop\|do\)' . s:after)
 call s:Match('sputnikControl', s:before . '\%(break\|return\)' . s:after)
 call s:Match('sputnikException', s:before . '\%(try\|catch\|rescue\|ensure\|raise\|throw\)' . s:after)
 call s:Match('sputnikWordOperator', s:before . '\%(and\|or\|not\|in\|as\)' . s:after)

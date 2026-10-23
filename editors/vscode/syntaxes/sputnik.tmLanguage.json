@@ -10,6 +10,7 @@
     { "include": "#numbers" },
     { "include": "#constants" },
     { "include": "#inline-conditional" },
+    { "include": "#keyword-then" },
     { "include": "#callable-references" },
     { "include": "#definition-function" },
     { "include": "#definition-native-class" },
@@ -267,13 +268,15 @@
         "1": { "name": "keyword.control.conditional.sputnik" }
       },
       "patterns": [
-        { "include": "#inline-then" },
+        { "include": "#keyword-then" },
         { "include": "$self" }
       ]
     },
-    "inline-then": {
-      "name": "keyword.control.conditional.sputnik",
-      "match": "(?<![\\p{L}\\p{N}_])then(?![\\p{L}\\p{N}_?!])"
+    "keyword-then": {
+      "match": "(?<=[\\p{L}\\p{N}_?!\\)\\]\\}'\"])[ \\t]*(?<![\\p{L}\\p{N}_])(then)(?![\\p{L}\\p{N}_?!])",
+      "captures": {
+        "1": { "name": "keyword.control.then.sputnik" }
+      }
     },
     "callable-references": {
       "patterns": [
@@ -416,7 +419,7 @@
         },
         {
           "name": "keyword.control.sputnik",
-          "match": "^\\s*(next)(?![\\p{L}\\p{N}_?!])(?=\\s*(?:$|#|[\"'0-9@:$]|true(?![\\p{L}\\p{N}_])|false(?![\\p{L}\\p{N}_])|null(?![\\p{L}\\p{N}_])|[\\p{L}_]))"
+          "match": "(?:^[ \\t]*|(?<=:)[ \\t]*|(?<=\\bthen)(?<!\\.then)[ \\t]+)(next)(?![\\p{L}\\p{N}_?!])(?=[ \\t]*(?:$|#|[,)}\\]]|[\"'0-9@$]|[\\p{L}_])|[ \\t]+:)"
         }
       ]
     },

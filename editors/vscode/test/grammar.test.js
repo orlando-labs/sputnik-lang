@@ -142,7 +142,7 @@ async function main() {
     conditionals,
     0,
     "then",
-    "keyword.control.conditional.sputnik",
+    "keyword.control.then.sputnik",
   );
   assertScope(
     conditionals,
@@ -154,6 +154,157 @@ async function main() {
   assertScope(conditionals, 0, "===", "keyword.operator.sputnik");
   assertNoScopePrefix(conditionals, 1, "then", "keyword.control");
   assertNoScopePrefix(conditionals, 2, "if_ready?", "keyword.control");
+
+
+  // Sequencing and scoped exits share the same lexical surface in every editor.
+  {
+    const lines = tokenize(grammar, "load() then normalize($_) then save($_)");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 1);
+  }
+  {
+    const lines = tokenize(grammar, "Model.rollback then break if invalid?");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "break", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "Model.transaction(): break :cancelled");
+    assertScope(lines, 0, "break", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "items.map |x|: prepare(x) then next x if skip?(x)");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "items.map |x|: next x");
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "items.map |x|: next");
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "next if ready?");
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 0);
+  }
+  for (const source of ["next :skipped", "items.map |x|: next :skipped", "ready() then next :skipped"]) {
+    const lines = tokenize(grammar, source);
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "ready() then next");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "(if ready? then start() else wait()) then finish()");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 1);
+  }
+  {
+    const lines = tokenize(grammar, "if ready? then (prepare() then run()) else fallback()");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 1);
+  }
+  {
+    const lines = tokenize(grammar, "obj.then() then obj.next()");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 1);
+  }
+  {
+    const lines = tokenize(grammar, "next = 1 then print(next)");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "f(next) then next");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+    assertScope(lines, 0, "next", "keyword.control.sputnik", 1);
+  }
+  {
+    const lines = tokenize(grammar, "π = load() then normalize($_)");
+    assertScope(lines, 0, "then", "keyword.control.then.sputnik", 0);
+  }
+  {
+    const lines = tokenize(grammar, "then = 1");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "next = 1");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "next(1)");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "obj.then() then obj.next()");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "fn(then, next)");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "symbols = [:then, :next]");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "def then(): null");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "def next(): null");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "then? = false");
+    assertNoScopePrefix(lines, 0, "then?", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "next! = false");
+    assertNoScopePrefix(lines, 0, "next!", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "labels = {then: 1, next: 2}");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "obj.then next");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "foo_then next");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "message = \"then next break\"");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "break", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "# then next break");
+    assertNoScopePrefix(lines, 0, "then", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "break", "keyword.control", 0);
+  }
+  {
+    const lines = tokenize(grammar, "next = 1 then print(next)");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 1);
+  }
+  {
+    const lines = tokenize(grammar, "f(next) then next");
+    assertNoScopePrefix(lines, 0, "next", "keyword.control", 0);
+  }
+
+  for (const source of ["α then β", "этап then следующий"]) {
+    assertScope(tokenize(grammar, source), 0, "then", "keyword.control.then.sputnik");
+  }
 
   const logical = tokenize(
     grammar,
@@ -443,7 +594,7 @@ async function main() {
     strings,
     0,
     "then",
-    "keyword.control.conditional.sputnik",
+    "keyword.control.then.sputnik",
   );
   assertScope(strings, 1, "r", "entity.name.function.macro.string-tag.sputnik");
   assertNoScopePrefix(strings, 1, "#not-a-comment", "comment");

@@ -78,8 +78,8 @@ call s:Match('sputnikConditional', s:before . 'with' . s:after . '\ze\s*{')
 call s:Match('sputnikDirective', '^\s*\zsnumeric' . s:after . '\ze\s*:')
 call s:Match('sputnikControl', s:before . 'quote' . s:after . '\ze\s*:\s*$')
 call s:Match('sputnikPropertyModifier', '^\s*\zs\%(get\|set\)' . s:after . '\ze\s*\%(([^\r\n]*)\)\?\s*:')
-call s:Match('sputnikControl', '^\s*\zsnext' . s:after
-      \ . '\ze\s*\%($\|#\|["''0-9@:$]\|' . s:head . '\)')
+call s:Match('sputnikControl', '\%(^[ \t]*\|:[ \t]*\|\<then\%(\.then\)\@<![ \t]\+\)\@<=next' . s:after
+      \ . '\ze\%([ \t]*\%($\|#\|[,)}\]]\|["''0-9@$]\|' . s:head . '\)\|[ \t]\+:\)')
 
 call s:Match('sputnikDeclaration', s:before . 'def' . s:after,
       \ 'nextgroup=sputnikFunction skipwhite')
@@ -103,9 +103,9 @@ call s:Match('sputnikReferenceReceiver', s:head . s:part . '*\ze[.#]', 'containe
 call s:Match('sputnikReferenceMethod', s:name . '\%(' . s:part . '\|[.#!?]\)\@!', 'contained')
 syntax match sputnikReferenceDelimiter /[&.#]/ contained
 
-syntax cluster sputnikExpression contains=sputnikIdentifier,sputnikDelimiter,sputnikOperator,sputnikMember,sputnikFunctionCall,sputnikType,sputnikNumber,sputnikFloat,sputnikBoolean,sputnikConstant,sputnikSelf,sputnikPlaceholder,sputnikWildcard,sputnikLastValue,sputnikInstanceVariable,sputnikClassVariable,sputnikSymbol,sputnikConditional,sputnikRepeat,sputnikControl,sputnikException,sputnikWordOperator,sputnikDeclaration,sputnikModifier,sputnikDirective,sputnikPropertyModifier,sputnikCallableReference,sputnikComment,sputnikShebang,sputnikDoubleString,sputnikSingleString,sputnikTextBlock,sputnikStringTag,sputnikRawTag,sputnikInlineConditional,sputnikNativeClass
+syntax cluster sputnikExpression contains=sputnikIdentifier,sputnikDelimiter,sputnikOperator,sputnikMember,sputnikFunctionCall,sputnikType,sputnikNumber,sputnikFloat,sputnikBoolean,sputnikConstant,sputnikSelf,sputnikPlaceholder,sputnikWildcard,sputnikLastValue,sputnikInstanceVariable,sputnikClassVariable,sputnikSymbol,sputnikConditional,sputnikRepeat,sputnikControl,sputnikException,sputnikWordOperator,sputnikDeclaration,sputnikModifier,sputnikDirective,sputnikPropertyModifier,sputnikCallableReference,sputnikComment,sputnikShebang,sputnikDoubleString,sputnikSingleString,sputnikTextBlock,sputnikStringTag,sputnikRawTag,sputnikInlineConditional,sputnikThen,sputnikNativeClass
 
-call s:Match('sputnikThen', s:before . 'then' . s:after, 'contained')
+call s:Match('sputnikThen', '\%(' . s:part . '\|[?!)}\]"'']\)\@1<=[ \t]*\zs' . s:before . 'then' . s:after)
 execute 'syntax region sputnikInlineConditional transparent matchgroup=sputnikConditional start=/'
       \ . s:before . 'if' . s:after . '\ze[^#\r\n]*' . s:before . 'then' . s:after
       \ . '/ end=/' . s:before . 'else' . s:after . '/ end=/$/ contains=@sputnikExpression,sputnikThen'

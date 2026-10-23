@@ -11,6 +11,11 @@ placeholders, symbols, numeric literals, operators, Unicode identifiers,
 strings, tagged text blocks, nested interpolation and macro splices. Tagged
 single-quoted strings also interpolate; raw `r` strings do not.
 
+`then` is highlighted in inline conditionals and expression sequences such as
+`rollback() then break if invalid?`. `next` is recognized at statement starts,
+in inline blocks and after sequencing `then`; member names, symbols and ordinary
+bindings such as `obj.then()`, `:next`, `next = value` retain their ordinary highlighting.
+
 Native `from "..." blocking` and class ownership modifiers such as `collected`
 use `StorageClass`. Elsewhere, `blocking` remains an ordinary identifier.
 

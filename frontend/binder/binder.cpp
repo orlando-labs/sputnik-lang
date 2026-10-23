@@ -393,6 +393,18 @@ private:
   }
 
   void predeclare_item(int scope_index, const ast::Expr &item) {
+    const auto *sequence =
+        item.kind == "AstExprStmt" ? node_field(item, "expr") : &item;
+    if (sequence && sequence->kind == "AstThen") {
+      if (const auto *items = list_field(*sequence, "items"))
+        for (const auto &expr : items->values) {
+          auto stmt = ast::make_expr("AstExprStmt", expr->span);
+          stmt->node_field("expr", ast::clone_expr(*expr));
+          predeclare_item(scope_index, *stmt);
+        }
+      return;
+    }
+
     if (item.kind == "AstImportStmt" &&
         graph_.scopes[scope_index].kind == "module") {
       declare_imports(scope_index, item);

@@ -10,6 +10,21 @@
 namespace sputnik::parser {
 namespace {
 
+bool contains_ungrouped_inline_if(const ast::Expr &expr) {
+  if (expr.kind == "AstGroup" || expr.kind == "AstBlock")
+    return false;
+  if (expr.kind == "AstInlineIfExpr")
+    return true;
+  for (const auto &field : expr.node_fields)
+    if (field.value && contains_ungrouped_inline_if(*field.value))
+      return true;
+  for (const auto &field : expr.list_fields)
+    for (const auto &item : field.values)
+      if (contains_ungrouped_inline_if(*item))
+        return true;
+  return false;
+}
+
 constexpr const char *kParseErrorCode = "P0001";
 
 ast::Expr &keyword_arg_field(ast::Expr &expr, const lexer::Token &name) {
@@ -789,7 +804,7 @@ Parser::Parser(const std::vector<lexer::Token> &tokens) : tokens_(tokens) {
 ParseResult Parser::parse_expression_unit() {
   while (match(lexer::TokenKind::Newline)) {
   }
-  std::unique_ptr<ast::Expr> expr = parse_expression(1, StopMode::Normal);
+  std::unique_ptr<ast::Expr> expr = parse_expression(0, StopMode::Normal);
   while (match(lexer::TokenKind::Newline)) {
   }
   if (!check(lexer::TokenKind::Eof)) {
@@ -930,34 +945,6 @@ std::unique_ptr<ast::Expr> Parser::parse_statement(BodyContext context) {
       current().lexeme == "numeric" &&
       peek(1).kind == lexer::TokenKind::Colon) {
     return parse_numeric_directive();
-  }
-
-  // `next` is a contextual loop/block control keyword. At statement-leading
-  // position it is the next-iteration statement when it stands alone (followed
-  // by a statement terminator) or is immediately followed by a value expression
-  // (`next 42`, `next x`, `next @f`). It stays an ordinary identifier when
-  // followed by a postfix/assignment/infix continuation (`.`, `(`, `[`, `=`,
-  // operators, `:`), so `.next`, `def next`, `next = …`, `next[i]`, `next(x)`,
-  // and `:next` keep working. (`next (expr)`, `next [..]`, `next -1` therefore
-  // read as identifier forms; bind the value first to yield those.)
-  if (current().kind == lexer::TokenKind::Identifier &&
-      current().lexeme == "next") {
-    const lexer::TokenKind after = peek(1).kind;
-    const bool bare = after == lexer::TokenKind::Newline ||
-                      after == lexer::TokenKind::Dedent ||
-                      after == lexer::TokenKind::Eof;
-    const bool valued =
-        after == lexer::TokenKind::Integer ||
-        after == lexer::TokenKind::Float || after == lexer::TokenKind::String ||
-        after == lexer::TokenKind::Identifier ||
-        after == lexer::TokenKind::At || after == lexer::TokenKind::AtAt ||
-        after == lexer::TokenKind::LastValue ||
-        after == lexer::TokenKind::KeywordTrue ||
-        after == lexer::TokenKind::KeywordFalse ||
-        after == lexer::TokenKind::KeywordNull;
-    if (bare || valued) {
-      return parse_next_expr();
-    }
   }
 
   // `native` is a contextual definition modifier: it leads a `native def` or
@@ -1114,10 +1101,12 @@ std::unique_ptr<ast::Expr> Parser::parse_statement(BodyContext context) {
 
   if (std::unique_ptr<ast::Expr> pattern_assign =
           try_parse_pattern_assignment()) {
-    return maybe_postfix_conditional(std::move(pattern_assign));
+    return maybe_postfix_conditional(
+        parse_sequence_tail(std::move(pattern_assign), StopMode::Normal));
   }
 
-  std::unique_ptr<ast::Expr> expr = parse_expression(1, StopMode::Normal);
+  next_control_ = true;
+  std::unique_ptr<ast::Expr> expr = parse_expression(0, StopMode::Normal);
   auto stmt = ast::make_expr("AstExprStmt", expr->span);
   stmt->node_field("expr", std::move(expr));
   return maybe_postfix_conditional(std::move(stmt));
@@ -1138,7 +1127,7 @@ Parser::maybe_postfix_conditional(std::unique_ptr<ast::Expr> stmt) {
   }
   const lexer::Token keyword = advance();
   const bool is_unless = keyword.kind == lexer::TokenKind::KeywordUnless;
-  std::unique_ptr<ast::Expr> cond = parse_expression(1, StopMode::Normal);
+  std::unique_ptr<ast::Expr> cond = parse_expression(0, StopMode::Normal);
   if (cond == nullptr) {
     cond = ast::make_expr("AstError", keyword.span);
   }
@@ -1344,7 +1333,7 @@ Parser::parse_def_stmt(bool class_method, const lexer::Token *start_override,
     signature = make_synthetic_signature(signature_span, patterns.size());
     std::unique_ptr<ast::Expr> guard;
     if (match(lexer::TokenKind::KeywordIf)) {
-      guard = parse_expression(1, StopMode::ControlHeader);
+      guard = parse_expression(0, StopMode::ControlHeader);
     }
     consume(lexer::TokenKind::Colon, "expected ':' after function signature");
     std::vector<std::unique_ptr<ast::Expr>> body =
@@ -2271,17 +2260,17 @@ std::unique_ptr<ast::Expr> Parser::parse_param() {
                  "its default");
     }
     if (!check(lexer::TokenKind::Comma) && !check(lexer::TokenKind::RParen)) {
-      default_expr = parse_expression(1, StopMode::Normal);
+      default_expr = parse_expression(0, StopMode::Normal);
     }
   } else if (!is_block && !is_rest && !is_kw_rest &&
              match(lexer::TokenKind::Colon)) {
     kind = "keyword";
     if (!check(lexer::TokenKind::Comma) && !check(lexer::TokenKind::RParen)) {
-      default_expr = parse_expression(1, StopMode::Normal);
+      default_expr = parse_expression(0, StopMode::Normal);
     }
   } else if (!is_block && !is_rest && !is_kw_rest &&
              match(lexer::TokenKind::Equal)) {
-    default_expr = parse_expression(1, StopMode::Normal);
+    default_expr = parse_expression(0, StopMode::Normal);
   }
 
   auto param = ast::make_expr(
@@ -2447,7 +2436,7 @@ std::unique_ptr<ast::Expr> Parser::parse_clause() {
   const std::string pattern_text = parse_clause_pattern_text();
   std::unique_ptr<ast::Expr> guard;
   if (match(lexer::TokenKind::KeywordIf)) {
-    guard = parse_expression(1, StopMode::ControlHeader);
+    guard = parse_expression(0, StopMode::ControlHeader);
   }
   consume(lexer::TokenKind::Colon, "expected ':' after function clause");
   std::vector<std::unique_ptr<ast::Expr>> body =
@@ -2768,6 +2757,9 @@ std::unique_ptr<ast::Expr> Parser::parse_if_expr(StopMode stop_mode) {
     match_contextual("then");
     std::unique_ptr<ast::Expr> consequent =
         parse_expression(1, StopMode::InlineIfBranch);
+    if (is_contextual_at(current_, "then"))
+      error_code(current(), "ParenthesesError",
+                 "parenthesize a then sequence inside an inline conditional");
     std::unique_ptr<ast::Expr> alternative;
     if (match(lexer::TokenKind::KeywordElse)) {
       alternative = parse_expression(1, stop_mode);
@@ -2791,7 +2783,7 @@ std::unique_ptr<ast::Expr> Parser::parse_if_expr(StopMode stop_mode) {
   }
 
   std::unique_ptr<ast::Expr> cond =
-      parse_expression(1, StopMode::ControlHeader);
+      parse_expression(0, StopMode::ControlHeader);
   consume(lexer::TokenKind::Colon, "expected ':' after if condition");
   std::vector<std::unique_ptr<ast::Expr>> then_body =
       parse_control_body(BodyContext::Def);
@@ -2833,7 +2825,7 @@ std::vector<std::unique_ptr<ast::Expr>> Parser::parse_if_tail() {
              check(lexer::TokenKind::KeywordElsif)) {
     const lexer::Token elif_token = advance();
     std::unique_ptr<ast::Expr> nested_cond =
-        parse_expression(1, StopMode::ControlHeader);
+        parse_expression(0, StopMode::ControlHeader);
     consume(lexer::TokenKind::Colon, "expected ':' after elif condition");
     std::vector<std::unique_ptr<ast::Expr>> nested_body =
         parse_control_body(BodyContext::Def);
@@ -2855,7 +2847,7 @@ std::vector<std::unique_ptr<ast::Expr>> Parser::parse_if_tail() {
 std::unique_ptr<ast::Expr> Parser::parse_unless_expr() {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> cond =
-      parse_expression(1, StopMode::ControlHeader);
+      parse_expression(0, StopMode::ControlHeader);
   consume(lexer::TokenKind::Colon, "expected ':' after unless condition");
   std::vector<std::unique_ptr<ast::Expr>> then_body =
       parse_control_body(BodyContext::Def);
@@ -2891,7 +2883,7 @@ std::unique_ptr<ast::Expr> Parser::parse_loop_expr(const char *kind) {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> cond;
   if (std::string(kind) == "AstWhile" || std::string(kind) == "AstUntil") {
-    cond = parse_expression(1, StopMode::ControlHeader);
+    cond = parse_expression(0, StopMode::ControlHeader);
   }
   consume(lexer::TokenKind::Colon, "expected ':' after loop header");
   std::vector<std::unique_ptr<ast::Expr>> body =
@@ -2922,7 +2914,7 @@ std::unique_ptr<ast::Expr> Parser::parse_for_expr() {
     indexed = true;
   }
   consume(lexer::TokenKind::KeywordIn, "expected in after for parameters");
-  auto receiver = parse_expression(1, StopMode::ControlHeader);
+  auto receiver = parse_expression(0, StopMode::ControlHeader);
   consume(lexer::TokenKind::Colon, "expected ':' after for container");
   auto body = parse_control_body(BodyContext::Def);
   const auto end = body.empty() ? previous().span : body.back()->span;
@@ -2956,7 +2948,7 @@ std::unique_ptr<ast::Expr> Parser::parse_do_while_expr() {
   consume(lexer::TokenKind::KeywordWhile,
           "expected trailing while after do body");
   std::unique_ptr<ast::Expr> cond =
-      parse_expression(1, StopMode::ControlHeader);
+      parse_expression(0, StopMode::ControlHeader);
 
   auto node =
       ast::make_expr("AstDoWhile", ast::join_spans(start.span, cond->span));
@@ -2970,7 +2962,10 @@ std::unique_ptr<ast::Expr> Parser::parse_break_expr() {
   std::unique_ptr<ast::Expr> value;
   // A colon terminates an expression after its value, but can also start a
   // symbol value here (`break :done`).
-  if (!is_stop_token(StopMode::Normal) ||
+  if ((!is_stop_token(StopMode::Normal) &&
+       !check(lexer::TokenKind::KeywordIf) &&
+       !check(lexer::TokenKind::KeywordUnless) &&
+       !check(lexer::TokenKind::KeywordElse)) ||
       (check(lexer::TokenKind::Colon) &&
        peek(1).kind == lexer::TokenKind::Identifier)) {
     value = parse_expression(1, StopMode::Normal);
@@ -2987,7 +2982,9 @@ std::unique_ptr<ast::Expr> Parser::parse_break_expr() {
 std::unique_ptr<ast::Expr> Parser::parse_next_expr() {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> value;
-  if (!is_stop_token(StopMode::Normal)) {
+  if (!is_stop_token(StopMode::Normal) && !check(lexer::TokenKind::KeywordIf) &&
+      !check(lexer::TokenKind::KeywordUnless) &&
+      !check(lexer::TokenKind::KeywordElse)) {
     value = parse_expression(1, StopMode::Normal);
   }
   auto node = ast::make_expr(
@@ -3001,7 +2998,9 @@ std::unique_ptr<ast::Expr> Parser::parse_next_expr() {
 std::unique_ptr<ast::Expr> Parser::parse_return_expr() {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> value;
-  if (!is_stop_token(StopMode::Normal)) {
+  if (!is_stop_token(StopMode::Normal) && !check(lexer::TokenKind::KeywordIf) &&
+      !check(lexer::TokenKind::KeywordUnless) &&
+      !check(lexer::TokenKind::KeywordElse)) {
     value = parse_expression(1, StopMode::Normal);
   }
   auto node = ast::make_expr("AstReturn",
@@ -3044,10 +3043,10 @@ std::unique_ptr<ast::Expr> Parser::parse_catch_expr() {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> tag;
   if (match(lexer::TokenKind::LParen)) {
-    tag = parse_expression(1, StopMode::Normal);
+    tag = parse_expression(0, StopMode::Normal);
     consume(lexer::TokenKind::RParen, "expected ')' after catch tag");
   } else {
-    tag = parse_expression(1, StopMode::ControlHeader);
+    tag = parse_expression(0, StopMode::ControlHeader);
   }
   consume(lexer::TokenKind::Colon, "expected ':' after catch tag");
   std::vector<std::unique_ptr<ast::Expr>> body =
@@ -3108,7 +3107,7 @@ std::unique_ptr<ast::Expr> Parser::parse_try_expr() {
 std::unique_ptr<ast::Expr> Parser::parse_case_expr(bool strict) {
   const lexer::Token start = advance();
   std::unique_ptr<ast::Expr> scrutinee =
-      parse_expression(1, StopMode::ControlHeader);
+      parse_expression(0, StopMode::ControlHeader);
   consume(lexer::TokenKind::Colon, "expected ':' after case scrutinee");
   consume(lexer::TokenKind::Newline, "expected newline after case header");
   consume(lexer::TokenKind::Indent, "expected indented case body");
@@ -3153,7 +3152,7 @@ std::unique_ptr<ast::Expr> Parser::parse_case_arm() {
 
   std::unique_ptr<ast::Expr> guard;
   if (match(lexer::TokenKind::KeywordIf)) {
-    guard = parse_expression(1, StopMode::ControlHeader);
+    guard = parse_expression(0, StopMode::ControlHeader);
   }
   consume(lexer::TokenKind::Colon, "expected ':' after case arm");
   std::vector<std::unique_ptr<ast::Expr>> body =
@@ -3189,7 +3188,8 @@ std::unique_ptr<ast::Expr> Parser::try_parse_pattern_assignment() {
     const lexer::Token &token = tokens_[index];
     if (token.kind == lexer::TokenKind::Newline ||
         token.kind == lexer::TokenKind::Dedent ||
-        token.kind == lexer::TokenKind::Eof) {
+        token.kind == lexer::TokenKind::Eof ||
+        (bracket_depth == 0 && is_contextual_at(index, "then"))) {
       break;
     }
     if (token.kind == lexer::TokenKind::LParen ||
@@ -3390,8 +3390,45 @@ bool Parser::match_contextual(const char *text) {
   return false;
 }
 
+std::unique_ptr<ast::Expr>
+Parser::parse_sequence_tail(std::unique_ptr<ast::Expr> left,
+                            StopMode stop_mode) {
+  if (!is_contextual_at(current_, "then"))
+    return left;
+  std::vector<std::unique_ptr<ast::Expr>> items;
+  const auto start = left->span;
+  if (contains_ungrouped_inline_if(*left))
+    error_code(current(), "ParenthesesError",
+               "parenthesize an inline conditional used in a then sequence");
+  items.push_back(std::move(left));
+  while (match_contextual("then")) {
+    const bool saved_sequence_operand = sequence_operand_;
+    sequence_operand_ = true;
+    next_control_ = true;
+    auto item = parse_expression(1, stop_mode);
+    sequence_operand_ = saved_sequence_operand;
+    if (contains_ungrouped_inline_if(*item))
+      error_code(previous(), "ParenthesesError",
+                 "parenthesize an inline conditional used in a then sequence");
+    items.push_back(std::move(item));
+  }
+  auto sequence =
+      ast::make_expr("AstThen", ast::join_spans(start, items.back()->span));
+  sequence->list_field("items", std::move(items));
+  return sequence;
+}
+
 std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
                                                     StopMode stop_mode) {
+  if (min_precedence == 0) {
+    // An argument, group or nested block starts its own guard context. Only
+    // the ungrouped operand of the enclosing sequence suppresses chain guards.
+    const bool saved_sequence_operand = sequence_operand_;
+    sequence_operand_ = false;
+    auto expr = parse_sequence_tail(parse_expression(1, stop_mode), stop_mode);
+    sequence_operand_ = saved_sequence_operand;
+    return expr;
+  }
   std::unique_ptr<ast::Expr> left = parse_prefix(stop_mode);
   int expression_continuation_depth = 0;
   const bool header_mode = stop_mode == StopMode::ControlHeader ||
@@ -3400,6 +3437,8 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
   bool has_segment = false;
 
   while (true) {
+    if (is_contextual_at(current_, "then"))
+      break;
     // A guard or inline block ends before the next outer segment, even when newlines
     // have been suppressed by surrounding parentheses/collection delimiters.
     if ((stop_mode == StopMode::ChainGuard ||
@@ -3441,8 +3480,8 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       if (next_assignment) break;
     }
 
-    if (has_segment && left->kind == "AstPostfixChain" && !header_mode &&
-        stop_mode != StopMode::CollectionElement &&
+    if (has_segment && !sequence_operand_ && left->kind == "AstPostfixChain" &&
+        !header_mode && stop_mode != StopMode::CollectionElement &&
         (check(lexer::TokenKind::KeywordIf) ||
          check(lexer::TokenKind::KeywordUnless)) &&
         left->span.end.line == current().span.start.line) {
@@ -3458,7 +3497,7 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
                    "a conditional chain segment requires a condition");
         break;
       }
-      auto condition_expr = parse_expression(1, StopMode::ChainGuard);
+      auto condition_expr = parse_expression(0, StopMode::ChainGuard);
       auto condition = ast::make_expr(
           "AstChainCondition",
           ast::join_spans(keyword.span, condition_expr->span));
@@ -3518,9 +3557,9 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       error_code(question, "AMB-SYN-INLINE-TERNARY-CSTYLE",
                  "C-style ternary operator is not supported; use `if cond "
                  "then a else b`.");
-      parse_expression(1, StopMode::Normal);
+      parse_expression(0, StopMode::Normal);
       if (match(lexer::TokenKind::Colon)) {
-        parse_expression(1, stop_mode);
+        parse_expression(0, stop_mode);
       }
       break;
     }
@@ -3610,7 +3649,7 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
     if (range_op && !header_mode &&
         match(lexer::TokenKind::Colon)) {
       const lexer::Token colon = previous();
-      std::unique_ptr<ast::Expr> step = parse_expression(1, stop_mode);
+      std::unique_ptr<ast::Expr> step = parse_expression(0, stop_mode);
       if (is_literal_zero_expr(*step)) {
         error_code(colon, "E_RANGE_ZERO_STEP", "range step must not be zero");
       }
@@ -3697,6 +3736,30 @@ std::unique_ptr<ast::Expr> Parser::parse_comparison_chain(
 }
 
 std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
+  const bool next_control = next_control_;
+  next_control_ = false;
+  if (next_control && is_contextual_at(current_, "next")) {
+    const auto after = peek().kind;
+    const bool bare =
+        after == lexer::TokenKind::Newline ||
+        after == lexer::TokenKind::Dedent || after == lexer::TokenKind::Eof ||
+        after == lexer::TokenKind::RParen || after == lexer::TokenKind::Comma ||
+        after == lexer::TokenKind::KeywordIf ||
+        after == lexer::TokenKind::KeywordUnless ||
+        after == lexer::TokenKind::KeywordElse ||
+        is_contextual_at(current_ + 1, "then");
+    const bool valued =
+        after == lexer::TokenKind::Integer ||
+        after == lexer::TokenKind::Float || after == lexer::TokenKind::String ||
+        after == lexer::TokenKind::Identifier ||
+        after == lexer::TokenKind::At || after == lexer::TokenKind::AtAt ||
+        after == lexer::TokenKind::LastValue ||
+        after == lexer::TokenKind::KeywordTrue ||
+        after == lexer::TokenKind::KeywordFalse ||
+        after == lexer::TokenKind::KeywordNull;
+    if (bare || valued)
+      return parse_next_expr();
+  }
   const lexer::Token token = advance();
   // Template splice hole in a `macro def` body (M4 surface): `#{expr}` is
   // sugar for `unquote(expr)`, `#{*expr}` for `unquote_splice(expr)`. The
@@ -3704,7 +3767,7 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
   // needed here; the nodes are consumed by the implicit template quote.
   if (token.kind == lexer::TokenKind::HashLBrace) {
     const bool splice = match(lexer::TokenKind::Star);
-    std::unique_ptr<ast::Expr> inner = parse_expression(1, StopMode::Normal);
+    std::unique_ptr<ast::Expr> inner = parse_expression(0, StopMode::Normal);
     const lexer::Token close = consume(
         lexer::TokenKind::RBrace, "expected '}' after template splice hole");
     auto node = ast::make_expr(splice ? "AstUnquoteSplice" : "AstUnquote",
@@ -3746,7 +3809,7 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
         check(lexer::TokenKind::LParen)) {
       const bool splice = token.lexeme == "unquote_splice";
       advance(); // consume '('
-      std::unique_ptr<ast::Expr> inner = parse_expression(1, StopMode::Normal);
+      std::unique_ptr<ast::Expr> inner = parse_expression(0, StopMode::Normal);
       const lexer::Token close = consume(lexer::TokenKind::RParen,
                                          "expected ')' after unquote argument");
       auto node = ast::make_expr(splice ? "AstUnquoteSplice" : "AstUnquote",
@@ -3762,7 +3825,7 @@ std::unique_ptr<ast::Expr> Parser::parse_prefix(StopMode stop_mode) {
     if (quote_depth_ > 0 && token.lexeme == "unhygienic" &&
         check(lexer::TokenKind::LParen)) {
       advance(); // consume '('
-      std::unique_ptr<ast::Expr> inner = parse_expression(1, StopMode::Normal);
+      std::unique_ptr<ast::Expr> inner = parse_expression(0, StopMode::Normal);
       const lexer::Token close = consume(
           lexer::TokenKind::RParen, "expected ')' after unhygienic argument");
       auto node = ast::make_expr("AstUnhygienic",
@@ -4160,11 +4223,7 @@ Parser::parse_callable_reference(const lexer::Token &ampersand) {
 std::unique_ptr<ast::Expr>
 Parser::parse_paren_or_tuple_literal(const lexer::Token &open,
                                      StopMode stop_mode) {
-  if (stop_mode == StopMode::ChainGuard ||
-      stop_mode == StopMode::CollectionElement ||
-      stop_mode == StopMode::ControlHeader) {
-    stop_mode = StopMode::Normal;
-  }
+  stop_mode = StopMode::Normal;
   std::vector<std::unique_ptr<ast::Expr>> elements;
   bool saw_comma = false;
 
@@ -4176,13 +4235,13 @@ Parser::parse_paren_or_tuple_literal(const lexer::Token &open,
     return expr;
   }
 
-  elements.push_back(parse_expression(1, stop_mode));
+  elements.push_back(parse_expression(0, stop_mode));
   while (match(lexer::TokenKind::Comma)) {
     saw_comma = true;
     if (check(lexer::TokenKind::RParen)) {
       break;
     }
-    elements.push_back(parse_expression(1, stop_mode));
+    elements.push_back(parse_expression(0, stop_mode));
   }
 
   const lexer::Token close =
@@ -4243,7 +4302,7 @@ Parser::parse_collection_element(lexer::TokenKind closing_kind,
     const lexer::Token spread = advance();
     error_code(spread, "E_KWARG_SPREAD_POSITION",
                "`**` spread is only valid in call arguments and map literals");
-    std::unique_ptr<ast::Expr> value = parse_expression(1, stop_mode);
+    std::unique_ptr<ast::Expr> value = parse_expression(0, stop_mode);
     auto error_node = ast::make_expr(
         "AstError", value == nullptr
                         ? spread.span
@@ -4253,7 +4312,7 @@ Parser::parse_collection_element(lexer::TokenKind closing_kind,
   }
   if (match(lexer::TokenKind::Star)) {
     const lexer::Token star = previous();
-    std::unique_ptr<ast::Expr> value = parse_expression(1, stop_mode);
+    std::unique_ptr<ast::Expr> value = parse_expression(0, stop_mode);
     std::unique_ptr<ast::Expr> condition = parse_collection_condition();
     const char *spread_kind = std::string(conditional_kind) == "AstSetElement"
                                   ? "AstSetSpread"
@@ -4281,7 +4340,7 @@ Parser::parse_collection_element(lexer::TokenKind closing_kind,
     return error_node;
   }
 
-  std::unique_ptr<ast::Expr> value = parse_expression(1, stop_mode);
+  std::unique_ptr<ast::Expr> value = parse_expression(0, stop_mode);
   std::unique_ptr<ast::Expr> condition = parse_collection_condition();
   if (condition == nullptr) {
     return value;
@@ -4302,7 +4361,7 @@ std::unique_ptr<ast::Expr> Parser::parse_collection_condition() {
     return nullptr;
   }
   const lexer::Token token = advance();
-  std::unique_ptr<ast::Expr> expr = parse_expression(1, StopMode::Normal);
+  std::unique_ptr<ast::Expr> expr = parse_expression(0, StopMode::Normal);
   auto condition = ast::make_expr(
       "AstCollectionCondition",
       expr == nullptr ? token.span : ast::join_spans(token.span, expr->span));
@@ -4350,7 +4409,7 @@ std::unique_ptr<ast::Expr> Parser::parse_map_literal(const lexer::Token &open,
   while (!check(lexer::TokenKind::RBrace) && !at_end()) {
     if (is_keyword_spread_start(current(), peek())) {
       const lexer::Token spread_token = advance();
-      std::unique_ptr<ast::Expr> value = parse_expression(1, stop_mode);
+      std::unique_ptr<ast::Expr> value = parse_expression(0, stop_mode);
       std::unique_ptr<ast::Expr> condition = parse_collection_condition();
       auto spread = ast::make_expr(
           "AstMapSpread",
@@ -4395,7 +4454,7 @@ std::unique_ptr<ast::Expr> Parser::parse_map_literal(const lexer::Token &open,
       key_span = ast::join_spans(key.span, name.span);
     } else {
       key_kind = "expression";
-      key_expr = parse_expression(1, stop_mode);
+      key_expr = parse_expression(0, stop_mode);
       if (key_expr == nullptr) {
         error(key, "expected map literal key");
         advance();
@@ -4408,7 +4467,7 @@ std::unique_ptr<ast::Expr> Parser::parse_map_literal(const lexer::Token &open,
     std::unique_ptr<ast::Expr> value =
         allow_same_name_value && is_same_name_map_value_boundary(current().kind)
             ? make_same_name_value(key)
-            : parse_expression(1, stop_mode);
+            : parse_expression(0, stop_mode);
     std::unique_ptr<ast::Expr> condition = parse_collection_condition();
     auto entry = ast::make_expr(
         "AstMapEntry",
@@ -4716,7 +4775,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
       const StopMode index_mode =
           stop_mode == StopMode::ChainGuard || stop_mode == StopMode::CollectionElement
               ? StopMode::Normal : stop_mode;
-      std::unique_ptr<ast::Expr> index = parse_expression(1, index_mode);
+      std::unique_ptr<ast::Expr> index = parse_expression(0, index_mode);
       const lexer::Token close =
           consume(lexer::TokenKind::RBracket, "expected ']' after index");
       auto tail = ast::make_expr("AstTailSafeIndex",
@@ -4770,7 +4829,7 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
     const StopMode index_mode =
         stop_mode == StopMode::ChainGuard || stop_mode == StopMode::CollectionElement
             ? StopMode::Normal : stop_mode;
-    std::unique_ptr<ast::Expr> index = parse_expression(1, index_mode);
+    std::unique_ptr<ast::Expr> index = parse_expression(0, index_mode);
     const lexer::Token close =
         consume(lexer::TokenKind::RBracket, "expected ']' after index");
     auto tail =
@@ -4856,7 +4915,10 @@ std::unique_ptr<ast::Expr> Parser::parse_block_suffix(StopMode stop_mode) {
     return block;
   }
 
-  std::unique_ptr<ast::Expr> body = parse_expression(1, StopMode::InlineBlock);
+  next_control_ = true;
+  std::unique_ptr<ast::Expr> body = parse_expression(0, StopMode::InlineBlock);
+  if (body && body->kind == "AstThen")
+    body = maybe_postfix_conditional(std::move(body));
   auto block =
       ast::make_expr("AstBlock", ast::join_spans(start_span, body->span));
   block->list_field("params", std::move(params));
@@ -4927,8 +4989,10 @@ Parser::parse_named_block_entry(StopMode stop_mode) {
     return entry;
   }
 
-  std::unique_ptr<ast::Expr> body =
-      parse_expression(1, StopMode::InlineBlock);
+  next_control_ = true;
+  std::unique_ptr<ast::Expr> body = parse_expression(0, StopMode::InlineBlock);
+  if (body && body->kind == "AstThen")
+    body = maybe_postfix_conditional(std::move(body));
   if (body == nullptr || body->kind == "AstError") {
     error_code(name, "AMB_MULTIBLOCK_ENTRY",
                "a named block entry body cannot be empty");
@@ -5030,7 +5094,7 @@ Parser::parse_call_arg(StopMode stop_mode, lexer::TokenKind closing_kind) {
   }
   if (is_keyword_spread_start(current(), peek())) {
     const lexer::Token spread = advance();
-    std::unique_ptr<ast::Expr> value = parse_expression(1, stop_mode);
+    std::unique_ptr<ast::Expr> value = parse_expression(0, stop_mode);
     auto arg = ast::make_expr("AstKeywordSpreadArg",
                               value == nullptr
                                   ? spread.span
@@ -5040,7 +5104,7 @@ Parser::parse_call_arg(StopMode stop_mode, lexer::TokenKind closing_kind) {
   }
   if (match(lexer::TokenKind::Star)) {
     const lexer::Token star = previous();
-    std::unique_ptr<ast::Expr> value = parse_expression(1, stop_mode);
+    std::unique_ptr<ast::Expr> value = parse_expression(0, stop_mode);
     auto arg = ast::make_expr(
         "AstSpreadArg",
         value == nullptr ? star.span : ast::join_spans(star.span, value->span));
@@ -5054,14 +5118,14 @@ Parser::parse_call_arg(StopMode stop_mode, lexer::TokenKind closing_kind) {
     std::unique_ptr<ast::Expr> value =
         is_same_name_call_value_boundary(current().kind, closing_kind)
             ? make_same_name_value(name)
-            : parse_expression(1, stop_mode);
+            : parse_expression(0, stop_mode);
     auto keyword = ast::make_expr("AstKeywordArg",
                                   ast::join_spans(name.span, value->span));
     keyword_arg_field(*keyword, name);
     keyword->node_field("value", std::move(value));
     return keyword;
   }
-  return parse_expression(1, stop_mode);
+  return parse_expression(0, stop_mode);
 }
 
 std::vector<std::unique_ptr<ast::Expr>>
@@ -5162,14 +5226,14 @@ Parser::parse_expr_list(lexer::TokenKind closing_kind, StopMode stop_mode) {
       std::unique_ptr<ast::Expr> value =
           is_same_name_call_value_boundary(current().kind, closing_kind)
               ? make_same_name_value(name)
-              : parse_expression(1, stop_mode);
+              : parse_expression(0, stop_mode);
       auto keyword = ast::make_expr("AstKeywordArg",
                                     ast::join_spans(name.span, value->span));
       keyword_arg_field(*keyword, name);
       keyword->node_field("value", std::move(value));
       values.push_back(std::move(keyword));
     } else {
-      values.push_back(parse_expression(1, stop_mode));
+      values.push_back(parse_expression(0, stop_mode));
     }
     if (!match(lexer::TokenKind::Comma)) {
       break;
@@ -5183,6 +5247,8 @@ Parser::parse_expr_list(lexer::TokenKind closing_kind, StopMode stop_mode) {
 }
 
 bool Parser::is_stop_token(StopMode stop_mode) const {
+  if (is_contextual_at(current_, "then"))
+    return true;
   switch (current().kind) {
   case lexer::TokenKind::Eof:
   case lexer::TokenKind::Newline:
@@ -5254,6 +5320,8 @@ bool Parser::starts_primary() const {
 }
 
 bool Parser::starts_bare_arg() const {
+  if (is_contextual_at(current_, "then"))
+    return false;
   switch (current().kind) {
   case lexer::TokenKind::Identifier:
   case lexer::TokenKind::KeywordAttr:

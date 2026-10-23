@@ -16,7 +16,7 @@ $(BUILD_DIR)/run_cancellation_checkpoint_tests: $(BUILD_DIR)/obj/tests/run_cance
 
 LEXER_SRCS := frontend/lexer/lexer.cpp frontend/lexer/token.cpp
 AST_SRCS := frontend/ast/expr.cpp
-PARSER_SRCS := frontend/parser/parser.cpp
+PARSER_SRCS := frontend/parser/parser.cpp frontend/lint/one_liners.cpp
 PATTERN_SRCS := frontend/pattern/pattern.cpp
 BINDER_SRCS := frontend/binder/binder.cpp
 CHECKER_SRCS := frontend/checker/checker.cpp
@@ -1039,3 +1039,8 @@ test-native-system-spread: $(BUILD_DIR)/sputnik
 test: test-effect-iteration
 test-effect-iteration: $(BUILD_DIR)/sputnik
 	python3 tests/effect_iteration_test.py $(BUILD_DIR)/sputnik
+
+.PHONY: test-language-updates
+test-language-updates: $(BUILD_DIR)/sputnik
+	python3 tests/language_updates_test.py $(BUILD_DIR)/sputnik
+test: test-language-updates

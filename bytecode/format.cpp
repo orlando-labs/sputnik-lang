@@ -1783,6 +1783,12 @@ bool decode_opcode(std::uint8_t raw, Opcode &opcode) {
   case 0x39:
     opcode = Opcode::BreakForeign;
     return true;
+  case 0x3B:
+    opcode = Opcode::BreakScoped;
+    return true;
+  case 0x3A:
+    opcode = Opcode::BreakScope;
+    return true;
   case 0x40:
     opcode = Opcode::PPrepSeq;
     return true;
@@ -4008,17 +4014,34 @@ InstructionFlow verify_instruction_flow(
     }
     break;
   }
+  case Opcode::BreakScope: {
+    if (operand_count_is(instruction, 2, errors)) {
+      add_register_read(code, instruction, 0, flow, errors);
+      std::uint32_t active = 0;
+      if (read_u32_operand(instruction, 1, "scope state must be unsigned",
+                           errors, &active) &&
+          active > 1)
+        add_verify_error(errors, "BC1401", "scope state must be zero or one",
+                         SectionKind::Code, 0);
+    }
+    break;
+  }
   case Opcode::SetLast:
   case Opcode::Raise:
+  case Opcode::BreakScoped:
   case Opcode::Throw: {
-    const std::size_t expected = instruction.opcode == Opcode::Throw ? 2U : 1U;
+    const std::size_t expected = (instruction.opcode == Opcode::Throw ||
+                                  instruction.opcode == Opcode::BreakScoped)
+                                     ? 2U
+                                     : 1U;
     if (operand_count_is(instruction, expected, errors)) {
       for (std::size_t index = 0; index < expected; ++index) {
         add_register_read(code, instruction, index, flow, errors);
       }
     }
     if (instruction.opcode == Opcode::Raise ||
-        instruction.opcode == Opcode::Throw) {
+        (instruction.opcode == Opcode::Throw ||
+         instruction.opcode == Opcode::BreakScoped)) {
       falls_through = false;
     }
     break;
@@ -5959,6 +5982,10 @@ std::string opcode_name(Opcode opcode) {
     return "RETURN_NONLOCAL";
   case Opcode::BreakForeign:
     return "BREAK_FOREIGN";
+  case Opcode::BreakScope:
+    return "BREAK_SCOPE";
+  case Opcode::BreakScoped:
+    return "BREAK_SCOPED";
   case Opcode::Raise:
     return "RAISE";
   case Opcode::RequireBlock:

@@ -151,6 +151,13 @@ struct ClosureValue {
     std::atomic<bool> active{true};
   };
   std::shared_ptr<NonlocalReturnTarget> nonlocal_return_target;
+  struct ScopedBreakTarget {
+    std::atomic<bool> active{false};
+    std::uint64_t task_id = 0;
+    std::uint64_t owner_id = 0;
+    std::weak_ptr<void> task_context;
+  };
+  std::shared_ptr<ScopedBreakTarget> scoped_break_target;
 };
 
 struct CollectionKeyError {

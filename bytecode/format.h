@@ -162,6 +162,8 @@ enum class Opcode : std::uint8_t {
   ReturnNonlocal = 0x38,
   // Unwind an rbcall block to its active foreign invocation.
   BreakForeign = 0x39,
+  BreakScope = 0x3A,  // private target register, active (0/1)
+  BreakScoped = 0x3B, // private target register, value
   PPrepSeq = 0x40,
   PPrepMap = 0x41,
   PCheckEq = 0x42,
@@ -342,6 +344,7 @@ inline constexpr std::uint32_t kCodeFlagRestParam = 0x1U;
 inline constexpr std::uint32_t kCodeFlagNonlocalReturnBlock = 0x2U;
 // A block containing foreign break requires an rbcall invocation target.
 inline constexpr std::uint32_t kCodeFlagRubyBreakBlock = 0x4U;
+inline constexpr std::uint32_t kCodeFlagScopedBreakBlock = 0x8U;
 inline constexpr std::uint32_t kCodeRestParamIndexShift = 8U;
 
 // Sequence-pattern `PGetIndex`: when this bit is set on the index operand, the

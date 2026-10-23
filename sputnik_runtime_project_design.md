@@ -2996,6 +2996,8 @@ IvarIC(
 | `RETURN reg` | вернуть значение caller'у |
 | `RAISE reg` | поднять исключение |
 | `THROW tag_reg, value_reg` | начать tagged non-exception unwind для `throw` / `catch` |
+| `BREAK_SCOPE tag_reg, active` | открыть (`1`) или закрыть (`0`) приватную цель scoped block break |
+| `BREAK_SCOPED tag_reg, value_reg` | проверить время жизни/task цели и начать non-exception unwind к принимающему вызову |
 | `SAFEPOINT` | poll cancellation / scheduler / GC cooperation |
 
 Для compiled bytecode обязательны такие правила:
@@ -3003,6 +3005,19 @@ IvarIC(
 - каждый back-edge цикла обязан проходить через `SAFEPOINT` либо сам считаться safepoint-инструкцией;
 - `SEND`, `CALL`, blocking waits и `TASK_*`-операции являются scheduler-visible точками;
 - unwinding использует `handler_table[]`, а не ad hoc поиск по source text.
+
+Scoped block break понижается в `HScopedBreak`, приватный `HCatch` вокруг
+принимающего вызова и `HTry` с `ensure`, закрывающим цель. Identity цели
+создаётся заново на каждое выполнение вызова и захватывается блоком по
+значению. Время жизни и identity task/владельца исполнения проверяются **до** раскрутки,
+поэтому истёкшая или чужая цель даёт обычный rescuable `LocalJumpError`.
+Флаг code object `kCodeFlagScopedBreakBlock` сохраняет запрет builtin chainable
+iterator-вызовов, в том числе через indexed adapter. `BREAK_SCOPED` проходит
+через `ensure`, пропускает `rescue`; Ruby `BREAK_FOREIGN` сохраняет отдельную
+семантику bridge. VM и native используют один контракт.
+
+`AstThen(items)` понижается в `HSeq` с `HLastSet` на каждом шаге: новая
+лексическая область и отдельная VM-инструкция для `then` не нужны.
 
 ### 8.5. Pattern opcodes
 

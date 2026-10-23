@@ -1236,6 +1236,43 @@ int main() {
            "scoped foreign imports retain the provider namespace");
   }
   {
+    const auto emitted = emit_ok("def scope(&blk): blk()\n"
+                                 "scope(): break 42\n");
+    bool saw_scope = false, saw_break = false, saw_contract = false;
+    for (const auto &code : emitted.module.code_objects) {
+      saw_contract |=
+          (code.flags & sputnik::bytecode::kCodeFlagScopedBreakBlock) != 0U;
+      for (const auto &insn : code.instructions) {
+        saw_scope |= insn.opcode == sputnik::bytecode::Opcode::BreakScope;
+        saw_break |= insn.opcode == sputnik::bytecode::Opcode::BreakScoped;
+      }
+    }
+    expect(saw_scope && saw_break && saw_contract,
+           "scoped break has a private target and iterator contract");
+    expect(sputnik::bytecode::deserialize_module(
+               sputnik::bytecode::serialize_module(emitted.module))
+               .ok(),
+           "scoped break bytecode round trip");
+    for (const auto opcode : {sputnik::bytecode::Opcode::BreakScope,
+                              sputnik::bytecode::Opcode::BreakScoped}) {
+      auto invalid = emitted.module;
+      bool corrupted = false;
+      for (auto &code : invalid.code_objects)
+        for (auto &insn : code.instructions)
+          if (insn.opcode == opcode) {
+            if (opcode == sputnik::bytecode::Opcode::BreakScope)
+              insn.operands[1].value = 2;
+            else
+              insn.operands.clear();
+            corrupted = true;
+          }
+      expect(corrupted && !sputnik::bytecode::deserialize_module(
+                               sputnik::bytecode::serialize_module(invalid))
+                               .ok(),
+             "invalid scoped break operands fail verification");
+    }
+  }
+  {
     const auto forbidden = emit_allow_bytecode_diagnostics(
         "[1, 2].each |x|: break x\n");
     expect(!forbidden.ok(), "literal Sputnik iterator still rejects block break at compile time");

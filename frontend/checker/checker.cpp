@@ -697,6 +697,13 @@ private:
   }
 
   TypeTerm infer_expr(const ast::Expr &expr, TypeEnv &env) {
+    if (expr.kind == "AstThen") {
+      TypeTerm last = named_type("Null");
+      if (const auto *items = list_field(expr, "items"))
+        for (const auto &item : items->values)
+          last = infer_expr(*item, env);
+      return last;
+    }
     if (expr.kind == "AstLiteral") {
       const std::string token = string_field(expr, "token");
       if (token == "INTEGER") {

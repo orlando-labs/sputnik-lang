@@ -37,6 +37,9 @@ private:
     CollectionElement
   };
 
+  bool sequence_operand_ = false;
+  bool next_control_ = false;
+
   enum class BodyContext { Module, Class, Mixin, Def };
 
   struct ClauseBody {
@@ -164,6 +167,8 @@ private:
                          const InfixInfo &first_info,
                          const lexer::Token &first_op_token,
                          StopMode stop_mode);
+  std::unique_ptr<ast::Expr>
+  parse_sequence_tail(std::unique_ptr<ast::Expr> left, StopMode stop_mode);
   std::unique_ptr<ast::Expr> parse_prefix(StopMode stop_mode);
   std::unique_ptr<ast::Expr>
   parse_callable_reference(const lexer::Token &ampersand);

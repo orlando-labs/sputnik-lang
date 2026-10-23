@@ -227,6 +227,21 @@ first_big = catch(:found):
 
 `if`, `case`, and loops are expressions. A loop returns `break value`, otherwise `null`. `for` lowers to `for_each`; both, like block-form `times`, always return `null`. Bare `break` ends this effect iteration; `break value` is forbidden here. `break` still cannot exit `each`/`map`/`select`. Use `find`/`any?`/lazy bounds for routine early exit; `catch`/`throw` crosses nested calls/blocks. `next value` ends only the current block invocation. `return value` in a call-site block exits the **creating method/lambda**; a standalone lambda returns locally. Bare `return` and bare `next` use `$_`, not necessarily `null`.
 
+`then` runs actions left to right in the same scope and updates `$_` after each:
+`load() then normalize($_)`. It has lower precedence than assignment;
+`x = first() then y = second()` performs two assignments. A trailing `if`/`unless`
+guards the whole sequence: `rollback() then break if invalid?`.
+
+In an ordinary call-site block, `break value` exits the accepting call and
+becomes its result; bare `break` returns `null`. Forwarding `&blk` preserves
+the original target. All `ensure` bodies run; `rescue` does not catch the exit.
+An expired target or another task raises `LocalJumpError`.
+
+Mixing inline `if … then … else …` with a sequence requires parentheses
+(`ParenthesesError` otherwise). Even with parentheses, prefer multiline code:
+`sputnik lint file.s` warns about mixed conditionals (`L1001`), nested sequences
+and three or more actions on one line (`L1002`). `obj.then()` remains a method call.
+
 ## 8. Everyday collection recipes
 
 | Pattern | Idiom |

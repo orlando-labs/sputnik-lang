@@ -2449,7 +2449,8 @@ private:
 
   std::optional<Value> call_block_to_value(
       const Frame &frame, const Value &block, const Value *args,
-      std::size_t arg_count, PreparedBlockCall *prepared) {
+      std::size_t arg_count, PreparedBlockCall *prepared,
+      bool allow_scoped_break = false) {
     if (block.is_null()) {
       set_fault(frame, "TypeError", "builtin collection SEND requires block");
       return std::nullopt;
@@ -2476,7 +2477,9 @@ private:
       set_fault(frame, "VMError", "closure code id is unknown");
       return std::nullopt;
     }
-    if ((code->flags & bytecode::kCodeFlagRubyBreakBlock) != 0U) {
+    if ((code->flags & bytecode::kCodeFlagRubyBreakBlock) != 0U ||
+        (!allow_scoped_break &&
+         (code->flags & bytecode::kCodeFlagScopedBreakBlock) != 0U)) {
       raise_runtime_error(frame, "LocalJumpError", "break is forbidden in Sputnik iterator blocks");
       return std::nullopt;
     }
@@ -3760,8 +3763,10 @@ private:
     case Opcode::Return:
     case Opcode::ReturnNonlocal:
     case Opcode::BreakForeign:
+    case Opcode::BreakScope:
     case Opcode::TypeCheck:
       return quick_operand_reg_equals(insn, 0, reg);
+    case Opcode::BreakScoped:
     case Opcode::Throw:
       return quick_operand_reg_equals(insn, 0, reg) ||
              quick_operand_reg_equals(insn, 1, reg);
@@ -4091,6 +4096,7 @@ private:
     case Opcode::StoreCvar:
     case Opcode::CloseUpvalues:
     case Opcode::SetLast:
+    case Opcode::BreakScope:
     case Opcode::Jump:
     case Opcode::JumpIfTrue:
     case Opcode::JumpIfFalse:
@@ -4098,6 +4104,7 @@ private:
     case Opcode::Return:
     case Opcode::ReturnNonlocal:
     case Opcode::BreakForeign:
+    case Opcode::BreakScoped:
     case Opcode::Raise:
     case Opcode::Throw:
     case Opcode::RequireBlock:
@@ -4172,6 +4179,7 @@ private:
     case Opcode::Return:
     case Opcode::ReturnNonlocal:
     case Opcode::BreakForeign:
+    case Opcode::BreakScoped:
     case Opcode::Raise:
     case Opcode::Throw:
       return true;
@@ -14677,7 +14685,8 @@ private:
     return [this, &frame, block](const std::vector<Value> &args) -> Value {
       RuntimeTextSourceLocationProviderScope source_scope(
           [](const void *ctx) { return static_cast<const Vm *>(ctx)->current_text_source_location(); }, this);
-      std::optional<Value> value = call_block_to_value(frame, block, args);
+      std::optional<Value> value = call_block_to_value(
+          frame, block, args.data(), args.size(), nullptr, true);
       if (!value.has_value()) {
         throw NativeBlockUnwind();
       }
@@ -34766,6 +34775,54 @@ private:
       }
       nonlocal_return_value(frame, frame.nonlocal_return_target,
                             std::move(value));
+      return;
+    }
+    case Opcode::BreakScope: {
+      std::uint32_t reg = 0, active = 0;
+      if (!operand_u32(frame, insn, 0, &reg) ||
+          !operand_u32(frame, insn, 1, &active))
+        return;
+      const Value tag = read_reg(frame, reg);
+      if (fault_)
+        return;
+      if (!tag.is_closure()) {
+        set_fault(frame, "VMError", "invalid scoped break target");
+        return;
+      }
+      auto &target = tag.as_closure()->scoped_break_target;
+      if (active) {
+        target = std::make_shared<ClosureValue::ScopedBreakTarget>();
+        target->task_id = current_runtime_task_id();
+        target->owner_id = current_runtime_resource_owner_id();
+        target->task_context = tls_runtime_task_context;
+        target->active.store(true, std::memory_order_release);
+      } else if (target)
+        target->active.store(false, std::memory_order_release);
+      ++frame.pc;
+      return;
+    }
+    case Opcode::BreakScoped: {
+      std::uint32_t tag_reg = 0, value_reg = 0;
+      if (!operand_u32(frame, insn, 0, &tag_reg) ||
+          !operand_u32(frame, insn, 1, &value_reg))
+        return;
+      const Value tag = read_reg(frame, tag_reg),
+                  value = read_reg(frame, value_reg);
+      if (fault_)
+        return;
+      const auto target =
+          tag.is_closure() ? tag.as_closure()->scoped_break_target : nullptr;
+      const auto context = target ? target->task_context.lock() : nullptr;
+      if (!target || !target->active.load(std::memory_order_acquire) ||
+          target->task_id != current_runtime_task_id() ||
+          (context ? context.get() != tls_runtime_task_context.get()
+                   : target->owner_id != current_runtime_resource_owner_id())) {
+        raise_runtime_error(
+            frame, "LocalJumpError",
+            "break target has expired or belongs to another task");
+        return;
+      }
+      throw_value(frame, tag, value);
       return;
     }
     case Opcode::BreakForeign: {

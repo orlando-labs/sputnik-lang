@@ -1961,6 +1961,17 @@ private:
   }
 
   std::unique_ptr<Node> lower_expr(const ast::Expr &expr) {
+    if (expr.kind == "AstThen") {
+      auto seq = make_node("HSeq", expr.span);
+      std::vector<std::unique_ptr<Node>> items;
+      for (const auto &item : list_field(expr, "items")->values) {
+        auto set = make_node("HLastSet", item->span);
+        set->node_field("expr", lower_expr(*item));
+        items.push_back(std::move(set));
+      }
+      seq->list_field("items", std::move(items));
+      return seq;
+    }
     if (expr.kind == "AstStringLiteral") {
       std::vector<std::unique_ptr<Node>> parts;
       std::string static_value;
@@ -2851,35 +2862,54 @@ private:
     return node;
   }
 
-  // Effect breaks use a private, fresh identity tag and the existing unwind
+  bool contains_block_break(const Node &node, unsigned loops = 0) {
+    if (node.kind == "HClosure")
+      return false;
+    if (node.kind == "HLoop")
+      ++loops;
+    if (node.kind == "HBreak" && loops == 0)
+      return true;
+    for (const auto &field : node.node_fields)
+      if (field.value && contains_block_break(*field.value, loops))
+        return true;
+    for (const auto &field : node.list_fields)
+      for (const auto &item : field.values)
+        if (contains_block_break(*item, loops))
+          return true;
+    return false;
+  }
+
+  // Scoped breaks use a private, fresh identity tag and the existing unwind
   // machinery. No user catch can name this tag; ensure and nonlocal return
   // retain their ordinary behavior. Native loops and nested closures keep
   // their own control-flow contracts.
-  bool rewrite_effect_breaks(Node &node, const std::string &capture,
-                             unsigned loops = 0) {
+  bool rewrite_scoped_breaks(Node &node, const std::string &capture,
+                             unsigned loops = 0, bool effect = true) {
     if (node.kind == "HClosure")
       return false;
     if (node.kind == "HLoop")
       ++loops;
     if (node.kind == "HBreak" && loops == 0) {
-      if (node_field(node, "value")) {
+      if (effect && node_field(node, "value")) {
         node.bool_field("effect_only", true);
       } else {
-        node.kind = "HThrow";
+        node.kind = "HScopedBreak";
         auto tag = make_node("HLoadCapture", node.span);
         tag->string_field("slot", capture);
         node.node_field("tag", std::move(tag));
-        node.node_field("value", make_null_const(node.span));
+        if (!node_field(node, "value"))
+          node.node_field("value", make_null_const(node.span));
       }
       return true;
     }
     bool found = false;
     for (auto &field : node.node_fields)
       if (field.value)
-        found = rewrite_effect_breaks(*field.value, capture, loops) || found;
+        found = rewrite_scoped_breaks(*field.value, capture, loops, effect) ||
+                found;
     for (auto &field : node.list_fields)
       for (auto &item : field.values)
-        found = rewrite_effect_breaks(*item, capture, loops) || found;
+        found = rewrite_scoped_breaks(*item, capture, loops, effect) || found;
     return found;
   }
 
@@ -2926,6 +2956,10 @@ private:
     Procedure adapter;
     adapter.id = "p" + std::to_string(procedures_.size());
     adapter.name = "__with_index__";
+    if (block->kind == "HClosure")
+      for (const auto &original : procedures_)
+        if (original.id == string_value(*block, "procedure"))
+          adapter.scoped_break_block = original.scoped_break_block;
     adapter.kind = "closure";
     adapter.owner = adapter.name;
     adapter.span = span;
@@ -3004,26 +3038,66 @@ private:
     for (auto &field : send->node_fields)
       if (field.name == "block")
         block = field.value.get();
+    std::vector<Node *> blocks;
+    if (block)
+      blocks.push_back(block);
+    if (auto *kwargs = mutable_list_field(*send, "kw_args"))
+      for (auto &arg : kwargs->values)
+        if (bool_value(*arg, "source_multiblock"))
+          for (auto &field : arg->node_fields)
+            if (field.name == "value" && field.value)
+              blocks.push_back(field.value.get());
     std::string tag_slot;
-    if ((selector == "for_each" || selector == "times") && block &&
-        block->kind == "HClosure") {
-      const auto id = string_value(*block, "procedure");
-      for (auto &procedure : procedures_)
-        if (procedure.id == id) {
-          const auto capture = "u" + std::to_string(procedure.captures.size());
-          if (rewrite_effect_breaks(*procedure.body, capture)) {
-            tag_slot = allocate_temp_local(span);
-            procedure.captures.push_back({capture, "__effect_break", "value",
-                                          tag_slot, "__effect_break", span});
-            auto captured = make_node("HCapture", span);
-            captured->string_field("slot", capture);
-            captured->string_field("source_kind", "value");
-            captured->string_field("source_slot", tag_slot);
-            mutable_list_field(*block, "captures")
-                ->values.push_back(std::move(captured));
+    // Ruby owns its foreign break boundary; forwarded blocks keep their
+    // original lexical target. Every other direct call-site block is scoped.
+    const bool effect = selector == "for_each" || selector == "times";
+    static const std::set<std::string> chainable_selectors = {
+        "each",     "map",        "select",          "reject",
+        "flat_map", "filter_map", "reduce",          "find",
+        "detect",   "find_index", "find_with_index", "any?",
+        "all?",     "none?",      "take_while",      "drop_while",
+        "sort",     "sort_by",    "group",           "partition",
+        "count",    "counts",     "tally",           "uniq",
+        "min",      "max",        "min_by",          "max_by",
+        "sum",      "product"};
+    const bool chainable = chainable_selectors.count(selector) != 0;
+    for (auto *block : blocks) {
+      if (chainable && block && block->kind == "HClosure") {
+        for (auto &procedure : procedures_)
+          if (procedure.id == string_value(*block, "procedure") &&
+              contains_block_break(*procedure.body)) {
+            procedure.scoped_break_block = true;
+            const auto *receiver = node_field(*send, "receiver");
+            if (receiver && (receiver->kind == "HListLiteral" ||
+                             receiver->kind == "HTupleLiteral" ||
+                             receiver->kind == "HSetLiteral" ||
+                             receiver->kind == "HMapLiteral"))
+              send->bool_field("forbidden_block_break", true);
           }
-          break;
-        }
+      }
+      if (!chainable && selector != "rbcall" && block &&
+          block->kind == "HClosure") {
+        const auto id = string_value(*block, "procedure");
+        for (auto &procedure : procedures_)
+          if (procedure.id == id) {
+            const auto capture =
+                "u" + std::to_string(procedure.captures.size());
+            if (rewrite_scoped_breaks(*procedure.body, capture, 0, effect)) {
+              procedure.scoped_break_block = !effect;
+              if (tag_slot.empty())
+                tag_slot = allocate_temp_local(span);
+              procedure.captures.push_back({capture, "__scoped_break", "value",
+                                            tag_slot, "__scoped_break", span});
+              auto captured = make_node("HCapture", span);
+              captured->string_field("slot", capture);
+              captured->string_field("source_kind", "value");
+              captured->string_field("source_slot", tag_slot);
+              mutable_list_field(*block, "captures")
+                  ->values.push_back(std::move(captured));
+            }
+            break;
+          }
+      }
     }
     if (indexed)
       send = index_iterator_block(std::move(send));
@@ -3031,7 +3105,7 @@ private:
       return send;
     Procedure tag;
     tag.id = "p" + std::to_string(procedures_.size());
-    tag.name = "__effect_break_tag__";
+    tag.name = "__scoped_break_tag__";
     tag.owner = tag.name;
     tag.kind = "closure";
     tag.span = span;
@@ -3046,7 +3120,23 @@ private:
     auto guarded = make_node("HCatch", span);
     guarded->node_field("tag", make_load_local(tag_slot, span));
     guarded->node_field("body", make_expr_body(std::move(send)));
-    return let_local(tag_slot, std::move(identity), std::move(guarded));
+    auto enter = make_node("HBreakScope", span);
+    enter->bool_field("active", true);
+    enter->node_field("tag", make_load_local(tag_slot, span));
+    auto leave = make_node("HBreakScope", span);
+    leave->bool_field("active", false);
+    leave->node_field("tag", make_load_local(tag_slot, span));
+    auto cleanup = make_node("HTry", span);
+    cleanup->bool_field("has_ensure", true);
+    cleanup->list_field("rescues", {});
+    cleanup->node_field("body", make_expr_body(std::move(guarded)));
+    cleanup->node_field("ensure_body", make_expr_body(std::move(leave)));
+    // Activation is compiler state, not a source statement: preserve $_ while
+    // evaluating the receiver, arguments and block of the accepting call.
+    auto activation = make_node("HLet", span);
+    activation->node_field("binding", std::move(enter));
+    activation->node_field("body", std::move(cleanup));
+    return let_local(tag_slot, std::move(identity), std::move(activation));
   }
 
   std::unique_ptr<Node> lower_postfix_chain(const ast::Expr &expr) {
@@ -3141,7 +3231,7 @@ private:
             lowered->span =
                 ast::join_spans(lowered->span, multiblock_tail->span);
           }
-          current = std::move(lowered);
+          current = finish_iterator_send(std::move(lowered));
           ++i;
           continue;
         }
@@ -3257,6 +3347,7 @@ private:
             current->bool_field("source_multiblock", true);
             current->span =
                 ast::join_spans(current->span, multiblock_tail->span);
+            current = finish_iterator_send(std::move(current));
           }
           ++i;
           continue;
@@ -3296,9 +3387,10 @@ private:
         if (block) {
           node->node_field("block", std::move(block));
         }
+        auto lowered = finish_iterator_send(std::move(node));
         current = safe ? wrap_safe_guard(std::move(guard_base), temp_slot,
-                                         std::move(node), node_span)
-                       : std::move(node);
+                                         std::move(lowered), node_span)
+                       : std::move(lowered);
         ++i;
         continue;
       }
@@ -3336,7 +3428,7 @@ private:
         node->list_field("pos_args", {});
         node->list_field("kw_args", {});
         node->node_field("block", lower_block_suffix(tail));
-        current = std::move(node);
+        current = finish_iterator_send(std::move(node));
         ++i;
         continue;
       }
@@ -3502,7 +3594,7 @@ private:
     if (block) {
       node->node_field("block", std::move(block));
     }
-    return node;
+    return finish_iterator_send(std::move(node));
   }
 
   std::unique_ptr<Node> lower_kernel_watch_send(const ast::Expr &base,

@@ -1001,7 +1001,45 @@ result = loop:
   break :some_symbol
 ```
 
-`break` **не разрешён для завершения chainable iterator-вызова** (`each` / `map` / `select` / …). Исключение — обходы ради эффектов `for_each`, `for` и блочный `times` (§7.3.1), принимающие только голый `break`. Для остальных Sputnik iterator-блоков: блок — это вызываемый объект, а не цикл, поэтому `break` там является compile-time ошибкой с corrective-подсказкой. (`next`, напротив, допустим в блоке: он завершает *текущий вызов блока*, давая своё значение — или `$_` при голой форме — как результат итерации, что удобно в `map` / `select`.)
+В call-site блоке вне его собственного нативного цикла `break value`
+завершает **тот вызов, которому блок был непосредственно передан**, и делает
+`value` результатом вызова; голый `break` даёт `null`. Выполнение метода после
+вызова блока пропускается. `next value` завершает только текущий вызов блока,
+после которого принимающий метод продолжает работу. `return` сохраняет цель
+создавшего блок метода или lambda (§7.5).
+
+```sputnik
+def scoped(&blk):
+  blk()
+  :completed
+
+result = scoped():
+  prepare()
+  rollback() then break :cancelled if invalid?
+  finish()
+```
+
+Здесь `rollback()` — обычный метод: сам по себе он не завершает блок.
+Цель `break` уникальна для каждой активации принимающего вызова, сохраняется
+при пробросе `&blk` через вспомогательные методы и не переназначается при
+повторной передаче сохранённого блока. Вложенные вызовы имеют собственные
+цели; рекурсия не смешивает их. При раскрутке исполняются все `ensure`,
+а `rescue` не перехватывает `break`. Сам `ensure` может заменить выход своим
+`return`, `throw` или исключением. После завершения принимающего вызова, а
+также из другой task, попытка выполнить такой `break` поднимает перехватываемый
+`LocalJumpError`.
+
+Первоклассная lambda, созданная отдельно от принимающего вызова, не получает
+его цель `break`. Нативный цикл внутри блока сохраняет ближайший локальный
+`break value`.
+
+`break` **не разрешён для завершения builtin chainable iterator-вызова**
+(`each` / `map` / `select` / …). Для статически известного получателя это
+compile-time ошибка с corrective-подсказкой; при динамической диспетчеризации
+iterator отвергает блок с `LocalJumpError`. Исключение — обходы ради эффектов
+`for_each`, `for` и блочный `times` (§7.3.1), принимающие только голый `break`.
+`next` допустим в chainable-блоках и завершает текущий вызов блока, давая своё
+значение — или `$_` при голой форме — как результат итерации.
 
 Дополнение для foreign bridge `rbcall` (2026-10-20): call-site блок,
 переданный Ruby-вызову, может использовать `break value` с целью конкретной
@@ -1011,7 +1049,9 @@ result = loop:
 такой блок; статически известный Sputnik literal receiver по-прежнему даёт
 compile-time ошибку. `break` в собственном `while`/`loop` внутри блока остаётся
 локальным выходом из этого цикла. Сохранённый Ruby блок не может выполнить
-`break` после завершения исходного вызова: Ruby сообщает `LocalJumpError`.
+`break` после завершения исходного вызова. Для scoped-цели проверка языка
+поднимает `LocalJumpError`; для legacy foreign-break цели ошибку сообщает Ruby
+(bridge оборачивает её в `rbcall.Error`).
 
 Ранний выход из цепочки коллекций (`each` → `map` → `select` → `reduce` …) выражается двумя явными, greppable способами. Для отдельного обхода ради эффектов используйте `for_each` / `for` с голым `break`:
 
@@ -3892,7 +3932,41 @@ C-style ternary operator is not supported in Sputnik; use `if condition then con
 
 ##### 2.3. `then` как contextual keyword
 
-`then` является contextual keyword только внутри inline conditional expression после `if <condition>`.
+`then` является contextual keyword после `if <condition>` и между
+выражениями последовательности `expr1 then expr2`.
+
+Последовательность вычисляет выражения слева направо в **одной области
+видимости**, обновляя `$_` после каждого выполненного выражения, как при
+записи отдельных statements. Результат — последнее выражение. `false`, `null`
+и значения `Result` не прерывают последовательность и не разворачиваются
+автоматически. Исключение, `return`, `next`, `break` и `throw` прекращают её
+обычным способом.
+
+```sputnik
+load() then normalize($_)
+x = first() then y = second()
+rollback() then break if invalid?
+```
+
+У `then` приоритет **ниже присваивания**: вторая строка — два присваивания,
+а `x = (first() then second())` — одно присваивание результата в скобках.
+Постфиксные `if` / `unless` охватывают всю последовательность: последняя
+строка выполняет и `rollback()`, и `break` только при `invalid?`.
+В bare call аргумент заканчивается перед `then`: `print a then print b` —
+два вызова; последовательность внутри аргумента записывается в скобках.
+При конфликте с именем аргумента `then` используйте явный вызов `print(then)`.
+
+Inline conditional и последовательность нельзя смешивать без явных скобок:
+`if c then a else b then finish()` и `if c then a then b else fallback()`
+дают parser diagnostic **`ParenthesesError`** (это не runtime exception).
+Допустимы `(if c then a else b) then finish()` и
+`if c then (prepare() then run()) else fallback()`.
+
+Стилевая рекомендация — короткие однострочники. `sputnik lint file.s`
+сообщает `L1001` при сочетании inline conditional с последовательностью и
+`L1002` при вложенной последовательности или трёх и более действиях на одной
+строке. Оба предупреждения предлагают многострочный body; предупреждения
+не препятствуют компиляции и не меняют семантику.
 
 В обычных identifier-position использование имени `then` не меняется, если это уже разрешено базовыми правилами идентификаторов и не создаёт локального конфликта parser-а.
 
@@ -3939,7 +4013,9 @@ Inline conditional expression является `PrimaryExpr`/control expression 
 Рекомендуемое parser-правило:
 
 ```ebnf
-InlineIfExpr::= "if" Expr "then" Expr "else" Expr
+SequenceExpr ::= AssignmentExpr ("then" AssignmentExpr)*
+InlineIfExpr ::= "if" Expr "then" AssignmentExpr "else" AssignmentExpr
+# Parenthesized PrimaryExpr may contain SequenceExpr.
 ```
 
 `InlineIfExpr` не является infix-оператором и не добавляет нового уровня precedence. Он парсится как отдельная expression-form, аналогично другим control expressions.
@@ -4265,7 +4341,9 @@ PrimaryExpr::= Literal
  | ClassExpr
  | MixinExpr
 
-InlineIfExpr::= "if" Expr "then" Expr "else" Expr
+SequenceExpr ::= AssignmentExpr ("then" AssignmentExpr)*
+InlineIfExpr ::= "if" Expr "then" AssignmentExpr "else" AssignmentExpr
+# Parenthesized PrimaryExpr may contain SequenceExpr.
 ```
 
 Implementation note: parser may fold `InlineIfExpr` into existing `IfExpr` AST family with `form = inline`, but AST must preserve that the source used inline spelling.

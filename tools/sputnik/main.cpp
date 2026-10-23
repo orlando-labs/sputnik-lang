@@ -11,6 +11,7 @@
 #include "frontend/hir/hir.h"
 #include "frontend/lexer/lexer.h"
 #include "frontend/parser/parser.h"
+#include "frontend/lint/one_liners.h"
 #include "frozen/image.h"
 #include "optimizer/mir.h"
 #include "optimizer/native.h"
@@ -84,6 +85,7 @@ void usage(std::ostream &out) {
   out << "Source extensions: .s, .spu, .sputnik\n";
   out << "usage:\n";
   out << "  sputnik <file.s>\n";
+  out << "  sputnik lint <file.s>\n";
   out << "  sputnik run <source|manifest|file.sputnikbc> "
          "[--grant <cap[=target]>...] [-- <program-args>...]\n";
   out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend cpu|cuda|mps] [--bundle none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE]\n";
@@ -2144,23 +2146,23 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
     const sputnik::bytecode::Instruction &instruction = code.instructions[pc];
     using sputnik::bytecode::Opcode;
     const bool integer_k_opcode = instruction.opcode == Opcode::IAddK ||
-                                  instruction.opcode == Opcode::ISubK ||
-                                  instruction.opcode == Opcode::ILtK ||
-                                  instruction.opcode == Opcode::IGtK ||
-                                  instruction.opcode == Opcode::IMulK ||
-                                  instruction.opcode == Opcode::IDivK ||
-                                  instruction.opcode == Opcode::IModK ||
-                                  instruction.opcode == Opcode::IFloorDivK ||
-                                  instruction.opcode == Opcode::ILeK ||
-                                  instruction.opcode == Opcode::IGeK ||
-                                  instruction.opcode == Opcode::IEqK ||
-                                  instruction.opcode == Opcode::INeK ||
-                                  instruction.opcode == Opcode::ICmpK ||
-                                  instruction.opcode == Opcode::IBitAndK ||
-                                  instruction.opcode == Opcode::IBitOrK ||
-                                  instruction.opcode == Opcode::IBitXorK ||
-                                  instruction.opcode == Opcode::IShlK ||
-                                  instruction.opcode == Opcode::IShrK;
+                   instruction.opcode == Opcode::ISubK ||
+                   instruction.opcode == Opcode::ILtK ||
+                   instruction.opcode == Opcode::IGtK ||
+                   instruction.opcode == Opcode::IMulK ||
+                   instruction.opcode == Opcode::IDivK ||
+                   instruction.opcode == Opcode::IModK ||
+                   instruction.opcode == Opcode::IFloorDivK ||
+                   instruction.opcode == Opcode::ILeK ||
+                   instruction.opcode == Opcode::IGeK ||
+                   instruction.opcode == Opcode::IEqK ||
+                   instruction.opcode == Opcode::INeK ||
+                   instruction.opcode == Opcode::ICmpK ||
+                   instruction.opcode == Opcode::IBitAndK ||
+                   instruction.opcode == Opcode::IBitOrK ||
+                   instruction.opcode == Opcode::IBitXorK ||
+                   instruction.opcode == Opcode::IShlK ||
+                   instruction.opcode == Opcode::IShrK;
     if (integer_k_opcode) {
       std::uint32_t const_id = 0;
       if (!operand_u32_value(instruction, 2, &const_id) ||
@@ -2285,6 +2287,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
     case Opcode::Raise:
       break;
     case Opcode::BreakForeign:
+    case Opcode::BreakScope:
+    case Opcode::BreakScoped:
       break;
     case Opcode::Throw: {
       // Only the compiler's private effect-break packet is admitted here.
@@ -4067,6 +4071,7 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
     } else if (instruction.opcode != Opcode::Return &&
                instruction.opcode != Opcode::ReturnNonlocal &&
                instruction.opcode != Opcode::BreakForeign &&
+               instruction.opcode != Opcode::BreakScoped &&
                instruction.opcode != Opcode::Throw) {
       enqueue(pc + 1U, next);
     }
@@ -4138,6 +4143,7 @@ native_cpp_live_registers_at_pc(const sputnik::bytecode::BcCode &code) {
       } else if (instruction.opcode != Opcode::Return &&
                  instruction.opcode != Opcode::ReturnNonlocal &&
                  instruction.opcode != Opcode::BreakForeign &&
+                 instruction.opcode != Opcode::BreakScoped &&
                  instruction.opcode != Opcode::Throw) {
         merge_successor(pc + 1U);
       }
@@ -4406,9 +4412,11 @@ native_cpp_live_registers_at_pc(const sputnik::bytecode::BcCode &code) {
       case Opcode::Return:
       case Opcode::ReturnNonlocal:
       case Opcode::BreakForeign:
+      case Opcode::BreakScope:
       case Opcode::Raise:
         use_operand(0);
         break;
+      case Opcode::BreakScoped:
       case Opcode::Throw:
         use_operand(0);
         use_operand(1);
@@ -4515,6 +4523,8 @@ bool native_cpp_compact_registers_supported(
     case Opcode::Safepoint:
     case Opcode::ReturnNonlocal:
     case Opcode::BreakForeign:
+    case Opcode::BreakScope:
+    case Opcode::BreakScoped:
     case Opcode::Throw:
     case Opcode::PTripleEq:
     case Opcode::PCheckEq:
@@ -7882,10 +7892,41 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
           << read_reg_expr(src) << "};\n";
       break;
     }
+    case Opcode::BreakScope: {
+      std::uint32_t tag = 0, active = 0;
+      operand_u32_value(instruction, 0, &tag);
+      operand_u32_value(instruction, 1, &active);
+      out << "  { auto tag = " << read_reg_expr(tag)
+          << "; auto &target = as_closure(tag)->scoped_break_target;\n";
+      if (active)
+        out << "    target = std::make_shared<NativeScopedBreakTarget>(); "
+               "target->task_id = sputnik::runtime::current_runtime_task_id(); "
+               "target->owner_id = "
+               "sputnik::runtime::current_runtime_resource_owner_id(); "
+               "target->task_context = sputnik::runtime::tls_runtime_task_context; "
+               "target->active.store(true, std::memory_order_release);\n";
+      else
+        out << "    if (target) target->active.store(false, "
+               "std::memory_order_release);\n";
+      out << "  }\n";
+      break;
+    }
+    case Opcode::BreakScoped:
     case Opcode::Throw: {
       std::uint32_t tag = 0, value = 0;
       operand_u32_value(instruction, 0, &tag);
       operand_u32_value(instruction, 1, &value);
+      if (instruction.opcode == Opcode::BreakScoped) {
+        out << "  { auto tag = " << read_reg_expr(tag)
+            << "; auto target = as_closure(tag)->scoped_break_target; "
+               "auto context = target ? target->task_context.lock() : std::shared_ptr<void>(); if "
+               "(!target || !target->active.load(std::memory_order_acquire) || "
+               "target->task_id != sputnik::runtime::current_runtime_task_id() "
+               "|| (context ? context.get() != sputnik::runtime::tls_runtime_task_context.get() : target->owner_id != "
+               "sputnik::runtime::current_runtime_resource_owner_id())) "
+               "native_raise(native_named_error(\"LocalJumpError\", \"break "
+               "target has expired or belongs to another task\")); }\n";
+      }
       out << "  throw NativeThrown{" << read_reg_expr(tag) << ", "
           << read_reg_expr(value) << "};\n";
       break;
@@ -9138,6 +9179,8 @@ private:
   out << "struct NativeRaised { NativeValue exception; "
          "std::vector<NativeTraceFrame> trace; };\n";
   out << "struct NativeThrown { NativeValue tag; NativeValue value; };\n";
+  out << "struct NativeScopedBreakTarget { std::atomic<bool> active{false}; "
+         "std::uint64_t task_id = 0; std::uint64_t owner_id = 0; std::weak_ptr<void> task_context; };\n";
   out << "struct NativeNonlocalReturnTarget { "
          "std::atomic<bool> active{true}; };\n";
   out << "struct NativeNonlocalReturn { "
@@ -9452,6 +9495,7 @@ private:
   out << "  NativeValue block = NativeValue::nullv();\n";
   out << "  std::shared_ptr<NativeNonlocalReturnTarget> "
          "nonlocal_return_target;\n";
+  out << "  std::shared_ptr<NativeScopedBreakTarget> scoped_break_target;\n";
   out << "  NativeClosure() = default;\n";
   out << "  NativeClosure(const NativeClosure &other);\n";
   out << "  NativeClosure(NativeClosure &&other);\n";
@@ -10163,7 +10207,7 @@ static void native_cell_release(NativeCell *cell) {
 NativeClosure::NativeClosure(const NativeClosure &other)
     : NativeRcHeader(other), code_id(other.code_id), captures(other.capture_view()),
       self(other.self), block(other.block),
-      nonlocal_return_target(other.nonlocal_return_target) {
+      nonlocal_return_target(other.nonlocal_return_target), scoped_break_target(other.scoped_break_target) {
   for (NativeCell *cell : captures) native_cell_retain(cell);
 }
 void NativeClosure::materialize_captures() {
@@ -10192,6 +10236,7 @@ NativeClosure &NativeClosure::operator=(NativeClosure &&other) {
   self = std::move(other.self);
   block = std::move(other.block);
   nonlocal_return_target = std::move(other.nonlocal_return_target);
+  scoped_break_target = std::move(other.scoped_break_target);
   other.captures.clear();
   return *this;
 }
@@ -12760,6 +12805,8 @@ static void native_append_keyword_call_spread(
   out << "}\n\n";
   out << R"SPUTNIKPP(static NativeValue sputnik_native_call_closure(
     const NativeValue &value, const NativeArgsView &args);
+static NativeValue sputnik_native_call_scoped_closure(
+    const NativeValue &value, const NativeArgsView &args);
 
 static std::string native_regexp_pattern_to_string(
     const NativeRegexp &pattern) {
@@ -13036,7 +13083,7 @@ static NativeValue native_regexp_replace_string(
                                               *replacement);
     } else {
       out += native_regexp_text_arg(
-          sputnik_native_call_closure(block_value, {match_value}));
+          sputnik_native_call_scoped_closure(block_value, {match_value}));
     }
     ++replaced;
     last_append = match_end;
@@ -13652,7 +13699,7 @@ static NativeValue native_map_merge_with_block(
         });
     NativeValue value = entry.second;
     if (existing != result.end() && has_block) {
-      value = sputnik_native_call_closure(
+      value = sputnik_native_call_scoped_closure(
           block, {existing->first, existing->second, entry.second});
     }
     if (existing == result.end()) result.push_back({entry.first, value});
@@ -19100,7 +19147,7 @@ static NativeValue native_json_stream_parse_file(const NativeValue &path_value,
     if (line.empty()) continue;
     NativeJsonParser parser(line);
     const NativeValue row = parser.parse_document();
-    (void)sputnik_native_call_closure(block_value, {row});
+    (void)sputnik_native_call_scoped_closure(block_value, {row});
     ++count;
   }
   return NativeValue::integer(count);
@@ -19819,7 +19866,7 @@ static NativeValue native_benchmark_send(
     }
     state->stack.push_back(index);
     const std::int64_t start = native_benchmark_now_ns();
-    NativeValue value = sputnik_native_call_closure(block_value, {});
+    NativeValue value = sputnik_native_call_scoped_closure(block_value, {});
     const std::int64_t finish = native_benchmark_now_ns();
     state->stack.pop_back();
     state->spans[index].elapsed_ns = std::max<std::int64_t>(0, finish - start);
@@ -19835,7 +19882,7 @@ static NativeValue native_benchmark_send(
     }
     const NativeValue label = native_benchmark_label_arg(args);
     const std::int64_t start = native_benchmark_now_ns();
-    NativeValue value = sputnik_native_call_closure(block_value, {});
+    NativeValue value = sputnik_native_call_scoped_closure(block_value, {});
     const std::int64_t elapsed = std::max<std::int64_t>(0, native_benchmark_now_ns() - start);
     if (selector == "time") return native_benchmark_time_period(elapsed);
     return native_benchmark_measurement(label, elapsed, value, "measurement");
@@ -19855,7 +19902,7 @@ static NativeValue native_benchmark_send(
     if (iterations == 0 && min_time_ns == 0) throw NativeBailout();
     iterations = std::max<std::int64_t>(1, iterations);
     for (std::int64_t i = 0; i < warmup; ++i) {
-      (void)sputnik_native_call_closure(block_value, {NativeValue::integer(i)});
+      (void)sputnik_native_call_scoped_closure(block_value, {NativeValue::integer(i)});
     }
     std::vector<std::int64_t> sample_ns;
     for (std::int64_t sample = 0; sample < samples; ++sample) {
@@ -19863,7 +19910,7 @@ static NativeValue native_benchmark_send(
       do {
         const std::int64_t start = native_benchmark_now_ns();
         for (std::int64_t i = 0; i < iterations; ++i) {
-          (void)sputnik_native_call_closure(block_value, {NativeValue::integer(i)});
+          (void)sputnik_native_call_scoped_closure(block_value, {NativeValue::integer(i)});
         }
         elapsed = std::max<std::int64_t>(0, native_benchmark_now_ns() - start);
         if (min_time_ns > 0 && elapsed < min_time_ns) {
@@ -19885,7 +19932,7 @@ static NativeValue native_benchmark_send(
     const NativeValue profiler = native_benchmark_profiler_map(state.id);
     native_benchmark_profiles.push_back(&state);
     const std::int64_t start = native_benchmark_now_ns();
-    NativeValue value = sputnik_native_call_closure(block_value, {profiler});
+    NativeValue value = sputnik_native_call_scoped_closure(block_value, {profiler});
     const std::int64_t total = std::max<std::int64_t>(0, native_benchmark_now_ns() - start);
     native_benchmark_profiles.pop_back();
     native_benchmark_finalize_profile(&state);
@@ -21536,7 +21583,9 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  if (value.tag == NativeValue::Tag::Closure) {\n";
   out << "    switch (as_closure(value)->code_id) {\n";
   for (const auto &candidate : module.code_objects) {
-    if ((candidate.flags & sputnik::bytecode::kCodeFlagRubyBreakBlock) != 0U)
+    if ((candidate.flags & (sputnik::bytecode::kCodeFlagRubyBreakBlock |
+                            sputnik::bytecode::kCodeFlagScopedBreakBlock)) !=
+        0U)
       out << "    case " << candidate.code_id << "U: native_raise(native_named_error("
              "\"LocalJumpError\", \"break is forbidden in Sputnik iterator blocks\"));\n";
   }
@@ -21544,6 +21593,7 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  return sputnik_native_call_closure_with_keywords("
          "value, args, {}, NativeValue::nullv());\n";
   out << "}\n\n";
+  out << "static NativeValue sputnik_native_call_scoped_closure(const NativeValue &value, const NativeArgsView &args) { return sputnik_native_call_closure_with_keywords(value, args, {}, NativeValue::nullv()); }\n";
   out << "static NativeValue sputnik_native_call_value("
          "const NativeValue &value, const NativeArgsView &args, "
          "const NativeKeywordArgsView &kwargs, "
@@ -21711,7 +21761,7 @@ public:
         native_args.push_back(std::move(native_arg));
       }
       NativeValue result =
-          sputnik_native_call_closure(block_, native_args);
+          sputnik_native_call_scoped_closure(block_, native_args);
       // A response producer is used for its writes. Its final expression may
       // be a StreamBody or telemetry event, neither of which crosses the HTTP
       // runtime boundary. Converting that unused result used to abort an
@@ -21747,7 +21797,7 @@ public:
       NativeValue native_request = NativeValue::runtime_handle(
           sputnik::runtime::Value::io_value(request));
       NativeValue result =
-          sputnik_native_call_closure(block_, {native_request});
+          sputnik_native_call_scoped_closure(block_, {native_request});
       if (result.tag == NativeValue::Tag::RuntimeHandle) {
         const sputnik::runtime::Value &runtime_result =
             as_native_runtime_handle(result)->value;
@@ -21920,7 +21970,7 @@ private:
     out << "    try {\n";
     out << "      NativeValue native_request = NativeValue::runtime_handle("
            "sputnik::runtime::Value::io_value(request));\n";
-    out << "      NativeValue result = sputnik_native_call_closure("
+    out << "      NativeValue result = sputnik_native_call_scoped_closure("
            "block_, {native_request});\n";
     out << "      if (result.tag == NativeValue::Tag::RuntimeHandle) {\n";
     out << "        const sputnik::runtime::Value &runtime_result = "
@@ -22035,7 +22085,7 @@ private:
            "bool direct_result) {\n";
     out << "    try {\n";
     out << "      NativeValue native_result = "
-           "sputnik_native_call_closure(block_, native_args);\n";
+           "sputnik_native_call_scoped_closure(block_, native_args);\n";
     out << "      if (direct_result) {\n";
     out << "        sputnik::runtime::Value result;\n";
     out << "        if (direct_native_value(native_result, &result)) "
@@ -22174,7 +22224,7 @@ static bool native_http_try_fast_headers_send(
       return false;
     }
     for (const auto &[name, value] : values.pairs()) {
-      (void)sputnik_native_call_closure(
+      (void)sputnik_native_call_scoped_closure(
           block, {NativeValue::heap_string(name),
                   NativeValue::heap_string(value)});
     }
@@ -23480,7 +23530,7 @@ static NativeValue native_channel_send(
     out << "  if (!scoped_query) return result;\n";
     out << "  try {\n";
     out << "    NativeValue block_result = "
-           "sputnik_native_call_closure(block, {result});\n";
+           "sputnik_native_call_scoped_closure(block, {result});\n";
     out << "    (void)native_http_send(result, \"close!\", {}, {}, "
            "NativeValue::nullv());\n";
     out << "    return block_result;\n";
@@ -23574,7 +23624,7 @@ static NativeValue native_channel_send(
   out << "      auto function = [state, block]() mutable {\n";
   out << "        NativeCycleScope cycle_scope;\n";
   out << "        try {\n";
-  out << "          NativeValue value = sputnik_native_call_closure(block, {});\n";
+  out << "          NativeValue value = sputnik_native_call_scoped_closure(block, {});\n";
   out << "          std::lock_guard<std::mutex> guard(state->mutex);\n";
   out << "          state->value = std::move(value);\n";
   out << "          state->has_value = true;\n";
@@ -23701,7 +23751,7 @@ static NativeValue native_channel_send(
            "*args.begin()));\n";
   }
   out << "      try {\n";
-  out << "        NativeValue result = sputnik_native_call_closure(block, {});\n";
+  out << "        NativeValue result = sputnik_native_call_scoped_closure(block, {});\n";
   out << "        (void)owned_context->pop_scope(token);\n";
   out << "        return result;\n";
   out << "      } catch (...) {\n";
@@ -23776,12 +23826,12 @@ static NativeValue native_channel_send(
   out << "  if (selector == \"or_else\" && args.size() == 0U && "
          "block.tag != NativeValue::Tag::Null) return result.is_ok "
          "? result.payload : "
-         "sputnik_native_call_closure(block, {result.payload});\n";
+         "sputnik_native_call_scoped_closure(block, {result.payload});\n";
   out << "  if (selector == \"map\" && args.size() == 0U && "
          "block.tag != NativeValue::Tag::Null) {\n";
   out << "    if (!result.is_ok) return receiver;\n";
   out << "    return NativeValue::result(true, "
-         "sputnik_native_call_closure(block, {result.payload}));\n";
+         "sputnik_native_call_scoped_closure(block, {result.payload}));\n";
   out << "  }\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
@@ -23813,7 +23863,7 @@ static NativeValue native_channel_send(
   out << "  if (selector != \"update\" || args.size() != 0U || "
          "block.tag == NativeValue::Tag::Null) throw NativeBailout();\n";
   out << "  NativeValue next = "
-         "sputnik_native_call_closure(block, {atomic.value});\n";
+         "sputnik_native_call_scoped_closure(block, {atomic.value});\n";
   out << "  native_cycle_write_barrier(receiver, next);\n";
   out << "  atomic.value = next;\n";
   out << "  return next;\n";
@@ -23834,7 +23884,7 @@ static NativeValue native_channel_send(
   out << "  NativeCycleSuspension suspension;\n";
   out << "  std::unique_lock<std::mutex> guard(mutex.mutex);\n";
   out << "  suspension.resume();\n";
-  out << "  return sputnik_native_call_closure(block, {});\n";
+  out << "  return sputnik_native_call_scoped_closure(block, {});\n";
   out << "}\n\n";
   out << "static NativeValue native_error_send("
          "const NativeValue &receiver, const std::string &selector, "
@@ -25600,6 +25650,7 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
   sputnik::runtime::NativeCallValueArena<NativeValue> arena;
   std::optional<NativeRaised> raised;
   std::optional<NativeNonlocalReturn> nonlocal_return;
+  std::optional<NativeThrown> scoped_break;
   std::string error_name;
   std::string error_message;
 
@@ -25865,6 +25916,8 @@ static SputnikStatus sputnik_native_ext_call_block(void *opaque, SputnikValue bl
     state->raised.emplace(raised);
   } catch (const NativeNonlocalReturn &signal) {
     state->nonlocal_return.emplace(signal);
+  } catch (const NativeThrown &signal) {
+    state->scoped_break.emplace(signal);
   } catch (const sputnik::runtime::RuntimeTaskCancelled &) {
     state->fail("CancelledError", "task cancelled");
   } catch (const std::exception &error) {
@@ -25942,6 +25995,7 @@ static NativeValue sputnik_native_extension_invoke_inline(
                    sputnik_native_ext_ops(), &state,
                    reinterpret_cast<SputnikFreeFn>(fn), handles.data(),
                    handles.size());
+  if (state.scoped_break.has_value()) throw std::move(*state.scoped_break);
   if (state.nonlocal_return.has_value()) throw std::move(*state.nonlocal_return);
   if (state.raised.has_value()) throw std::move(*state.raised);
   if (!state.error_name.empty() || outcome.status != SPUTNIK_OK) {
@@ -30342,8 +30396,9 @@ int main(int argc, char **argv) {
       return validated.ok ? 0 : 1;
     }
     if (argc != 3 ||
-        (std::string(argv[1]) != "lex" && std::string(argv[1]) != "parse" &&
-         std::string(argv[1]) != "bind" && std::string(argv[1]) != "typed" &&
+        (std::string(argv[1]) != "lex" && std::string(argv[1]) != "lint" &&
+         std::string(argv[1]) != "parse" && std::string(argv[1]) != "bind" &&
+         std::string(argv[1]) != "typed" &&
          std::string(argv[1]) != "effects-check" &&
          std::string(argv[1]) != "hir" && std::string(argv[1]) != "mir" &&
          std::string(argv[1]) != "mir-dump" &&
@@ -30382,9 +30437,9 @@ int main(int argc, char **argv) {
     }
 
     sputnik::parser::Parser parser(lex_result.tokens);
-    if (command == "parse" || command == "bind" || command == "typed" ||
-        command == "effects-check" || command == "hir" || command == "mir" ||
-        command == "mir-dump" || command == "mir-verify" ||
+    if (command == "lint" || command == "parse" || command == "bind" ||
+        command == "typed" || command == "effects-check" || command == "hir" ||
+        command == "mir" || command == "mir-dump" || command == "mir-verify" ||
         command == "native" || command == "native-dump" ||
         command == "native-verify" || command == "bc" ||
         command == "bc-disasm" || command == "symbols") {
@@ -30394,6 +30449,11 @@ int main(int argc, char **argv) {
         std::cerr << sputnik::lexer::diagnostics_to_json(
             parse_result.diagnostics);
         return 1;
+      }
+      if (command == "lint") {
+        const auto warnings = sputnik::lint::one_liners(parse_result.items);
+        std::cout << sputnik::lexer::diagnostics_to_json(warnings);
+        return 0;
       }
       if (command == "bind" || command == "typed" ||
           command == "effects-check" || command == "hir" || command == "mir" ||

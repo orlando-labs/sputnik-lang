@@ -1854,6 +1854,8 @@ CodeEmitter::CodeEmitter(Emitter *owner, const hir::Procedure *procedure,
          owner_->intern_string(capture.source_name)});
   }
 
+  if (procedure_->scoped_break_block)
+    code_.flags |= kCodeFlagScopedBreakBlock;
   if (code_.kind == CodeKind::Block && procedure_->signature != nullptr) {
     if (procedure_->needs_nonlocal_return_target) {
       code_.flags |= kCodeFlagNonlocalReturnBlock;
@@ -2466,7 +2468,7 @@ void CodeEmitter::compile_expr_for_effect(const ast::Expr &expr) {
     compile_raise(expr);
     return;
   }
-  if (expr.kind == "HThrow") {
+  if (expr.kind == "HThrow" || expr.kind == "HScopedBreak") {
     compile_throw(expr);
     return;
   }
@@ -3662,6 +3664,10 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
     }
   }
 
+  if (bool_field(expr, "forbidden_block_break"))
+    diag(expr.span, "BC2001",
+         "break is forbidden in Sputnik iterator blocks; use next, find or "
+         "throw/catch");
   std::vector<InstructionOperand> operands;
   const std::uint32_t dst = alloc_temp();
   operands.push_back({dst, false});
@@ -3676,9 +3682,17 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
     const bool known_collection = receiver->kind == "HListLiteral" ||
         receiver->kind == "HTupleLiteral" || receiver->kind == "HSetLiteral" ||
         receiver->kind == "HMapLiteral";
-    if (known_collection && block && block->kind == "HClosure") {
+    const auto selector = string_field(expr, "selector");
+    const bool chainable = selector == "each" || selector == "map" ||
+                           selector == "select" || selector == "reject" ||
+                           selector == "flat_map" || selector == "reduce" ||
+                           selector == "find" || selector == "any?" ||
+                           selector == "all?" || selector == "take_while" ||
+                           selector == "drop_while";
+    if (known_collection && chainable && block && block->kind == "HClosure") {
       const auto *procedure = owner_->procedure_by_id(string_field(*block, "procedure"));
-      if (procedure && contains_foreign_break(procedure->body.get()))
+      if (procedure && (procedure->scoped_break_block ||
+                        contains_foreign_break(procedure->body.get())))
         diag(block->span, "BC2001", "break is forbidden in Sputnik iterator blocks; use find/any?/take_while or throw/catch");
     }
     const std::uint32_t recv_reg = compile_expr(*receiver);
@@ -3959,8 +3973,9 @@ void CodeEmitter::compile_throw(const ast::Expr &expr) {
     value_reg = alloc_temp();
     emit_instruction(Opcode::LoadNull, {{value_reg, false}}, expr.span);
   }
-  emit_instruction(Opcode::Throw, {{tag_reg, false}, {value_reg, false}},
-                   expr.span);
+  emit_instruction(expr.kind == "HScopedBreak" ? Opcode::BreakScoped
+                                               : Opcode::Throw,
+                   {{tag_reg, false}, {value_reg, false}}, expr.span);
 }
 
 void CodeEmitter::compile_ensure_for_normal_path(const ast::Expr *ensure_body,
@@ -4968,6 +4983,12 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     emit_instruction(Opcode::Send, std::move(operands), expr.span);
     return dst;
   }
+  if (expr.kind == "HSeq") {
+    const auto dst = alloc_temp();
+    compile_seq_to_reg(expr, dst, expr.span);
+    last_value_reg_ = dst;
+    return dst;
+  }
   if (expr.kind == "HClosure") {
     return compile_closure(expr);
   }
@@ -4986,6 +5007,13 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
   if (expr.kind == "HTry") {
     return compile_try(expr);
   }
+  if (expr.kind == "HBreakScope") {
+    const auto reg = compile_expr(*node_field(expr, "tag"));
+    emit_instruction(
+        Opcode::BreakScope,
+        {{reg, false}, {bool_field(expr, "active") ? 1 : 0, false}}, expr.span);
+    return reg;
+  }
   if (expr.kind == "HCatch") {
     return compile_catch(expr);
   }
@@ -4993,7 +5021,7 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     compile_raise(expr);
     return alloc_temp();
   }
-  if (expr.kind == "HThrow") {
+  if (expr.kind == "HThrow" || expr.kind == "HScopedBreak") {
     compile_throw(expr);
     return alloc_temp();
   }

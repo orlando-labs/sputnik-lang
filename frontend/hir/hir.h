@@ -37,6 +37,7 @@ struct Procedure {
   std::string owner;
   // A call-site block returns through the concrete activation which created
   // it. Standalone lambdas keep ordinary local-return semantics.
+  bool scoped_break_block = false;
   bool nonlocal_return_block = false;
   bool needs_nonlocal_return_target = false;
   lexer::Span span;

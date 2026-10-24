@@ -257,6 +257,19 @@ void test_ambient_export_read_uses_qualified_lookup() {
   expect(false, "ambient export LookupConst instruction was not found");
 }
 
+void test_bigint_prelude_is_not_a_notebook_input() {
+  const CellSource source = cell(602, "large = BigInt(\"18446744073709551616\")\n");
+  const DependencyGraph graph({source});
+  expect(graph.missing_names(source.id).empty(),
+         "BigInt must be recognized as a native prelude constant");
+  NotebookImage image;
+  const auto result = sputnik::notebook::compile_cell(source, graph, image);
+  expect(result.ok && result.inputs.empty(),
+         "BigInt construction must not require a notebook input");
+  expect(has_opcode(code_for(image, result.code_id), Opcode::LookupConst),
+         "BigInt must compile as a runtime constant lookup");
+}
+
 void test_native_prelude_reads_and_shadowing() {
   const CellSource source = cell(601, "answer = system\n");
   const DependencyGraph graph({source});
@@ -653,6 +666,7 @@ int main() {
   test_repeated_external_reads_share_one_cell_input();
   test_ambient_export_read_uses_qualified_lookup();
   test_native_prelude_reads_and_shadowing();
+  test_bigint_prelude_is_not_a_notebook_input();
   test_notebook_provider_shadows_ambient_export();
   test_malformed_ambient_path_is_diagnostic();
   test_duplicate_code_ids_and_diagnostics();

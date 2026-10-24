@@ -359,6 +359,14 @@ void test_compound_assignment_eval() {
   expect(view.result == "3", "compound assignment should return updated value");
 }
 
+void test_bigint_constructor_uses_native_prelude() {
+  const EvalView bigint = evaluate_prefix(
+      {make_cell("large = BigInt(\"18446744073709551616\")\n"
+                 "(large * 2).str\n")}, 0);
+  expect(bigint.ok && bigint.result == "\"36893488147419103232\"",
+         "notebook cells must construct BigInt without missing-input errors");
+}
+
 void test_range_literal_uses_native_prelude() {
   std::vector<Cell> cells;
   cells.push_back(make_cell("(0..5)\n"));
@@ -836,6 +844,7 @@ int main() {
   test_independent_cell_uses_isolated_eval();
   test_compound_assignment_eval();
   test_range_literal_uses_native_prelude();
+  test_bigint_constructor_uses_native_prelude();
   test_cell_can_read_binding_initialized_earlier_in_cell();
   test_versioned_write_reads_previous_provider();
   test_evaluate_from_runs_only_dependent_watch_cells();

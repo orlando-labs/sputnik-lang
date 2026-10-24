@@ -1436,6 +1436,7 @@ bool native_prelude_name_impl(const std::string &name) {
       "Barrier",
       "Base64",
       "Base64Url",
+      "BigInt",
       "Bool",
       "Bytes",
       "Channel",

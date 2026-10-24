@@ -554,7 +554,8 @@ test: build-tests
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q 'NativeClosure \*invocation = as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
 	! grep -q 'NativeClosure invocation = \*as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
-	test "$$(grep -c 'native_append_trace_frame(raised' $(BUILD_DIR)/native-sequence-core.native.cpp)" -eq 2
+	grep -q 'if (native_trace_at_dispatch(code_id)) native_append_trace_frame(raised' $(BUILD_DIR)/native-sequence-core.native.cpp
+	test "$$(grep -c '^[[:space:]]*native_append_trace_frame(raised' $(BUILD_DIR)/native-sequence-core.native.cpp)" -eq 1
 	$(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core.out
 	grep -q '^26$$' $(BUILD_DIR)/native-sequence-core.out
 	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_sequence_core/main.s > $(BUILD_DIR)/native-sequence-core.dump
@@ -664,7 +665,8 @@ test: build-tests
 	grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	grep -q 'static constexpr NativeTraceLocationRecord kNativeTraceLocations' $(BUILD_DIR)/native-exception-state.native.cpp
 	grep -q 'static SPUTNIK_NATIVE_COLD NativeTraceFrame native_trace_frame' $(BUILD_DIR)/native-exception-state.native.cpp
-	test "$$(grep -c 'native_append_trace_frame(raised' $(BUILD_DIR)/native-exception-state.native.cpp)" -eq 1
+	grep -q 'if (native_trace_at_dispatch(code_id)) native_append_trace_frame(raised' $(BUILD_DIR)/native-exception-state.native.cpp
+	test "$$(grep -c '^[[:space:]]*native_append_trace_frame(raised' $(BUILD_DIR)/native-exception-state.native.cpp)" -eq 0
 	$(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state.out
 	grep -q '^74$$' $(BUILD_DIR)/native-exception-state.out
 	$(BUILD_DIR)/sputnik build corpus/run/native_io_state/source.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-io-state > $(BUILD_DIR)/native-io-state-build.json
@@ -979,9 +981,11 @@ conformance: $(BUILD_DIR)/sputniktest
 	$(BUILD_DIR)/sputniktest run corpus --bundle M11
 
 backend-equivalence: $(BUILD_DIR)/sputnik
+	python3 tests/backend_equivalence_runner_test.py $(BUILD_DIR)/sputnik
 	python3 tools/backend_equivalence.py
 
 spec-sync-check:
+	python3 tests/spec_sync_test.py
 	python3 tools/spec_sync.py check
 
 .PHONY: test-conditional-assignment
@@ -1044,6 +1048,11 @@ test: test-native-byte-buffer
 test-native-bigint: $(BUILD_DIR)/sputnik
 	python3 tests/native_bigint_test.py $(BUILD_DIR)/sputnik
 test: test-native-bigint
+
+.PHONY: test-native-throw-fallback
+test-native-throw-fallback: $(BUILD_DIR)/sputnik
+	python3 tests/native_throw_fallback_test.py $(BUILD_DIR)/sputnik
+test: test-native-throw-fallback
 
 .PHONY: test-effect-iteration
 test: test-effect-iteration

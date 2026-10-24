@@ -42,11 +42,13 @@ def main():
         environment.pop("SPUTNIK_PKG_HOME", None)
         environment.pop("SPUTNIK_PKG_REGISTRY", None)
         environment["SPUTNIK_NATIVE_EXT_CACHE"] = str(root / "native cache")
+        environment.setdefault("SPUTNIK_NATIVE_RT_CACHE",
+                               str(Path(binary).parent / "interop-runtime-cache"))
 
-        def cli(*args, env=None, ok=True):
+        def cli(*args, env=None, ok=True, timeout=90):
             result = subprocess.run([binary, *map(str, args)], cwd=cwd,
                                     env=environment if env is None else env,
-                                    text=True, capture_output=True, timeout=90)
+                                    text=True, capture_output=True, timeout=timeout)
             output = result.stdout + result.stderr
             assert (result.returncode == 0) == ok, (args, result.returncode, output)
             return output
@@ -140,7 +142,8 @@ def main():
         program.write_text("from acme.calc import answer\nprint(answer())\n")
         assert cli("run", program, env=custom_env).strip() == "42"
         executable = cwd / "macro-native"
-        cli("build", program, "--require-full-native", "-o", executable, env=custom_env)
+        cli("build", program, "--require-full-native", "-o", executable,
+            env=custom_env, timeout=600)
         native = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
         assert native.returncode == 0 and native.stdout.strip() == "42", native.stderr
 

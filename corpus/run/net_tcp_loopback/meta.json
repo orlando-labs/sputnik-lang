@@ -3,5 +3,6 @@
   "phase": "run",
   "source": "source.s",
   "expect": "expect.run.json",
-  "entry": "probe"
+  "entry": "probe",
+  "grants": ["net.listen", "net.connect"]
 }

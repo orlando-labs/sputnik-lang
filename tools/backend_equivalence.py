@@ -3,12 +3,13 @@
 
 Every `corpus/run` fixture is executed through both backends:
 
-- `sputnik build --target bytecode-wrapper`: the VM lane (semantic oracle);
+- `sputnik run`: the VM lane (semantic oracle);
 - `sputnik build --target native`: the cpp-bytecode-direct lane. Incomplete
   coverage may use the whole-program bailout/restart; full coverage emits no
   VM restart path.
 
-Both executables must produce identical stdout, stderr, and exit codes. This
+Both lanes receive the grants declared in fixture metadata and must produce
+identical stdout, stderr, and exit codes. This
 is the cheap guard for all future native-coverage widening: any divergence
 between the native lane and the VM shows up as a mismatch here.
 
@@ -84,24 +85,25 @@ def main() -> int:
         source_path = WORK_DIR / f"{name}.s"
         source_path.write_text(build_fixture_source(fixture, meta))
 
-        lanes: dict[str, tuple[int, str, str] | None] = {}
-        build_failed = False
-        for lane, target in (("vm", "bytecode-wrapper"), ("native", "native")):
-            exe = WORK_DIR / f"{name}.{lane}"
+        grants = [arg for grant in meta.get("grants", []) for arg in ("--grant", grant)]
+        lane = "vm"
+        try:
+            vm_result = run_capture([str(SPUTNIK), "run", str(source_path), *grants])
+            lane = "native build"
+            exe = WORK_DIR / f"{name}.native"
             code, out, err = run_capture([
-                str(SPUTNIK), "build", str(source_path), "--target", target,
-                "-o", str(exe), "--out-dir", str(WORK_DIR),
-            ])
+                str(SPUTNIK), "build", str(source_path), "--target", "native",
+                "-o", str(exe), "--out-dir", str(WORK_DIR), *grants,
+            ], timeout=300)
             if code != 0:
-                failures.append(f"{name}: {lane} lane build failed:\n{err or out}")
-                build_failed = True
-                break
-            lanes[lane] = run_capture([str(exe)])
-        if build_failed:
+                failures.append(f"{name}: native lane build failed:\n{err or out}")
+                continue
+            lane = "native"
+            native_result = run_capture([str(exe)])
+        except subprocess.TimeoutExpired as error:
+            failures.append(f"{name}: {lane} timed out after {error.timeout}s")
             continue
 
-        vm_result = lanes["vm"]
-        native_result = lanes["native"]
         if vm_result == native_result:
             passed += 1
             continue

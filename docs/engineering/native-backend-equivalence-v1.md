@@ -5,22 +5,28 @@ Status: active guard; run via `make backend-equivalence`
 
 ## What it checks
 
-Every `corpus/run` fixture is compiled into two executables with
-`sputnik build`:
+Every `corpus/run` fixture is executed through both backends:
 
-- `--target bytecode-wrapper`: the VM lane (the semantic oracle);
-- `--target native`: the `cpp-bytecode-direct-v1` lane, which runs generated
+- `sputnik run`: the VM lane (the semantic oracle);
+- `sputnik build --target native`: the `cpp-bytecode-direct-v1` lane, which runs generated
   C++ for eligible code objects. Coverage-incomplete builds may fall back to
   the VM through the whole-program `NativeBailout` restart. Complete native
   body coverage emits no VM entry or bailout restart path, but is reported
   separately from VM-independent execution: runtime-backed stdlib sends may
   still cross the explicitly reported `vm-stdlib-send-v1` bridge.
 
-Both executables must produce byte-identical stdout, stderr, and exit codes.
+Both lanes must produce byte-identical stdout, stderr, and exit codes.
 Fixtures whose `meta.json` entry is a callable are driven by appending an
 entry call to module init, so the executable's printed init result is the
 entry result. Fault fixtures (e.g. `OverflowError`, `ZeroDivisionError`)
 compare the full trace output and the nonzero exit code.
+
+Fixture metadata may declare a `grants` array, passed as `--grant` to VM Run
+and native build. Process and loopback fixtures use explicit grants so they
+exercise the intended IO instead of comparing two permission failures. The VM
+lane uses Run because bytecode wrappers do not accept embedded grants. Native
+builds have a 300-second limit; execution has a 60-second limit. A timeout fails
+that fixture and the harness continues collecting failures from the rest.
 
 ## The bailout/restart soundness invariant
 
@@ -162,6 +168,12 @@ program to the whole-program restart. The generated executable lazily
 decodes its embedded bytecode into one `RuntimeWorld` (module init is NOT
 run inside it) and executes just that code object per call across a scalar
 value bridge.
+
+Source `throw` is excluded from the scalar VM bridge because that VM cannot
+see a dynamically enclosing native `catch`. Such code makes the entry use the
+whole-program VM path before any effect; private compiler break packets retain
+their existing direct-native lowering. `make test-native-throw-fallback` checks
+iterator catch propagation, a preceding output printed once, and uncaught faults.
 
 Soundness rests on three constraints, each enforced where stated:
 

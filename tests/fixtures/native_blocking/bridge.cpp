@@ -16,8 +16,6 @@ bool pressure_released = false;
 }
 
 extern "C" {
-uint32_t sputnik_ext_abi_version() { return SPUTNIK_EXT_ABI_VERSION; }
-
 SputnikStatus blocking_worker(SputnikCtx *cx, const SputnikValue *, size_t,
                              SputnikValue *out) {
   *out = sputnik_make_bool(cx, sputnik::runtime::current_runtime_is_blocking_ffi_thread());

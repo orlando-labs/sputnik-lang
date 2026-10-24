@@ -253,12 +253,15 @@ def check_links() -> list[str]:
             resolved, anchor = resolve_link(source, target)
             if resolved is None:
                 continue
-            if not resolved.exists():
-                errors.append(f"{rel(source)}: missing link target {target}")
-                continue
             try:
                 resolved_rel = rel(resolved)
             except ValueError:
+                # Sibling repositories are optional in a standalone checkout.
+                # Check this repository's files and anchors independently of
+                # which other projects happen to be present on the host.
+                continue
+            if not resolved.exists():
+                errors.append(f"{rel(source)}: missing link target {target}")
                 continue
             if anchor and resolved.suffix.lower() in {".md", ".markdown"}:
                 available = anchors.get(resolved_rel)

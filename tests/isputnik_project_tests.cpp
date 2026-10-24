@@ -161,8 +161,9 @@ void expect_documents_equal(const sputnik::notebook::ProjectDocument &left,
 
 void test_load_is_document_only_and_roundtrip_preserves_unrelated_sheets() {
   const sputnik::notebook::ProjectDocument original = project_document();
-  sputnik::notebook::LoadedProject project;
-  project.document = original;
+  TempDirectory temporary;
+  auto project =
+      sputnik::notebook::create_project(temporary.path / "book", original);
 
   Session session;
   load_project_into_session(&session, project);
@@ -191,8 +192,9 @@ void test_code_edit_reorder_delete_and_new_ids_are_persisted() {
   sputnik::notebook::ProjectDocument original = project_document();
   original.sheets[1].cells.clear();
   Session session;
-  sputnik::notebook::LoadedProject project;
-  project.document = original;
+  TempDirectory temporary;
+  auto project =
+      sputnik::notebook::create_project(temporary.path / "book", original);
   load_project_into_session(&session, project);
 
   const auto deleted_id = session.cells[1].id;
@@ -234,8 +236,9 @@ void test_opaque_cells_are_read_only_and_block_evaluation() {
   opaque.extra["native"] = R"({"number":9007199254740993})";
   original.sheets[0].cells.push_back(opaque);
 
-  sputnik::notebook::LoadedProject project;
-  project.document = original;
+  TempDirectory temporary;
+  auto project =
+      sputnik::notebook::create_project(temporary.path / "book", original);
   Session session;
   load_project_into_session(&session, project);
   expect(session.cells.back().kind == "markdown" &&
@@ -274,8 +277,9 @@ void test_text_cells_roundtrip_and_project_edits() {
   text.extra["native"] = R"({"selection":2})";
   original.sheets[0].cells.push_back(text);
 
-  sputnik::notebook::LoadedProject project;
-  project.document = original;
+  TempDirectory temporary;
+  auto project =
+      sputnik::notebook::create_project(temporary.path / "book", original);
   Session session;
   load_project_into_session(&session, project);
   expect(session.cells.back().kind == "text" &&
@@ -313,8 +317,9 @@ void test_text_cells_roundtrip_and_project_edits() {
 }
 
 void test_mixed_text_execution_and_diagnostic_identity() {
-  sputnik::notebook::LoadedProject project;
-  project.document = project_document();
+  TempDirectory temporary;
+  auto project = sputnik::notebook::create_project(
+      temporary.path / "book", project_document());
   auto &cells = project.document.sheets.front().cells;
   cells[0].source = "x = 21\nx\n";
   cells[1].source = "x * 2\n";

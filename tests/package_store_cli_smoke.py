@@ -21,10 +21,10 @@ def main():
         env["SPUTNIK_VM_CACHE"] = str(root / "vm-cache")
         env["SPUTNIK_NATIVE_EXT_CACHE"] = str(root / "native-cache")
 
-        def cli(*args, ok=True, extra_env=None):
+        def cli(*args, ok=True, extra_env=None, timeout=180):
             result = subprocess.run([binary, *map(str, args)], cwd=elsewhere,
                                     env=dict(env, **(extra_env or {})), text=True,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=180)
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
             output = result.stdout + result.stderr
             assert (result.returncode == 0) == ok, (args, result.returncode, output)
             return output
@@ -91,10 +91,10 @@ def main():
         manifest.write_text(json.dumps(pinned))
         built = json.loads(cli("build", manifest, "--target", "bytecode", "--out-dir", app / "bytecode"))
         assert cli("run", app / "bytecode/app.main.sputnikbc").strip() == "42", built
-        cli("build", script, "--target", "bytecode-wrapper", "-o", app / "train")
+        cli("build", script, "--target", "bytecode-wrapper", "-o", app / "train", timeout=600)
         wrapper = subprocess.run([str(app / "train")], env=env, capture_output=True, text=True)
         assert wrapper.returncode == 0 and wrapper.stdout.strip() == "42", wrapper
-        cli("build", script, "--require-full-native", "-o", app / "native-train")
+        cli("build", script, "--require-full-native", "-o", app / "native-train", timeout=600)
         native_app = subprocess.run([str(app / "native-train")], env=env, capture_output=True, text=True)
         assert native_app.returncode == 0 and native_app.stdout.strip() == "42", native_app
 

@@ -11,7 +11,7 @@ def main():
   roles = users.counts: $it[:role]
   tallied_roles = users.tally: $it[:role]
   groups = users.group: $it[:role]
-  sizes = groups.transform_values: $it.size
+  sizes = groups.transformed_values: $it.size
   check_counts(roles == {"admin": 2, "member": 1}, "key block")
   check_counts(roles == tallied_roles and roles == sizes, "group equivalence")
   check_counts(roles.keys == ["admin", "member"], "key order")

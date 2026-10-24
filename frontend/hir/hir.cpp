@@ -3059,7 +3059,9 @@ private:
         "sort",     "sort_by",    "group",           "partition",
         "count",    "counts",     "tally",           "uniq",
         "min",      "max",        "min_by",          "max_by",
-        "sum",      "product"};
+        "sum",      "product",    "transformed",     "transformed_keys",
+        "transformed_values",     "transform!",      "transform_keys!",
+        "transform_values!"};
     const bool chainable = chainable_selectors.count(selector) != 0;
     for (auto *block : blocks) {
       if (chainable && block && block->kind == "HClosure") {

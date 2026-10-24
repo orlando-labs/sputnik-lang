@@ -91,7 +91,8 @@ void usage(std::ostream &out) {
   out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend cpu|cuda|mps] [--bundle none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE]\n";
   out << "  sputnik pkg login [--namespace <name>] [--registry <url>] [--credentials <file>]\n";
   out << "  sputnik pkg versions <name> [--registry URL] [--credentials FILE] [--json]\n";
-  out << "  sputnik pkg variants <name>@<version> [--registry URL] [--credentials FILE] [--json]\n";
+  out << "  sputnik pkg variants <name>@<version> [--registry URL] "
+         "[--credentials FILE] [--json [--check-host]]\n";
   out << "  sputnik pkg whoami|logout [--registry <url>] [--credentials <file>]\n";
   out << "  sputnik pkg publish <file.sputnikpkg> [--registry <url>] [--credentials <file>] [--session <file>] [--allow-native-large]\n";
   out << "  sputnik pkg uninstall|remove <name> [--version V] [--variant ID]\n";
@@ -1452,8 +1453,8 @@ bool native_cpp_collection_selector(const std::string &selector,
            selector == "find_with_index" || selector == "each_with_index" ||
            selector == "map" || selector == "select" || selector == "reject" ||
            selector == "find" || selector == "any?" || selector == "all?" ||
-           selector == "none?" || selector == "transform_keys" ||
-           selector == "transform_values") &&
+           selector == "none?" || selector == "transformed_keys" ||
+           selector == "transformed_values") &&
           pos_count == 0U) ||
          (selector == "reduce" && (pos_count == 0U || pos_count == 1U)) ||
          ((selector == "count" || selector == "length" || selector == "size" ||
@@ -1517,7 +1518,7 @@ bool native_cpp_collection_mutator_selector(const std::string &selector,
            selector == "delete_if!" || selector == "keep_if!" ||
            selector == "select!" || selector == "reject!" ||
            selector == "map!" || selector == "filter_map!" ||
-           selector == "transform_keys!" ||
+           selector == "transform!" || selector == "transform_keys!" ||
            selector == "transform_values!") &&
           pos_count == 0U) ||
          (selector == "flatten!" && pos_count <= 1U) ||
@@ -1533,7 +1534,7 @@ bool native_cpp_collection_query_selector(const std::string &selector,
   return ((selector == "filter_map" || selector == "flat_map" ||
            selector == "group" || selector == "find_index" ||
            selector == "take_while" || selector == "drop_while" ||
-           selector == "partition" || selector == "transform") &&
+           selector == "partition" || selector == "transformed") &&
           pos_count == 0U) ||
          ((selector == "uniq" || selector == "tally" || selector == "counts" ||
            selector == "each_pair") && pos_count == 0U) ||
@@ -2080,10 +2081,7 @@ bool native_cpp_lookup_const_supported(
     return true;
   }
   static const std::set<std::string> supported = {
-      // BigInt has no NativeValue payload yet. Keep code that constructs one
-      // on the per-function VM lane instead of admitting a guaranteed native
-      // bailout from the callable type tag.
-      "Str",          "Int",                         "Float",
+      "Str",          "Int",          "BigInt",       "Float",
       "Bool",         "Symbol",       "Null",        "Object",
       "Array",        "Tuple",        "Set",         "Map",
       "StrictMap",
@@ -2092,7 +2090,7 @@ bool native_cpp_lookup_const_supported(
       "Base64",       "Base64Url",    "Hex",         "Digest",
       "Signature",
       "Benchmark",    "Url",          "ArgParser",   "Regexp",
-      "fs",           "io",           "task",         "SecureRandom",
+      "fs",           "io",           "ByteBuffer",   "task",         "SecureRandom",
       "Uuid",         "UUID",
       "Range",        "Time",         "TimePeriod",  "Atomic",
       "Channel",      "Mutex", "system"};
@@ -2596,15 +2594,16 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
             selector == "drop_while" || selector == "partition" ||
             selector == "count" || selector == "uniq" || selector == "tally" ||
             selector == "counts" || selector == "each_pair" ||
-            selector == "transform" || selector == "sorted" ||
+            selector == "transformed" || selector == "sorted" ||
             selector == "delete_if!" || selector == "keep_if!" ||
             selector == "select!" || selector == "reject!" ||
             selector == "map!" || selector == "filter_map!" ||
             selector == "sort!" || selector == "uniq!" || selector == "min" ||
             selector == "max" || selector == "minmax" || selector == "merge!" ||
-            selector == "update!" || selector == "transform_keys!" ||
-            selector == "transform_values!" || selector == "transform_keys" ||
-            selector == "transform_values" || selector == "find" ||
+            selector == "update!" || selector == "transform!" ||
+            selector == "transform_keys!" ||
+            selector == "transform_values!" || selector == "transformed_keys" ||
+            selector == "transformed_values" || selector == "find" ||
             selector == "any?" || selector == "all?" || selector == "none?" ||
             selector == "times") &&
            pos_count == 0U && kw_count == 0U && !no_block) ||
@@ -2682,6 +2681,7 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
         codec_send = true;
       } else if ((selector == "encode" || selector == "decode") &&
                  pos_count == 1U && kw_count <= 1U && no_block) {
+        codec_send = true;
         if (kw_count == 1U) {
           std::uint32_t kw_symbol_id = 0;
           if (!operand_u32_value(instruction, kw_index + 1U, &kw_symbol_id) ||
@@ -2690,13 +2690,12 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
             return false;
           }
           const std::string &kw_name = module.symbols[kw_symbol_id];
-          if ((selector == "encode" && kw_name != "padding") ||
-              (selector == "decode" && kw_name != "mode")) {
-            *reason = "unsupported codec keyword shape";
-            return false;
-          }
+          // User methods may share a selector with a stdlib codec while
+          // accepting unrelated keywords, e.g. SessionCodec.encode(now:).
+          // Leave those sends to the user-method eligibility check below.
+          codec_send = selector == "encode" ? kw_name == "padding"
+                                             : kw_name == "mode";
         }
-        codec_send = true;
       }
       const bool digest_send =
           (((selector == "crc32" || selector == "md5" || selector == "sha1" ||
@@ -2972,6 +2971,19 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
             pos_count == 0U) ||
            (selector == "write_str" && pos_count == 1U) ||
            (selector == "write_line" && pos_count <= 1U));
+      const bool byte_buffer_send = kw_count == 0U && no_block &&
+          ((selector == "ByteBuffer" && pos_count <= 1U) ||
+           ((selector == "wrap" || selector == "put!" ||
+             selector == "put_all!" || selector == "get_at") && pos_count == 1U) ||
+           ((selector == "capacity" || selector == "position" ||
+             selector == "limit" || selector == "remaining" ||
+             selector == "full?" || selector == "flip!" ||
+             selector == "rewind!" || selector == "compact!" ||
+             selector == "get!" || selector == "copy_bytes" ||
+             selector == "freeze_bytes!" || selector == "owner" ||
+             selector == "shareable?") && pos_count == 0U) ||
+           ((selector == "read_slice" || selector == "write_slice") && pos_count <= 1U) ||
+           (selector == "slice" && (pos_count == 1U || pos_count == 2U)));
       const bool task_send =
           (kw_count == 0U &&
            (((selector == "spawn" || selector == "async") &&
@@ -3147,7 +3159,7 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !fs_read_send && !fs_direct_send && !atomic_send && !mutex_send &&
-          !channel_send && !io_send && !task_send && !http_send &&
+          !channel_send && !io_send && !byte_buffer_send && !task_send && !http_send &&
           !system_send && !threaded_send && !sputnik_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send) {
@@ -3160,7 +3172,7 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
           !random_send && !time_send && !uuid_send && !regexp_send &&
           !regexp_replace_send && !url_send && !math_send && !benchmark_send &&
           !argparser_send && !fs_path_send && !fs_read_send && !fs_direct_send && !atomic_send && !mutex_send &&
-          !channel_send && !io_send && !task_send && !http_send &&
+          !channel_send && !io_send && !byte_buffer_send && !task_send && !http_send &&
           !system_send && !threaded_send && !sputnik_send && !result_send &&
           !error_send &&
           !declared_error_send && !triple_eq_send && !user_send &&
@@ -3328,8 +3340,9 @@ bool native_vm_callable_pure_selector(const std::string &selector) {
       "any?",
       "all?",
       "none?",
-      "transform_keys",
-      "transform_values",
+      "transformed",
+      "transformed_keys",
+      "transformed_values",
       "partition",
       "count_by",
       "tally",
@@ -3421,6 +3434,7 @@ bool native_vm_callable_local_mutator_selector(const std::string &selector) {
       "select!",
       "reject!",
       "map!",
+      "transform!",
       "transform_keys!",
       "transform_values!",
   };
@@ -5764,6 +5778,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
             native_module_expr = "NativeValue::fs_module()";
           } else if (name == "io") {
             native_module_expr = "NativeValue::io_module()";
+          } else if (name == "ByteBuffer") {
+            native_module_expr = "NativeValue::runtime_handle(sputnik::runtime::Value::native_type(sputnik::runtime::RuntimeNativeTypeKind::ByteBuffer))";
           } else if (name == "task") {
             native_module_expr = "NativeValue::task_module()";
           } else if (name == "system") {
@@ -6746,10 +6762,15 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                      ", " + (has_block ? "true" : "false") + ")");
       } else if (selector == "map" || selector == "select" ||
                  selector == "reject" || selector == "find" ||
-                 selector == "transform_keys" ||
-                 selector == "transform_values") {
+                 selector == "transformed_keys" ||
+                 selector == "transformed_values") {
         if (!has_block) {
-          out << "  native_bailout();\n";
+          if (selector == "transformed_keys" || selector == "transformed_values") {
+            out << "  throw NativeRaised{native_named_error(\"TypeError\", \""
+                << selector << " requires a block\")};\n";
+          } else {
+            out << "  native_bailout();\n";
+          }
         } else {
           write_reg_stmt(
               dst, "native_sequence_higher_order(" + read_reg_expr(recv) +
@@ -8774,6 +8795,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include \"runtime/signature.h\"\n";
   out << "#include \"runtime/errors.h\"\n";
   out << "#include \"runtime/io.h\"\n";
+  out << "#include \"runtime/numeric.h\"\n";
   out << "#include \"runtime/system.h\"\n";
   out << "#include \"runtime/net_http_server.h\"\n";
   out << "#include \"runtime/net_http_client.h\"\n";
@@ -8915,7 +8937,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
          "RangeModule, TimeModule, "
          "TimePeriodModule, MutexModule, AtomicModule, ResultOkFunction, "
          "ResultErrFunction, DescFunction, PrintFunction, ErrorClass, Class, "
-         "PackageModule, Bytes, List, "
+         "PackageModule, Bytes, BigInt, List, "
          "Tuple, Set, "
          "Map, Range, "
          "ArgParser, "
@@ -9051,6 +9073,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "  static NativeValue heap_string(std::string text);\n";
   out << "  static NativeValue error_namespace(std::string path);\n";
   out << "  static NativeValue bytes(std::string value);\n";
+  out << "  static NativeValue big_int(std::shared_ptr<sputnik::runtime::BigIntValue> value);\n";
   out << "  static NativeValue list(std::vector<NativeValue> items);\n";
   out << "  static NativeValue tuple(std::vector<NativeValue> items);\n";
   out << "  static NativeValue set(std::vector<NativeValue> items);\n";
@@ -9209,6 +9232,7 @@ private:
   out << "#define SPUTNIK_NATIVE_POOL_NEW\n";
   out << "struct NativeBytes : NativeRcHeader { std::string bytes; "
          "SPUTNIK_NATIVE_POOL_NEW };\n";
+  out << "struct NativeBigInt : NativeRcHeader { std::shared_ptr<sputnik::runtime::BigIntValue> value; };\n";
   out << "struct NativeList : NativeRcHeader { "
          "std::vector<NativeValue> items; "
          "NativeValue lazy_char_source; "
@@ -10118,6 +10142,8 @@ static void native_value_delete_payload(NativeValue::Tag tag, void *payload) {
   switch (tag) {
     case NativeValue::Tag::Bytes:
       delete static_cast<NativeBytes *>(payload); return;
+    case NativeValue::Tag::BigInt:
+      delete static_cast<NativeBigInt *>(payload); return;
     case NativeValue::Tag::List:
       delete static_cast<NativeList *>(payload); return;
     case NativeValue::Tag::Tuple:
@@ -10769,6 +10795,10 @@ static void native_collect_finished_cycles() {
   out << "  out.tag = Tag::ErrorNamespace; "
          "return native_track_value(std::move(out));\n";
   out << "}\n";
+  out << "NativeValue NativeValue::big_int(std::shared_ptr<sputnik::runtime::BigIntValue> value) {\n"
+         "  NativeValue out; auto *box = new NativeBigInt();\n"
+         "  box->value = std::move(value); out.heap_value = box; out.tag = Tag::BigInt;\n"
+         "  return out;\n}\n";
   out << "NativeValue NativeValue::bytes(std::string value) {\n";
   out << "  NativeValue out;\n";
   out << "  auto *bytes = new NativeBytes();\n";
@@ -12125,6 +12155,7 @@ static void native_append_keyword_call_spread(
   out << "  case NativeValue::Tag::Null: return NativeValue::null_type();\n";
   out << "  case NativeValue::Tag::Bool: return NativeValue::bool_type();\n";
   out << "  case NativeValue::Tag::Integer: return NativeValue::int_type();\n";
+  out << "  case NativeValue::Tag::BigInt: return NativeValue::bigint_type();\n";
   out << "  case NativeValue::Tag::Float: return NativeValue::float_type();\n";
   out << "  case NativeValue::Tag::String:\n";
   out << "  case NativeValue::Tag::HeapString: return "
@@ -12356,13 +12387,16 @@ static void native_append_keyword_call_spread(
   out << "  return value.tag == NativeValue::Tag::Integer ? "
          "static_cast<double>(value.scalar_value) : value.float_value;\n";
   out << "}\n\n";
+  out << "#include \"runtime/bigint_native.inc\"\n";
   out << "static NativeValue native_unary_plus(const NativeValue &value) "
          "{\n";
+  out << "  if (value.tag == NativeValue::Tag::BigInt) return value;\n";
   out << "  if (numeric_tag(value)) return value;\n";
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue native_unary_minus(const NativeValue &value) "
          "{\n";
+  out << "  if (value.tag == NativeValue::Tag::BigInt) return NativeValue::big_int(sputnik::runtime::big_negate(*native_bigint_value(value)));\n";
   out << "  if (value.tag == NativeValue::Tag::Integer) return "
          "NativeValue::integer(profile_neg_int64(value.scalar_value));\n";
   out << "  if (value.tag == NativeValue::Tag::Float) return "
@@ -12370,6 +12404,9 @@ static void native_append_keyword_call_spread(
   out << "  throw NativeBailout();\n";
   out << "}\n\n";
   out << "static NativeValue native_abs(const NativeValue &value) {\n";
+  out << "  if (value.tag == NativeValue::Tag::BigInt) {\n"
+         "    auto result = std::make_shared<sputnik::runtime::BigIntValue>(*native_bigint_value(value));\n"
+         "    result->negative = false; return NativeValue::big_int(std::move(result));\n  }\n";
   out << "  if (value.tag == NativeValue::Tag::Integer) {\n";
   out << "    return value.scalar_value < 0 ? "
          "NativeValue::integer(profile_neg_int64(value.scalar_value)) : "
@@ -13323,6 +13360,9 @@ static bool native_value_equal(const NativeValue &lhs, const NativeValue &rhs) {
     return lhs.scalar_value == rhs.scalar_value;
   case NativeValue::Tag::Bytes:
     return as_bytes(lhs).bytes == as_bytes(rhs).bytes;
+  case NativeValue::Tag::BigInt:
+    return sputnik::runtime::big_compare_signed(*native_bigint_value(lhs),
+                                               *native_bigint_value(rhs)) == 0;
   case NativeValue::Tag::List:
     return native_sequence_equal(as_list(lhs).items, as_list(rhs).items);
   case NativeValue::Tag::Tuple:
@@ -14895,20 +14935,22 @@ static NativeValue native_sequence_higher_order(
       }
       return NativeValue::map_entries(std::move(filtered), map.strict);
     }
-    if (selector == "transform_values") {
+    if (selector == "transformed_values") {
+      const auto snapshot = map.entries;
       std::vector<std::pair<NativeValue, NativeValue>> transformed;
-      transformed.reserve(map.entries.size());
-      for (const auto &entry : map.entries) {
+      transformed.reserve(snapshot.size());
+      for (const auto &entry : snapshot) {
         transformed.emplace_back(
             entry.first,
             sputnik_native_call_closure(block_value, {entry.second, entry.first}));
       }
       return NativeValue::map_entries(std::move(transformed), map.strict);
     }
-    if (selector == "transform_keys") {
+    if (selector == "transformed_keys") {
+      const auto snapshot = map.entries;
       std::vector<std::pair<NativeValue, NativeValue>> transformed;
-      transformed.reserve(map.entries.size());
-      for (const auto &entry : map.entries) {
+      transformed.reserve(snapshot.size());
+      for (const auto &entry : snapshot) {
         NativeValue key =
             sputnik_native_call_closure(block_value, {entry.first, entry.second});
         native_map_store(transformed, key, entry.second, map.strict);
@@ -15080,6 +15122,24 @@ static std::vector<NativeValue> native_collection_sorted_items(
   return items;
 }
 
+// Both Map transformation forms use the same pair validation and key rules.
+static void native_map_transformed_store(
+    std::vector<std::pair<NativeValue, NativeValue>> &entries,
+    const NativeValue &pair, bool strict, const std::string &selector) {
+  if (pair.tag != NativeValue::Tag::Tuple && pair.tag != NativeValue::Tag::List)
+    throw NativeRaised{native_named_error(
+        "TypeError", "Map#" + selector + " block must return key/value tuple or list")};
+  const auto values = native_sequence_items_copy(pair);
+  if (values.size() != 2U)
+    throw NativeRaised{native_named_error(
+        "TypeError", "Map#" + selector + " block must return exactly two values")};
+  try {
+    native_map_store(entries, values[0], values[1], strict);
+  } catch (const NativeBailout &) {
+    throw NativeRaised{native_named_error("TypeError", "unsupported Map key")};
+  }
+}
+
 static NativeValue native_collection_query(
     const NativeValue &receiver, std::string selector,
     std::initializer_list<NativeValue> raw_args,
@@ -15159,14 +15219,16 @@ static NativeValue native_collection_query(
       }
       return NativeValue::list(std::move(result));
     }
-    if (selector == "transform") {
+    if (selector == "transformed") {
+      if (!has_block) throw NativeRaised{native_named_error(
+          "TypeError", "transformed requires a block")};
+      const auto snapshot = map.entries;
       std::vector<std::pair<NativeValue, NativeValue>> result;
-      for (const auto &entry : map.entries) {
+      result.reserve(snapshot.size());
+      for (const auto &entry : snapshot) {
         NativeValue pair = sputnik_native_call_closure(block,
                                                      {entry.first, entry.second});
-        const auto values = native_sequence_items_copy(pair);
-        if (values.size() != 2U) throw NativeBailout();
-        native_map_store(result, values[0], values[1], map.strict);
+        native_map_transformed_store(result, pair, map.strict, selector);
       }
       return NativeValue::map_entries(std::move(result), map.strict);
     }
@@ -15606,25 +15668,54 @@ static NativeValue native_collection_query(
       native_map_rebuild_index(map);
       return receiver;
     }
+    if (selector == "transform!") {
+      if (!has_block) throw NativeRaised{native_named_error(
+          "TypeError", "transform! requires a block")};
+      const auto snapshot = map.entries;
+      std::vector<std::pair<NativeValue, NativeValue>> transformed;
+      transformed.reserve(snapshot.size());
+      for (const auto &entry : snapshot) {
+        NativeValue pair = sputnik_native_call_closure(block,
+                                                     {entry.first, entry.second});
+        native_require_mutable_collection(receiver);
+        native_map_transformed_store(transformed, pair, map.strict, selector);
+      }
+      for (const auto &entry : transformed)
+        native_cycle_write_barrier(receiver, {entry.first, entry.second});
+      map.entries = std::move(transformed);
+      native_map_rebuild_index(map);
+      return receiver;
+    }
     if (selector == "transform_values!") {
       if (!has_block) throw NativeBailout();
-      for (auto &entry : map.entries) {
+      const auto snapshot = map.entries;
+      std::vector<std::pair<NativeValue, NativeValue>> transformed;
+      transformed.reserve(snapshot.size());
+      for (const auto &entry : snapshot) {
         NativeValue value =
             sputnik_native_call_closure(block, {entry.second, entry.first});
-        native_cycle_write_barrier(receiver, value);
-        entry.second = std::move(value);
+        native_require_mutable_collection(receiver);
+        transformed.emplace_back(entry.first, std::move(value));
       }
+      for (const auto &entry : transformed)
+        native_cycle_write_barrier(receiver, entry.second);
+      map.entries = std::move(transformed);
+      native_map_rebuild_index(map);
       return receiver;
     }
     if (selector == "transform_keys!") {
       if (!has_block) throw NativeBailout();
+      const auto snapshot = map.entries;
       std::vector<std::pair<NativeValue, NativeValue>> transformed;
-      for (const auto &entry : map.entries) {
+      transformed.reserve(snapshot.size());
+      for (const auto &entry : snapshot) {
         NativeValue key = sputnik_native_call_closure(block,
                                                      {entry.first, entry.second});
-        native_cycle_write_barrier(receiver, {key, entry.second});
+        native_require_mutable_collection(receiver);
         native_map_store(transformed, key, entry.second, map.strict);
       }
+      for (const auto &entry : transformed)
+        native_cycle_write_barrier(receiver, {entry.first, entry.second});
       map.entries = std::move(transformed);
       native_map_rebuild_index(map);
       return receiver;
@@ -16140,7 +16231,8 @@ static NativeValue native_type_matches(const NativeValue &module,
     matched = value.tag == NativeValue::Tag::IntType ||
               value.tag == NativeValue::Tag::Integer;
   } else if (module.tag == NativeValue::Tag::BigIntType) {
-    matched = value.tag == NativeValue::Tag::BigIntType;
+    matched = value.tag == NativeValue::Tag::BigIntType ||
+              value.tag == NativeValue::Tag::BigInt;
   } else if (module.tag == NativeValue::Tag::FloatType) {
     matched = value.tag == NativeValue::Tag::FloatType ||
               value.tag == NativeValue::Tag::Float;
@@ -20117,6 +20209,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_add(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"+\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -20140,6 +20233,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_sub(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"-\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -20158,6 +20252,17 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_mul(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"*\");\n";
+  out << "  if (native_value_is_string(lhs)) {\n"
+         "    if (rhs.tag != NativeValue::Tag::Integer) throw NativeRaised{native_named_error(\"TypeError\", \"repeat expects integer count\")};\n"
+         "    if (rhs.scalar_value < 0) throw NativeRaised{native_named_error(\"ArgumentError\", \"repeat count must be non-negative\")};\n"
+         "    const auto &text = native_string_text(lhs); std::string repeated;\n"
+         "    const auto count = static_cast<std::size_t>(rhs.scalar_value);\n"
+         "    if (!text.empty() && count > repeated.max_size() / text.size())\n"
+         "      throw NativeRaised{native_named_error(\"OverflowError\", \"repeated string is too large\")};\n"
+         "    repeated.reserve(text.size() * count);\n"
+         "    for (std::size_t index = 0; !text.empty() && index < count; ++index) repeated += text;\n"
+         "    return NativeValue::heap_string(std::move(repeated));\n  }\n";
   out << "  if (lhs.tag == NativeValue::Tag::Integer && "
          "rhs.tag == NativeValue::Tag::Integer) return "
          "NativeValue::integer(profile_mul_int64(lhs.scalar_value, "
@@ -20171,6 +20276,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_pow(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"**\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Integer && "
          "rhs.tag == NativeValue::Tag::Integer) {\n";
   out << "    if (rhs.scalar_value < 0) return NativeValue::floating("
@@ -20186,6 +20292,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_div(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"/\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Integer && "
          "rhs.tag == NativeValue::Tag::Integer) return "
          "NativeValue::integer(profile_div_int64(lhs.scalar_value, "
@@ -20200,6 +20307,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_mod(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"%\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Integer && "
          "rhs.tag == NativeValue::Tag::Integer) {\n";
   out << "    if (rhs.scalar_value == 0) native_raise_zero_division();\n";
@@ -20216,6 +20324,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_floor_div(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"//\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Integer && "
          "rhs.tag == NativeValue::Tag::Integer) return "
          "NativeValue::integer(profile_floor_div_int64(lhs.scalar_value, "
@@ -20230,6 +20339,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_lt(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"<\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -20248,6 +20358,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_gt(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \">\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -20266,6 +20377,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_le(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"<=\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -20284,6 +20396,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_ge(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \">=\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -20302,6 +20415,10 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_eq(const NativeValue &lhs, "
          "const NativeValue &rhs, bool negate) {\n";
+  out << "  if (lhs.tag == NativeValue::Tag::BigInt) {\n"
+         "    const bool comparable = rhs.tag == NativeValue::Tag::BigInt || rhs.tag == NativeValue::Tag::Integer;\n"
+         "    const bool equal = comparable && sputnik::runtime::big_compare_signed(*native_bigint_value(lhs), *native_bigint_operand(rhs)) == 0;\n"
+         "    return NativeValue::boolean(negate ? !equal : equal);\n  }\n";
   // Mirrors value_equals for scalar kinds: numeric pairs compare by value
   // (Int/Int exact, otherwise double); values of different non-string kinds
   // are never equal. Same-kind deep values may still use their specialized
@@ -20374,6 +20491,7 @@ static NativeValue native_benchmark_send(
   out << "static std::string native_value_to_display_string("
          "const NativeValue &value);\n";
   out << "static NativeValue native_to_str(const NativeValue &value) {\n";
+  out << "  if (value.tag == NativeValue::Tag::BigInt) return NativeValue::heap_string(sputnik::runtime::big_int_to_decimal_string(*native_bigint_value(value)));\n";
   out << "  if (value.tag == NativeValue::Tag::Map && "
          "native_benchmark_has_schema(value, kNativeBenchmarkSchema)) {\n";
   out << "    return native_benchmark_compact_text(value, "
@@ -20516,6 +20634,7 @@ static NativeValue native_benchmark_send(
          ":inspect, or :pretty\")};\n";
   out << "}\n\n";
   out << "static NativeValue native_to_int(const NativeValue &value) {\n";
+  out << "  if (value.tag == NativeValue::Tag::BigInt) return native_bigint_to_int(value);\n";
   out << "  if (value.tag == NativeValue::Tag::Integer) return value;\n";
   out << "  if (value.tag == NativeValue::Tag::Float) {\n";
   out << "    if (!std::isfinite(value.float_value)) throw NativeBailout();\n";
@@ -20572,6 +20691,7 @@ static NativeValue native_benchmark_send(
   out << "}\n\n";
   out << "static NativeValue numeric_cmp(const NativeValue &lhs, "
          "const NativeValue &rhs) {\n";
+  out << "  if (native_bigint_pair(lhs, rhs)) return native_bigint_binary(lhs, rhs, \"<=>\");\n";
   out << "  if (lhs.tag == NativeValue::Tag::Time || "
          "lhs.tag == NativeValue::Tag::TimePeriod || "
          "rhs.tag == NativeValue::Tag::Time || "
@@ -21599,6 +21719,16 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
   out << "  try {\n";
+  out << "  if (value.tag == NativeValue::Tag::BigIntType) {\n"
+         "    if (args.size() != 1U || !kwargs.empty() || block.tag != NativeValue::Tag::Null)\n"
+         "      throw NativeRaised{native_named_error(\"TypeError\", \"BigInt expects one argument and no keywords or block\")};\n"
+         "    return native_bigint_construct(args[0]);\n  }\n";
+  out << "  if (value.tag == NativeValue::Tag::IntType || value.tag == NativeValue::Tag::StrType || value.tag == NativeValue::Tag::MapType) {\n"
+         "    if (args.size() != 1U || !kwargs.empty() || block.tag != NativeValue::Tag::Null)\n"
+         "      throw NativeRaised{native_named_error(\"TypeError\", \"conversion expects one argument and no keywords or block\")};\n"
+         "    if (value.tag == NativeValue::Tag::IntType) return native_to_int(args[0]);\n"
+         "    if (value.tag == NativeValue::Tag::StrType) return native_to_str(args[0]);\n"
+         "    return native_to_map(args[0]);\n  }\n";
   out << "  if (value.tag == NativeValue::Tag::ResultOkFunction || "
          "value.tag == NativeValue::Tag::ResultErrFunction) {\n";
   out << "    if (args.size() != 1U || kwargs.size() != 0U || "
@@ -21676,9 +21806,11 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  native_map_store(as_mutable_map(map_value), key, value);\n";
   out << "  return value;\n";
   out << "}\n\n";
+  out << "#include \"runtime/byte_buffer_native.inc\"\n";
   out << "static NativeValue native_io_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, NativeValue block) {\n";
+  out << "  if (receiver.tag == NativeValue::Tag::IoModule && selector == \"ByteBuffer\") return native_byte_buffer_factory(args, block);\n";
   out << "  if (block.tag != NativeValue::Tag::Null) throw NativeBailout();\n";
   out << "  if (receiver.tag == NativeValue::Tag::IoModule) {\n";
   out << "    if (args.size() != 0U) throw NativeBailout();\n";
@@ -23959,6 +24091,7 @@ static NativeValue native_channel_send(
          "  case NativeValue::Tag::FsModule:\n"
          "    return native_fs_direct_send(receiver, selector, args, kwargs, block);\n"
          "  case NativeValue::Tag::RuntimeHandle:\n"
+         "    if (native_byte_buffer_receiver(receiver)) return native_byte_buffer_send(receiver, selector, args, kwargs, block);\n"
          "    if (native_host_io_receiver(receiver)) return native_host_io_send(receiver, selector, args, kwargs, block);\n"
          "    if (as_native_runtime_handle(receiver)->value.is_native_type() && as_native_runtime_handle(receiver)->value.as_native_type().kind == sputnik::runtime::RuntimeNativeTypeKind::Net && selector == \"unix\" && args.empty() && kwargs.empty() && block.tag == NativeValue::Tag::Null) return NativeValue::runtime_handle(sputnik::runtime::Value::native_type(sputnik::runtime::RuntimeNativeTypeKind::NetUnix));\n"
          "    if (native_system_receiver(receiver)) return native_system_send(receiver, selector, args, kwargs, block);\n"
@@ -24862,10 +24995,11 @@ static std::string native_named_callable_type_name(
   out << "  if (matcher.tag == NativeValue::Tag::BoolType) "
          "return value.tag == NativeValue::Tag::BoolType || "
          "value.tag == NativeValue::Tag::Bool;\n";
-  out << "  if (matcher.tag == NativeValue::Tag::IntType || "
-         "matcher.tag == NativeValue::Tag::BigIntType) "
+  out << "  if (matcher.tag == NativeValue::Tag::IntType) "
          "return value.tag == matcher.tag || "
          "value.tag == NativeValue::Tag::Integer;\n";
+  out << "  if (matcher.tag == NativeValue::Tag::BigIntType) "
+         "return value.tag == matcher.tag || value.tag == NativeValue::Tag::BigInt;\n";
   out << "  if (matcher.tag == NativeValue::Tag::FloatType) "
          "return value.tag == NativeValue::Tag::FloatType || "
          "value.tag == NativeValue::Tag::Float;\n";
@@ -25323,6 +25457,7 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
            "NativeValue::boolean(value.as_bool());\n";
     out << "  if (value.is_integer()) return "
            "NativeValue::integer(value.as_integer());\n";
+    out << "  if (value.is_big_int()) return NativeValue::big_int(value.as_big_int());\n";
     out << "  if (value.is_float()) return "
            "NativeValue::floating(value.as_float());\n";
     // Runtime string ids are scoped to the host world. Their contents are
@@ -25505,6 +25640,7 @@ SputnikNativeBridgeRequestStateScope::~SputnikNativeBridgeRequestStateScope() {
            "return sputnik::runtime::Value::boolean(arg.scalar_value != 0);\n";
     out << "  case NativeValue::Tag::Integer: "
            "return sputnik::runtime::Value::integer(arg.scalar_value);\n";
+    out << "  case NativeValue::Tag::BigInt: return sputnik::runtime::Value::big_int(native_bigint_value(arg));\n";
     out << "  case NativeValue::Tag::Float: "
            "return sputnik::runtime::Value::floating(arg.float_value);\n";
     out << "  case NativeValue::Tag::String:\n";
@@ -26189,6 +26325,7 @@ static NativeValue sputnik_native_extension_invoke(
          "\"true\" : \"false\";\n";
   out << "  case NativeValue::Tag::Integer: return "
          "std::to_string(value.scalar_value);\n";
+  out << "  case NativeValue::Tag::BigInt: return sputnik::runtime::big_int_to_decimal_string(*native_bigint_value(value));\n";
   // Mirrors value_to_debug_string: default ostream precision, so integral
   // floats print without a decimal point.
   out << "  case NativeValue::Tag::Float: {\n";

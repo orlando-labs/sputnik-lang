@@ -188,8 +188,8 @@ Current implemented slice:
   `each_pair`, `each_cons`, `take_while`, `reverse`, `sort`, `uniq`,
   `permutation`, `combination`, eager-compatible `lazy`, and mutating
   `Array` / `Set` `filter_map!`, plus `Map#each`, `Map#each_pair`,
-  `Map#map`, `Map#filter_map`, `Map#select`, `Map#reject`, `Map#transform`,
-  `transform_values`, `merge`, `contains?`, `include?`, `+` / `|` merge
+  `Map#map`, `Map#filter_map`, `Map#select`, `Map#reject`, `Map#transformed`,
+  `transformed_values`, `merge`, `contains?`, `include?`, `+` / `|` merge
   aliases, `keys`, `values`, and `entries` with insertion-order-preserving
   results and canonical `IndexError` / `KeyError` edge behavior;
 - `STD-010` task module runtime-facing surface in `runtime/vm.{h,cpp}` with

@@ -7694,7 +7694,9 @@ private:
   }
 
   std::optional<MapEntry> map_entry_from_transform_result(const Frame &frame,
-                                                          const Value &result) {
+                                                        const Value &result,
+                                                        bool strict,
+                                                        const std::string &selector) {
     if (!ensure_lifecycle_access(frame, result)) {
       return std::nullopt;
     }
@@ -7703,36 +7705,36 @@ private:
     if (result.is_tuple()) {
       const IntrusivePtr<TupleValue> tuple = result.as_tuple();
       if (tuple == nullptr) {
-        set_fault(frame, "TypeError",
-                  "Map#transform block returned null tuple");
+        raise_runtime_error(frame, "TypeError",
+                  "Map#" + selector + " block returned null tuple");
         return std::nullopt;
       }
       items = tuple->items;
     } else if (result.is_list()) {
       const IntrusivePtr<ListValue> list = result.as_list();
       if (list == nullptr) {
-        set_fault(frame, "TypeError", "Map#transform block returned null list");
+        raise_runtime_error(frame, "TypeError", "Map#" + selector + " block returned null list");
         return std::nullopt;
       }
       items = list->items;
     } else {
-      set_fault(frame, "TypeError",
-                "Map#transform block must return key/value tuple or list");
+      raise_runtime_error(frame, "TypeError",
+                "Map#" + selector + " block must return key/value tuple or list");
       return std::nullopt;
     }
 
     if (items.size() != 2U) {
-      set_fault(frame, "TypeError",
-                "Map#transform block must return exactly two values");
+      raise_runtime_error(frame, "TypeError",
+                "Map#" + selector + " block must return exactly two values");
       return std::nullopt;
     }
     CollectionKeyError error;
     std::optional<Value> key = normalize_map_key(items[0], &error);
     if (!key.has_value()) {
-      set_fault(frame, error.error_name, error.message);
+      raise_runtime_error(frame, error.error_name, error.message);
       return std::nullopt;
     }
-    return MapEntry{*key, items[1]};
+    return make_canonical_map_entry(*key, items[1], strict);
   }
 
   void upsert_map_entry(std::vector<MapEntry> *entries, MapEntry entry) {
@@ -25013,7 +25015,7 @@ private:
       return SendStatus::Faulted;
     }
     if (map->frozen) {
-      set_fault(frame, "FrozenError", "cannot modify frozen map");
+      raise_runtime_error(frame, "FrozenError", "cannot modify frozen map");
       return SendStatus::Faulted;
     }
     auto reject_block = [&]() -> bool {
@@ -25209,6 +25211,38 @@ private:
         }
       }
       map_value_assign_entries(map.get(), std::move(kept));
+      *out = receiver;
+      return SendStatus::Matched;
+    }
+    if (selector == "transform!") {
+      if (block.is_null()) {
+        raise_runtime_error(frame, "TypeError", "transform! requires a block");
+        return SendStatus::Faulted;
+      }
+      if (!require_args(0)) {
+        return SendStatus::Faulted;
+      }
+      const std::vector<MapEntry> snapshot = map->entries;
+      std::vector<MapEntry> result;
+      result.reserve(snapshot.size());
+      for (const MapEntry &entry : snapshot) {
+        const std::optional<Value> pair =
+            call_block_to_value(frame, block, {entry.key, entry.value});
+        if (!pair.has_value() || !ensure_lifecycle_access(frame, receiver)) {
+          return SendStatus::Faulted;
+        }
+        const std::optional<MapEntry> transformed =
+            map_entry_from_transform_result(frame, *pair, map->strict, selector);
+        if (!transformed.has_value()) {
+          return SendStatus::Faulted;
+        }
+        upsert_normalized_map_entry(&result, *transformed, map->strict);
+      }
+      if (map->frozen) {
+        raise_runtime_error(frame, "FrozenError", "cannot modify frozen map");
+        return SendStatus::Faulted;
+      }
+      map_value_assign_entries(map.get(), std::move(result));
       *out = receiver;
       return SendStatus::Matched;
     }
@@ -27154,7 +27188,8 @@ private:
         collection_selector_in({"get_or_set!", "store!", "delete!",
                                 "delete_if!", "keep_if!", "select!",
                                 "reject!", "merge!", "update!",
-                                "transform_keys!", "transform_values!",
+                                "transform!", "transform_keys!",
+                                "transform_values!",
                                 "compact!", "clear!", "replace!", "shift!"});
     const bool set_mutation_selector =
         receiver.is_set() &&
@@ -27196,8 +27231,8 @@ private:
                                                       "select",
                                                       "filter_map",
                                                       "reject",
-                                                      "transform",
-                                                      "transform_values",
+                                                      "transformed",
+                                                      "transformed_values",
                                                       "merge",
                                                       "each_pair",
                                                       "contains?",
@@ -27209,7 +27244,7 @@ private:
                                                       "except",
                                                       "slice",
                                                       "compact",
-                                                      "transform_keys",
+                                                      "transformed_keys",
                                                       "dig",
                                                       "fetch",
                                                       "+",
@@ -27404,7 +27439,7 @@ private:
         return SendStatus::Faulted;
       }
       if (map->frozen) {
-        set_fault(frame, "FrozenError", "cannot modify frozen map");
+        raise_runtime_error(frame, "FrozenError", "cannot modify frozen map");
         return SendStatus::Faulted;
       }
       CollectionKeyError error;
@@ -29180,7 +29215,11 @@ private:
           *out = make_symbol_map_value(std::move(filtered));
           return SendStatus::Matched;
         }
-        if (collection_selector == "transform") {
+        if (collection_selector == "transformed") {
+          if (block.is_null()) {
+            raise_runtime_error(frame, "TypeError", "transformed requires a block");
+            return SendStatus::Faulted;
+          }
           if (!require_arity(0)) {
             return SendStatus::Faulted;
           }
@@ -29196,16 +29235,23 @@ private:
               return SendStatus::Faulted;
             }
             const std::optional<MapEntry> transformed_entry =
-                map_entry_from_transform_result(frame, *value);
+                map_entry_from_transform_result(frame, *value, source_strict,
+                                                collection_selector);
             if (!transformed_entry.has_value()) {
               return SendStatus::Faulted;
             }
-            upsert_map_entry(&transformed, *transformed_entry);
+            upsert_normalized_map_entry(&transformed, *transformed_entry,
+                                        source_strict);
           }
-          *out = make_symbol_map_value(std::move(transformed));
+          *out = make_symbol_map_value(std::move(transformed), false,
+                                      source_strict);
           return SendStatus::Matched;
         }
-        if (collection_selector == "transform_values") {
+        if (collection_selector == "transformed_values") {
+          if (block.is_null()) {
+            raise_runtime_error(frame, "TypeError", "transformed_values requires a block");
+            return SendStatus::Faulted;
+          }
           if (!require_arity(0)) {
             return SendStatus::Faulted;
           }
@@ -29222,7 +29268,8 @@ private:
             }
             transformed.push_back({entry.key, *value});
           }
-          *out = make_symbol_map_value(std::move(transformed));
+          *out = make_symbol_map_value(std::move(transformed), false,
+                                      source_strict);
           return SendStatus::Matched;
         }
         if (collection_selector == "merge" || collection_selector == "+" ||
@@ -29337,12 +29384,12 @@ private:
           *out = make_symbol_map_value(std::move(result), false, source_strict);
           return SendStatus::Matched;
         }
-        if (collection_selector == "transform_keys") {
+        if (collection_selector == "transformed_keys") {
           if (!require_arity(0)) {
             return SendStatus::Faulted;
           }
           if (block.is_null()) {
-            set_fault(frame, "TypeError", "transform_keys requires a block");
+            raise_runtime_error(frame, "TypeError", "transformed_keys requires a block");
             return SendStatus::Faulted;
           }
           std::vector<MapEntry> result;
@@ -29361,9 +29408,11 @@ private:
               set_fault(frame, error.error_name, error.message);
               return SendStatus::Faulted;
             }
-            upsert_map_entry(&result, MapEntry{std::move(*key), entry.value});
+            upsert_normalized_map_entry(
+                &result, make_canonical_map_entry(*key, entry.value, source_strict),
+                source_strict);
           }
-          *out = make_symbol_map_value(std::move(result));
+          *out = make_symbol_map_value(std::move(result), false, source_strict);
           return SendStatus::Matched;
         }
       }
@@ -32317,7 +32366,7 @@ private:
                     hint->second + ". Sputnik marks receiver mutation with `!`";
         }
       }
-      set_fault(frame, "NoMethodError", message);
+      raise_runtime_error(frame, "NoMethodError", message);
       return false;
     }
 
@@ -32591,7 +32640,7 @@ private:
         }
         return false;
       }
-      set_fault(frame, "NoMethodError",
+      raise_runtime_error(frame, "NoMethodError",
                 "selector `" + *selector +
                     "` is not implemented in current runtime baseline");
       return false;

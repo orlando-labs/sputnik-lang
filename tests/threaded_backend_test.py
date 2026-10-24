@@ -58,7 +58,7 @@ def main():
     print("threaded collections: VM + full native passed", flush=True)
 
     stress = ('import system\ncmd = system.cmd"/usr/bin/printf output"\n'
-              '10_000.times.threaded(500).map: cmd.output .group: $it .transform_values: $it.size\n'
+              '10_000.times.threaded(500).map: cmd.output .group: $it .transformed_values: $it.size\n'
               'print $_\n')
     source, executable = build("process_stress", stress)
     vm = run([str(compiler), "run", str(source), "--grant", "process.spawn"]).stdout

@@ -3688,7 +3688,13 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
                            selector == "flat_map" || selector == "reduce" ||
                            selector == "find" || selector == "any?" ||
                            selector == "all?" || selector == "take_while" ||
-                           selector == "drop_while";
+                           selector == "drop_while" ||
+                           selector == "transformed" ||
+                           selector == "transformed_keys" ||
+                           selector == "transformed_values" ||
+                           selector == "transform!" ||
+                           selector == "transform_keys!" ||
+                           selector == "transform_values!";
     if (known_collection && chainable && block && block->kind == "HClosure") {
       const auto *procedure = owner_->procedure_by_id(string_field(*block, "procedure"));
       if (procedure && (procedure->scoped_break_block ||

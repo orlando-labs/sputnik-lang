@@ -6459,7 +6459,7 @@ void test_runtime_map_collections_contract() {
                     "select",
                     "reject",
                     "map",
-                    "transform_values",
+                    "transformed_values",
                     "each",
                     "+",
                     ">",
@@ -6486,7 +6486,7 @@ void test_runtime_map_collections_contract() {
   probe.instructions.push_back(
       send_instr(8, 0, symbol_id_or_die(module, "reject"), {}, 1));
   probe.instructions.push_back(
-      send_instr(9, 0, symbol_id_or_die(module, "transform_values"), {}, 2));
+      send_instr(9, 0, symbol_id_or_die(module, "transformed_values"), {}, 2));
   probe.instructions.push_back(
       send_instr(10, 0, symbol_id_or_die(module, "map"), {}, 3));
   probe.instructions.push_back(
@@ -6570,7 +6570,7 @@ void test_runtime_map_collections_contract() {
   expect(parts->items[5].is_map() &&
              parts->items[5].as_map()->entries[0].value.as_integer() == 2 &&
              parts->items[5].as_map()->entries[1].value.as_integer() == 3,
-         "Map#transform_values should preserve keys and transform values");
+         "Map#transformed_values should preserve keys and transform values");
   expect_integer_list(parts->items[6], {2, 3}, "Map#map");
 
   const sputnik::runtime::ExecutionResult each =

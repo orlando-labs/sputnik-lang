@@ -22,7 +22,7 @@ def main():
              'from system import cmd\ncmd\'printf "%s" #{"tag"}\'.output'},
             {"id": "3", "kind": "code", "mode": "watch", "source":
              'import system\ncommand = system.cmd"/usr/bin/printf output"\n'
-             '24.times.threaded(4).map: command.output .group: $it .transform_values: $it.size\n'
+             '24.times.threaded(4).map: command.output .group: $it .transformed_values: $it.size\n'
              'print $_'},
         ]
         path.write_text(json.dumps(document))

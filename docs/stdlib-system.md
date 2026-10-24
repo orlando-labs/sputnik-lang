@@ -32,7 +32,7 @@ values from preceding cells, work in persistent notebook cells:
 ```sputnik
 import system
 command = system.cmd"/usr/bin/printf output"
-10_000.times.threaded(500).map: command.output .group: $it .transform_values: $it.size
+10_000.times.threaded(500).map: command.output .group: $it .transformed_values: $it.size
 print $_
 ```
 

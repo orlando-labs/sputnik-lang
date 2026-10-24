@@ -56,4 +56,13 @@ with tempfile.TemporaryDirectory(prefix="sputnik-language-updates-") as tmp:
     assert '"native_full_coverage": true' in built.stdout, built.stdout
     native = subprocess.run([str(output)], capture_output=True, text=True, timeout=300)
     assert native.returncode == 0 and native.stdout == vm.stdout, (native.stdout, native.stderr)
+    # ORM transactions probe Result predicates on arbitrary block results.
+    # Missing builtin members/methods must unwind through rescue and ensure.
+    fixture = root / "tests/fixtures/rescuable_missing_selector/main.s"
+    vm = run(fixture)
+    assert vm.stdout.strip() == "PASS rescuable missing selector\n0", vm.stdout
+    output = tmp / "missing-selector-native"
+    run("build", fixture, "--entry", "init", "--require-full-native", "-o", output)
+    native = subprocess.run([str(output)], capture_output=True, text=True, timeout=300)
+    assert native.returncode == 0 and native.stdout == vm.stdout, (native.stdout, native.stderr)
 print("language_updates_test: ok")

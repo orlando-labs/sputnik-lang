@@ -157,7 +157,7 @@ Missing:
 ### 1d. Map methods (`runtime/vm.cpp`)
 - **`fetch(key[, default])`** — value or default/raise KeyError.
 - **`dig(*keys)`** — nested fetch through Maps/Lists, null on miss.
-(`merge` already works; check `invert`, `transform_keys`/`transform_values`, `to_a`,
+(`merge` already works; check `invert`, `transformed_keys`/`transformed_values`, `to_a`,
 `min`/`max` key-block — add any missing.)
 
 ---

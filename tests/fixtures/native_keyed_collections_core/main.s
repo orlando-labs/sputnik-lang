@@ -42,11 +42,11 @@ def main():
   if compacted.count() == 2 and compacted.has_key?(:c) == false:
     score = score + 1
 
-  doubled = merged.transform_values |v, k|: v * 2
+  doubled = merged.transformed_values |v, k|: v * 2
   if doubled[:a] == 2 and doubled[:b] == 40 and doubled[:d] == 8:
     score = score + 1
 
-  rekeyed = {1: 10, 2: 20}.transform_keys |k, v|: k * 10
+  rekeyed = {1: 10, 2: 20}.transformed_keys |k, v|: k * 10
   if rekeyed[10] == 10 and rekeyed[20] == 20:
     score = score + 1
 
@@ -145,7 +145,7 @@ def main():
       value * 10
     else:
       null
-  transformed_pairs = {a: 1, b: 2}.transform |key, value|: [key.to_str.upcase, value * 2]
+  transformed_pairs = {a: 1, b: 2}.transformed |key, value|: [key.to_str.upcase, value * 2]
   selected_keys = {a: 1, b: 2}.deconstruct_keys([:b])
   if mapped_values == [20, 30] and transformed_pairs["A"] == 2 and transformed_pairs["B"] == 4 and selected_keys[:b] == 2 and selected_keys.count() == 1:
     score = score + 1

@@ -276,7 +276,7 @@ void test_threaded_system_in_persistent_notebook() {
   session.cells.push_back(make_cell(
       "import system\n"
       "cmd = system.cmd\"/usr/bin/printf output\"\n"
-      "24.times.threaded(4).map: cmd.output .group: $it .transform_values: $it.size\n"
+      "24.times.threaded(4).map: cmd.output .group: $it .transformed_values: $it.size\n"
       "print $_\n"));
   evaluate_from(&session, 0, true, false, false);
   expect(session.cells[0].ok,

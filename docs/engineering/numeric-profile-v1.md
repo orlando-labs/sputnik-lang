@@ -4,7 +4,7 @@ Status: implemented in the reference toolchain (parser `numeric:` preamble,
 emitter literal range checks + `.sputnikbc` attrs, VM checked/wrapping/saturating
 arithmetic for Int8–Int64 and UInt8–UInt32, explicit `BigInt`, manifest
 `profiles.numeric` mirror with mismatch diagnostics, native lane checked-Int64
-with VM fallback for other profiles). Staged, not yet implemented: `int:
+and explicit BigInt values, with VM fallback for other profiles). Staged, not yet implemented: `int:
 UInt64` and `int: BigInt` profiles (compile-time diagnostic), per-function
 native support for non-default profiles. Conformance:
 `corpus/run/numeric_*`.
@@ -179,6 +179,27 @@ Implementation expectations:
 This keeps hot integer loops predictable for both the interpreter and generated
 native code. Programs that need arbitrary precision choose `BigInt` explicitly
 and pay its allocation, GC-root, and helper-call costs only at those sites.
+
+### Direct native BigInt
+
+The cpp-bytecode-direct backend represents BigInt as an immutable, refcounted
+leaf containing the runtime's arbitrary-precision value. It uses the same
+`runtime/numeric.cpp` helpers as the VM through `runtime/bigint_native.inc`;
+arithmetic does not instantiate a RuntimeWorld or invoke bytecode.
+
+The native surface includes `BigInt(Int/Str/BigInt)`, mixed Int/BigInt arithmetic,
+`+`, `-`, `*`, truncating `/`, floor `//` and `%`, nonnegative integer powers,
+comparisons, unary signs, `abs`, decimal formatting, and checked narrowing to
+Int. BigInt remains distinct from Int in both matcher forms and can be stored
+in collections or passed between native tasks. The optional VM/extension bridge
+preserves its exact value in both directions. Fixed-width Int never implicitly
+promotes on overflow.
+
+`make test-native-bigint` checks VM/native parity with `--require-full-native`,
+zero fallback bodies, and no VM stdlib bridge. An independent integer oracle
+covers signed arithmetic and division through 512 bits. Orbit's session test
+graphs additionally exercise the ChaCha20-Poly1305 implementation under the
+same strict native gate.
 
 ## Cross-Package Rules
 

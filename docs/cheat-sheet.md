@@ -263,14 +263,16 @@ and three or more actions on one line (`L1002`). `obj.then()` remains a method c
 | Zip / compact / flatten | `xs.zip(ys)` truncates to shortest; `xs.compact` drops null; `xs.flattened` flattens nested arrays |
 | Set operations | `a.union(b)`, `.intersection(b)`, `.difference(b)`, `.symmetric_difference(b)`; aliases `\| & - ^` |
 | Render text | `xs.join(", ")`; `text.lines`; `text.replaced("old", "new")` |
-| Transform a map | `m.map \|k, v\|: …` → Array; `m.transform \|k, v\|: (k, v * 2)` → Map |
-| Keep map keys | `m.select \|k, v\|: v > 0`; `m.transform_values \|v\|: v * 2` |
+| Transform a map | `m.map \|k, v\|: …` → Array; `m.transformed \|k, v\|: (k, v * 2)` → Map |
+| Transform keys / values | `m.transformed_keys \|k, v\|: k.str + "_copy"`; `m.transformed_values \|v, k\|: v * 2` |
+| Transform a map in place | `m.transform! \|k, v\|: (k.str + "_new", v * 2)` → receiver; `transform_keys!` / `transform_values!` change one side |
+| Keep map keys | `m.select \|k, v\|: v > 0`; `m.transformed_values \|v\|: v * 2` |
 | Merge with conflict handling | `left.merge(right) \|key, old, new\|: old + new` |
 | Nested optional lookup | `cfg.dig(:server, :port) ?? 8080` |
 | Memoize, including false/null | `cache.get_or_set!(key): expensive(key)`; block runs only for absent keys |
 | Copy | `xs.copy` is shallow; `xs.deep_copy` preserves cycles/shared-reference topology |
 
-Collections are eager unless made lazy. Prefer an explicit seed for `reduce` on possibly empty input. `each` returns its receiver; `for_each`, `for`, and `n.times: …` return `null`. All search forms return `null` on no match. `.with_index` appends a zero-based index to block arguments without changing the method result. `for` preserves the argument/pattern contract of `each`, including `for k, v in map:`; ranges keep `..`/`...`/`:step`. Map blocks normally receive **key, value**; `transform_values` receives **value, optional key**. Mutation methods include `push!`, `filter_map!` (Array/Set), `compact!`, `flatten!`; pure string forms include `trimmed`, `upcased`, `downcased`, `reversed`.
+Collections are eager unless made lazy. Prefer an explicit seed for `reduce` on possibly empty input. `each` returns its receiver; `for_each`, `for`, and `n.times: …` return `null`. All search forms return `null` on no match. `.with_index` appends a zero-based index to block arguments without changing the method result. `for` preserves the argument/pattern contract of `each`, including `for k, v in map:`; ranges keep `..`/`...`/`:step`. Map blocks normally receive **key, value**; `transformed_values` receives **value, optional key**. Mutation methods include `push!`, `filter_map!` (Array/Set), `compact!`, `flatten!`; pure string forms include `trimmed`, `upcased`, `downcased`, `reversed`.
 
 ## 9. Errors, cleanup, and explicit results
 

@@ -1035,6 +1035,16 @@ test-foreign-bridges: $(BUILD_DIR)/sputnik
 test-native-system-spread: $(BUILD_DIR)/sputnik
 	python3 tests/native_system_spread_cli_test.py $(BUILD_DIR)/sputnik
 
+.PHONY: test-native-byte-buffer
+test-native-byte-buffer: $(BUILD_DIR)/sputnik
+	python3 tests/native_byte_buffer_test.py $(BUILD_DIR)/sputnik
+test: test-native-byte-buffer
+
+.PHONY: test-native-bigint
+test-native-bigint: $(BUILD_DIR)/sputnik
+	python3 tests/native_bigint_test.py $(BUILD_DIR)/sputnik
+test: test-native-bigint
+
 .PHONY: test-effect-iteration
 test: test-effect-iteration
 test-effect-iteration: $(BUILD_DIR)/sputnik

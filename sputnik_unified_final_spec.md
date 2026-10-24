@@ -3376,7 +3376,7 @@ Detached / orphan task в v1 не вводятся.
  раз для каждого элемента в порядке обхода: `users.counts: $it.role`.
  Ключи нормализуются по правилам `Map` и сохраняют порядок первого появления.
  Результат эквивалентен `group` по тому же ключу с последующим
- `transform_values: $it.size`, без промежуточных массивов групп.
+ `transformed_values: $it.size`, без промежуточных массивов групп.
  Пустая коллекция возвращает пустой `Map` и не вызывает блок; исключение
  блока прекращает обход и передаётся вызывающему коду. Позиционные и
  именованные аргументы не принимаются. `count` по-прежнему возвращает одно
@@ -3425,8 +3425,11 @@ xs.reduce |acc, x|:...
 - `filter_map |k, v|:`
 - `select |k, v|:`
 - `reject |k, v|:`
-- `transform |k, v|:` возвращает key/value tuple или list
-- `transform_values |v, k|:` где `k` — опциональный второй аргумент блока
+- `transformed |k, v|:` возвращает key/value tuple или list
+- `transformed_keys |k, v|:` возвращает новый ключ
+- `transformed_values |v, k|:` где `k` — опциональный второй аргумент блока
+- `transform! |k, v|:` возвращает key/value tuple или list
+- `transform_keys! |k, v|:` и `transform_values! |v, k|:`
 - `merge(other)` / `merge(other) |k, old, new|:`
 - `keys`
 - `values`
@@ -3449,8 +3452,24 @@ xs.reduce |acc, x|:...
  `m[key]`, `fetch(key, default)` возвращает `default` при отсутствии ключа;
 - `Map#filter_map` возвращает `Array` truthy-результатов block;
 - `Map#select` и `Map#reject` возвращают `Map`;
-- `Map#transform` возвращает `Map` и может менять ключи;
-- `Map#transform_values` возвращает `Map`;
+- `Map#transformed`, `Map#transformed_keys` и `Map#transformed_values`
+ возвращают новый ассоциативный контейнер того же типа (`Map` либо `StrictMap`),
+ не меняя receiver; первая форма преобразует сразу ключ и значение;
+- `Map#transform!` преобразует ключ и значение за один проход, заменяет
+ содержимое receiver и возвращает сам receiver; существующие ссылки на мэп
+ видят изменение. `transform_keys!` и `transform_values!` изменяют только ключи
+ и только значения соответственно и также возвращают receiver;
+- блоки семейства преобразований обязательны и вычисляются в порядке исходных
+ entries по snapshot. Результат `transformed` / `transform!` должен быть tuple
+ или list ровно из двух элементов; другой результат даёт `TypeError`;
+- новые ключи нормализуются по правилам исходного контейнера. При коллизии
+ последнее значение побеждает, а позиция первого вхождения сохраняется;
+- мутирующие формы применяют собранный результат после успешного выполнения
+ всех блоков; ошибка не применяет частичный результат. Самостоятельные
+ побочные эффекты пользовательского блока не откатываются. Frozen receiver
+ допускает чистые формы, а для форм с `!` даёт `FrozenError`;
+- прежние чистые имена `transform`, `transform_keys`, `transform_values`
+ отсутствуют; каноничны `transformed`, `transformed_keys`, `transformed_values`;
 - `Map#merge` возвращает `Map`, сохраняет порядок левого receiver, добавляет
  новые ключи справа в порядке правого аргумента и при конфликте использует
  правое значение либо значение, возвращённое block;
@@ -3468,7 +3487,7 @@ stored `null` не заменяются. На frozen map вызов даёт `Fr
 от наличия key. `StrictMap` / `StrictHashMap` используют exact-key semantics;
 ordinary `Map` / `HashMap` используют normal name-indifferent semantics.
 
-С ordinary `Map` operations используют normalized key semantics. Для name keys canonical export — `Str`: `keys`, `entries`, `each`, `map`, `filter_map`, `select`, `reject`, `transform`, `transform_values` и `merge` обязаны передавать/возвращать string key для `Symbol(:name)` / `Str("name")` entry. `Map#[]`, `Map#[]?`, `contains?` и `include?` нормализуют lookup key тем же правилом, что и литерал; unsupported key values дают `TypeError`, отсутствующие valid keys дают `KeyError` только для обязательного `Map#[]`.
+С ordinary `Map` operations используют normalized key semantics. Для name keys canonical export — `Str`: `keys`, `entries`, `each`, `map`, `filter_map`, `select`, `reject`, `transformed`, `transformed_values` и `merge` обязаны передавать/возвращать string key для `Symbol(:name)` / `Str("name")` entry. `Map#[]`, `Map#[]?`, `contains?` и `include?` нормализуют lookup key тем же правилом, что и литерал; unsupported key values дают `TypeError`, отсутствующие valid keys дают `KeyError` только для обязательного `Map#[]`.
 
 Изменяемые `Array` / `List` и `Set` дополнительно поддерживают
 `filter_map! |x|:`. Метод вычисляет block по snapshot receiver'а, удаляет
@@ -3477,7 +3496,7 @@ block и возвращает receiver. `Set#filter_map!` нормализует
 set elements и схлопывает дубликаты. `Tuple`, `Range` и `LazySeq` не имеют
 `filter_map!`, потому что не мутируются. `Map#filter_map!` намеренно отсутствует:
 `Map#filter_map` возвращает `Array`, а shape-preserving мутации `Map` остаются
-за `select!`, `reject!`, `transform_keys!` / `transform_values!` и related
+за `select!`, `reject!`, `transform!`, `transform_keys!` / `transform_values!` и related
 mutators.
 
 `StrictMap` / `StrictHashMap` предоставляют тот же operation surface, но используют exact-key semantics и экспортируют фактический stored key value. `Map#merge` с ordinary maps схлопывает name-key duplicates, а strict merge схлопывает только exact-key duplicates.
@@ -11093,9 +11112,9 @@ map.each |k, v|:...
 map.map |k, v|:...
 map.select |k, v|:...
 map.reject |k, v|:...
-map.transform |k, v|:
+map.transformed |k, v|:
  (new_key, new_value)
-map.transform_values |v, k|:...
+map.transformed_values |v, k|:...
 map.merge(other)
 map + other
 map | other
@@ -11506,7 +11525,7 @@ Update and test:
 
 ```text
 Map: [], [?], assignment, contains?, include?, keys, entries, each, map, select,
- reject, transform, transform_values, merge, +, |, casts from pairs
+ reject, transformed, transformed_values, merge, +, |, casts from pairs
 
 Set: construction, add, delete, include?, contains?, algebra, to_set
 ```
@@ -12154,9 +12173,9 @@ hm.each |k, v|:...
 hm.map |k, v|:...
 hm.select |k, v|:...
 hm.reject |k, v|:...
-hm.transform |k, v|:
+hm.transformed |k, v|:
  (new_key, new_value)
-hm.transform_values |v, k|:...
+hm.transformed_values |v, k|:...
 hm.merge(other)
 hm + other
 hm | other
@@ -14928,10 +14947,10 @@ map.select |k, v|:...
 
 map.reject |k, v|:...
 
-map.transform |k, v|:
+map.transformed |k, v|:
  (new_key, new_value)
 
-map.transform_values |v, k|:...
+map.transformed_values |v, k|:...
 
 map.keys()
 map.values()

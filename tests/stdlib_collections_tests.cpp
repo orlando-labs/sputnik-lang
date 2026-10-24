@@ -1504,7 +1504,7 @@ sputnik::bytecode::BcModule make_map_protocol_module() {
   BcModule module;
   for (const std::string &symbol :
        {"keys", "values", "entries", "to_array", "each", "map", "select", "reject",
-        "filter_map", "transform", "transform_values", "[]", "contains?",
+        "filter_map", "transformed", "transformed_values", "[]", "contains?",
         "include?", "+", ">", "==", "count", "length", "size", "key?",
         "has_key?", "member?", "value?", "has_value?", "collect", "filter",
         "find_all", "alpha", "beta", "gamma", "missing"}) {
@@ -1534,11 +1534,11 @@ sputnik::bytecode::BcModule make_map_protocol_module() {
   module.code_objects.push_back(
       make_send_code(8, symbol_id_or_die(module, "reject"), true));
   module.code_objects.push_back(
-      make_send_code(9, symbol_id_or_die(module, "transform_values"), true));
+      make_send_code(9, symbol_id_or_die(module, "transformed_values"), true));
   module.code_objects.push_back(
       make_unary_send_code(10, symbol_id_or_die(module, "[]")));
   module.code_objects.push_back(
-      make_send_code(11, symbol_id_or_die(module, "transform"), true));
+      make_send_code(11, symbol_id_or_die(module, "transformed"), true));
   module.code_objects.push_back(
       make_unary_send_code(12, symbol_id_or_die(module, "contains?")));
   module.code_objects.push_back(
@@ -1795,20 +1795,20 @@ void test_std001_map_protocol_matrix() {
                             "Map#reject key/value args");
 
   result = sputnik::runtime::execute_code(module, 9, {map, inc_value});
-  expect_ok(result, "Map#transform_values");
+  expect_ok(result, "Map#transformed_values");
   expect_symbol_map_entries(module, result.value, {{"alpha", 2}, {"beta", 3}},
-                            "Map#transform_values");
+                            "Map#transformed_values");
 
   result = sputnik::runtime::execute_code(module, 9,
                                         {map, transform_value_with_key});
-  expect_ok(result, "Map#transform_values key-aware");
+  expect_ok(result, "Map#transformed_values key-aware");
   expect_symbol_map_entries(module, result.value, {{"alpha", 2}, {"beta", 2}},
-                            "Map#transform_values key-aware");
+                            "Map#transformed_values key-aware");
 
   result = sputnik::runtime::execute_code(module, 11, {map, transform_rekey});
-  expect_ok(result, "Map#transform");
+  expect_ok(result, "Map#transformed");
   expect_symbol_map_entries(module, result.value, {{"beta", 2}, {"gamma", 3}},
-                            "Map#transform");
+                            "Map#transformed");
 
   result = sputnik::runtime::execute_code(module, 14, {map});
   expect_ok(result, "Map#count");
@@ -1924,14 +1924,14 @@ void test_std001_empty_map_edges() {
          "empty Map#reject should return empty map");
 
   result = sputnik::runtime::execute_code(module, 9, {empty, inc_value});
-  expect_ok(result, "empty Map#transform_values");
+  expect_ok(result, "empty Map#transformed_values");
   expect(result.value.is_map() && result.value.as_map()->entries.empty(),
-         "empty Map#transform_values should return empty map");
+         "empty Map#transformed_values should return empty map");
 
   result = sputnik::runtime::execute_code(module, 11, {empty, transform_rekey});
-  expect_ok(result, "empty Map#transform");
+  expect_ok(result, "empty Map#transformed");
   expect(result.value.is_map() && result.value.as_map()->entries.empty(),
-         "empty Map#transform should return empty map");
+         "empty Map#transformed should return empty map");
 }
 
 void test_std006_collection_error_edges() {

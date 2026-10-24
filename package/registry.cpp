@@ -323,19 +323,58 @@ Value complete_release_index(API &api, const std::string &reference) {
   fail("release index kept changing; retry the command");
 }
 
+PackageManifest registry_artifact_manifest(const Value &a) {
+    PackageManifest m; m.variant = a.at("variant").string();
+    const auto string = [](const Value &object, const std::string &key, std::string &out) { if (object.object.count(key)) out = object.at(key).string(); };
+    const auto strings = [](const Value &object, const std::string &key, std::vector<std::string> &out) {
+      if (!object.object.count(key)) return;
+      if (object.at(key).kind != Value::Array) fail("invalid target requirements");
+      for (const auto &x : object.at(key).array) out.push_back(x.string());
+    };
+    string(a,"kind",m.kind); string(a,"bundle",m.bundle);
+    if (a.object.count("target")) {
+      const auto &t = a.at("target");
+      string(t,"os",m.target.os); string(t,"arch",m.target.arch); string(t,"min_os",m.target.min_os);
+      string(t,"libc",m.target.libc); string(t,"min_libc",m.target.min_libc); string(t,"compute_backend",m.target.compute_backend);
+      string(t,"cuda_version",m.target.cuda_version); string(t,"min_cuda_driver",m.target.min_cuda_driver);
+      strings(t,"cpu_features",m.target.cpu_features); strings(t,"compute_backends",m.target.compute_backends); strings(t,"cuda_architectures",m.target.cuda_architectures);
+    } else if (m.variant != "source" && m.variant != "bytecode") fail("native variant lacks target metadata");
+    std::string mode = "none"; string(a,"native_mode",mode);
+    if (mode != "none" || (a.object.count("native_payload") && a.at("native_payload").truth())) {
+      if (!a.object.count("target") || !a.object.count("compatibility")) fail("native variant lacks compatibility metadata");
+      PackageNativeExtension n; n.kind = mode == "source" || mode == "mixed" ? "source" : "prebuilt";
+      const auto &compatibility = a.at("compatibility");
+      if (compatibility.object.count("sputnik_ext_abi") && compatibility.at("sputnik_ext_abi").kind != Value::Null)
+        n.sputnik_ext_abi_version = static_cast<std::uint32_t>(size_field(compatibility.at("sputnik_ext_abi")));
+      m.native_extensions.push_back(n);
+    }
+    if (a.object.count("compatibility")) {
+      const auto &c = a.at("compatibility");
+      m.has_bytecode_delivery = c.object.count("bytecode_versions") && !c.at("bytecode_versions").array.empty();
+      if (c.object.count("native_providers")) for (const auto &item : c.at("native_providers").array) {
+        PackageNativeProvider p;
+        string(item,"id",p.id); string(item,"kind",p.kind); string(item,"version",p.version);
+        string(item,"abi",p.abi); string(item,"build_id",p.build_id); string(item,"runtime_build_id",p.runtime_build_id);
+        m.native_providers.push_back(p);
+      }
+    }
+    return m;
+}
+
 int registry_query_command(int argc, char **argv) {
   const std::string command = argv[2];
   std::string origin = default_registry, reference, version;
   fs::path credentials;
-  bool json = false;
+  bool json = false, check_host = false;
   if (const auto *value = std::getenv("SPUTNIK_PKG_REGISTRY")) if (*value) origin = value;
   if (const auto *value = std::getenv("SPUTNIK_PKG_CREDENTIALS")) if (*value) credentials = value;
   std::set<std::string> options;
   for (int i = 3; i < argc; ++i) {
     const std::string option = argv[i];
-    if (option == "--json" || option == "--registry" || option == "--credentials") {
+    if (option == "--json" || option == "--check-host" || option == "--registry" || option == "--credentials") {
       if (!options.insert(option).second) fail("duplicate option: " + option);
       if (option == "--json") { json = true; continue; }
+      if (option == "--check-host") { check_host = true; continue; }
       if (++i >= argc || !*argv[i] || std::string(argv[i]).rfind("--", 0) == 0)
         fail("missing value for " + option);
       if (option == "--registry") origin = argv[i];
@@ -343,6 +382,7 @@ int registry_query_command(int argc, char **argv) {
     } else if (option.rfind('-', 0) != 0 && reference.empty()) reference = option;
     else fail("unknown pkg " + command + " argument: " + option);
   }
+  if (check_host && (command != "variants" || !json)) fail("--check-host requires pkg variants --json");
   if (command == "variants") {
     const auto at = reference.find('@');
     if (at == std::string::npos) fail("usage: sputnik pkg variants <package>@<version>");
@@ -381,6 +421,68 @@ int registry_query_command(int argc, char **argv) {
     std::sort(artifacts.array.begin(), artifacts.array.end(), [](const Value &a, const Value &b) {
       return a.at("variant").text < b.at("variant").text;
     });
+  }
+  if (check_host) {
+    // Use the installer's target/ABI/hardware gates. Consent to native code,
+    // source compilation and size is collected separately by the caller.
+    const auto host = probe_package_host(true);
+    const auto string_value = [](const std::string &s) { Value v; v.kind = Value::String; v.text = s; return v; };
+    const auto bool_value = [](bool b) { Value v; v.kind = Value::Boolean; v.text = b ? "true" : "false"; return v; };
+    Value host_value; host_value.kind = Value::Object;
+    host_value.object = {{"os", string_value(host.os)}, {"arch", string_value(host.arch)}};
+    result.object["host"] = host_value;
+    std::vector<PackageManifest> best;
+    int best_rank = -10000;
+    for (auto &artifact : result.object.at("artifacts").array) {
+      auto manifest = registry_artifact_manifest(artifact);
+      VariantPolicy policy;
+      policy.variant = manifest.variant; policy.bundle = manifest.bundle;
+      policy.allow_native = true;
+      policy.build_from_source = std::any_of(manifest.native_extensions.begin(), manifest.native_extensions.end(),
+          [](const auto &n) { return n.kind == "source"; });
+      const auto supports = [&](const std::string &b) {
+        return manifest.target.compute_backend == b ||
+            std::find(manifest.target.compute_backends.begin(), manifest.target.compute_backends.end(), b) != manifest.target.compute_backends.end();
+      };
+      policy.backend = manifest.target.compute_backend == "none" ? "cpu" : manifest.target.compute_backend;
+      auto reason = package_incompatibility(manifest, host, policy);
+      for (const auto *backend : {"cuda", "mps", "cpu"}) {
+        if (!supports(backend)) continue;
+        auto candidate = policy; candidate.backend = backend;
+        const auto problem = package_incompatibility(manifest, host, candidate);
+        if (problem.empty()) { policy = candidate; reason.clear(); break; }
+      }
+      Value selection; selection.kind = Value::Object;
+      selection.object = {{"compatible", bool_value(reason.empty())}, {"reason", string_value(reason)},
+          {"backend", string_value(policy.backend)}, {"bundle", string_value(policy.bundle)},
+          {"allow_native", bool_value(package_has_native(manifest))},
+          {"build_from_source", bool_value(policy.build_from_source)}};
+      artifact.object["host_selection"] = selection;
+      if (!reason.empty() || result.at("yanked").truth()) continue;
+      const int rank = (policy.build_from_source ? -1000 : 0) +
+          (policy.backend == "cuda" || policy.backend == "mps" ? 100 : 0) +
+          (policy.bundle == "none" ? 20 : policy.bundle == "runtime" ? 10 : 0);
+      if (rank > best_rank) { best.clear(); best_rank = rank; }
+      if (rank == best_rank) best.push_back(manifest);
+    }
+    Value recommended;
+    if (!best.empty()) {
+      VariantPolicy policy; policy.bundle = "auto"; policy.allow_native = true;
+      const auto &first = result.at("artifacts").array;
+      const auto selected = std::find_if(first.begin(), first.end(), [&](const auto &a) { return a.at("variant").text == best.front().variant; });
+      policy.backend = selected->at("host_selection").at("backend").text;
+      policy.build_from_source = std::any_of(best.front().native_extensions.begin(), best.front().native_extensions.end(),
+          [](const auto &n) { return n.kind == "source"; });
+      // Equivalent builds have no unique SDK selector. The UI pins an explicit
+      // variant, so a stable lexical choice is safe and remains user-editable.
+      int chosen = 0;
+      try { const int selected = select_package_variant(best, host, policy); if (selected >= 0) chosen = selected; }
+      catch (const std::runtime_error &error) {
+        if (std::string(error.what()).find("ARTIFACT_SELECTION_AMBIGUOUS") == std::string::npos) throw;
+      }
+      recommended = string_value(best[chosen].variant);
+    }
+    result.object["recommended_variant"] = recommended;
   }
   if (json) { write_json(std::cout, result); std::cout << '\n'; }
   else if (command == "versions") {
@@ -573,47 +675,10 @@ RegistryDownload download_registry_package(const std::string &origin,
   const auto canonical = canonical_package(api, name);
   auto location = base(canonical);
   const auto host = probe_package_host(policy.backend == "cuda" || !policy.variant.empty());
-  const auto descriptor = [&](const Value &a) {
-    PackageManifest m; m.variant = a.at("variant").string();
-    const auto string = [](const Value &object, const std::string &key, std::string &out) { if (object.object.count(key)) out = object.at(key).string(); };
-    const auto strings = [](const Value &object, const std::string &key, std::vector<std::string> &out) {
-      if (!object.object.count(key)) return;
-      if (object.at(key).kind != Value::Array) fail("invalid target requirements");
-      for (const auto &x : object.at(key).array) out.push_back(x.string());
-    };
-    string(a,"kind",m.kind); string(a,"bundle",m.bundle);
-    if (a.object.count("target")) {
-      const auto &t = a.at("target");
-      string(t,"os",m.target.os); string(t,"arch",m.target.arch); string(t,"min_os",m.target.min_os);
-      string(t,"libc",m.target.libc); string(t,"min_libc",m.target.min_libc); string(t,"compute_backend",m.target.compute_backend);
-      string(t,"cuda_version",m.target.cuda_version); string(t,"min_cuda_driver",m.target.min_cuda_driver);
-      strings(t,"cpu_features",m.target.cpu_features); strings(t,"compute_backends",m.target.compute_backends); strings(t,"cuda_architectures",m.target.cuda_architectures);
-    } else if (m.variant != "source" && m.variant != "bytecode") fail("native variant lacks target metadata");
-    std::string mode = "none"; string(a,"native_mode",mode);
-    if (mode != "none" || (a.object.count("native_payload") && a.at("native_payload").truth())) {
-      if (!a.object.count("target") || !a.object.count("compatibility")) fail("native variant lacks compatibility metadata");
-      PackageNativeExtension n; n.kind = mode == "source" || mode == "mixed" ? "source" : "prebuilt";
-      const auto &compatibility = a.at("compatibility");
-      if (compatibility.object.count("sputnik_ext_abi") && compatibility.at("sputnik_ext_abi").kind != Value::Null)
-        n.sputnik_ext_abi_version = static_cast<std::uint32_t>(size_field(compatibility.at("sputnik_ext_abi")));
-      m.native_extensions.push_back(n);
-    }
-    if (a.object.count("compatibility")) {
-      const auto &c = a.at("compatibility");
-      m.has_bytecode_delivery = c.object.count("bytecode_versions") && !c.at("bytecode_versions").array.empty();
-      if (c.object.count("native_providers")) for (const auto &item : c.at("native_providers").array) {
-        PackageNativeProvider p;
-        string(item,"id",p.id); string(item,"kind",p.kind); string(item,"version",p.version);
-        string(item,"abi",p.abi); string(item,"build_id",p.build_id); string(item,"runtime_build_id",p.runtime_build_id);
-        m.native_providers.push_back(p);
-      }
-    }
-    return m;
-  };
   const auto select = [&](const Value &release) {
     if (release.at("artifacts").kind != Value::Array) fail("invalid artifact list");
     std::vector<PackageManifest> variants;
-    for (const auto &a : release.at("artifacts").array) if (!a.at("quarantined").truth()) variants.push_back(descriptor(a));
+    for (const auto &a : release.at("artifacts").array) if (!a.at("quarantined").truth()) variants.push_back(registry_artifact_manifest(a));
     const int i = select_package_variant(variants,host,policy);
     return i < 0 ? std::string{} : variants[i].variant;
   };
@@ -693,7 +758,7 @@ RegistryDownload download_registry_package(const std::string &origin,
     const auto problem = package_incompatibility(archive.manifest,host,policy);
     if (!problem.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + problem);
     PackageManifest expected_target, actual_target;
-    expected_target.target = descriptor(meta).target; actual_target.target = archive.manifest.target;
+    expected_target.target = registry_artifact_manifest(meta).target; actual_target.target = archive.manifest.target;
     if (render_distribution_manifest(expected_target) != render_distribution_manifest(actual_target)) fail("archive target differs from registry metadata");
   } catch (...) { fs::remove(output); throw; }
   return {output, canonical, chosen};

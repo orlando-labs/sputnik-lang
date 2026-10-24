@@ -7001,7 +7001,7 @@ Title: SPEC-SYNC <artifact> <mismatch>
 - `T-054.1` реализовать обязательный eager API для `each`, `map`, `flat_map`, `select`, `reject`, `reduce`, `find`, `any?`, `all?`, `none?`, `first`, `count`, `group_by`, `to_a`, `lazy`.
 - `T-054.2` реализовать `reduce(init)` и `reduce` без init с `EmptyCollectionError` на пустой последовательности.
 - `T-054.3` реализовать `LazySeq` materialization path и corpus на lazy/eager chaining.
-- `T-055.1` реализовать `Map#each`, `Map#map`, `Map#select`, `Map#reject`, `transform_values`, `keys`, `values`, `entries`.
+- `T-055.1` реализовать `Map#each`, `Map#map`, `Map#select`, `Map#reject`, `transformed_values`, `keys`, `values`, `entries`.
 - `T-055.2` собрать corpus на arity, return-shape и ordering expectations там, где ordering зафиксирован.
 
 `ISS-054` и `ISS-055` закрываются только когда surface collection style языка больше не зависит от ad hoc helper functions вне stdlib contract.

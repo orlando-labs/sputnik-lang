@@ -169,6 +169,8 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-query-') as temporary:
                      ('versions', 'UPPER'), ('versions', 'a/b/c'),
                      ('versions', 'example', '--json', '--json'),
                      ('versions', 'example', '--registry', '--json'),
+                     ('versions', 'example', '--check-host', '--json'),
+                     ('variants', 'example@1.10.0', '--check-host'),
                      ('versions', 'example', '--unknown'), ('versions', 'example', 'extra')]:
             cli(*args, ok=False)
         assert len(state['requests']) == count

@@ -55,10 +55,16 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         def do_GET(self):
             base='/api/v1/namespaces/test/packages/native'
             def metadata(v):
-                a=artifacts[v]
-                return dict(package_ref='test/native',version='1.0.0',variant=v,kind='library',bundle='none',native_mode='prebuilt',native_payload=True,
+                a=artifacts.get(v, artifacts['cpu-a'])
+                item = dict(package_ref='test/native',version='1.0.0',variant=v,kind='library',bundle='none',native_mode='prebuilt',native_payload=True,
                     target=a['target'],compatibility=dict(sputnik_ext_abi=1),quarantined=False,size=len(a['body']),sha256='sha256:'+'0'*64 if state['bad_digest'] else a['sha256'],
                     url=origin+base+'/versions/1.0.0/artifacts/'+v+'/download')
+                if v == 'native-source': item['native_mode'] = 'source'
+                if v == 'source':
+                    item.update(native_mode='none', native_payload=False, target=dict(os='any', arch='any', compute_backend='none'))
+                if v == 'cpu-mps': item['target'] = dict(a['target'], compute_backends=['cpu', 'mps'])
+                if v == 'wrong-abi': item['compatibility']['sputnik_ext_abi'] = 999
+                return item
             if '/artifacts/' in self.path:
                 v=self.path.split('/artifacts/')[1].split('/')[0]
                 if self.path.endswith('/download'):
@@ -67,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
                 else: body=json.dumps(metadata(v)).encode(); headers={}
             else:
                 release=dict(package_ref='test/native',version='1.0.0',yanked=False,artifacts=[metadata(v) for v in state['variants']])
-                if self.path.endswith('/index'): data=dict(package_ref='test/native',versions=[release],next_cursor=None)
+                if self.path.endswith('/index'): data=dict(package_ref='test/native',versions=[release],revision=1,next_cursor=None)
                 elif '/versions/' in self.path: data=release
                 else: data=dict(package_ref='test/native')
                 body=json.dumps(data).encode(); headers={}
@@ -79,6 +85,27 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
     thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
     try:
         def install(*args,ok=True): return cli('pkg','install','test/native','--registry',origin,*args,ok=ok)
+        def inspect():
+            return json.loads(cli('pkg', 'variants', 'test/native@1.0.0', '--registry', origin, '--json', '--check-host'))
+        state['variants'] = ['source']
+        inspected = inspect()
+        assert inspected['recommended_variant'] == 'source'
+        selection = inspected['artifacts'][0]['host_selection']
+        assert selection['compatible'] and not selection['allow_native'] and selection['backend'] == 'cpu'
+        state['variants'] = ['native-source', 'cpu-a', 'foreign', 'wrong-abi']
+        inspected = inspect()
+        assert inspected['recommended_variant'] == 'cpu-a'
+        selections = {a['variant']: a['host_selection'] for a in inspected['artifacts']}
+        assert selections['native-source']['compatible'] and selections['native-source']['build_from_source']
+        assert not selections['foreign']['compatible'] and 'architecture' in selections['foreign']['reason']
+        assert not selections['wrong-abi']['compatible'] and 'ABI' in selections['wrong-abi']['reason']
+        assert state['downloads'] == 0 and not (root/'home').exists()
+        state['variants'] = ['foreign']
+        assert inspect()['recommended_variant'] is None
+        state['variants'] = ['cpu-mps']
+        selection = inspect()['artifacts'][0]['host_selection']
+        assert selection['compatible'] and selection['backend'] == ('mps' if mac else 'cpu')
+        state['variants'] = ['cpu-a']
         assert 'NO_COMPATIBLE_ARTIFACT' in install(ok=False)
         assert state['downloads']==0
         env['SPUTNIK_NATIVE_CXX']='/no/compiler'
@@ -92,6 +119,7 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         assert 'variant = "cpu-a"' in original_lock and artifacts['cpu-a']['sha256'] in original_lock and origin in original_lock
         state['variants']=['cpu-a','cpu-b','foreign']
         assert 'AMBIGUOUS' in install('--allow-native',ok=False)
+        assert inspect()['recommended_variant'] == 'cpu-a'
         before=state['downloads']
         assert 'NO_COMPATIBLE_ARTIFACT' in install('--allow-native','--variant','foreign',ok=False)
         assert state['downloads']==before

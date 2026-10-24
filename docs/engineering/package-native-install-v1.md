@@ -7,12 +7,13 @@ publishes the complete variant directory. Native execution still requires the
 normal FFI grant or notebook native trust.
 
 Registry discovery reads metadata without downloading archives or checking the
-current host's GPU. Root aliases and canonical scoped names both work:
+current host's GPU unless `--check-host` is requested. Root aliases and canonical scoped names both work:
 
 ```sh
 sputnik pkg versions sputniktorch
 sputnik pkg variants slowpilot/sputniktorch@0.1.2
 sputnik pkg variants sputniktorch@0.1.2 --json
+sputnik pkg variants sputniktorch@0.1.2 --json --check-host
 ```
 
 Each command requests its index/release endpoint directly; resolving a root
@@ -24,6 +25,16 @@ ordered by SemVer descending, including prereleases; withdrawn releases have a
 the complete index or release metadata, including target, CUDA/LibTorch
 requirements and archive hashes. Index pages are collected automatically, with
 bounded retries if publication changes the index during pagination.
+`pkg variants --json --check-host` adds the current process host (`os`, `arch`),
+a `host_selection` record for each artifact and `recommended_variant` (or null).
+The selection record reports compatibility and its reason, backend, bundle,
+native-code consent and source-build requirement using the installer's gates.
+It probes GPU hardware on the execution machine without downloading packages.
+Recommendations prefer prebuilt artifacts, a supported GPU backend and ordinary
+runtime/library builds over SDK bundles; equivalent builds use a stable variant
+order. The caller pins the explicit selected variant on installation and still
+collects native/source/large-package consent. Ordinary discovery output is unchanged.
+
 Both commands accept `--registry URL` and `--credentials FILE`, using the same
 default hub, environment overrides and saved credentials as installation.
 

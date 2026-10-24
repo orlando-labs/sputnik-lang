@@ -156,7 +156,7 @@ SputnikStatus sputnik_package_answer(SputnikCtx *cx, const SputnikValue *args,
             "native_calc": 'export answer\nnative def answer() -> Int from "native.answer": 9\n',
             "native_calc.facade": "from native_calc import answer\nexport answer\n",
         }, native=native_source)
-        cli("pkg", "install", "native-package")
+        cli("pkg", "install", "native-package", "--allow-native", "--build-from-source")
         native_script = app / "native.s"
         native_script.write_text("from native_calc import answer\nanswer()\n")
         assert cli("run", native_script).strip() == "9"
@@ -187,7 +187,8 @@ SputnikStatus sputnik_package_answer(SputnikCtx *cx, const SputnikValue *args,
         library = library_meta.parent / library_meta.read_text().splitlines()[1]
         with library.open("ab") as output:
             output.write(b"tampered")
-        assert "installed native library changed" in cli("run", native_script, "--grant", "ffi", ok=False)
+        changed = cli("run", native_script, "--grant", "ffi", ok=False)
+        assert "prepared native library changed" in changed and library.name in changed, changed
 
         # An installed artifact cannot silently change its pinned contents.
         artifact = home / "renamed-library/1.11.0/renamed-library-1.11.0.sputnikpkg"

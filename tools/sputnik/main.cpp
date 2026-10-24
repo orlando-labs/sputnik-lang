@@ -3473,6 +3473,9 @@ bool native_vm_callable_code_body(const sputnik::bytecode::BcModule &module,
   for (const sputnik::bytecode::Instruction &instruction : code.instructions) {
     using sputnik::bytecode::Opcode;
     switch (instruction.opcode) {
+    case Opcode::Throw:
+      *reason = "throw needs dynamic catch scopes outside the scalar VM bridge";
+      return false;
     case Opcode::Call:
     case Opcode::CallSpread:
       *reason = "calls can reach output helpers";

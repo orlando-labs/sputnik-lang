@@ -16,6 +16,8 @@ jobs:
   build-and-test:
     name: build+test (${{ matrix.cc }})
     runs-on: ubuntu-latest
+    env:
+      SPUTNIK_NATIVE_RT_CACHE: ${{ github.workspace }}/build/native-rt-cache
     strategy:
       fail-fast: false
       matrix:

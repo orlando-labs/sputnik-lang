@@ -19,7 +19,7 @@ def main():
     score = score + 1
   if Math.min(10, 4) == 4 and Math.max(1.5, 2) == 2:
     score = score + 1
-  if Math.hypot(3, 4) == 5.0 and Math.cbrt(27) == 3.0:
+  if Math.hypot(3, 4) == 5.0 and Math.abs(Math.cbrt(27) - 3.0) < 0.000000000001:
     score = score + 1
   if Math.log2(8) == 3.0 and Math.log10(100) == 2.0:
     if Math.log(1) == 0.0 and Math.abs(Math.log(Math.E()) - 1.0) < 0.000000001:

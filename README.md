@@ -12,6 +12,9 @@ Current baseline:
 - LibYAML development headers/libraries are required for notebook YAML config
   codecs (`brew install libyaml` or `apt install libyaml-dev`); `YAML_PREFIX`
   overrides discovery. TOML parsing uses the vendored MIT-licensed toml++ header;
+- LibArchive and zlib development headers/libraries are required for package
+  distribution (`brew install libarchive` or `apt install libarchive-dev zlib1g-dev`);
+  `ARCHIVE_PREFIX` overrides LibArchive discovery;
 - ncurses headers/libraries are required for the bundled interactive console
   (Linux: `libncurses-dev`; macOS: supplied by Xcode Command Line Tools);
 - W12 documentation sync uses only the Python 3 standard library for generated anchor-map checks;

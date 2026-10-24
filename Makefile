@@ -982,6 +982,7 @@ backend-equivalence: $(BUILD_DIR)/sputnik
 	python3 tools/backend_equivalence.py
 
 spec-sync-check:
+	python3 tests/spec_sync_test.py
 	python3 tools/spec_sync.py check
 
 .PHONY: test-conditional-assignment

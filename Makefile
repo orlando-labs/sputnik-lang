@@ -993,7 +993,7 @@ test: test-conditional-assignment
 test-conditional-assignment: $(BUILD_DIR)/sputnik
 	mkdir -p $(BUILD_DIR)/conditional_assignment
 	$(BUILD_DIR)/sputnik tests/fixtures/conditional_assignment/main.s > $(BUILD_DIR)/conditional_assignment/vm.out
-	rg -q '^PASS conditional assignment$$' $(BUILD_DIR)/conditional_assignment/vm.out
+	grep -q '^PASS conditional assignment$$' $(BUILD_DIR)/conditional_assignment/vm.out
 	$(BUILD_DIR)/sputnik build tests/fixtures/conditional_assignment/main.s --entry main --require-full-native -o $(BUILD_DIR)/conditional_assignment/native > $(BUILD_DIR)/conditional_assignment/build.json
 	$(BUILD_DIR)/conditional_assignment/native > $(BUILD_DIR)/conditional_assignment/native.out
 	cmp $(BUILD_DIR)/conditional_assignment/vm.out $(BUILD_DIR)/conditional_assignment/native.out

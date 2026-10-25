@@ -170,10 +170,14 @@ run inside it) and executes just that code object per call across a scalar
 value bridge.
 
 Source `throw` is excluded from the scalar VM bridge because that VM cannot
-see a dynamically enclosing native `catch`. Such code makes the entry use the
-whole-program VM path before any effect; private compiler break packets retain
-their existing direct-native lowering. `make test-native-throw-fallback` checks
-iterator catch propagation, a preceding output printed once, and uncaught faults.
+see a dynamically enclosing native `catch`. Source `throw/catch` is lowered
+directly to native control flow, including tag snapshots, mismatched nested
+catches, payload ownership, rescue bypass, and ensure replacement. An uncaught
+throw reports `UncaughtThrowError` with VM-compatible source frames. A throw in
+a detached task or threaded worker cannot reach the caller's catch scope.
+`make test-native-throw` requires VM-independent full native coverage and checks
+VM/native results, output, and fault traces. Counter and blocking FFI regressions
+also require full native coverage, including a throw escaping an FFI callback.
 
 Soundness rests on three constraints, each enforced where stated:
 

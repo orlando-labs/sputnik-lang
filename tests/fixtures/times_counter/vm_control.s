@@ -1,5 +1,4 @@
-# catch/throw currently uses the VM backend; keep this regression separate
-# from the fixture that requires complete native coverage.
+# Dynamic throw must exit a large lazy counter and execute ensure in both backends.
 finalized = []
 stopped = catch(:done):
   9223372036854775807.times |i|:

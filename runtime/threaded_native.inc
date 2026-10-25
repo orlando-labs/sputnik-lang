@@ -202,6 +202,15 @@ static NativeValue native_threaded_send(
         failures->exceptions.emplace(index, raised);
       }
       throw sputnik::runtime::RuntimeTaskFailure("RuntimeError", "native threaded block raised");
+    } catch (const NativeThrown &signal) {
+      // A worker cannot throw into the caller's dynamic catch scope.
+      {
+        std::lock_guard<std::mutex> lock(failures->mutex);
+        failures->exceptions.emplace(
+            index, NativeRaised{native_uncaught_throw_error(signal), {}});
+      }
+      throw sputnik::runtime::RuntimeTaskFailure(
+          "UncaughtThrowError", native_uncaught_throw_message(signal));
     } catch (const NativeBailout &error) {
       throw sputnik::runtime::RuntimeTaskFailure("NativeCodeError", error.what());
     }

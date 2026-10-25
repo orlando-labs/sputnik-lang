@@ -2288,34 +2288,8 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
     case Opcode::BreakScope:
     case Opcode::BreakScoped:
       break;
-    case Opcode::Throw: {
-      // Only the compiler's private effect-break packet is admitted here.
-      // General source throw retains its existing VM fallback contract,
-      // including rescuable UncaughtThrowError and native callback boundaries.
-      const auto pc = static_cast<std::size_t>(&instruction - code.instructions.data());
-      std::uint32_t tag = 0, value = 0, loaded_tag = 0, capture = 0, null_reg = 0;
-      bool effect_break = pc >= 2U &&
-          operand_u32_value(instruction, 0, &tag) &&
-          operand_u32_value(instruction, 1, &value) &&
-          code.instructions[pc - 2U].opcode == Opcode::LoadUpval &&
-          operand_u32_value(code.instructions[pc - 2U], 0, &loaded_tag) &&
-          operand_u32_value(code.instructions[pc - 2U], 1, &capture) &&
-          loaded_tag == tag && code.instructions[pc - 1U].opcode == Opcode::LoadNull &&
-          operand_u32_value(code.instructions[pc - 1U], 0, &null_reg) &&
-          null_reg == value && capture < code.capture_layout.size();
-      if (effect_break) {
-        const auto &entry = code.capture_layout[capture];
-        effect_break = entry.name_str_id < module.strings.size() &&
-            module.strings[entry.name_str_id] == "__effect_break" &&
-            entry.source_kind_str_id < module.strings.size() &&
-            module.strings[entry.source_kind_str_id] == "value";
-      }
-      if (!effect_break) {
-        *reason = "source throw still uses VM fallback";
-        return false;
-      }
+    case Opcode::Throw:
       break;
-    }
     case Opcode::PBind: {
       std::uint32_t ignored_slot = 0;
       std::uint32_t value_reg = 0;
@@ -5180,6 +5154,16 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
             << "U, frame.pc);\n";
       }
       out << "    throw;\n";
+      out << "  } catch (NativeThrown &signal) {\n";
+      if (needs_handler_frame) {
+        out << "    if (handler_seed != nullptr) "
+               "native_merge_handler_frame(*handler_seed, frame);\n";
+      }
+      if (traces_locally) {
+        out << "    native_append_trace_frame(signal, " << code.code_id
+            << "U, frame.pc);\n";
+      }
+      out << "    throw;\n";
     }
     if (may_own_nonlocal_return_target) {
       out << "  } catch (NativeNonlocalReturn &signal) {\n";
@@ -7952,7 +7936,7 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                "target has expired or belongs to another task\")); }\n";
       }
       out << "  throw NativeThrown{" << read_reg_expr(tag) << ", "
-          << read_reg_expr(value) << "};\n";
+          << read_reg_expr(value) << ", {}};\n";
       break;
     }
     case Opcode::BreakForeign: {
@@ -8002,13 +7986,18 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         continue;
       out << "      if (frame.pc >= " << handler.protected_from
           << "U && frame.pc < " << handler.protected_to << "U) {\n";
-      out << "        std::optional<NativeRaised> next_exception = "
+      out << "        frame.pc = " << handler.handler_pc << "U;\n";
+      out << "        try {\n";
+      out << "          std::optional<NativeRaised> next_exception = "
              "sputnik_native_run_exception_handler(frame, raised, "
           << handler.handler_code_id << "U, " << kind << "U, "
           << exception_slot << "U, " << result_slot << "U);\n";
-      out << "        frame.pc = " << handler.handler_pc << "U;\n";
-      out << "        if (next_exception.has_value()) "
+      out << "          if (next_exception.has_value()) "
              "pending_exception = std::move(next_exception);\n";
+      out << "        } catch (const NativeThrown &replacement) { "
+             "pending_throw = replacement; }\n";
+      out << "        catch (const NativeNonlocalReturn &replacement) { "
+             "pending_return = replacement; }\n";
       out << "        continue;\n";
       out << "      }\n";
     }
@@ -8025,21 +8014,24 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       const auto result_slot =
           sputnik::bytecode::handler_result_slot(handler.flags);
       out << "      if (frame.pc >= " << handler.protected_from
-          << "U && frame.pc < " << handler.protected_to << "U";
-      if (kind == sputnik::bytecode::kHandlerKindCatch)
-        out << " && native_value_equal(read_reg(frame, " << tag_slot
-            << "U), signal.tag)";
-      out << ") {\n";
+          << "U && frame.pc < " << handler.protected_to << "U) {\n";
+      // The VM unwinds to the nearest catch/ensure before testing its tag.
+      // A continued throw starts at that handler's resume PC without frames
+      // that have already been removed, even for a mismatched catch.
       if (kind == sputnik::bytecode::kHandlerKindEnsure) {
         out << "        pending_throw = signal;\n";
+        out << "        pending_throw->trace.clear();\n";
         out << "        try { sputnik_native_run_nonlocal_ensure_handler(frame, "
             << handler.handler_code_id << "U, " << tag_slot << "U); }\n";
         out << "        catch (const NativeRaised &replacement) { pending_throw.reset(); pending_exception = replacement; }\n";
         out << "        catch (const NativeThrown &replacement) { pending_throw = replacement; }\n";
         out << "        catch (const NativeNonlocalReturn &replacement) { pending_throw.reset(); pending_return = replacement; }\n";
       } else {
-        out << "        write_reg(frame, " << result_slot
+        out << "        if (native_value_equal(read_reg(frame, " << tag_slot
+            << "U), signal.tag)) write_reg(frame, " << result_slot
             << "U, signal.value);\n";
+        out << "        else { pending_throw = signal; "
+               "pending_throw->trace.clear(); }\n";
       }
       out << "        frame.pc = " << handler.handler_pc << "U; continue;\n";
       out << "      }\n";
@@ -8077,6 +8069,39 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
   out << "  native_bailout(\"fell through native code\");\n";
   out << "}\n\n";
   return out.str();
+}
+
+void emit_native_cpp_fault_print(std::ostream &out) {
+  out << "    if (raised.exception.tag == NativeValue::Tag::ErrorInstance) "
+         "{\n";
+  out << "      NativeErrorInstance &error = "
+         "as_native_error(raised.exception);\n";
+  out << "      const std::string error_name = "
+         "native_error_registry.error_name(error.error_id);\n";
+  out << "      const std::string message = "
+         "native_value_to_display_string(error.message);\n";
+  out << "      std::cerr << error_name << \": \" << message << \"\\n\";\n";
+  out << "      std::cerr << error_name << \": \" << message;\n";
+  out << "      for (const NativeTraceFrame &frame : raised.trace) {\n";
+  out << "        std::cerr << \"\\n  at c\" << frame.code_id << \":\" "
+         "<< frame.pc;\n";
+  out << "        if (!frame.file.empty()) {\n";
+  out << "          std::cerr << \" (\" << frame.file;\n";
+  out << "          if (frame.line != 0U) {\n";
+  out << "            std::cerr << \":\" << frame.line;\n";
+  out << "            if (frame.column != 0U) "
+         "std::cerr << \":\" << frame.column;\n";
+  out << "          }\n";
+  out << "          std::cerr << \")\";\n";
+  out << "        } else if (frame.line != 0U) {\n";
+  out << "          std::cerr << \" (line \" << frame.line << \")\";\n";
+  out << "        }\n";
+  out << "      }\n";
+  out << "      std::cerr << \"\\n\";\n";
+  out << "    } else {\n";
+  out << "      std::cerr << \"NativeError: \" << "
+         "native_value_to_debug_string(raised.exception) << \"\\n\";\n";
+  out << "    }\n";
 }
 
 std::string emit_embedded_bytecode_cpp(
@@ -9204,7 +9229,8 @@ private:
          "std::uint32_t column = 0; };\n";
   out << "struct NativeRaised { NativeValue exception; "
          "std::vector<NativeTraceFrame> trace; };\n";
-  out << "struct NativeThrown { NativeValue tag; NativeValue value; };\n";
+  out << "struct NativeThrown { NativeValue tag; NativeValue value; "
+         "std::vector<NativeTraceFrame> trace; };\n";
   out << "struct NativeScopedBreakTarget { std::atomic<bool> active{false}; "
          "std::uint64_t task_id = 0; std::uint64_t owner_id = 0; std::weak_ptr<void> task_context; };\n";
   out << "struct NativeNonlocalReturnTarget { "
@@ -20493,6 +20519,15 @@ static NativeValue native_benchmark_send(
          "const NativeValue &value);\n";
   out << "static std::string native_value_to_display_string("
          "const NativeValue &value);\n";
+  out << "static std::string native_uncaught_throw_message("
+         "const NativeThrown &signal) {\n"
+         "  return \"uncaught throw \" + native_value_to_debug_string(signal.tag);\n"
+         "}\n"
+         "static NativeValue native_uncaught_throw_error("
+         "const NativeThrown &signal) {\n"
+         "  return native_named_error(\"UncaughtThrowError\", "
+         "native_uncaught_throw_message(signal));\n"
+         "}\n";
   out << "static NativeValue native_to_str(const NativeValue &value) {\n";
   out << "  if (value.tag == NativeValue::Tag::BigInt) return NativeValue::heap_string(sputnik::runtime::big_int_to_decimal_string(*native_bigint_value(value)));\n";
   out << "  if (value.tag == NativeValue::Tag::Map && "
@@ -21044,8 +21079,9 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   const std::set<std::uint32_t> direct_chars_each_block_code_ids =
       native_cpp_direct_chars_each_block_code_ids(module,
                                                   plan.native_code_ids);
+  out << "template <typename Signal>\n";
   out << "static SPUTNIK_NATIVE_COLD void native_append_trace_frame("
-         "NativeRaised &raised, std::uint32_t code_id, "
+         "Signal &raised, std::uint32_t code_id, "
          "std::uint32_t pc);\n";
   out << "static bool native_trace_at_dispatch(std::uint32_t code_id);\n";
   for (std::uint32_t code_id : plan.native_code_ids) {
@@ -21110,6 +21146,10 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "  } catch (NativeRaised &raised) {\n";
   out << "    if (native_trace_at_dispatch(code_id)) "
          "native_append_trace_frame(raised, code_id, trace_pc);\n";
+  out << "    throw;\n";
+  out << "  } catch (NativeThrown &signal) {\n";
+  out << "    if (native_trace_at_dispatch(code_id)) "
+         "native_append_trace_frame(signal, code_id, trace_pc);\n";
   out << "    throw;\n";
   out << "  } catch (const NativeBailout &bailout) {\n";
   out << "    throw NativeBailout(\"c\" + std::to_string(code_id) + "
@@ -21913,6 +21953,9 @@ public:
       return sputnik::runtime::Value::null();
     } catch (const NativeRaised &raised) {
       throw_task_failure(raised);
+    } catch (const NativeThrown &signal) {
+      throw sputnik::runtime::RuntimeTaskFailure(
+          "UncaughtThrowError", native_uncaught_throw_message(signal));
     } catch (const NativeBailout &bailout) {
       throw sputnik::runtime::RuntimeTaskFailure(
           "NativeCodeError", bailout.what());
@@ -21978,6 +22021,9 @@ public:
       return true;
     } catch (const NativeRaised &raised) {
       throw_task_failure(raised);
+    } catch (const NativeThrown &signal) {
+      throw sputnik::runtime::RuntimeTaskFailure(
+          "UncaughtThrowError", native_uncaught_throw_message(signal));
     } catch (const NativeBailout &bailout) {
       throw sputnik::runtime::RuntimeTaskFailure(
           "NativeCodeError", bailout.what());
@@ -23776,6 +23822,14 @@ static NativeValue native_channel_send(
          "throw sputnik::runtime::RuntimeTaskCancelled();\n";
   out << "          throw sputnik::runtime::RuntimeTaskFailure("
          "\"RuntimeError\", \"native task failed\");\n";
+  out << "        } catch (const NativeThrown &signal) {\n"
+         "          {\n"
+         "            std::lock_guard<std::mutex> guard(state->mutex);\n"
+         "            state->exception = native_uncaught_throw_error(signal);\n"
+         "            state->has_exception = true;\n"
+         "          }\n"
+         "          throw sputnik::runtime::RuntimeTaskFailure("
+         "\"UncaughtThrowError\", native_uncaught_throw_message(signal));\n";
   out << "        } catch (const NativeBailout &) {\n";
   out << "          throw sputnik::runtime::RuntimeTaskFailure("
          "\"NativeCodeError\", \"native task bailed after spawn\");\n";
@@ -24225,6 +24279,10 @@ static NativeValue native_channel_send(
     out << "  } catch (NativeRaised &raised) {\n"
            "    if (native_trace_at_dispatch(" << code_id
         << "U)) native_append_trace_frame(raised, " << code_id
+        << "U, trace_pc);\n    throw;\n"
+           "  } catch (NativeThrown &signal) {\n"
+           "    if (native_trace_at_dispatch(" << code_id
+        << "U)) native_append_trace_frame(signal, " << code_id
         << "U, trace_pc);\n    throw;\n"
            "  } catch (const NativeBailout &bailout) {\n"
            "    throw NativeBailout(\"c" << code_id
@@ -25186,8 +25244,9 @@ static std::string native_named_callable_type_name(
   out << "  frame.line = location.line; frame.column = location.column;\n";
   out << "  return frame;\n";
   out << "}\n\n";
+  out << "template <typename Signal>\n";
   out << "static SPUTNIK_NATIVE_COLD void native_append_trace_frame("
-         "NativeRaised &raised, std::uint32_t code_id, std::uint32_t pc) {\n";
+         "Signal &raised, std::uint32_t code_id, std::uint32_t pc) {\n";
   out << "  raised.trace.push_back(native_trace_frame(code_id, pc));\n";
   out << "}\n\n";
   for (const sputnik::bytecode::BcCode &code : module.code_objects) {
@@ -26056,7 +26115,9 @@ static SputnikStatus sputnik_native_ext_call_block(void *opaque, SputnikValue bl
   } catch (const NativeNonlocalReturn &signal) {
     state->nonlocal_return.emplace(signal);
   } catch (const NativeThrown &signal) {
-    state->scoped_break.emplace(signal);
+    // The ABI transports the tag and payload back to the suspended caller.
+    // As in the VM, callback frames have already unwound at that boundary.
+    state->scoped_break.emplace(NativeThrown{signal.tag, signal.value, {}});
   } catch (const sputnik::runtime::RuntimeTaskCancelled &) {
     state->fail("CancelledError", "task cancelled");
   } catch (const std::exception &error) {
@@ -26762,40 +26823,12 @@ static NativeValue sputnik_native_extension_invoke(
   }
   out << "    return 0;\n";
   out << "  } catch (const NativeRaised &raised) {\n";
-  out << "    if (raised.exception.tag == NativeValue::Tag::ErrorInstance) "
-         "{\n";
-  out << "      NativeErrorInstance &error = "
-         "as_native_error(raised.exception);\n";
-  out << "      const std::string error_name = "
-         "native_error_registry.error_name(error.error_id);\n";
-  out << "      const std::string message = "
-         "native_value_to_display_string(error.message);\n";
-  out << "      std::cerr << error_name << \": \" << message << \"\\n\";\n";
-  out << "      std::cerr << error_name << \": \" << message;\n";
-  out << "      for (const NativeTraceFrame &frame : raised.trace) {\n";
-  out << "        std::cerr << \"\\n  at c\" << frame.code_id << \":\" "
-         "<< frame.pc;\n";
-  out << "        if (!frame.file.empty()) {\n";
-  out << "          std::cerr << \" (\" << frame.file;\n";
-  out << "          if (frame.line != 0U) {\n";
-  out << "            std::cerr << \":\" << frame.line;\n";
-  out << "            if (frame.column != 0U) "
-         "std::cerr << \":\" << frame.column;\n";
-  out << "          }\n";
-  out << "          std::cerr << \")\";\n";
-  out << "        } else if (frame.line != 0U) {\n";
-  out << "          std::cerr << \" (line \" << frame.line << \")\";\n";
-  out << "        }\n";
-  out << "      }\n";
-  out << "      std::cerr << \"\\n\";\n";
-  out << "    } else {\n";
-  out << "      std::cerr << \"NativeError: \" << "
-         "native_value_to_debug_string(raised.exception) << \"\\n\";\n";
-  out << "    }\n";
+  emit_native_cpp_fault_print(out);
   out << "    return 1;\n";
-  out << "  } catch (const NativeThrown &signal) {\n";
-  out << "    std::cerr << \"UncaughtThrowError: uncaught throw \" << "
-         "native_value_to_debug_string(signal.tag) << \"\\n\";\n";
+  out << "  } catch (NativeThrown &signal) {\n";
+  out << "    NativeRaised raised{native_uncaught_throw_error(signal), "
+         "std::move(signal.trace)};\n";
+  emit_native_cpp_fault_print(out);
   out << "    return 1;\n";
   out << "  } catch (const NativeBailout &bailout) {\n";
   if (plan.uses_bytecode_fallback) {

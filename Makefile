@@ -843,6 +843,9 @@ test-times-counter: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_collections_tests
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/times-counter/build.json
 	$(BUILD_DIR)/times-counter/native > $(BUILD_DIR)/times-counter/native.out
 	cmp $(BUILD_DIR)/times-counter/vm.out $(BUILD_DIR)/times-counter/native.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/times_counter/vm_control.s --entry init --require-full-native -o $(BUILD_DIR)/times-counter/control-native > $(BUILD_DIR)/times-counter/control-build.json
+	$(BUILD_DIR)/times-counter/control-native > $(BUILD_DIR)/times-counter/control-native.out
+	cmp $(BUILD_DIR)/times-counter/vm-control.out $(BUILD_DIR)/times-counter/control-native.out
 
 test: test-native-language-idioms test-native-call-buffers test-native-dispatch-cache test-native-trivial-methods
 test: test-native-blocking
@@ -861,6 +864,9 @@ test-native-blocking: $(BUILD_DIR)/sputnik $(BUILD_DIR)/blocking_ffi_tests check
 	$(BUILD_DIR)/sputnik build tests/fixtures/native_blocking/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_blocking/native > $(BUILD_DIR)/native_blocking/build.json
 	$(BUILD_DIR)/native_blocking/native/test.blocking > $(BUILD_DIR)/native_blocking/native.out
 	grep -q '^PASS source blocking native dispatch$$' $(BUILD_DIR)/native_blocking/native.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_blocking/vm_control.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_blocking/control > $(BUILD_DIR)/native_blocking/control-build.json
+	$(BUILD_DIR)/native_blocking/control/test.blocking.vm_control > $(BUILD_DIR)/native_blocking/control-native.out
+	cmp $(BUILD_DIR)/native_blocking/vm-control.out $(BUILD_DIR)/native_blocking/control-native.out
 
 # Exercise waits with no spare scheduler workers, including a producer that
 # needs to enter FFI while the original idle pool is fully occupied.
@@ -1049,10 +1055,10 @@ test-native-bigint: $(BUILD_DIR)/sputnik
 	python3 tests/native_bigint_test.py $(BUILD_DIR)/sputnik
 test: test-native-bigint
 
-.PHONY: test-native-throw-fallback
-test-native-throw-fallback: $(BUILD_DIR)/sputnik
-	python3 tests/native_throw_fallback_test.py $(BUILD_DIR)/sputnik
-test: test-native-throw-fallback
+.PHONY: test-native-throw
+test-native-throw: $(BUILD_DIR)/sputnik
+	python3 tests/native_throw_test.py $(BUILD_DIR)/sputnik
+test: test-native-throw
 
 .PHONY: test-effect-iteration
 test: test-effect-iteration

@@ -2,5 +2,5 @@
   "schema": "sputnik.run.v1",
   "entry": "probe",
   "status": "ok",
-  "value": "\"-1:1:4:3:4:3:3:0:0:1\""
+  "value": "\"-1:1:4:true:4:3:3:0:0:1\""
 }

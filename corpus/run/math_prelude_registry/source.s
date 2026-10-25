@@ -9,7 +9,8 @@ def probe():
   sign_neg = Math.sign(0 - 3)
   sign_pos = Math.sign(3)
   mn = Math.min(10, 4)
-  cb = Math.cbrt(27)
+  # libm may return a neighbouring Float for the exact cube root.
+  cb = Math.abs(Math.cbrt(27) - 3.0) < 0.000000000001
   rd = Math.round(3.5)
   tr = Math.trunc(3.9)
   l2 = Math.log2(8)

@@ -109,6 +109,13 @@ rescue UncaughtThrowError:
   42
 result
 ''',
+    "threaded_boundary": '''result = try:
+  catch :worker:
+    [1].threaded(1).map: throw :worker, 1
+rescue UncaughtThrowError:
+  42
+result
+''',
     "uncaught_threaded_boundary": "catch :worker:\n  [1].threaded(1).map: throw :worker, 1\n",
     "uncaught": "throw :missing, 1\n",
     "uncaught_deep": '''def deep():

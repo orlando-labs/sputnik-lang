@@ -11895,6 +11895,25 @@ void test_source_throw_catch_execution() {
   expect(unhandled.fault.has_value() &&
              unhandled.fault->error_name == "UncaughtThrowError",
          "unhandled throw should report UncaughtThrowError");
+
+  const sputnik::runtime::ExecutionResult worker_throw = execute_emitted_init(
+      "try:\n"
+      "  catch :worker:\n"
+      "    [1].threaded(1).map: throw :worker, 1\n"
+      "rescue UncaughtThrowError:\n"
+      "  42\n");
+  expect(worker_throw.ok() && worker_throw.value.is_integer() &&
+             worker_throw.value.as_integer() == 42,
+         "worker throw must become a rescuable error outside the caller catch scope");
+
+  const sputnik::runtime::ExecutionResult worker_raise = execute_emitted_init(
+      "try:\n"
+      "  [1].threaded(1).map: raise ValueError(\"worker\")\n"
+      "rescue ValueError:\n"
+      "  42\n");
+  expect(worker_raise.ok() && worker_raise.value.is_integer() &&
+             worker_raise.value.as_integer() == 42,
+         "detached worker exceptions must be rescuable by the caller");
 }
 
 void test_manual_ensure_suppresses_pending_exception() {

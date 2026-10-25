@@ -174,7 +174,8 @@ see a dynamically enclosing native `catch`. Source `throw/catch` is lowered
 directly to native control flow, including tag snapshots, mismatched nested
 catches, payload ownership, rescue bypass, and ensure replacement. An uncaught
 throw reports `UncaughtThrowError` with VM-compatible source frames. A throw in
-a detached task or threaded worker cannot reach the caller's catch scope.
+a detached task or threaded worker becomes a rescuable `UncaughtThrowError` in
+the caller; it cannot reach the caller's catch scope.
 `make test-native-throw` requires VM-independent full native coverage and checks
 VM/native results, output, and fault traces. Counter and blocking FFI regressions
 also require full native coverage, including a throw escaping an FFI callback.

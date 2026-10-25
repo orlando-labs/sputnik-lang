@@ -15297,16 +15297,18 @@ private:
     return false;
   }
 
-  bool set_fault_from_flow_result(const Frame &frame,
-                                  const RuntimeFlowGatherResult &result) {
+  bool raise_flow_failure(const Frame &frame,
+                          const RuntimeFlowGatherResult &result) {
     std::string error_name = result.error_name;
     std::string message = result.message;
     if (error_name.empty() && !result.failures.empty()) {
       error_name = result.failures.front().error_name;
       message = result.failures.front().message;
     }
-    set_fault(frame, error_name.empty() ? "FlowError" : error_name,
-              message.empty() ? "flow operation failed" : message);
+    // Detached failures cross back as ordinary exceptions in the caller,
+    // including an uncaught throw that could not reach a worker-local catch.
+    raise_runtime_error(frame, error_name.empty() ? "FlowError" : error_name,
+                        message.empty() ? "flow operation failed" : message);
     return false;
   }
 
@@ -24428,7 +24430,7 @@ private:
                   value, Value::integer(static_cast<std::int64_t>(index))});
             });
         if (!result.ok || result.failed) {
-          set_fault_from_flow_result(frame, result);
+          raise_flow_failure(frame, result);
           return SendStatus::Faulted;
         }
         *out = make_list_value(std::move(result.values));
@@ -24460,7 +24462,7 @@ private:
                   value, Value::integer(static_cast<std::int64_t>(index))});
             });
         if (!result.ok || result.failed) {
-          set_fault_from_flow_result(frame, result);
+          raise_flow_failure(frame, result);
           return SendStatus::Faulted;
         }
         *out = make_list_value(std::move(result.values));
@@ -24493,7 +24495,7 @@ private:
         }
         RuntimeFlowGatherResult result = flow->gather(std::move(handles));
         if (!result.ok || result.failed) {
-          set_fault_from_flow_result(frame, result);
+          raise_flow_failure(frame, result);
           return SendStatus::Faulted;
         }
         *out = make_list_value(std::move(result.values));
@@ -24577,7 +24579,7 @@ private:
               });
         }
         if (!result.ok || result.failed) {
-          set_fault_from_flow_result(frame, result);
+          raise_flow_failure(frame, result);
           return SendStatus::Faulted;
         }
         *out = make_list_value(std::move(result.values));
@@ -24603,7 +24605,7 @@ private:
                 : threaded->permutation(
                       static_cast<std::size_t>(args[0].as_integer()));
         if (!result.ok || result.failed) {
-          set_fault_from_flow_result(frame, result);
+          raise_flow_failure(frame, result);
           return SendStatus::Faulted;
         }
         *out = make_list_value(std::move(result.values));

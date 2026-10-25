@@ -41,20 +41,24 @@ jobs:
 
       # Clean-clone build: no pre-existing build/ artifacts are checked in.
       - name: make build
+        id: build
         run: make build CXX=${{ matrix.cxx }}
 
       - name: make test
         run: make test CXX=${{ matrix.cxx }}
 
       - name: make test-isputnik-tui
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: make test-isputnik-tui CXX=${{ matrix.cxx }}
 
       - name: make conformance
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: make conformance CXX=${{ matrix.cxx }}
 
       # Every corpus/run fixture executes through both the VM lane and the
       # native lane; outputs must match (backend-equivalence bundle).
       - name: make backend-equivalence
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: make backend-equivalence CXX=${{ matrix.cxx }}
 
   spec-sync:

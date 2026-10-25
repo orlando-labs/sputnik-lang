@@ -9329,6 +9329,49 @@ void test_runtime_task_cancel_is_cooperative_safepoint() {
          "task stats should count cooperative cancellation");
 }
 
+void test_vm_cancelled_mutex_child_does_not_fail_parent() {
+  const auto cancelled_child = execute_emitted_init(R"(
+from sync import Mutex
+from sync import Channel
+
+mutex = Mutex.new()
+ready = Channel.new(capacity: 1)
+parent = task.spawn:
+  mutex.lock()
+  child = task.spawn:
+    ready.send(1)
+    mutex.lock(timeout: 2.0)
+    mutex.unlock()
+  # The child has started and cannot acquire the parent's mutex.
+  ready.recv(timeout: 2.0)
+  child.cancel()
+  try:
+    child.wait(timeout: 2.0)
+  rescue CancelledError:
+    null
+  mutex.unlock()
+  if child.cancelled?() and not child.failed?(): 42 else: 0
+parent.wait(timeout: 3.0)
+)");
+  expect(cancelled_child.ok(),
+         "cancelling a VM child blocked on a mutex must not fail its parent");
+  expect(cancelled_child.value.is_integer() &&
+             cancelled_child.value.as_integer() == 42,
+         "explicit cancellation must leave the child cancelled, not failed");
+
+  const auto raised_error = execute_emitted_init(R"(
+handle = task.spawn:
+  raise CancelledError.new("application error")
+try:
+  handle.wait(timeout: 2.0)
+rescue CancelledError:
+  if handle.failed?() and not handle.cancelled?(): 42 else: 0
+)");
+  expect(raised_error.ok() && raised_error.value.is_integer() &&
+             raised_error.value.as_integer() == 42,
+         "user-raised CancelledError without cancellation must remain a failure");
+}
+
 void test_runtime_structured_task_scope_propagates_first_failure() {
   sputnik::runtime::RuntimeScheduler scheduler(3);
   std::atomic<bool> sibling_started{false};
@@ -13555,6 +13598,7 @@ int main() {
   test_runtime_task_join_rethrows_failure();
   test_runtime_task_join_timeout_does_not_cancel_task();
   test_runtime_task_cancel_is_cooperative_safepoint();
+  test_vm_cancelled_mutex_child_does_not_fail_parent();
   test_runtime_structured_task_scope_propagates_first_failure();
   test_runtime_channel_rendezvous_fifo_close();
   test_runtime_channel_buffered_close_and_shareability_gate();

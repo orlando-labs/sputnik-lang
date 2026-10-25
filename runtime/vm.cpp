@@ -15009,8 +15009,14 @@ private:
         }
         if (vm->fault_.has_value()) {
           vm->unwind_all_frame_scopes();
-          if (runtime_run_cancel_requested() && vm->fault_->error_name == "CancelledError")
+          // Expected task cancellation must not enter the failed-child path,
+          // which cancels the parent. A user-raised error without a request
+          // remains an ordinary task failure.
+          if (vm->fault_->error_name == "CancelledError" &&
+              (runtime_run_cancel_requested() ||
+               current_runtime_task_cancel_requested())) {
             throw RuntimeTaskCancelled();
+          }
           throw RuntimeTaskFailure(vm->fault_->error_name, vm->fault_->message);
         }
         if (vm->park_request_.has_value()) {

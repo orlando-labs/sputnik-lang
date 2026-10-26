@@ -752,6 +752,29 @@ void Lexer::lex_number() {
   emit(is_float ? TokenKind::Float : TokenKind::Integer, start, text);
 }
 
+LexResult Lexer::lex_template_body() {
+  const auto start = position();
+  while (!at_end()) {
+    if (current() == '\\') {
+      const auto escape = position();
+      advance();
+      validate_string_escape(escape, '"');
+    } else if (current() == '#' && peek() == '{') {
+      const auto interpolation = position();
+      advance();
+      advance();
+      if (!consume_interpolation_in_string(interpolation)) break;
+    } else if (at_line_break()) {
+      advance_line_break();
+    } else {
+      advance();
+    }
+  }
+  emit(TokenKind::String, start, source_);
+  emit(TokenKind::Eof, position(), "");
+  return std::move(result_);
+}
+
 void Lexer::lex_string(char quote, bool raw) {
   const Position start = position();
   // Adjacent identifier + quote is a tag candidate. Both tag delimiters

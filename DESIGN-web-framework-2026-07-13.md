@@ -1073,29 +1073,28 @@ def index(posts as List[Post]):
 `Html` is a distinct safe value. Text and attribute interpolation escape by
 default. Raw output requires an explicit audited type/helper.
 
-### 12.3. External `.amv` files
+### 12.3. External `.html.sv` files (implemented 2026-10-26)
 
-External view files require compiler/build support, not filesystem access from
-an Orbit macro. The build layer must:
+Views use the common compiler source-format registry and `@template` declaration:
 
-- declare external files as build inputs;
-- map suffixes to exported string-tag macro providers;
-- construct `Ast.StringTemplate` values with external source spans;
-- generate virtual Sputnik modules under a mounted namespace;
-- include provider and input digests in build cache keys;
-- report parser, binder, and type errors against the external file.
+```sputnik
+package app.views.posts
+export index
 
-This should become a general Sputnik source-format registry usable by HTML, SQL,
-GraphQL, protobuf, and other packages. It should not be hard-coded into the
-web framework.
+@template("./posts/index.html.sv")
+def index(posts, title: "Posts")
+```
 
-The exact registry/manifest syntax remains a separate compiler-level design.
-Until then Orbit documentation must not present `.amv` mounting as an already
-implementable package-only macro.
+The external file contains only the HTML template body, including interpolation
+and `%for`. Inputs/imports/exports use the ordinary declaring module and function
+signature. Build manifest `source_formats` maps `.html.sv` to module `orbit.html`,
+macro `html`; `.cmd.sv` and `.sql.sv` use their own providers through the same
+compiler pass. The host loads files before expansion, records content/provider
+cache dependencies and preserves source diagnostics. Runtime rendering needs no
+filesystem access. This replaces the earlier `.amv` direction.
 
-SQL template providers may safely parameterize interpolations, but declaring a
-typed result such as `List[Post]` additionally requires schema/result-shape
-validation that `sqlite3` does not currently provide.
+See [the implementation contract](docs/engineering/external-templates-v1.md).
+SQL result-shape/schema validation is separate from safe parameter binding.
 
 ---
 
@@ -1783,8 +1782,8 @@ responsibilities.
 
 - inline `Html` string-tag macro and escaping model;
 - typed Sputnik-module views;
-- compiler-level external source-format RFC;
-- `.amv` mounting only after the compiler contract exists.
+- compiler source-format registry and external `.html.sv` bodies (implemented);
+- typed function signatures declared with `@template`.
 
 ### Phase 6 — ORM web readiness
 
@@ -1845,8 +1844,7 @@ responsibilities.
     and record methods.
 17. Bare function handlers receive no hidden controller/ORM scope; middleware,
     a `before` annotation, or an explicit request service supplies it.
-18. Typed view calls are preferred; external `.amv` mounting depends on a
-    compiler-level source-format registry.
+18. Typed view calls are preferred; external `.html.sv` bodies use the compiler-level source-format registry.
 19. Selecting a streaming response immediately freezes status and initial
     headers, before the first body write.
 20. HTTP/1.1 streaming responses own framing: `length: null` uses chunked coding,

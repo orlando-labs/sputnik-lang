@@ -242,9 +242,24 @@ void test_native_extensions_parse_and_gate() {
   expect(mentions_ffi, "gating diagnostic should name the ffi.v1 requirement");
 }
 
+void test_source_format_registry_roundtrip() {
+  const auto parsed = sputnik::build::parse_build_manifest_json(R"JSON({
+    "schema":"sputnik.build.v1", "name":"app", "root":"app",
+    "source_formats":[{"suffix":".cmd.sv","module":"system","macro":"cmd"}],
+    "modules":[{"name":"app","path":"main.s"}]
+  })JSON");
+  expect(parsed.ok(), "source-format registry parses");
+  expect(parsed.manifest.source_formats.size() == 1, "registry retained");
+  const auto again = sputnik::build::parse_build_manifest_json(
+      sputnik::build::manifest_to_json(parsed.manifest));
+  expect(again.ok() && again.manifest.source_formats.size() == 1 &&
+      again.manifest.source_formats[0].suffix == ".cmd.sv", "source-format registry roundtrips");
+}
+
 } // namespace
 
 int main() {
+  test_source_format_registry_roundtrip();
   test_manifest_parses_and_normalizes();
   test_yaml_manifest_parses_and_normalizes();
   test_manifest_rejects_profile_conflict();

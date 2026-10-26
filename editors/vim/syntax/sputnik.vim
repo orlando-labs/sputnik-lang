@@ -130,7 +130,11 @@ syntax region sputnikSingleString start=/'/ skip=/\\./ end=/'/ contains=sputnikS
 syntax region sputnikDoubleString start=/"/ skip=/\\./ end=/"/ contains=sputnikDoubleEscape,sputnikInterpolation,@Spell
 syntax region sputnikTextBlock start=/"""/ skip=/\\./ end=/"""/ contains=sputnikDoubleEscape,sputnikInterpolation,@Spell
 call s:Match('sputnikStringTag', s:before . s:head . s:part . '*\ze["'']',
-      \ 'nextgroup=sputnikDoubleString,sputnikTaggedSingleString,sputnikTextBlock')
+      \ 'nextgroup=sputnikDoubleString,sputnikTaggedSingleString,sputnikTaggedTextBlock')
+syntax match sputnikTemplateComment /^\s*\zs%#.*/ contained
+syntax match sputnikTemplatePercent /^\s*\zs%%/ contained
+syntax region sputnikTemplateFor matchgroup=sputnikTemplateControl start=/^\s*\zs%for\ze[ \t]/ end=/$/ contained contains=@sputnikExpression
+syntax region sputnikTaggedTextBlock start=/"""/ skip=/\\./ end=/"""/ contained contains=sputnikDoubleEscape,sputnikInterpolation,sputnikTemplateComment,sputnikTemplatePercent,sputnikTemplateFor,@Spell
 syntax region sputnikTaggedSingleString start=/'/ skip=/\\./ end=/'/ contained contains=sputnikSingleEscape,sputnikInterpolation,@Spell
 call s:Match('sputnikRawTag', s:before . 'r\ze["'']',
       \ 'nextgroup=sputnikRawDoubleString,sputnikRawSingleString,sputnikRawTextBlock')
@@ -144,9 +148,16 @@ syntax region sputnikInterpolation matchgroup=sputnikInterpolationDelimiter star
 syntax region sputnikMacroSplice matchgroup=sputnikInterpolationDelimiter start=/#{/ end=/}/ contained contains=@sputnikExpression,sputnikInterpolationBrace
 syntax region sputnikMacroDefinition transparent start=/^\z([ \t]*\)\%(string_tag\s\+\)\?macro\s\+def\s\+/ end=/^\%(\z1[ \t]\)\@!\%(\s*#\)\@!\ze\s*\S/ contains=@sputnikExpression,sputnikMacroSplice
 
+syntax match sputnikTemplateAnnotation /^\s*\zs@template\ze\s*(/
+highlight default link sputnikTemplateAnnotation PreProc
+
 " Parse from the start so long text blocks and macro bodies stay accurate.
 syntax sync fromstart
 
+highlight default link sputnikTaggedTextBlock String
+highlight default link sputnikTemplateComment Comment
+highlight default link sputnikTemplatePercent SpecialChar
+highlight default link sputnikTemplateControl Repeat
 highlight default link sputnikDelimiter Delimiter
 highlight default link sputnikOperator Operator
 highlight default link sputnikMember Identifier

@@ -5,6 +5,7 @@
   "patterns": [
     { "include": "#macro-definition" },
     { "include": "#comments" },
+    { "include": "#external-template-annotation" },
     { "include": "#native-binding" },
     { "include": "#strings" },
     { "include": "#numbers" },
@@ -33,6 +34,10 @@
     { "include": "#punctuation" }
   ],
   "repository": {
+    "external-template-annotation": {
+      "name": "storage.modifier.template.sputnik",
+      "match": "^[ \\t]*(@template)(?=[ \\t]*\\()"
+    },
     "native-binding": {
       "match": "(?<![\\p{L}\\p{N}_])(from)(?![\\p{L}\\p{N}_?!])[ \\t]+((?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'))[ \\t]+(blocking)(?![\\p{L}\\p{N}_?!])(?=[ \\t]*(?::|#|$))",
       "captures": {
@@ -124,8 +129,44 @@
         "0": { "name": "punctuation.definition.string.end.sputnik" }
       },
       "patterns": [
+        { "include": "#template-controls" },
         { "include": "#string-escape-double" },
         { "include": "#interpolation" }
+      ]
+    },
+    "template-controls": {
+      "patterns": [
+        {
+          "match": "^[ \\t]*(%#.*$)",
+          "captures": {
+            "1": {
+              "name": "comment.line.template.sputnik"
+            }
+          }
+        },
+        {
+          "match": "^[ \\t]*(%%)",
+          "captures": {
+            "1": {
+              "name": "constant.character.escape.template.sputnik"
+            }
+          }
+        },
+        {
+          "name": "meta.template.for.sputnik",
+          "begin": "^[ \\t]*(%for)(?=[ \\t])",
+          "end": "$",
+          "beginCaptures": {
+            "1": {
+              "name": "keyword.control.template.sputnik"
+            }
+          },
+          "patterns": [
+            {
+              "include": "$self"
+            }
+          ]
+        }
       ]
     },
     "string-block": {

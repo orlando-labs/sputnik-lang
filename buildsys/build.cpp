@@ -1164,6 +1164,23 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
     result.manifest.profiles.required_features.push_back("core.v1");
   }
 
+  if (const auto *formats = member(root, "source_formats")) {
+    std::set<std::string> seen;
+    if (formats->kind != JsonValue::Kind::Array) {
+      result.diagnostics.push_back(diagnostic("BuildManifestError", "source_formats must be an array", path));
+    } else for (const auto &entry : formats->array_value) {
+      templates::SourceFormat format;
+      if (entry.kind != JsonValue::Kind::Object ||
+          !read_string_member(entry, "suffix", &format.suffix) ||
+          !read_string_member(entry, "module", &format.module) ||
+          !read_string_member(entry, "macro", &format.macro) ||
+          format.suffix.empty() || format.suffix.front() != '.' ||
+          format.module.empty() || format.macro.empty() || !seen.insert(format.suffix).second) {
+        result.diagnostics.push_back(diagnostic("BuildManifestError", "source_formats require unique dot-prefixed suffixes and module/macro strings", path));
+      } else result.manifest.source_formats.push_back(std::move(format));
+    }
+  }
+
   read_modules(root, "stdlib", true, path, &result.manifest.stdlib_modules,
                &result.diagnostics);
   read_modules(root, "modules", false, path, &result.manifest.modules,
@@ -1338,6 +1355,17 @@ std::string manifest_to_json(const BuildManifest &manifest) {
   emit_module_array(out, "stdlib", manifest.stdlib_modules, "  ");
   out << ",\n";
   emit_module_array(out, "modules", manifest.modules, "  ");
+  if (!manifest.source_formats.empty()) {
+    out << ",\n  \"source_formats\": [";
+    for (std::size_t i = 0; i < manifest.source_formats.size(); ++i) {
+      const auto &format = manifest.source_formats[i];
+      if (i) out << ',';
+      out << "\n    {\"suffix\": \"" << json_escape(format.suffix)
+          << "\", \"module\": \"" << json_escape(format.module)
+          << "\", \"macro\": \"" << json_escape(format.macro) << "\"}";
+    }
+    out << "\n  ]";
+  }
   if (!manifest.dependencies.empty()) {
     out << ",\n  \"dependencies\": {";
     for (std::size_t i = 0; i < manifest.dependencies.size(); ++i) {
@@ -1466,7 +1494,17 @@ std::string summary_to_json(const BuildSummary &summary) {
         << ",\"cached\":" << (artifact.cached ? "true" : "false")
         << ",\"bootstrap\":\"" << json_escape(artifact.bootstrap_layer)
         << "\",\"bytes\":" << artifact.byte_size
-        << ",\"native_bytes\":" << artifact.native_byte_size << "}";
+        << ",\"native_bytes\":" << artifact.native_byte_size;
+    if (!artifact.template_inputs.empty()) {
+      out << ",\"template_inputs\":[";
+      for (std::size_t j = 0; j < artifact.template_inputs.size(); ++j) {
+        if (j) out << ',';
+        out << "{\"path\":\"" << json_escape(artifact.template_inputs[j].first)
+            << "\",\"source_hash\":\"" << artifact.template_inputs[j].second << "\"}";
+      }
+      out << ']';
+    }
+    out << '}';
   }
   if (!summary.artifacts.empty()) {
     out << "\n  ";

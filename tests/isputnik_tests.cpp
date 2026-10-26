@@ -229,7 +229,12 @@ void test_system_in_persistent_notebook() {
       "import system\nsystem.cmd\"/usr/bin/printf single\".output\n",
       "from system import cmd\ncmd'printf \"%s\" #{\"single\"}'.output\n",
       "import system as sys\nsys.cmd'printf single'.output\n",
-      "import system as sys\nsys.command(\"/usr/bin/printf\", \"single\").output\n"};
+      "import system as sys\nsys.command(\"/usr/bin/printf\", \"single\").output\n",
+      "from system import cmd\ncmd\"\"\"\n"
+      "  /usr/bin/printf %s\n"
+      "  %for value in [\"sin\", \"gle\"]:\n"
+      "    #{value}\n"
+      "  \"\"\".output\n"};
   for (const auto &source : sources) {
     Session session;
     session.runtime_capability_grants = {

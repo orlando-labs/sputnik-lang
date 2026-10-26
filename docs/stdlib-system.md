@@ -89,6 +89,24 @@ An immediately following method call operates on the expanded tag result.
 Multiline `tag"""` remains supported with a newline after the opener;
 `tag"""inline"""` is not a text-block form.
 
+Multiline command templates support `%for`:
+
+```sputnik
+command = cmd"""
+  printf %s
+  %for value in values:
+    #{value}
+  """
+```
+
+This constructs one command with repeated argument chunks. Each interpolant
+remains opaque, including spaces, empty strings and shell-looking content.
+The iterable evaluates once and empty iteration adds no arguments. A loop must
+start and end at an argument boundary with quotes/escapes closed, otherwise macro
+expansion fails with `CMD_TEMPLATE_CONTROL`. Directive lines emit no newline;
+extra body indentation is stripped. `%#` comments and `%%` literal percent lines
+are supported. This is distinct from interpolating an argument Array.
+
 ## Capture and multiblock
 
 ```sputnik

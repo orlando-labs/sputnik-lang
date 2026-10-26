@@ -29,6 +29,9 @@ struct MacroExport {
 // macro definitions already staged.
 using MacroProviderMap = std::map<std::string, std::vector<MacroExport>>;
 
+// Compiler-owned providers also participate in build dependency fingerprints.
+const MacroProviderMap &builtin_macro_providers();
+
 // Harvest a parsed module's staged macro table. If the module has at least one
 // valid `export macro`, all of its macro defs are returned: exported entries are
 // public trigger surfaces, and private entries are helper definitions available
@@ -89,6 +92,7 @@ ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
 ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
                            const std::string &module_name,
                            const std::string &source,
-                           const MacroProviderMap &providers);
+                           const MacroProviderMap &providers,
+                           const std::map<std::string, std::string> &external_sources = {});
 
 } // namespace sputnik::macros

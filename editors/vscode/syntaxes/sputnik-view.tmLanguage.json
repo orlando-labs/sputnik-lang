@@ -1,0 +1,19 @@
+{
+  "name": "Sputnik View",
+  "scopeName": "source.sputnik.view",
+  "patterns": [
+    {
+      "include": "source.sputnik#template-controls"
+    },
+    {
+      "include": "source.sputnik#interpolation"
+    },
+    {
+      "include": "source.sputnik#string-escape-double"
+    },
+    {
+      "name": "string.unquoted.template.sputnik",
+      "match": "[^#%\\\\\\n]+|."
+    }
+  ]
+}

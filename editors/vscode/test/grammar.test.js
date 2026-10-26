@@ -35,16 +35,13 @@ async function loadGrammar() {
   const registry = new textmate.Registry({
     onigLib: Promise.resolve(onigLib()),
     loadGrammar: async (scopeName) => {
-      if (scopeName !== "source.sputnik") {
-        return null;
-      }
-      return textmate.parseRawGrammar(
-        fs.readFileSync(grammarPath, "utf8"),
-        grammarPath,
-      );
+      const file = scopeName === "source.sputnik" ? grammarPath
+        : scopeName === "source.sputnik.view" ? path.join(extensionRoot, "syntaxes", "sputnik-view.tmLanguage.json") : null;
+      if (!file) return null;
+      return textmate.parseRawGrammar(fs.readFileSync(file, "utf8"), file);
     },
   });
-  return registry.loadGrammar("source.sputnik");
+  return registry;
 }
 
 function tokenize(grammar, source) {
@@ -104,8 +101,31 @@ function assertNoScopePrefix(
 }
 
 async function main() {
-  const grammar = await loadGrammar();
+  const registry = await loadGrammar();
+  const grammar = await registry.loadGrammar("source.sputnik");
+  const view = await registry.loadGrammar("source.sputnik.view");
+  const viewTokens = tokenize(view, '<h1>#{title}</h1>\n%for value in values:\n  #{value}');
+  assertScope(viewTokens, 1, '%for', 'keyword.control.template.sputnik');
+  assertNoScopePrefix(viewTokens, 0, 'title', 'string.unquoted');
+  assertScope(tokenize(grammar, '@template("./page.html.sv")'), 0, '@template', 'storage.modifier.template.sputnik');
   assert.ok(grammar, "Sputnik grammar failed to load");
+
+  const loops = tokenize(grammar, [
+    'html"""',
+    '  %for item in items:',
+    '    <li>#{item}</li>',
+    '  %# omitted',
+    '  %%for literal',
+    '  """',
+    'plain = """',
+    '  %for is text',
+    '  """',
+  ].join('\n'));
+  assertScope(loops, 1, '%for', 'keyword.control.template.sputnik');
+  assertScope(loops, 1, 'in', 'keyword.operator.relational.sputnik');
+  assertScope(loops, 3, '%# omitted', 'comment.line.template.sputnik');
+  assertScope(loops, 4, '%%', 'constant.character.escape.template.sputnik');
+  assertNoScopePrefix(loops, 7, '%for', 'keyword.control');
 
   const blocking = tokenize(grammar, [
     'native def wait(timeout as Int) from "unit.wait" blocking',

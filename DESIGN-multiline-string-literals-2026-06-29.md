@@ -238,8 +238,9 @@ rows = conn.execute(sql"""
 - `html"""…"""` expands so interpolants are HTML-escaped by default (with an
   opt-out marker for pre-sanitized fragments) — the auto-escaping templating the
   web-DSL sketch needs.
-- Because expansion is pre-binder, the result is fully typed and **zero runtime
-  cost** beyond the bind itself (macro doc §1 table) — no reflective slow path.
+- Expansion emits ordinary typed runtime code before binding. Runtime loops
+  evaluate their sources/interpolants and buffer output chunks; there is no
+  runtime template parser or reflective expansion path.
 
 So the layering is: plain `"""` (sugar, ships first, no macro dependency) →
 tagged `name"""…"""` (safety + DSLs, ships with / after macros; **implemented
@@ -422,30 +423,29 @@ emit).
 This delivers ERB's full feature set with `#{}≡<%= %>`, a structured `<% %>`
 analog spelled `%`, and none of ERB's unstructured-`end` or whitespace warts.
 
-### 7.3 Control flow is a per-tag feature, not universal
+### 7.3 Runtime template loops (implemented 2026-10-26)
 
-Crucially, the control tags belong to *specific* tag macros, **not** to the base
-literal and **not** to every tag:
+The common string-tag handoff parses `%for` into a structured template tree.
+Providers retain contextual interpolation semantics: `html` repeats escaped or
+trusted HTML fragments; SQLite `sql` repeats static SQL and appends separate
+bound parameters; `system.cmd` repeats argument chunks in one command without
+shell reparsing. Ordinary untagged strings keep percent lines as literal text.
+A provider must handle or reject the loop node explicitly.
 
-- `html` wants control flow — markup-first reading order with logic sprinkled in
-  is the entire reason ERB exists.
-- `sql` does **not** — you never loop inside query text; a list becomes a
-  parameter expansion `IN ($1, $2, …)`, which the `sql` tag produces from a
-  *list interpolation* (`#{ids}` where `ids` is a list), not a `%for`. Loops in
-  SQL text are how injection and unbounded queries happen.
+The initial implementation supports `%for`, `%#` comments and `%%` literal
+percent lines. `%if`, `%elif` and `%else` in §7.2 remain future design, not shipped
+syntax. Headers reuse normal `for` patterns, Map arguments and `with_index`;
+iterables evaluate once at runtime. Indentation closes a body, its extra indent
+is stripped, and the directive itself emits no newline. Empty loops emit nothing.
+HTML loops must begin/end in text context; command loops require argument
+boundaries. SQL separators and query structure belong to the template author.
 
-So control flow rides the tag that asks for it. The base `"""` and tags like
-`sql` stay value-only; only template-shaped tags (`html`, future `text`/`md`)
-opt into the `%for`/`%if` surface. Each tag macro declares which control tags it
-honors — an unrecognized control tag in a tag that doesn't support it is a
-compile-time diagnostic, not silent text.
-
-Implementation note: the base lexer still suspends ordinary Sputnik layout while
-inside a text block (§3.A). A template-shaped tag may parse `%` control lines
-from the template body using the body text's relative indentation and then emit
-ordinary Sputnik AST. "Layout-native" here means the tag's template grammar reuses
-Sputnik's indentation discipline; it does not mean third-party packages extend the
-core lexer with new `INDENT`/`DEDENT` tokens after parsing.
+The base lexer continues to suspend layout inside text blocks. F1.5 reads
+literal control lines and relative indentation, preserving interpolation ASTs,
+then the provider transforms leaves and the common renderer emits ordinary
+Sputnik iteration AST. Escaped characters and runtime values cannot become
+control syntax. See [the implementation contract](docs/engineering/string-template-loops-v1.md)
+for `AstStringFor`, `AstTemplateRender`, diagnostics and tests.
 
 ## 8. Edge cases to pin (for the eventual spec patch)
 
@@ -487,7 +487,8 @@ core lexer with new `INDENT`/`DEDENT` tokens after parsing.
    like other static module names (`from db.postgres import sql as psql`).
 5. **Bytes text blocks** (`b"""…"""`) for binary/wire fixtures — reserve the
    prefix grammar now or defer.
-6. **Control-tag surface** (§7.2-Y): *settled.* Emit `#{ expr }`; control `%for
+6. **Control-tag surface** (§7.2-Y): `%for`, `%#` and `%%` implemented;
+   conditional directives remain future. Design spelling: emit `#{ expr }`; control `%for
    … :` / `%if … :` / `%elif … :` / `%else:` (`%` at the dedent-relative line
    start, opening a structured INDENT block); comment `%# …`; raw emit
    `#{ Html.raw(x) }`; a literal leading `%` in body text escapes as `%%`. All

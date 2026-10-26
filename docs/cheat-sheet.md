@@ -33,6 +33,30 @@ Only `false` and `null` are falsy: `0`, `""`, `[]`, `{}` are truthy. Names may e
 | Explicit absence | `text.trimmed.presence() or "anonymous"`; `xs.nonempty() or defaults`; `n.nonzero() or 100` |
 | Last result | `$_` is read-only, scoped to the current callable/block; expression statements **including assignments and logging** update it |
 
+Multiline string-tag macros can repeat a template region at runtime:
+
+```sputnik
+from system import cmd
+command = cmd"""
+  echo
+  %for value with_index i in values:
+    --item=#{value}
+  """
+```
+
+`%for` uses ordinary patterns / Map arguments / `with_index`; the iterable is
+evaluated once. Dedent closes the body, extra body indent is stripped, and the
+directive emits no newline. `%#` is a template comment; `%%` emits `%`. Plain
+untagged strings keep percent lines literal. The provider preserves interpolation
+semantics: HTML escaping, SQL parameters, or opaque command arguments. Only
+`%for` is implemented; `%if` is not. See [the provider contract](engineering/string-template-loops-v1.md).
+
+External bodies use a declaration-only function: `@template("./page.html.sv")`
+immediately above `def page(title as Str, subtitle: "")`. Its parameters/imports
+are visible in the body. Register `source_formats` (`suffix`, `module`, `macro`)
+in the build manifest; call the function normally. `.sv` files need no delimiters
+and preserve file layout. [External templates](engineering/external-templates-v1.md).
+
 ## 2. Collections, ranges, and absence
 
 ```sputnik

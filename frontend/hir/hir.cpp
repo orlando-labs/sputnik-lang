@@ -1938,6 +1938,13 @@ private:
 
   std::unique_ptr<Node> lower_stmt(const ast::Expr &item) {
     if (item.kind == "AstExprStmt") {
+      if (bool_value(item, "preserve_last")) {
+        if (const auto *expr = node_field(item, "expr")) {
+          auto lowered = lower_expr(*expr);
+          lowered->bool_field("preserve_last", true);
+          return lowered;
+        }
+      }
       auto node = make_node("HLastSet", item.span);
       if (const ast::Expr *expr = node_field(item, "expr")) {
         node->node_field("expr", lower_expr(*expr));
@@ -1961,10 +1968,28 @@ private:
   }
 
   std::unique_ptr<Node> lower_expr(const ast::Expr &expr) {
+    if (expr.kind == "AstQualifiedRef") {
+      auto value = make_node("HLoadConst", expr.span);
+      value->string_field("path", string_value(expr, "module") + "." + string_value(expr, "name"));
+      return value;
+    }
     if (expr.kind == "AstThen") {
+      const auto *parts = list_field(expr, "items");
+      // HLet evaluates scaffolding without publishing source-statement $_.
+      if (bool_value(expr, "preserve_last")) {
+        if (parts->values.empty()) return make_null_const(expr.span);
+        auto result = lower_expr(*parts->values.back());
+        for (std::size_t i = parts->values.size() - 1; i > 0; --i) {
+          auto let = make_node("HLet", parts->values[i - 1]->span);
+          let->node_field("binding", lower_expr(*parts->values[i - 1]));
+          let->node_field("body", std::move(result));
+          result = std::move(let);
+        }
+        return result;
+      }
       auto seq = make_node("HSeq", expr.span);
       std::vector<std::unique_ptr<Node>> items;
-      for (const auto &item : list_field(expr, "items")->values) {
+      for (const auto &item : parts->values) {
         auto set = make_node("HLastSet", item->span);
         set->node_field("expr", lower_expr(*item));
         items.push_back(std::move(set));
@@ -2474,7 +2499,14 @@ private:
     if (string_value(expr, "name") == "self") {
       return make_node("HSelf", expr.span);
     }
-    if (notebook_options_ != nullptr &&
+    const binder::Reference *ref =
+        find_reference(expr.span, string_value(expr, "name"),
+                       string_value(expr, "syntax_context"), ref_kind);
+    const auto *lexical_binding = ref && ref->resolved ? binding_for_id(ref->binding_id) : nullptr;
+    // Macro-generated locals share call-site spans with external reads, but
+    // retain their own hygienic lexical storage.
+    const bool macro_local = lexical_binding && !lexical_binding->context.empty();
+    if (!macro_local && notebook_options_ != nullptr &&
         notebook_options_->external_read_descriptor) {
       const std::optional<std::uint32_t> descriptor =
           notebook_options_->external_read_descriptor(
@@ -2485,7 +2517,7 @@ private:
         return node;
       }
     }
-    if (notebook_options_ != nullptr &&
+    if (!macro_local && notebook_options_ != nullptr &&
         notebook_options_->external_read_constant_path) {
       const std::optional<std::string> path =
           notebook_options_->external_read_constant_path(
@@ -2496,9 +2528,6 @@ private:
         return node;
       }
     }
-    const binder::Reference *ref =
-        find_reference(expr.span, string_value(expr, "name"),
-                       string_value(expr, "syntax_context"), ref_kind);
     if (ref == nullptr || !ref->resolved) {
       // Pattern matcher expressions are parsed from their preserved source
       // text after binding, so their synthetic spans have no Reference entry.
@@ -2772,7 +2801,8 @@ private:
       node->string_field("slot",
                          slot.empty() ? string_value(*left, "name") : slot);
       node->node_field("expr", lower_assigned_value());
-      if (notebook_options_ != nullptr &&
+      if (string_value(*left, "syntax_context").empty() &&
+          notebook_options_ != nullptr &&
           current_proc_ != nullptr &&
           procedures_[current_proc_->procedure_index].kind == "notebook_cell" &&
           notebook_options_->declared_write_descriptor) {

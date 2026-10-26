@@ -13,6 +13,7 @@
 #include "runtime/world.h"
 
 #include <algorithm>
+#include <functional>
 #include <map>
 #include <memory>
 #include <optional>
@@ -536,6 +537,8 @@ struct StringTagCall {
   std::size_t tail_count = 0;
 };
 
+#include "runtime/string_template.inc"
+
 std::optional<StringTagCall>
 match_string_tag(const ast::Expr &expr,
                  const std::set<std::string> &string_tag_names) {
@@ -740,11 +743,15 @@ class Expander {
 public:
   Expander(bytecode::BcModule macro_module, MacroNameTable macro_names,
            std::set<std::string> string_tag_names,
-           std::shared_ptr<const std::string> source)
+           std::shared_ptr<const std::string> source,
+           const std::map<std::string, std::string> &external_sources)
       : macro_module_(std::move(macro_module)),
         macro_names_(std::move(macro_names)),
         string_tag_names_(std::move(string_tag_names)),
-        source_(std::move(source)) {}
+        source_(std::move(source)) {
+    for (const auto &entry : external_sources)
+      external_sources_[entry.first] = std::make_shared<const std::string>(entry.second);
+  }
 
   ExpandResult result() const { return result_; }
 
@@ -753,6 +760,14 @@ public:
   // expand_statements, where multi-node expansion and annotations live.
   void expand(std::unique_ptr<ast::Expr> &slot, int depth) {
     if (!result_.ok || !slot) {
+      return;
+    }
+    if (slot->kind == "AstTemplateRender") {
+      std::string error;
+      auto lowered = lower_template_render(*slot, fresh_mark(), &error);
+      if (!lowered) { fail(error + at_location(slot->span)); return; }
+      slot = std::move(lowered);
+      expand(slot, depth + 1);
       return;
     }
     if (std::optional<BuiltinRegexpTag> tag = match_builtin_regexp_tag(*slot)) {
@@ -786,10 +801,12 @@ public:
       // Hand-off (§8.5 / multiline design §7): the literal re-kinded as
       // Ast.StringTemplate becomes the tag macro's single argument; the
       // macro must return exactly one expression Ast.
-      std::unique_ptr<ast::Expr> template_node = ast::clone_expr(*tag->literal);
+      std::string template_error;
+      auto template_node = StringTemplateParser(*tag->literal).parse(&template_error);
+      if (!template_node) { fail(template_error); return; }
       template_node->kind = "AstStringTemplate";
       std::vector<runtime::Value> args;
-      args.push_back(make_ast_value(*template_node, source_));
+      args.push_back(make_ast_value(*template_node, source_for(*template_node)));
       const std::optional<runtime::Value> value =
           execute_macro(tag->name, tag->span, std::move(args), {}, depth);
       if (!value.has_value()) {
@@ -1060,7 +1077,7 @@ private:
       return {runtime::Value::null(),
               runtime::Fault{"MacroExpansionError", result_.error, 0, 0}};
     }
-    return {make_ast_value(*expanded, source_), std::nullopt};
+    return {make_ast_value(*expanded, source_for(*expanded)), std::nullopt};
   }
 
   // "expanded from macro `x` (at …)" lines, innermost expansion first. A
@@ -1094,6 +1111,10 @@ private:
     }
   }
 
+  std::shared_ptr<const std::string> source_for(const ast::Expr &node) const {
+    const auto found = external_sources_.find(node.span.file);
+    return found == external_sources_.end() ? source_ : found->second;
+  }
   std::string fresh_mark() { return "h" + std::to_string(++hygiene_counter_); }
 
   // The macro-call expression carried by a statement slot (directly or under
@@ -1272,7 +1293,7 @@ private:
              at_location(call.span));
         return false;
       }
-      kw_values->emplace_back(*name, make_ast_value(*value, source_));
+      kw_values->emplace_back(*name, make_ast_value(*value, source_for(*value)));
       return true;
     }
     if (arg.kind == "AstSpreadArg") {
@@ -1302,7 +1323,7 @@ private:
                  at_location(call.span));
             return false;
           }
-          arg_values->push_back(make_ast_value(*element, source_));
+          arg_values->push_back(make_ast_value(*element, source_for(*element)));
         }
       }
       return true;
@@ -1336,7 +1357,7 @@ private:
                  at_location(call.span));
             return false;
           }
-          kw_values->emplace_back(*key, make_ast_value(*value, source_));
+          kw_values->emplace_back(*key, make_ast_value(*value, source_for(*value)));
         }
       }
       return true;
@@ -1352,7 +1373,7 @@ private:
       *block_pass = value;
       return true;
     }
-    arg_values->push_back(make_ast_value(arg, source_));
+    arg_values->push_back(make_ast_value(arg, source_for(arg)));
     return true;
   }
 
@@ -1364,7 +1385,7 @@ private:
     std::vector<std::pair<std::string, runtime::Value>> kw_values;
     const ast::Expr *block_pass = nullptr;
     if (extra_decl != nullptr && extra_position == ExtraArgPosition::First) {
-      arg_values.push_back(make_ast_value(*extra_decl, source_));
+      arg_values.push_back(make_ast_value(*extra_decl, source_for(*extra_decl)));
     }
     if (call.call_tail != nullptr) {
       if (const ast::ListField *args = list_field(*call.call_tail, "args")) {
@@ -1390,12 +1411,12 @@ private:
       return std::nullopt;
     }
     if (call.block != nullptr) {
-      block_value = make_ast_value(*call.block, source_);
+      block_value = make_ast_value(*call.block, source_for(*call.block));
     } else if (block_pass != nullptr) {
-      block_value = make_ast_value(*block_pass, source_);
+      block_value = make_ast_value(*block_pass, source_for(*block_pass));
     }
     if (extra_decl != nullptr && extra_position == ExtraArgPosition::Last) {
-      arg_values.push_back(make_ast_value(*extra_decl, source_));
+      arg_values.push_back(make_ast_value(*extra_decl, source_for(*extra_decl)));
     }
     return execute_macro(call.name, call.span, std::move(arg_values),
                          std::move(kw_values), depth, std::move(block_value));
@@ -1615,6 +1636,7 @@ private:
   // callable macro block expands (for example `orm` inside `orm.model`).
   std::string active_block_namespace_;
   std::shared_ptr<const std::string> source_;
+  std::map<std::string, std::shared_ptr<const std::string>> external_sources_;
   ExpandResult result_;
   int hygiene_counter_ = 0;
   // Macros whose spliced output is being re-expanded, outermost first (§12
@@ -2085,32 +2107,56 @@ ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
   return expand_macros(items, module_name, source, kNoProviders);
 }
 
-ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
-                           const std::string &module_name,
-                           const std::string &source,
-                           const MacroProviderMap &supplied_providers) {
+const MacroProviderMap &builtin_macro_providers() {
   // The standard command tag follows the ordinary provider/import protocol.
   // Interpolants are inserted as expressions exactly once; static fragments
   // are parsed by the shared process engine, never by a shell.
   static const std::vector<MacroExport> system_exports = [] {
     const std::string source = R"SPUTNIK(
-string_tag macro def cmd(t):
-  parts = []
-  text = ""
-  t.parts.each |part|:
-    if part.kind == "AstStringExpr":
-      parts.push!(Ast.lift(text))
-      parts.push!(part.expr)
-      text = ""
+macro def _command_template_parts(parts, loop_body: false):
+  result = []
+  quote_char = ""
+  escaped = false
+  active_word = false
+  parts.each |part|:
+    if part.kind == "AstStringFor":
+      if quote_char != "" or escaped or active_word:
+        raise ArgumentError("CMD_TEMPLATE_CONTROL: %for requires an argument boundary")
+      result.push!(Ast.node("AstStringFor", {iteration: part.iteration, parts: _command_template_parts(part.parts, loop_body: true)}))
     else:
-      text = text + part.value
-  parts.push!(Ast.lift(text))
-  return Ast.node("AstPostfixChain", {
-    base: Ast.node("AstName", {name: "system"}),
-    tails: [
-      Ast.node("AstTailDotMember", {name: "__template", chain_boundary: false}),
-      Ast.node("AstTailCall", {call_style: "paren", args: [Ast.node("AstListLiteral", {elements: parts})]})
-    ]
+      is_text = part.kind != "AstStringExpr"
+      value = if is_text then Ast.lift(part.value) else part.expr
+      if is_text:
+        part.value.chars.each |char|:
+          if escaped:
+            escaped = false
+            active_word = true
+          elif char == "\\" and quote_char != "'":
+            escaped = true
+            active_word = true
+          elif quote_char != "":
+            quote_char = "" if char == quote_char
+            active_word = true
+          elif char == "'" or char == "\"":
+            quote_char = char
+            active_word = true
+          elif " \t\r\n".contains?(char):
+            active_word = false
+          else:
+            active_word = true
+      else:
+        active_word = true
+      result.push!(Ast.node("AstTupleLiteral", {elements: [Ast.lift(is_text), value]}))
+  if loop_body and (quote_char != "" or escaped or active_word):
+    raise ArgumentError("CMD_TEMPLATE_CONTROL: loop body must finish at an argument boundary")
+  return result
+
+string_tag macro def cmd(t):
+  finish = quote:
+    system.__template_chunks
+  return Ast.node("AstTemplateRender", {
+    parts: _command_template_parts(t.parts),
+    finish: finish
   })
 export macro cmd
 )SPUTNIK";
@@ -2119,8 +2165,17 @@ export macro cmd
     auto parsed = parser.parse_module_unit();
     return collect_macro_exports(parsed.items);
   }();
+  static const MacroProviderMap providers{{"system", system_exports}};
+  return providers;
+}
+
+ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
+                           const std::string &module_name,
+                           const std::string &source,
+                           const MacroProviderMap &supplied_providers,
+                           const std::map<std::string, std::string> &external_sources) {
   MacroProviderMap providers = supplied_providers;
-  providers.emplace("system", system_exports);
+  for (const auto &entry : builtin_macro_providers()) providers.emplace(entry.first, entry.second);
   frontend::ImportAliases aliases;
   try { aliases = frontend::collect_import_aliases(items); }
   catch (const std::exception &error) { return ExpandResult{false, error.what()}; }
@@ -2239,6 +2294,16 @@ export macro cmd
         continue;
       }
       alias_helper_keys.insert(key);
+      // A from-import and a module import of the same provider share helpers.
+      // Public entry points have separate selectors; private definitions do not.
+      const bool already_staged = std::any_of(
+          macro_defs.begin(), macro_defs.end(), [&](const ast::Expr *existing) {
+            const auto *existing_name = string_field(*existing, "name");
+            return existing_name && *existing_name == *name &&
+                   existing->span.file == entry.def->span.file &&
+                   existing->span.start.offset == entry.def->span.start.offset;
+          });
+      if (already_staged) continue;
       std::unique_ptr<ast::Expr> def = ast::clone_expr(*entry.def);
       macro_defs.push_back(def.get());
       alias_imported.push_back(std::move(def));
@@ -2255,7 +2320,7 @@ export macro cmd
 
   Expander expander(std::move(macro_module), std::move(macro_names),
                     std::move(string_tag_names),
-                    std::make_shared<const std::string>(source));
+                    std::make_shared<const std::string>(source), external_sources);
   // The module item list is itself a statement/declaration context, so
   // annotation runs and multi-node expansions apply at top level.
   expander.expand_statements(items, 0);

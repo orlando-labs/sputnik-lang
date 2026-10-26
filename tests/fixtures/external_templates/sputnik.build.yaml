@@ -1,0 +1,20 @@
+schema: sputnik.build.v1
+name: app.external
+root: app.external
+profiles:
+  required: [core.v1, macro.v1]
+source_formats:
+  - suffix: .sv
+    module: app.text
+    macro: source
+  - suffix: .text.sv
+    module: app.text
+    macro: text
+  - suffix: .cmd.sv
+    module: system
+    macro: cmd
+modules:
+  - name: app.text
+    path: text.s
+  - name: app.external
+    path: main.s

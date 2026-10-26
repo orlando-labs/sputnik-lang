@@ -191,7 +191,7 @@ public:
     }
 
     if (std::optional<std::string> name = binding_name(expr)) {
-      if (block_depth_ && block_local(expr, *name)) {
+      if (macro_local(expr, *name) || (block_depth_ && block_local(expr, *name))) {
         analysis_->local_reads.insert(*name);
         return;
       }
@@ -217,6 +217,19 @@ public:
   }
 
 private:
+  bool macro_local(const ast::Expr &expr, const std::string &name) const {
+    const auto context = string_field(expr, "syntax_context");
+    if (context.empty()) return false;
+    for (const auto &ref : graph_.references) {
+      if (!ref.resolved || ref.name != name || ref.context != context ||
+          ref.span.start.offset != expr.span.start.offset ||
+          ref.span.end.offset != expr.span.end.offset) continue;
+      for (const auto &binding : graph_.bindings)
+        if (binding.id == ref.binding_id) return !binding.context.empty();
+    }
+    return false;
+  }
+
   bool block_local(const ast::Expr &expr, const std::string &name) const {
     for (const auto &ref : graph_.references) {
       if (!ref.resolved || ref.name != name ||
@@ -251,7 +264,7 @@ private:
 
   void scan_write_target(const ast::Expr &target) {
     if (std::optional<std::string> name = binding_name(target)) {
-      write(*name);
+      if (string_field(target, "syntax_context").empty()) write(*name);
       return;
     }
     // Assignment to a member/index mutates its receiver and reads all of the

@@ -436,6 +436,21 @@ syntax Sputnik already has:
    text-block design (`DESIGN-multiline-string-literals` §7); this doc owns
    the trigger, the `string_tag` definition modifier, and resolution.
 
+   Multiline template `%for` is implemented by the common handoff parser.
+   It adds `AstStringFor {iteration, parts}` to the template's parts tree.
+   Providers transform leaves while preserving context-specific interpolation,
+   then may return `AstTemplateRender {parts, finish}` for common runtime
+   lowering. This differs from `%for` in a macro definition, which executes at
+   expansion time. See [runtime template loops](docs/engineering/string-template-loops-v1.md).
+   Only `%for`, `%#` and `%%` are shipped; conditional directives remain future.
+
+   External `.sv` bodies use `@template` on a declaration-only function and a
+   build-manifest source-format registration. The compiler loads source before
+   expansion, preserves external spans / `Ast.source`, and supplies normal
+   provider imports. `AstQualifiedRef {module, name}` is the explicit runtime
+   export reference for hygienic provider helpers. See
+   [external templates](docs/engineering/external-templates-v1.md).
+
    **Surface kinds are declared, not inferred.** `string_tag` occupies a
    definition-modifier slot before `macro def` (the same contextual-modifier
    grammar as `native`). A tag macro *must* be declared (nothing at the use

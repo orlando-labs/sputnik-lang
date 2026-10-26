@@ -884,7 +884,7 @@ SystemValue system_dispatch(const SystemCall &call) {
   const auto &args = call.args;
   const auto &kwargs = call.kwargs;
   if (call.receiver.kind == Kind::Module) {
-    if (name == "command" || name == "shell" || name == "__template") {
+    if (name == "command" || name == "shell" || name == "__template" || name == "__template_chunks") {
       check(call.block.kind == Kind::Null,
             "command construction does not accept a block");
       auto command = std::make_shared<Command>();
@@ -902,6 +902,25 @@ SystemValue system_dispatch(const SystemCall &call) {
           for (const auto &arg : extra.items)
             command->argv.push_back(string(arg));
         }
+      } else if (name == "__template_chunks") {
+        check(args.size() == 1 && args[0].kind == Kind::List,
+              "invalid command template chunks");
+        std::vector<SystemValue> alternating;
+        std::string text;
+        for (const auto &chunk : args[0].items) {
+          check(chunk.kind == Kind::List &&
+                    chunk.items.size() == 2 && chunk.items[0].kind == Kind::Bool,
+                "invalid command template chunk");
+          if (chunk.items[0].boolean) {
+            text += string(chunk.items[1]);
+          } else {
+            alternating.push_back(SystemValue::str(text));
+            alternating.push_back(chunk.items[1]);
+            text.clear();
+          }
+        }
+        alternating.push_back(SystemValue::str(text));
+        command->argv = template_argv(alternating);
       } else if (name == "__template") {
         check(args.size() == 1 && args[0].kind == Kind::List,
               "invalid command template");

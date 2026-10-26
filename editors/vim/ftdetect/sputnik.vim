@@ -2,6 +2,7 @@
 " use :setfiletype asm when editing assembly, or disable this detector.
 augroup sputnik_filetype
   autocmd!
+  autocmd BufRead,BufNewFile *.html.sv,*.cmd.sv,*.sql.sv,*.text.sv setlocal filetype=sputnikview
   autocmd BufRead,BufNewFile *.spu,*.sputnik setfiletype sputnik
   autocmd BufRead,BufNewFile *.s if &l:filetype ==# '' || &l:filetype ==# 'asm' | setlocal filetype=sputnik | endif
 augroup END

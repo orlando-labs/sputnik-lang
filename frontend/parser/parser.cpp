@@ -554,21 +554,7 @@ const ast::Expr *last_postfix_tail(const ast::Expr &expr) {
   return tails->values.back().get();
 }
 
-lexer::Position offset_position_in_token(const lexer::Token &token,
-                                         std::size_t lexeme_offset) {
-  lexer::Position position = token.span.start;
-  position.offset += lexeme_offset;
-  position.col += lexeme_offset;
-  return position;
-}
 
-lexer::Span span_for_token_slice(const lexer::Token &token,
-                                 std::size_t begin_offset,
-                                 std::size_t end_offset) {
-  return lexer::Span{token.span.file,
-                     offset_position_in_token(token, begin_offset),
-                     offset_position_in_token(token, end_offset)};
-}
 
 std::string utf8_from_codepoint(std::uint32_t codepoint) {
   std::string out;
@@ -4528,6 +4514,42 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
       token.lexeme.compare(token.lexeme.size() - 3U, 3, "\"\"\"") == 0;
   const std::size_t content_begin = block ? 3U : 1U;
   const std::size_t content_end = token.lexeme.size() - (block ? 3U : 1U);
+  return parse_string_parts(token, content_begin, content_end,
+                            block ? "block" : (tagged_single ? "single" : "double"));
+}
+
+ParseResult Parser::parse_template_body() {
+  ParseResult result;
+  const auto &token = current();
+  result.expr = parse_string_parts(token, 0, token.lexeme.size(), "block");
+  result.diagnostics = std::move(diagnostics_);
+  return result;
+}
+
+std::unique_ptr<ast::Expr> Parser::parse_string_parts(
+    const lexer::Token &token, std::size_t content_begin, std::size_t content_end,
+    const std::string &quote_kind) {
+  std::vector<std::size_t> lines{0};
+  for (std::size_t i = 0; i < token.lexeme.size(); ++i) {
+    if (token.lexeme[i] == '\r') {
+      if (i + 1 < token.lexeme.size() && token.lexeme[i + 1] == '\n') ++i;
+      lines.push_back(i + 1);
+    } else if (token.lexeme[i] == '\n') lines.push_back(i + 1);
+  }
+  const auto offset_position_in_token = [&](const lexer::Token &, std::size_t offset) {
+    const auto line = std::upper_bound(lines.begin(), lines.end(), offset) - lines.begin() - 1;
+    auto position = token.span.start;
+    position.offset += offset;
+    position.line += line;
+    position.col = line == 0 ? token.span.start.col : 1;
+    for (std::size_t i = lines[line]; i < offset; ++i)
+      if ((static_cast<unsigned char>(token.lexeme[i]) & 0xC0) != 0x80) ++position.col;
+    return position;
+  };
+  const auto span_for_token_slice = [&](const lexer::Token &, std::size_t begin, std::size_t end) {
+    return lexer::Span{token.span.file, offset_position_in_token(token, begin),
+                       offset_position_in_token(token, std::min(end, token.lexeme.size()))};
+  };
   std::vector<std::unique_ptr<ast::Expr>> parts;
   std::size_t text_begin = content_begin;
   std::size_t cursor = content_begin;
@@ -4675,8 +4697,7 @@ Parser::parse_string_literal_expr(const lexer::Token &token) {
   push_text_part(text_begin, content_end);
 
   auto expr = ast::make_expr("AstStringLiteral", token.span);
-  expr->string_field("quote_kind", block ? "block" :
-                                     (tagged_single ? "single" : "double"));
+  expr->string_field("quote_kind", quote_kind);
   expr->bool_field("interpolation", saw_interpolation);
   expr->list_field("parts", std::move(parts));
   return expr;

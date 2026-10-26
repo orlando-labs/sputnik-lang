@@ -20,6 +20,8 @@ public:
   Lexer(std::string source, std::string file);
 
   LexResult lex();
+  // Delimiter-free string-template input; preserves file layout and spans.
+  LexResult lex_template_body();
 
 private:
   bool at_end() const;

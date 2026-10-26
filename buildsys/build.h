@@ -1,10 +1,12 @@
 #pragma once
 
 #include "package/package.h"
+#include "frontend/templates/templates.h"
 
 #include <cstdint>
 #include <string>
 #include <vector>
+#include <utility>
 
 namespace sputnik::build {
 
@@ -38,6 +40,7 @@ struct BuildManifest {
   BuildProfileSet profiles;
   std::vector<BuildModule> stdlib_modules;
   std::vector<BuildModule> modules;
+  std::vector<templates::SourceFormat> source_formats;
   // Package identities and exact versions, independent of module names.
   std::vector<pkg::PackageDependency> dependencies;
   // Native extension units, lowered from the package manifest's [[native]]
@@ -60,6 +63,7 @@ struct BuildArtifactRecord {
   std::string cache_path;
   std::string cache_key;
   std::string source_hash;
+  std::vector<std::pair<std::string, std::string>> template_inputs;
   std::string artifact_hash;
   std::string abi_hash;
   std::string native_output_path;

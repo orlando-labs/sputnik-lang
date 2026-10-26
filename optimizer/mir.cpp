@@ -29,6 +29,12 @@ const ast::ListField *list_field(const ast::Expr &expr,
   return nullptr;
 }
 
+bool bool_field(const ast::Expr &expr, const std::string &name) {
+  for (const auto &field : expr.bool_fields)
+    if (field.name == name) return field.value;
+  return false;
+}
+
 std::string string_field(const ast::Expr &expr, const std::string &name) {
   for (const ast::StringField &field : expr.string_fields) {
     if (field.name == name) {
@@ -247,6 +253,10 @@ private:
   }
 
   void compile_stmt(const ast::Expr &stmt) {
+    if (bool_field(stmt, "preserve_last")) {
+      compile_expr(stmt);
+      return;
+    }
     if (stmt.kind == "HSeq") {
       compile_seq(stmt);
       return;

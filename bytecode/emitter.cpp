@@ -2414,6 +2414,12 @@ void CodeEmitter::compile_seq_to_reg(const ast::Expr &seq, std::uint32_t dst,
 }
 
 void CodeEmitter::compile_stmt(const ast::Expr &stmt, bool want_result) {
+  if (bool_field(stmt, "preserve_last")) {
+    const auto saved_last = last_value_reg_;
+    const auto value = compile_expr(stmt);
+    last_value_reg_ = want_result ? std::optional<std::uint32_t>(value) : saved_last;
+    return;
+  }
   if (stmt.kind == "HSeq") {
     compile_seq(stmt, want_result);
     return;

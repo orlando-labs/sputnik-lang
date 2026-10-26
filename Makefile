@@ -16,7 +16,7 @@ $(BUILD_DIR)/run_cancellation_checkpoint_tests: $(BUILD_DIR)/obj/tests/run_cance
 
 LEXER_SRCS := frontend/lexer/lexer.cpp frontend/lexer/token.cpp
 AST_SRCS := frontend/ast/expr.cpp
-PARSER_SRCS := frontend/parser/parser.cpp frontend/lint/one_liners.cpp
+PARSER_SRCS := frontend/parser/parser.cpp frontend/lint/one_liners.cpp frontend/templates/templates.cpp
 PATTERN_SRCS := frontend/pattern/pattern.cpp
 BINDER_SRCS := frontend/binder/binder.cpp
 CHECKER_SRCS := frontend/checker/checker.cpp
@@ -1069,3 +1069,13 @@ test-effect-iteration: $(BUILD_DIR)/sputnik
 test-language-updates: $(BUILD_DIR)/sputnik
 	python3 tests/language_updates_test.py $(BUILD_DIR)/sputnik
 test: test-language-updates
+
+.PHONY: test-string-template-loops
+test-string-template-loops: $(BUILD_DIR)/sputnik
+	python3 tests/string_template_loops_test.py $(BUILD_DIR)/sputnik
+test: test-string-template-loops
+
+.PHONY: test-external-templates
+test-external-templates: $(BUILD_DIR)/sputnik
+	python3 tests/external_templates_test.py $(BUILD_DIR)/sputnik
+test: test-external-templates

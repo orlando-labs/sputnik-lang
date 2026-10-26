@@ -21,6 +21,7 @@ struct SourceKey {
   std::string file;
   std::size_t start = 0;
   std::size_t end = 0;
+  std::string name;
 
   bool operator<(const SourceKey &other) const {
     if (file != other.file) {
@@ -29,12 +30,13 @@ struct SourceKey {
     if (start != other.start) {
       return start < other.start;
     }
-    return end < other.end;
+    if (end != other.end) return end < other.end;
+    return name < other.name;
   }
 };
 
-SourceKey source_key(const lexer::Span &span) {
-  return {span.file, span.start.offset, span.end.offset};
+SourceKey source_key(const lexer::Span &span, const std::string &name) {
+  return {span.file, span.start.offset, span.end.offset, name};
 }
 
 bool same_span(const lexer::Span &left, const lexer::Span &right) {
@@ -414,7 +416,7 @@ CellCompileResult compile_cell(const CellSource &cell,
             // Native prelude names are runtime constants when no preceding
             // notebook provider shadows them. This also handles names such
             // as system introduced by expansion of an imported string tag.
-            external_constant_paths.emplace(source_key(read.span), read.name);
+            external_constant_paths.emplace(source_key(read.span, read.name), read.name);
             continue;
           }
           result.diagnostics.push_back(diagnostic(
@@ -429,7 +431,7 @@ CellCompileResult compile_cell(const CellSource &cell,
                   ambient->second + "'"));
           continue;
         }
-        external_constant_paths.emplace(source_key(read.span), ambient->second);
+        external_constant_paths.emplace(source_key(read.span, read.name), ambient->second);
         continue;
       }
       const std::uint32_t descriptor =
@@ -440,7 +442,7 @@ CellCompileResult compile_cell(const CellSource &cell,
             read.span, "NB1004", "notebook descriptor id space exhausted"));
         continue;
       }
-      external_descriptors.emplace(source_key(read.span), descriptor);
+      external_descriptors.emplace(source_key(read.span, read.name), descriptor);
     }
 
     for (const std::string &name : analysis.writes) {
@@ -468,18 +470,18 @@ CellCompileResult compile_cell(const CellSource &cell,
   lowering_options.import_paths = &options.import_paths;
   lowering_options.external_read_descriptor =
       [&external_descriptors](
-          const std::string &,
+          const std::string &name,
           const lexer::Span &span) -> std::optional<std::uint32_t> {
-    const auto found = external_descriptors.find(source_key(span));
+    const auto found = external_descriptors.find(source_key(span, name));
     return found == external_descriptors.end()
                ? std::nullopt
                : std::optional<std::uint32_t>(found->second);
   };
   lowering_options.external_read_constant_path =
       [&external_constant_paths](
-          const std::string &, const lexer::Span &span)
+          const std::string &name, const lexer::Span &span)
       -> std::optional<std::string> {
-    const auto found = external_constant_paths.find(source_key(span));
+    const auto found = external_constant_paths.find(source_key(span, name));
     return found == external_constant_paths.end()
                ? std::nullopt
                : std::optional<std::string>(found->second);

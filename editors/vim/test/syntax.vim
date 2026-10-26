@@ -50,6 +50,16 @@ try
   call assert_equal('sputnik', &l:filetype)
   call s:Group(1, 'if', 'sputnikConditional')
 
+  call s:Source(['html"""', '  %for item in items:', '    #{item}', '  %# omitted', '  %%for literal', '  """', 'plain = """', '  %for is text', '  """'])
+  call s:Group(2, '%for', 'sputnikTemplateControl')
+  call s:Group(2, 'in', 'sputnikWordOperator')
+  call s:Group(4, '%# omitted', 'sputnikTemplateComment')
+  call s:Group(5, '%%', 'sputnikTemplatePercent')
+  call s:Group(8, '%for', 'sputnikTextBlock')
+
+  call s:Source(['@template("./page.html.sv")', 'def page(title)'])
+  call s:Group(1, '@template', 'sputnikTemplateAnnotation')
+
   call s:Source(['a?=false', 'xs[0] or= 1', 'obj.value?=2', 'def []?(key): null'])
   call s:Group(1, '?=', 'sputnikOperator')
   call s:Group(2, 'or=', 'sputnikWordOperator')
@@ -409,7 +419,7 @@ try
   call s:Group(5, '#{not_interpolated}#not-a-comment', 'sputnikRawDoubleString')
   call s:Group(6, '#{not_interpolated}', 'sputnikRawSingleString')
   call s:Group(7, 'sql', 'sputnikStringTag')
-  call s:Group(8, 'SELECT', 'sputnikTextBlock')
+  call s:Group(8, 'SELECT', 'sputnikTaggedTextBlock')
   call s:Group(8, 'id', 'sputnikIdentifier', 1)
   call s:Group(10, 'r', 'sputnikRawTag', 1)
   call s:Group(11, '#{not_interpolated}', 'sputnikRawTextBlock')
@@ -466,10 +476,17 @@ try
   execute 'edit ' . fnameescape(fnamemodify(s:fixture, ':h') . '/Makefile.am')
   call assert_equal('automake', &l:filetype)
   call assert_equal('', v:errmsg)
+  execute 'edit ' . fnameescape(s:fixture . '.html.sv')
+  call assert_equal('sputnikview', &l:filetype)
+  call s:Source(['<h1>#{title}</h1>', '%for value in values:', '  #{value}', '%# omitted'])
+  call s:Group(1, 'title', 'sputnikIdentifier')
+  call s:Group(2, '%for', 'sputnikTemplateControl')
+  call s:Group(4, '%# omitted', 'sputnikTemplateComment')
 catch
   call assert_report(v:exception . ' at ' . v:throwpoint)
 finally
   call delete(s:fixture)
+  call delete(s:fixture . ".html.sv")
 endtry
 
 if !empty(v:errors)

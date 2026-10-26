@@ -11,6 +11,8 @@ FILES = {
     "cheat-sheet.ru.md": "docs/cheat-sheet.ru.md",
     "spec/sputnik_unified_final_spec.md": "sputnik_unified_final_spec.md",
     "spec/sputnik_runtime_project_design.md": "sputnik_runtime_project_design.md",
+    "spec/docs/engineering/string-template-loops-v1.md": "docs/engineering/string-template-loops-v1.md",
+    "spec/docs/engineering/external-templates-v1.md": "docs/engineering/external-templates-v1.md",
 }
 
 

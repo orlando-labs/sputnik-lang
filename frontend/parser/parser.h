@@ -30,6 +30,7 @@ public:
 
   ParseResult parse_expression_unit();
   ParseModuleResult parse_module_unit();
+  ParseResult parse_template_body();
 
 private:
   enum class StopMode {
@@ -188,6 +189,8 @@ private:
                                                StopMode stop_mode);
   std::unique_ptr<ast::Expr> parse_map_literal(const lexer::Token &open,
                                                StopMode stop_mode);
+  std::unique_ptr<ast::Expr> parse_string_parts(const lexer::Token &token,
+      std::size_t content_begin, std::size_t content_end, const std::string &quote_kind);
   std::unique_ptr<ast::Expr>
   parse_string_literal_expr(const lexer::Token &token);
   std::unique_ptr<ast::Expr> parse_postfix(std::unique_ptr<ast::Expr> expr,

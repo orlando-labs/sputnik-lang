@@ -27,6 +27,7 @@
 #include "runtime/context.h"
 #include "runtime/errors.h"
 #include "runtime/macro_expander.h"
+#include "frontend/templates/templates.h"
 #include "runtime/stdlib_registry.h"
 #include "runtime/vm.h"
 
@@ -527,6 +528,46 @@ struct CompiledModuleArtifact {
   sputnik::native::NativeModule native_module;
 };
 
+struct PreparedSource {
+  sputnik::parser::ParseModuleResult parsed;
+  sputnik::templates::PrepareResult templates;
+};
+
+sputnik::templates::PrepareResult prepare_template_inputs(
+    std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
+    const std::string &source, const std::string &path,
+    const std::vector<sputnik::templates::SourceFormat> &formats = {}) {
+  auto result = sputnik::templates::prepare(items, path, source, formats,
+      [](const auto &declaring, const auto &relative) {
+        const auto input = std::filesystem::weakly_canonical(
+            std::filesystem::absolute(declaring).parent_path() / relative);
+        return sputnik::templates::SourceInput{input.string(), read_file(input.string())};
+      });
+  if (!result.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(result.diagnostics));
+  return result;
+}
+
+PreparedSource prepare_source_text(const std::string &source, const std::string &path,
+    const std::vector<sputnik::templates::SourceFormat> &formats = {}) {
+  auto lexed = lex_source(source, path);
+  if (!lexed.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(lexed.diagnostics));
+  sputnik::parser::Parser parser(lexed.tokens);
+  PreparedSource result;
+  result.parsed = parser.parse_module_unit();
+  if (!result.parsed.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(result.parsed.diagnostics));
+  result.templates = prepare_template_inputs(result.parsed.items, source, path, formats);
+  return result;
+}
+
+void validate_template_names(const PreparedSource &prepared,
+    const sputnik::binder::BindGraph &graph) {
+  if (prepared.templates.sources.empty()) return;
+  std::vector<sputnik::lexer::Diagnostic> errors;
+  for (const auto &error : sputnik::binder::unresolved_name_diagnostics(prepared.parsed.items, graph))
+    if (prepared.templates.sources.count(error.span.file)) errors.push_back(error);
+  if (!errors.empty()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(errors));
+}
+
 // Temporary declaration for the macro provider pre-pass; the real macro driver
 // cleanup can move this once the staging code settles.
 std::vector<sputnik::macros::MacroExport>
@@ -555,6 +596,8 @@ CompiledModuleArtifact compile_source_to_module_artifact(
                              "' does not match source package '" +
                              parse_result.module_name + "' in " + path);
   }
+
+  prepare_template_inputs(parse_result.items, source, path);
 
   // F1.5: expand macro calls, then quote/unquote, before binding. Package /
   // image builds pass the staged provider table (§11 cross-module macros).
@@ -629,30 +672,36 @@ CompiledModuleArtifact compile_source_to_module_artifact(
 
 sputnik::macros::MacroProviderMap installed_macro_providers(
     const std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
-    const std::string &path);
+    const std::string &path,
+    const std::vector<sputnik::pkg::PackageDependency> &dependencies = {});
 
-sputnik::bytecode::BcModule compile_source_text_to_module(
-    const std::string &source, const std::string &source_path,
+sputnik::bytecode::BcModule compile_prepared_source_to_module(
+    PreparedSource &prepared, const std::string &source, const std::string &source_path,
     const std::string &expected_module_name,
-    const std::vector<sputnik::capability::CapabilityRequest> &capabilities = {},
-    const sputnik::macros::MacroProviderMap *macro_providers = nullptr) {
-  sputnik::lexer::LexResult lex_result = lex_source(source, source_path);
-  if (!lex_result.ok()) {
-    throw std::runtime_error(
-        sputnik::lexer::diagnostics_to_json(lex_result.diagnostics));
-  }
-
-  sputnik::parser::Parser parser(lex_result.tokens);
-  sputnik::parser::ParseModuleResult parse_result = parser.parse_module_unit();
-  if (!parse_result.ok()) {
-    throw std::runtime_error(
-        sputnik::lexer::diagnostics_to_json(parse_result.diagnostics));
-  }
+    const std::vector<sputnik::capability::CapabilityRequest> &capabilities,
+    const sputnik::macros::MacroProviderMap *macro_providers) {
+  auto &parse_result = prepared.parsed;
   if (!expected_module_name.empty() &&
       parse_result.module_name != expected_module_name) {
     throw std::runtime_error("manifest module '" + expected_module_name +
                              "' does not match source package '" +
                              parse_result.module_name + "' in " + source_path);
+  }
+
+  for (const auto &use : prepared.templates.providers) {
+    bool found = use.format.module == "system" && use.format.macro == "cmd";
+    if (macro_providers) {
+      const auto provider = macro_providers->find(use.format.module);
+      if (provider != macro_providers->end())
+        for (const auto &entry : provider->second) {
+          if (!entry.public_export || entry.public_name != use.format.macro || !entry.def) continue;
+          found = std::any_of(entry.def->bool_fields.begin(), entry.def->bool_fields.end(),
+              [](const auto &field) { return field.name == "is_string_tag" && field.value; });
+        }
+    }
+    if (!found) throw std::runtime_error(sputnik::lexer::diagnostics_to_json({
+        {"TEMPLATE_PROVIDER", "error", "templates", "source-format provider must export a string_tag macro: " +
+         use.format.module + "." + use.format.macro, use.declaration}}));
   }
 
   // F1.5: expand macro calls, then quote/unquote, before binding. Manifest
@@ -662,9 +711,9 @@ sputnik::bytecode::BcModule compile_source_text_to_module(
         macro_providers != nullptr
             ? sputnik::macros::expand_macros(parse_result.items,
                                            parse_result.module_name, source,
-                                           *macro_providers)
+                                           *macro_providers, prepared.templates.sources)
             : sputnik::macros::expand_macros(parse_result.items,
-                                           parse_result.module_name, source);
+                                           parse_result.module_name, source, {}, prepared.templates.sources);
     if (!macro_result.ok) {
       throw std::runtime_error("macro expansion error: " + macro_result.error);
     }
@@ -677,6 +726,7 @@ sputnik::bytecode::BcModule compile_source_text_to_module(
     throw std::runtime_error(
         sputnik::lexer::diagnostics_to_json(bind_result.diagnostics));
   }
+  validate_template_names(prepared, bind_result.graph);
   sputnik::checker::CheckResult check_result = sputnik::checker::check_module(
       parse_result.items, parse_result.module_name, bind_result.graph);
   const std::vector<sputnik::lexer::Diagnostic> effect_diagnostics =
@@ -697,6 +747,16 @@ sputnik::bytecode::BcModule compile_source_text_to_module(
   emit_result.module.capabilities = capabilities;
   emit_result.module.effects = check_result.effect_summaries;
   return std::move(emit_result.module);
+}
+
+sputnik::bytecode::BcModule compile_source_text_to_module(
+    const std::string &source, const std::string &source_path,
+    const std::string &expected_module_name,
+    const std::vector<sputnik::capability::CapabilityRequest> &capabilities = {},
+    const sputnik::macros::MacroProviderMap *macro_providers = nullptr) {
+  auto prepared = prepare_source_text(source, source_path);
+  return compile_prepared_source_to_module(prepared, source, source_path,
+      expected_module_name, capabilities, macro_providers);
 }
 
 std::vector<std::uint8_t> compile_source_to_bytecode(
@@ -935,6 +995,8 @@ RunnableModuleArtifact compile_source_to_runnable_module(
     throw std::runtime_error(
         sputnik::lexer::diagnostics_to_json(parse_result.diagnostics));
   }
+
+  prepare_template_inputs(parse_result.items, source, path);
 
   // F1.5: expand macro calls, then quote/unquote, before binding.
   {
@@ -1811,7 +1873,7 @@ bool native_cpp_user_method_selector(const sputnik::bytecode::BcModule &module,
 // because the current graph has no implementation.
 bool native_cpp_system_selector(const std::string &selector) {
   static const std::set<std::string> selectors{
-      "command", "shell", "__template", "with", "argv", "program", "cwd",
+      "command", "shell", "__template", "__template_chunks", "with", "argv", "program", "cwd",
       "capture", "output", "run", "spawn", "communicate", "wait", "close",
       "stdin", "stdout", "stderr", "stdin_value", "stdout_value", "stderr_value",
       "pid", "running?", "status", "success?", "exit_code", "signal", "signaled?",
@@ -28231,9 +28293,11 @@ harvest_macro_exports(const std::string &source, const std::string &path) {
 // graph pass after bytecode emission cannot recover unexpanded macro syntax.
 sputnik::macros::MacroProviderMap installed_macro_providers(
     const std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
-    const std::string &path) {
+    const std::string &path,
+    const std::vector<sputnik::pkg::PackageDependency> &dependencies) {
   sputnik::macros::MacroProviderMap providers;
   sputnik::pkg::PackageResolver resolver(std::filesystem::absolute(path).parent_path());
+  resolver.require(dependencies);
   sputnik::runtime::RuntimeModuleRegistry natives;
   sputnik::runtime::RuntimeDispatchRegistry dispatch;
   sputnik::runtime::RuntimeTypeRegistry types;
@@ -28326,18 +28390,36 @@ sputnik::build::BuildArtifactRecord build_one_module(
     const sputnik::build::BuildProfileSet &profiles,
     const std::vector<BuiltStdlibAbi> &stdlib_abis, bool cache_enabled,
     const sputnik::macros::MacroProviderMap *macro_providers = nullptr,
-    const std::string &macro_material = {}) {
+    const std::string &macro_material = {},
+    const std::vector<sputnik::templates::SourceFormat> &formats = {},
+    const std::vector<sputnik::pkg::PackageDependency> &dependencies = {}) {
   const std::filesystem::path source_path = root_dir / module.path;
   const std::string source = read_file(source_path.string());
+  auto prepared = prepare_source_text(source, source_path.string(), formats);
+  auto effective_providers = macro_providers ? *macro_providers : sputnik::macros::MacroProviderMap{};
+  std::string installed_material;
+  if (!prepared.templates.providers.empty()) {
+    for (const auto &entry : sputnik::macros::builtin_macro_providers()) {
+      effective_providers.emplace(entry.first, entry.second);
+      for (const auto &macro : entry.second)
+        if (macro.def) installed_material += entry.first + "\n" + sputnik::ast::ast_module_to_json(*macro.def, "") + "\n";
+    }
+    for (auto &entry : installed_macro_providers(prepared.parsed.items, source_path.string(), dependencies)) {
+      if (effective_providers.count(entry.first)) continue;
+      for (const auto &macro : entry.second)
+        if (macro.def) installed_material += entry.first + "\n" + sputnik::ast::ast_module_to_json(*macro.def, "") + "\n";
+      effective_providers.emplace(entry.first, std::move(entry.second));
+    }
+  }
   const std::string source_hash = sputnik::lexer::sha256_hex(source);
   // `macro_material` folds the staged macro providers (name + source hash per
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      // v6 records import-as replacements and canonical repeated bindings.
-      "sputnik.build.cache.v6\n" + module.name + "\n" + module.path + "\n" +
+      // v7 includes external source-format registrations and input/provider digests.
+      "sputnik.build.cache.v7\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
-      stdlib_abi_material(stdlib_abis) + macro_material);
+      stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material);
   const std::filesystem::path output_path =
       out_dir / (safe_artifact_name(module.name) + ".sputnikbc");
   const std::filesystem::path cache_path =
@@ -28351,6 +28433,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
   record.cache_path = cache_path.string();
   record.cache_key = cache_key;
   record.source_hash = source_hash;
+  for (const auto &input : prepared.templates.sources)
+    record.template_inputs.emplace_back(input.first, sputnik::lexer::sha256_hex(input.second));
   record.stdlib = module.stdlib;
   record.bootstrap_layer = module.bootstrap_layer;
 
@@ -28359,8 +28443,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
     bytes = read_bytes(cache_path.string());
     record.cached = true;
   } else {
-    sputnik::bytecode::BcModule bc_module = compile_source_text_to_module(
-        source, module.path, module.name, {}, macro_providers);
+    sputnik::bytecode::BcModule bc_module = compile_prepared_source_to_module(
+        prepared, source, source_path.string(), module.name, {}, &effective_providers);
     bc_module.required_features = profiles.required_features;
     bc_module.optional_features = profiles.optional_features;
     bc_module.forbidden_features = profiles.forbidden_features;
@@ -28389,7 +28473,10 @@ sputnik::build::BuildArtifactRecord build_one_module(
                       module.bootstrap_layer.empty() ? "B2"
                                                      : module.bootstrap_layer);
     }
-    bc_module.abi_hash = module_abi_hash(module, profiles, source_hash);
+    if (!prepared.templates.sources.empty())
+      add_module_attr(&bc_module, "sputnik.build.template_inputs", prepared.templates.cache_material);
+    bc_module.abi_hash = module_abi_hash(module, profiles,
+        source_hash + prepared.templates.cache_material);
     bytes = sputnik::bytecode::serialize_module(bc_module);
     if (cache_enabled) {
       std::filesystem::create_directories(cache_dir);
@@ -28666,7 +28753,7 @@ void build_manifest_modules(
   for (const sputnik::build::BuildModule &module : manifest.modules) {
     summary->artifacts.push_back(build_one_module(
         module, manifest_dir, out_dir, cache_dir, manifest.profiles,
-        stdlib_abis, cache_enabled, &macro_providers, macro_material));
+        stdlib_abis, cache_enabled, &macro_providers, macro_material, manifest.source_formats, manifest.dependencies));
   }
 }
 

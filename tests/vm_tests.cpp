@@ -5435,7 +5435,8 @@ void test_runtime_watch_stream_wait_timeout_and_wakeup() {
 void test_runtime_watch_wait_large_timeout_does_not_overflow() {
   using namespace sputnik::runtime;
   using namespace std::chrono_literals;
-  for (const auto timeout : {std::chrono::milliseconds::max(),
+  for (const auto timeout : {std::chrono::milliseconds(std::chrono::hours(2)),
+                             std::chrono::milliseconds::max(),
                              std::chrono::milliseconds::max() / 2}) {
     auto stream = std::make_shared<RuntimeWatchStream>();
     const auto cursor = stream->tail_cursor();

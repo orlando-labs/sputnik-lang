@@ -154,8 +154,22 @@ RuntimeWatchPollResult RuntimeWatchStream::wait(
       Clock::time_point::max() - now);
   const auto deadline = timeout >= remaining ? Clock::time_point::max()
                                              : now + timeout;
-  const bool ready = condition_.wait_until(
-      lock, deadline, [this, &cursor] { return wait_ready_locked(cursor); });
+  // Older standard libraries translate a steady deadline to system_clock.
+  // Translating time_point::max() can overflow there and spin with mutex_ held.
+  // Bounded waits keep that conversion safe without shortening the timeout.
+  bool ready = wait_ready_locked(cursor);
+  while (!ready) {
+    const auto current = Clock::now();
+    if (current >= deadline) {
+      break;
+    }
+    const auto slice = std::min(
+        deadline - current,
+        std::chrono::duration_cast<Clock::duration>(std::chrono::hours(1)));
+    ready = condition_.wait_until(
+        lock, current + slice,
+        [this, &cursor] { return wait_ready_locked(cursor); });
+  }
   RuntimeWatchPollResult result = poll_locked(cursor, max_events);
   result.timed_out = !ready && result.ok() && result.events.empty();
   return result;

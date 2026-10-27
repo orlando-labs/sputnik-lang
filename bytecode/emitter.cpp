@@ -4784,6 +4784,16 @@ std::uint32_t CodeEmitter::compile_expr(const ast::Expr &expr) {
     emit_instruction(Opcode::GetLast, {{dst, false}}, expr.span);
     return dst;
   }
+  if (expr.kind == "HLastSet") {
+    const ast::Expr *value = node_field(expr, "expr");
+    if (value == nullptr) {
+      diag(expr.span, "BC2001", "HLastSet is missing expr");
+      return alloc_temp();
+    }
+    const std::uint32_t reg = compile_expr(*value);
+    record_last_value(reg, expr.span, false);
+    return reg;
+  }
   if (expr.kind == "HLoadCapture") {
     const std::uint32_t dst = alloc_temp();
     emit_instruction(

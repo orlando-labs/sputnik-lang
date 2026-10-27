@@ -994,6 +994,16 @@ spec-sync-check:
 	python3 tests/spec_sync_test.py
 	python3 tools/spec_sync.py check
 
+.PHONY: test-last-result-conditions
+test: test-last-result-conditions
+test-last-result-conditions: $(BUILD_DIR)/sputnik
+	mkdir -p $(BUILD_DIR)/last_result_conditions
+	$(BUILD_DIR)/sputnik tests/fixtures/last_result_conditions/main.s > $(BUILD_DIR)/last_result_conditions/vm.out
+	grep -q '^PASS last result conditions$$' $(BUILD_DIR)/last_result_conditions/vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/last_result_conditions/main.s --entry main --require-full-native -o $(BUILD_DIR)/last_result_conditions/native > $(BUILD_DIR)/last_result_conditions/build.json
+	$(BUILD_DIR)/last_result_conditions/native > $(BUILD_DIR)/last_result_conditions/native.out
+	cmp $(BUILD_DIR)/last_result_conditions/vm.out $(BUILD_DIR)/last_result_conditions/native.out
+
 .PHONY: test-conditional-assignment
 test: test-conditional-assignment
 test-conditional-assignment: $(BUILD_DIR)/sputnik

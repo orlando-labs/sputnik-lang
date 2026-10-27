@@ -1883,6 +1883,15 @@ private:
     return body;
   }
 
+  std::unique_ptr<Node> lower_condition(const ast::Expr &expr) {
+    // Publish the completed source condition before entering either branch.
+    // Logical operands and compiler-generated guards do not publish their
+    // intermediate values: `and`/`or` retain the incoming $_ while evaluating.
+    auto node = make_node("HLastSet", expr.span);
+    node->node_field("expr", lower_expr(expr));
+    return node;
+  }
+
   std::unique_ptr<Node> wrap_safe_guard(std::unique_ptr<Node> current,
                                         const std::string &temp_slot,
                                         std::unique_ptr<Node> else_expr,
@@ -2079,7 +2088,8 @@ private:
                                     string_value(*condition, "kind"));
               if (const ast::Expr *condition_expr =
                       node_field(*condition, "expr")) {
-                lowered->node_field("condition", lower_expr(*condition_expr));
+                lowered->node_field("condition",
+                                    lower_condition(*condition_expr));
               }
             }
             if (const ast::Expr *value = node_field(*element, "expr")) {
@@ -2098,7 +2108,8 @@ private:
                                     string_value(*condition, "kind"));
               if (const ast::Expr *condition_expr =
                       node_field(*condition, "expr")) {
-                lowered->node_field("condition", lower_expr(*condition_expr));
+                lowered->node_field("condition",
+                                    lower_condition(*condition_expr));
               }
             }
             elements.push_back(std::move(lowered));
@@ -2132,7 +2143,8 @@ private:
                                     string_value(*condition, "kind"));
               if (const ast::Expr *condition_expr =
                       node_field(*condition, "expr")) {
-                lowered->node_field("condition", lower_expr(*condition_expr));
+                lowered->node_field("condition",
+                                    lower_condition(*condition_expr));
               }
             }
             entries.push_back(std::move(lowered));
@@ -2152,7 +2164,8 @@ private:
                                   string_value(*condition, "kind"));
             if (const ast::Expr *condition_expr =
                     node_field(*condition, "expr")) {
-              lowered->node_field("condition", lower_expr(*condition_expr));
+              lowered->node_field("condition",
+                                  lower_condition(*condition_expr));
             }
           }
           entries.push_back(std::move(lowered));
@@ -2298,7 +2311,7 @@ private:
     if (expr.kind == "AstInlineIfExpr") {
       auto node = make_node("HIf", expr.span);
       node->node_field("cond",
-                       lower_expr(*node_field_required(expr, "condition")));
+                       lower_condition(*node_field_required(expr, "condition")));
 
       std::vector<std::unique_ptr<Node>> then_items;
       auto then_last = make_node("HLastSet", expr.span);
@@ -2322,7 +2335,8 @@ private:
     }
     if (expr.kind == "AstIf") {
       auto node = make_node("HIf", expr.span);
-      node->node_field("cond", lower_expr(*node_field_required(expr, "cond")));
+      node->node_field("cond",
+                       lower_condition(*node_field_required(expr, "cond")));
       node->node_field("then_body",
                        lower_body(list_field(expr, "then_body"), expr.span));
       node->node_field("else_body",
@@ -2333,7 +2347,7 @@ private:
       auto node = make_node("HIf", expr.span);
       auto negated = make_node("HSend", expr.span);
       negated->node_field("receiver",
-                          lower_expr(*node_field_required(expr, "cond")));
+                          lower_condition(*node_field_required(expr, "cond")));
       negated->string_field("selector", "not");
       negated->list_field("pos_args", {});
       negated->list_field("kw_args", {});
@@ -2349,7 +2363,7 @@ private:
       auto node = make_node("HLoop", expr.span);
       node->string_field("kind", map_loop_kind(expr.kind));
       if (const ast::Expr *cond = node_field(expr, "cond")) {
-        node->node_field("cond", lower_expr(*cond));
+        node->node_field("cond", lower_condition(*cond));
       }
       node->node_field("body", lower_body(list_field(expr, "body"), expr.span));
       return node;
@@ -2414,7 +2428,7 @@ private:
       node->node_field("pattern", std::move(pattern_node));
       node->node_field("compiled_pattern", std::move(compiled_pattern));
       if (const ast::Expr *guard = node_field(expr, "guard_expr")) {
-        node->node_field("guard", lower_expr(*guard));
+        node->node_field("guard", lower_condition(*guard));
       }
       node->node_field("body", lower_body(list_field(expr, "body"), expr.span));
       return node;
@@ -3219,8 +3233,8 @@ private:
             base, tails, i, end, make_load_local(slot, span), true);
         auto skipped = make_load_local(slot, span);
         auto branch = make_node("HIf", span);
-        branch->node_field("cond", lower_expr(
-            *node_field_required(*condition, "expr")));
+        branch->node_field("cond", lower_condition(
+                                       *node_field_required(*condition, "expr")));
         if (string_value(*condition, "kind") == "unless") {
           std::swap(applied, skipped);
         }

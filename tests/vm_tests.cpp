@@ -1504,6 +1504,18 @@ void test_branching_and_last_result() {
          "flag(null) should treat null as falsey");
 }
 
+void test_condition_publishes_last_result() {
+  std::ifstream source_file("tests/fixtures/last_result_conditions/main.s");
+  expect(source_file.good(), "last-result condition fixture exists");
+  const std::string source((std::istreambuf_iterator<char>(source_file)),
+                           std::istreambuf_iterator<char>());
+  const auto result = execute_emitted_init(source + "\nmain()\n");
+  expect(result.ok(), result.fault.has_value() ? result.fault->message
+                                             : "last-result condition execution");
+  expect(result.value.is_integer() && result.value.as_integer() == 42,
+         "conditions publish their final result without changing logical operands");
+}
+
 void test_manual_closure_call_and_capture() {
   using namespace sputnik::bytecode;
 
@@ -13454,6 +13466,7 @@ int main() {
   test_top_level_clause_function_self_recursion_base_one_orders();
   test_top_level_clause_function_miss_raises_match_error();
   test_branching_and_last_result();
+  test_condition_publishes_last_result();
   test_manual_closure_call_and_capture();
   test_runtime_uninitialized_register_read_raises_name_error();
   test_manual_call_invokes_object_call_method();

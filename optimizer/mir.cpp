@@ -315,6 +315,14 @@ private:
     if (expr.kind == "HLastGet") {
       return emit_value("last.get", {}, {}, expr.span);
     }
+    if (expr.kind == "HLastSet") {
+      const ast::Expr *value = node_field(expr, "expr");
+      const std::string compiled = value == nullptr
+                                       ? emit_value("undef", {}, {}, expr.span)
+                                       : compile_expr(*value);
+      emit_void("last.set", {value_operand(compiled)}, {}, expr.span);
+      return compiled;
+    }
     if (expr.kind == "HLoadCapture") {
       return emit_value("capture.load",
                         {capture_operand(string_field(expr, "slot"))}, {},

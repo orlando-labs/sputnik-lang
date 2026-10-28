@@ -1,6 +1,6 @@
 {
   "format": "sputnik.tokens.v1",
-  "source_hash": "sha256:87368ca0cc9fafeaea3ac41aafd14411dc800146eb606f599e5fcf9efb3d2fc7",
+  "source_hash": "sha256:340afa3346ff99eecbdf97d0b5aff6fac5a1e4b850d96c7daacc6dacffcadc9a",
   "tokens": [
     {"kind":"IDENTIFIER","lexeme":"items","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":1,"col":1,"offset":0},"end":{"line":1,"col":6,"offset":5}}},
     {"kind":"DOT","lexeme":".","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":1,"col":6,"offset":5},"end":{"line":1,"col":7,"offset":6}}},
@@ -31,7 +31,7 @@
     {"kind":"IDENTIFIER","lexeme":"map","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":7,"offset":67},"end":{"line":4,"col":10,"offset":70}}},
     {"kind":"COLON","lexeme":":","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":10,"offset":70},"end":{"line":4,"col":11,"offset":71}}},
     {"kind":"PLACEHOLDER","lexeme":"$it","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":12,"offset":72},"end":{"line":4,"col":15,"offset":75}}},
-    {"kind":"BANG_TILDE","lexeme":"!~","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":15,"offset":75},"end":{"line":4,"col":17,"offset":77}}},
+    {"kind":"TILDE_EQUAL","lexeme":"~=","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":15,"offset":75},"end":{"line":4,"col":17,"offset":77}}},
     {"kind":"IDENTIFIER","lexeme":"pattern","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":17,"offset":77},"end":{"line":4,"col":24,"offset":84}}},
     {"kind":"NEWLINE","lexeme":"\n","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":4,"col":24,"offset":84},"end":{"line":5,"col":1,"offset":85}}},
     {"kind":"IDENTIFIER","lexeme":"items","span":{"file":"corpus/parse/lexer/placeholder_aliases/source.s","start":{"line":5,"col":1,"offset":85},"end":{"line":5,"col":6,"offset":90}}},

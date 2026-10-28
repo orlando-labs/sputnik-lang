@@ -152,8 +152,8 @@ void test_identifier_forms() {
                {TokenKind::Placeholder, TokenKind::BangEqual,
                 TokenKind::Integer, TokenKind::Newline, TokenKind::Eof});
   expect_kinds("placeholder alias followed by regexp operator",
-               "$it1!~pattern\n",
-               {TokenKind::Placeholder, TokenKind::BangTilde,
+               "$it1~=pattern\n",
+               {TokenKind::Placeholder, TokenKind::TildeEqual,
                 TokenKind::Identifier, TokenKind::Newline, TokenKind::Eof});
   expect_kinds("placeholder alias followed by optional index", "$it2[?0]\n",
                {TokenKind::Placeholder, TokenKind::LBracket,

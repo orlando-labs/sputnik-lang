@@ -11,6 +11,7 @@
 #include "runtime/vm.h"
 #include "runtime/vm_internal.h"
 #include "runtime/world.h"
+#include "runtime/regexp_engine.h"
 
 #include <algorithm>
 #include <functional>
@@ -593,7 +594,7 @@ struct BuiltinRegexpTag {
 };
 
 std::optional<BuiltinRegexpTag>
-match_builtin_regexp_tag(const ast::Expr &expr) {
+match_builtin_regexp_tag(const ast::Expr &expr, const std::set<std::string> &names) {
   if (expr.kind != "AstPostfixChain") {
     return std::nullopt;
   }
@@ -604,7 +605,7 @@ match_builtin_regexp_tag(const ast::Expr &expr) {
     return std::nullopt;
   }
   const std::string *name = string_field(*base, "name");
-  if (name == nullptr || *name != "r" ||
+  if (name == nullptr || names.count(*name) == 0 ||
       tails->values[0]->kind != "AstTailCall") {
     return std::nullopt;
   }
@@ -622,36 +623,6 @@ match_builtin_regexp_tag(const ast::Expr &expr) {
   return BuiltinRegexpTag{args->values[0].get(), expr.span};
 }
 
-std::optional<std::string>
-regexp_source_from_literal(const ast::Expr &literal) {
-  const ast::ListField *parts = list_field(literal, "parts");
-  if (parts == nullptr) {
-    return std::string{};
-  }
-  std::string source;
-  for (const std::unique_ptr<ast::Expr> &part : parts->values) {
-    if (!part) {
-      continue;
-    }
-    if (part->kind == "AstStringText") {
-      if (const std::string *value = string_field(*part, "value")) {
-        source += *value;
-      }
-      continue;
-    }
-    if (part->kind == "AstStringEscape") {
-      if (const std::string *raw = string_field(*part, "source")) {
-        source += *raw;
-      }
-      continue;
-    }
-    if (part->kind == "AstStringExpr") {
-      return std::nullopt;
-    }
-  }
-  return source;
-}
-
 std::unique_ptr<ast::Expr> make_plain_string_literal(std::string text,
                                                      const lexer::Span &span) {
   auto literal = ast::make_expr("AstStringLiteral", span);
@@ -665,28 +636,46 @@ std::unique_ptr<ast::Expr> make_plain_string_literal(std::string text,
   return literal;
 }
 
-std::unique_ptr<ast::Expr> make_regexp_compile_call(std::string source,
-                                                    const lexer::Span &span) {
-  auto base = ast::make_expr("AstName", span);
-  base->string_field("name", "Regexp");
-
+std::unique_ptr<ast::Expr> make_regexp_call(std::string selector,
+    std::vector<std::unique_ptr<ast::Expr>> args, const lexer::Span &span) {
+  auto base = ast::make_expr("AstQualifiedRef", span);
+  base->string_field("module", ""); base->string_field("name", "Regexp");
   auto member = ast::make_expr("AstTailDotMember", span);
-  member->string_field("name", "compile");
-  member->bool_field("chain_boundary", false);
-
-  std::vector<std::unique_ptr<ast::Expr>> args;
-  args.push_back(make_plain_string_literal(std::move(source), span));
-  auto call = ast::make_expr("AstTailCall", span);
-  call->string_field("call_style", "paren");
+  member->string_field("name", std::move(selector)); member->bool_field("chain_boundary", false);
+  auto call = ast::make_expr("AstTailCall", span); call->string_field("call_style", "paren");
   call->list_field("args", std::move(args));
-
   std::vector<std::unique_ptr<ast::Expr>> tails;
-  tails.push_back(std::move(member));
-  tails.push_back(std::move(call));
+  tails.push_back(std::move(member)); tails.push_back(std::move(call));
   auto chain = ast::make_expr("AstPostfixChain", span);
-  chain->node_field("base", std::move(base));
-  chain->list_field("tails", std::move(tails));
-  return chain;
+  chain->node_field("base", std::move(base)); chain->list_field("tails", std::move(tails)); return chain;
+}
+
+std::unique_ptr<ast::Expr> expand_regexp_literal(const ast::Expr &literal) {
+  const auto *suffix = string_field(literal, "tag_suffix");
+  const std::string flags = suffix ? *suffix : "";
+  const auto bits = regexp::flags(flags);
+  std::vector<std::string> chunks(1);
+  std::vector<std::unique_ptr<ast::Expr>> values;
+  if (const auto *parts = list_field(literal, "parts")) for (const auto &part : parts->values) {
+    if (part->kind == "AstStringExpr") {
+      values.push_back(ast::clone_expr(*node_field(*part, "expr"))); chunks.emplace_back();
+    } else {
+      const auto *value = string_field(*part, part->kind == "AstStringEscape" ? "source" : "value");
+      if (value) chunks.back() += *value;
+    }
+  }
+  if (values.empty()) (void)regexp::compile(chunks[0], bits);
+  else regexp::validate_holes(chunks, bits);
+  std::vector<std::unique_ptr<ast::Expr>> text_parts;
+  for (auto &chunk : chunks) text_parts.push_back(make_plain_string_literal(std::move(chunk), literal.span));
+  auto chunk_list = ast::make_expr("AstListLiteral", literal.span);
+  chunk_list->list_field("elements", std::move(text_parts));
+  auto value_list = ast::make_expr("AstListLiteral", literal.span);
+  value_list->list_field("elements", std::move(values));
+  std::vector<std::unique_ptr<ast::Expr>> args;
+  args.push_back(std::move(chunk_list)); args.push_back(std::move(value_list));
+  args.push_back(make_plain_string_literal(flags, literal.span));
+  return make_regexp_call("__compile_template", std::move(args), literal.span);
 }
 
 // Wrap an AST subtree as an `Ast` value, carrying the module source so the
@@ -744,11 +733,13 @@ public:
   Expander(bytecode::BcModule macro_module, MacroNameTable macro_names,
            std::set<std::string> string_tag_names,
            std::shared_ptr<const std::string> source,
-           const std::map<std::string, std::string> &external_sources)
+           const std::map<std::string, std::string> &external_sources,
+           std::set<std::string> regexp_names)
       : macro_module_(std::move(macro_module)),
         macro_names_(std::move(macro_names)),
         string_tag_names_(std::move(string_tag_names)),
         source_(std::move(source)) {
+    regexp_tag_names_ = std::move(regexp_names);
     for (const auto &entry : external_sources)
       external_sources_[entry.first] = std::make_shared<const std::string>(entry.second);
   }
@@ -770,26 +761,45 @@ public:
       expand(slot, depth + 1);
       return;
     }
-    if (std::optional<BuiltinRegexpTag> tag = match_builtin_regexp_tag(*slot)) {
-      const std::optional<std::string> source =
-          regexp_source_from_literal(*tag->literal);
-      if (!source.has_value()) {
-        fail("builtin regexp tag `r` does not support interpolation yet" +
-             at_location(tag->span));
-        return;
-      }
+    if (std::optional<BuiltinRegexpTag> tag = match_builtin_regexp_tag(*slot, regexp_tag_names_)) {
       std::vector<std::unique_ptr<ast::Expr>> suffix;
       const auto *tails = list_field(*slot, "tails");
       for (std::size_t i = tag->tail_count; i < tails->values.size(); ++i)
         suffix.push_back(ast::clone_expr(*tails->values[i]));
-      slot = make_regexp_compile_call(*source, tag->span);
+      try { slot = expand_regexp_literal(*tag->literal); }
+      catch (const regexp::Error &error) {
+        auto span = tag->literal->span;
+        if (span.end.offset <= source_->size() && span.start.offset < span.end.offset) {
+          const auto original = source_->substr(span.start.offset, span.end.offset - span.start.offset);
+          lexer::Lexer diagnostic_lexer("r" + original, span.file);
+          const auto lexed = diagnostic_lexer.lex();
+          for (const auto &token : lexed.tokens) {
+            if (token.kind != lexer::TokenKind::String) continue;
+            const auto prefix = token.lexeme.compare(0, 3, "\"\"\"") == 0 ? 3U : 1U;
+            const auto offset = std::min(prefix + error.byte_offset, token.lexeme.size() - prefix);
+            auto position = token.span.start;
+            if (!token.source_positions.empty()) position = token.source_positions[offset];
+            else for (std::size_t i = 0; i < offset; ++i) {
+              ++position.offset;
+              if ((static_cast<unsigned char>(token.lexeme[i]) & 0xc0) != 0x80) ++position.col;
+            }
+            position.offset = span.start.offset + position.offset - 1;
+            if (position.line == 1) position.col = span.start.col + position.col - 2;
+            position.line += span.start.line - 1;
+            span.start = position;
+            break;
+          }
+        }
+        fail(error.kind + ": " + error.what() + at_location(span)); return;
+      }
       if (!suffix.empty()) {
         auto chain = ast::make_expr("AstPostfixChain", tag->span);
         chain->node_field("base", std::move(slot));
         chain->list_field("tails", std::move(suffix));
         slot = std::move(chain);
-        expand(slot, depth + 1);
       }
+      // Interpolated expressions may themselves contain macros or string tags.
+      expand(slot, depth + 1);
       return;
     }
     if (std::optional<StringTagCall> tag =
@@ -1632,6 +1642,7 @@ private:
   MacroNameTable macro_names_;
   // Macros declared `string_tag` — invocable only via `name"""…"""`.
   std::set<std::string> string_tag_names_;
+  std::set<std::string> regexp_tag_names_{"r"};
   // Provider alias currently supplying bare nested DSL macro names while a
   // callable macro block expands (for example `orm` inside `orm.model`).
   std::string active_block_namespace_;
@@ -2318,9 +2329,20 @@ ExpandResult expand_macros(std::vector<std::unique_ptr<ast::Expr>> &items,
     }
   }
 
+  std::set<std::string> regexp_names{"r"};
+  for (const auto &item : items) {
+    if (!item || item->kind != "AstImportStmt") continue;
+    const auto *path = string_field(*item, "module_path");
+    if (!path || aliases.resolve(*path) != "Regexp") continue;
+    if (const auto *names = list_field(*item, "names")) for (const auto &entry : names->values) {
+      const auto *name = string_field(*entry, "source_name");
+      const auto *local = string_field(*entry, "local_name");
+      if (name && *name == "r" && local) regexp_names.insert(*local);
+    }
+  }
   Expander expander(std::move(macro_module), std::move(macro_names),
                     std::move(string_tag_names),
-                    std::make_shared<const std::string>(source), external_sources);
+                    std::make_shared<const std::string>(source), external_sources, std::move(regexp_names));
   // The module item list is itself a statement/declaration context, so
   // annotation runs and multi-node expansions apply at top level.
   expander.expand_statements(items, 0);

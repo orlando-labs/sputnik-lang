@@ -9,6 +9,8 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <fstream>
+#include <iterator>
 #include <string>
 
 namespace {
@@ -90,12 +92,12 @@ void test_compile_match_groups_and_operators() {
       execute_source(
           "pat = Regexp.compile(\"(\\\\d+)\")\n"
           "m = pat.match(\"id=123\")\n"
-          "left = \"id=123\" =~ pat\n"
-          "right = pat =~ \"id=123\"\n"
+          "left = \"id=123\" ~= pat\n"
+          "right = pat ~= \"id=123\"\n"
           "if m and left and right and m[0] == \"123\" and m[1] == \"123\" "
           "and m.count() == 1 and m.captures()[0] == \"123\" and "
           "m.start == 3 and m.finish == 6 and pat.match?(\"x9\") and "
-          "pat.full_match?(\"123\") and (\"abc\" !~ pat):\n"
+          "pat.full_match?(\"123\") and not (\"abc\" ~= pat):\n"
           "  42\n"
           "else:\n"
           "  0\n"),
@@ -134,7 +136,7 @@ void test_replacement_variants() {
 void test_faults() {
   expect_fault("Regexp.compile(\"[\")\n", "RegexpCompileError",
                "invalid regexp");
-  expect_fault("Regexp.compile(\"x\", flags: \"m\")\n", "ArgumentError",
+  expect_fault("Regexp.compile(\"x\", flags: \"z\")\n", "ArgumentError",
                "unsupported flags");
 }
 
@@ -145,6 +147,10 @@ int main() {
   test_regexp_tag_and_escape();
   test_replacement_variants();
   test_faults();
+  std::ifstream input("tests/fixtures/regexp_unicode/main.s");
+  expect(input.good(), "Unicode regexp fixture exists");
+  const std::string source((std::istreambuf_iterator<char>(input)),std::istreambuf_iterator<char>());
+  expect_ok_integer(execute_source(source+"\nmain()\n"),42,"Unicode, flags, interpolation and ~= contract");
   std::cout << "stdlib_regexp_tests: ok\n";
   return 0;
 }

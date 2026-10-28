@@ -27,7 +27,7 @@ endfunction
 " Define general matches first; more specific matches below take priority.
 call s:Match('sputnikIdentifier', s:before . s:name)
 syntax match sputnikDelimiter /[.,:;()[\]{}]/
-syntax match sputnikOperator /?=\|\/\/=\|+=\|-=\|\*=\|\/=\|%=\|===\|<=>\|<<\|>>\|\*\*\|\/\/\|=\~\|!\~\|==\|!=\|<=\|>=\|->\|??\|[-+*/%<>=&|^]/
+syntax match sputnikOperator /?=\|\/\/=\|+=\|-=\|\*=\|\/=\|%=\|===\|<=>\|<<\|>>\|\*\*\|\/\/\|\~=\|==\|!=\|<=\|>=\|->\|??\|[-+*/%<>=&|^]/
 syntax match sputnikOperator /\.?\./
 syntax match sputnikOperator /\.\.\.\?/
 syntax match sputnikOperator /?\ze\s*\[/
@@ -53,7 +53,7 @@ call s:Match('sputnikConstant', s:before . 'null' . s:after)
 call s:Match('sputnikSelf', s:before . 'self' . s:after)
 call s:Match('sputnikPlaceholder', s:before . '_[0-9]\+' . s:part . '\@!')
 call s:Match('sputnikPlaceholder', s:before . '\$it\%([1-9][0-9]*\)\?'
-      \ . '\%(' . s:part . '\|?\|!\%([=~]\)\@!\)\@!')
+      \ . '\%(' . s:part . '\|?\|!\%([=]\)\@!\)\@!')
 call s:Match('sputnikWildcard', s:before . '_' . s:part . '\@!')
 syntax match sputnikLastValue /\$_/
 call s:Match('sputnikInstanceVariable', '@' . s:name)
@@ -83,7 +83,7 @@ call s:Match('sputnikControl', '\%(^[ \t]*\|:[ \t]*\|\<then\%(\.then\)\@<![ \t]\
 
 call s:Match('sputnikDeclaration', s:before . 'def' . s:after,
       \ 'nextgroup=sputnikFunction skipwhite')
-call s:Match('sputnikFunction', '\%(\[\][=?]\?\|\*\*\|//\|<=>\|===\|=\~\|!\~\|==\|!=\|<=\|>=\|<<\|>>\|[-+*/%&|^<>]\|' . s:name . '\)', 'contained')
+call s:Match('sputnikFunction', '\%(\[\][=?]\?\|\*\*\|//\|<=>\|===\|\~=\|==\|!=\|<=\|>=\|<<\|>>\|[-+*/%&|^<>]\|' . s:name . '\)', 'contained')
 call s:Match('sputnikDeclaration', s:before . '\%(class\|mixin\)' . s:after,
       \ 'nextgroup=sputnikClassName skipwhite')
 call s:Match('sputnikClassName', s:head . s:part . '*', 'contained')
@@ -138,9 +138,9 @@ syntax region sputnikTaggedTextBlock start=/"""/ skip=/\\./ end=/"""/ contained 
 syntax region sputnikTaggedSingleString start=/'/ skip=/\\./ end=/'/ contained contains=sputnikSingleEscape,sputnikInterpolation,@Spell
 call s:Match('sputnikRawTag', s:before . 'r\ze["'']',
       \ 'nextgroup=sputnikRawDoubleString,sputnikRawSingleString,sputnikRawTextBlock')
-syntax region sputnikRawSingleString start=/'/ skip=/\\./ end=/'/ contained contains=sputnikRawEscape
-syntax region sputnikRawDoubleString start=/"/ skip=/\\./ end=/"/ contained contains=sputnikRawEscape
-syntax region sputnikRawTextBlock start=/"""/ skip=/\\./ end=/"""/ contained contains=sputnikRawEscape
+syntax region sputnikRawSingleString start=/'/ skip=/\\./ end=/'/ contained contains=sputnikRawEscape,sputnikInterpolation
+syntax region sputnikRawDoubleString start=/"/ skip=/\\./ end=/"/ contained contains=sputnikRawEscape,sputnikInterpolation
+syntax region sputnikRawTextBlock start=/"""/ skip=/\\./ end=/"""/ contained contains=sputnikRawEscape,sputnikInterpolation
 
 " Recursive braces and strings keep nested interpolation balanced.
 syntax region sputnikInterpolationBrace transparent matchgroup=sputnikDelimiter start=/{/ end=/}/ contained contains=@sputnikExpression,sputnikInterpolationBrace

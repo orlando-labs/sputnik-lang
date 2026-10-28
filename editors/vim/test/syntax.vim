@@ -257,7 +257,7 @@ try
         \ 'items.map: $it + $it1 + $it2 + _1 + _2',
         \ 'when _: null',
         \ '$it!=0',
-        \ '$it1!~pattern',
+        \ '$it1~=pattern',
         \ '$it2[?0]',
         \ 'α42 + value2 + 0xFG',
         \ ])
@@ -278,7 +278,7 @@ try
   call s:Group(7, '$it', 'sputnikPlaceholder')
   call s:Group(7, '!=', 'sputnikOperator')
   call s:Group(8, '$it1', 'sputnikPlaceholder')
-  call s:Group(8, '!~', 'sputnikOperator')
+  call s:Group(8, '~=', 'sputnikOperator')
   call s:Group(9, '$it2', 'sputnikPlaceholder')
   call s:Group(9, '?', 'sputnikOperator')
   call s:Group(10, 'α42', 'sputnikIdentifier')
@@ -292,7 +292,7 @@ try
 
   call s:Source([
         \ 'a ** b // c % d <=> e',
-        \ 'a =~ pattern or a !~ pattern',
+        \ 'a ~= pattern or a ~= pattern',
         \ 'a << 2 >> 1',
         \ 'first..last',
         \ 'first...last',
@@ -308,8 +308,7 @@ try
   for s:token in ['**', '//', '%', '<=>']
     call s:Group(1, s:token, 'sputnikOperator')
   endfor
-  call s:Group(2, '=~', 'sputnikOperator')
-  call s:Group(2, '!~', 'sputnikOperator')
+  call s:Group(2, '~=', 'sputnikOperator')
   call s:Group(3, '<<', 'sputnikOperator')
   call s:Group(3, '>>', 'sputnikOperator')
   call s:Group(4, '..', 'sputnikOperator')
@@ -416,13 +415,17 @@ try
   call s:Group(4, '\u{1F600}', 'sputnikDoubleEscape')
   call s:Group(5, 'r', 'sputnikRawTag')
   call s:Group(5, '\d', 'sputnikRawEscape')
-  call s:Group(5, '#{not_interpolated}#not-a-comment', 'sputnikRawDoubleString')
-  call s:Group(6, '#{not_interpolated}', 'sputnikRawSingleString')
+  call s:Group(5, '#{', 'sputnikInterpolationDelimiter')
+  call s:Group(5, 'not_interpolated', 'sputnikIdentifier')
+  call s:Group(5, '#not-a-comment', 'sputnikRawDoubleString')
+  call s:Group(6, '#{', 'sputnikInterpolationDelimiter')
+  call s:Group(6, 'not_interpolated', 'sputnikIdentifier')
   call s:Group(7, 'sql', 'sputnikStringTag')
   call s:Group(8, 'SELECT', 'sputnikTaggedTextBlock')
   call s:Group(8, 'id', 'sputnikIdentifier', 1)
   call s:Group(10, 'r', 'sputnikRawTag', 1)
-  call s:Group(11, '#{not_interpolated}', 'sputnikRawTextBlock')
+  call s:Group(11, '#{', 'sputnikInterpolationDelimiter')
+  call s:Group(11, 'not_interpolated', 'sputnikIdentifier')
   call s:Group(14, 'value', 'sputnikIdentifier')
   call s:Group(14, 'trailing', 'sputnikTextBlock')
   call s:Group(16, 'cmd', 'sputnikStringTag')

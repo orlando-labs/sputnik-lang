@@ -1,649 +1,526 @@
 #include "runtime/stdlib_regexp.h"
-
-#include <cctype>
+#include "runtime/errors.h"
+#include "runtime/objects.h"
 #include <limits>
-#include <optional>
-#include <stdexcept>
-#include <utility>
 
 namespace sputnik::runtime {
-
 namespace {
-
-Value regexp_pattern_value(std::shared_ptr<RuntimeRegexpPatternValue> pattern) {
-  return Value::regexp_pattern(std::move(pattern));
+using regexp::Error;
+// The legacy host keyword guard sets a terminal VM fault. Domain handlers
+// raise through their normal facade so malformed calls can be rescued too.
+bool keywords(NativeStdlibCall &c, std::initializer_list<const char *> allowed) {
+  std::size_t recognized = 0;
+  for (const auto *name : allowed)
+    if (c.keyword(name)) ++recognized;
+  if (recognized != c.kw_args.size())
+    throw Error("TypeError", "unknown or duplicate regexp keyword argument");
+  return true;
 }
-
-Value regexp_match_value(std::shared_ptr<RuntimeRegexpMatchValue> match) {
-  return Value::regexp_match(std::move(match));
+std::string text(NativeStdlibCall &c, const Value &v) {
+  if (!v.is_string())
+    throw Error("TypeError", "regexp text must be Str");
+  const auto s = c.text_of(v);
+  if (!s)
+    throw Error("TypeError", "invalid regexp text");
+  return *s;
 }
-
-std::optional<std::string> required_text(NativeStdlibCall &call,
-                                         const Value &value,
-                                         const std::string &context) {
-  const std::optional<std::string> text = call.text_of(value);
-  if (!text.has_value()) {
-    call.fault("TypeError", context + " must be Str or Symbol");
-    return std::nullopt;
-  }
-  return text;
+std::string key_text(NativeStdlibCall &c, const Value &v) {
+  const auto s = c.text_of(v);
+  if (!s)
+    throw Error("TypeError", "expected Str or Symbol");
+  return *s;
 }
-
-std::optional<std::regex::flag_type>
-regexp_flags_from_value(NativeStdlibCall &call, const Value &value) {
-  const std::optional<std::string> text = required_text(call, value, "flags");
-  if (!text.has_value()) {
-    return std::nullopt;
-  }
-  std::regex::flag_type flags = std::regex::ECMAScript;
-  for (char c : *text) {
-    if (c == 'i') {
-      flags |= std::regex::icase;
-      continue;
-    }
-    call.fault("ArgumentError", "Regexp flags currently support only `i`");
-    return std::nullopt;
-  }
-  return flags;
+bool boolean(const Value &v) {
+  if (!v.is_bool())
+    throw Error("TypeError", "regexp option must be Bool");
+  return v.as_bool();
 }
-
-std::optional<std::shared_ptr<RuntimeRegexpPatternValue>>
-compile_regexp(NativeStdlibCall &call, const std::string &source,
-               std::regex::flag_type flags) {
-  try {
-    auto pattern = std::make_shared<RuntimeRegexpPatternValue>();
-    pattern->source = source;
-    pattern->flags = flags;
-    pattern->compiled = std::regex(source, flags);
-    return pattern;
-  } catch (const std::regex_error &error) {
-    call.fault("RegexpCompileError",
-               std::string("invalid regexp: ") + error.what());
-    return std::nullopt;
-  }
+std::size_t nonnegative(const Value &v, const std::string &name) {
+  if (!v.is_integer())
+    throw Error("TypeError", name + " must be Int");
+  if (v.as_integer() < 0)
+    throw Error("ArgumentError", name + " must be non-negative");
+  return static_cast<std::size_t>(v.as_integer());
 }
-
-std::optional<std::shared_ptr<RuntimeRegexpPatternValue>>
-regexp_pattern_arg(NativeStdlibCall &call, const Value &value,
-                   const std::string &context) {
-  if (!value.is_regexp_pattern()) {
-    call.fault("TypeError", context + " expects Regexp.Pattern");
-    return std::nullopt;
-  }
-  const std::shared_ptr<RuntimeRegexpPatternValue> pattern =
-      value.as_regexp_pattern();
-  if (pattern == nullptr) {
-    call.fault("TypeError", "Regexp.Pattern value is null");
-    return std::nullopt;
-  }
-  return pattern;
+std::shared_ptr<RuntimeRegexpPatternValue> pattern(const Value &v) {
+  if (!v.is_regexp_pattern() || !v.as_regexp_pattern())
+    throw Error("TypeError", "expected Regexp.Pattern");
+  return v.as_regexp_pattern();
 }
-
 std::shared_ptr<RuntimeRegexpMatchValue>
-make_match(const std::shared_ptr<RuntimeRegexpPatternValue> &pattern,
-           const std::string &source, const std::smatch &match,
-           std::size_t base_offset) {
-  auto value = std::make_shared<RuntimeRegexpMatchValue>();
-  value->source = source;
-  value->pattern = pattern;
-  value->captures.reserve(match.size());
-  for (std::size_t i = 0; i < match.size(); ++i) {
-    RuntimeRegexpCaptureRange capture;
-    capture.matched = match[i].matched;
-    if (capture.matched) {
-      capture.start = base_offset + static_cast<std::size_t>(match.position(i));
-      capture.end = capture.start + static_cast<std::size_t>(match.length(i));
-    }
-    value->captures.push_back(capture);
-  }
-  return value;
+make_match(std::shared_ptr<RuntimeRegexpPatternValue> p, const std::string &s,
+           std::vector<regexp::Capture> captures) {
+  auto m = std::make_shared<RuntimeRegexpMatchValue>();
+  m->source = s;
+  m->pattern = std::move(p);
+  m->captures = std::move(captures);
+  return m;
 }
-
-std::optional<std::shared_ptr<RuntimeRegexpMatchValue>>
-search_regexp(NativeStdlibCall &call,
-              const std::shared_ptr<RuntimeRegexpPatternValue> &pattern,
-              const std::string &source, bool full_match) {
-  try {
-    std::smatch match;
-    const bool matched =
-        full_match ? std::regex_match(source, match, pattern->compiled)
-                   : std::regex_search(source, match, pattern->compiled);
-    if (!matched) {
-      return std::nullopt;
-    }
-    return make_match(pattern, source, match, 0U);
-  } catch (const std::regex_error &error) {
-    call.fault("RegexpError",
-               std::string("regexp match failed: ") + error.what());
-    return std::nullopt;
-  }
+Value match_value(std::shared_ptr<RuntimeRegexpPatternValue> p,
+                  const std::string &s,
+                  std::optional<std::vector<regexp::Capture>> captures) {
+  return captures ? Value::regexp_match(
+                        make_match(std::move(p), s, std::move(*captures)))
+                  : Value::null();
 }
-
-std::optional<std::string> group_text(const RuntimeRegexpMatchValue &match,
-                                      std::size_t index) {
-  if (index >= match.captures.size()) {
-    return std::nullopt;
-  }
-  const RuntimeRegexpCaptureRange &capture = match.captures[index];
-  if (!capture.matched || capture.start > capture.end ||
-      capture.end > match.source.size()) {
-    return std::nullopt;
-  }
-  return match.source.substr(capture.start, capture.end - capture.start);
+std::size_t group_index(NativeStdlibCall &c, const RuntimeRegexpMatchValue &m,
+                        const Value &v) {
+  if (v.is_integer() && v.as_integer() < 0)
+    throw Error("RegexpGroupError", "regexp group index out of range");
+  const auto i = v.is_integer() ? nonnegative(v, "group")
+                                : regexp::group(*m.pattern, key_text(c, v));
+  if (i >= m.captures.size())
+    throw Error("RegexpGroupError", "regexp group index out of range");
+  return i;
 }
-
-std::optional<std::size_t> replacement_limit(NativeStdlibCall &call) {
-  const std::optional<Value> value = call.keyword("count");
-  if (!value.has_value()) {
-    return std::numeric_limits<std::size_t>::max();
-  }
-  if (value->is_integer()) {
-    if (value->as_integer() < 0) {
-      call.fault("ArgumentError", "replace count must be non-negative");
-      return std::nullopt;
-    }
-    return static_cast<std::size_t>(value->as_integer());
-  }
-  const std::optional<std::string> text = call.text_of(*value);
-  if (text.has_value() && *text == "all") {
-    return std::numeric_limits<std::size_t>::max();
-  }
-  call.fault("TypeError", "replace count must be Int or :all");
-  return std::nullopt;
+Value group_value(NativeStdlibCall &c, const RuntimeRegexpMatchValue &m,
+                  std::size_t i) {
+  const auto &r = m.captures.at(i);
+  return r.matched ? c.string_value(m.source.substr(r.start, r.end - r.start))
+                   : Value::null();
 }
-
-std::optional<std::size_t> parse_group_index(const std::string &text) {
-  if (text.empty()) {
-    return std::nullopt;
-  }
-  std::size_t value = 0;
-  for (char c : text) {
-    if (!std::isdigit(static_cast<unsigned char>(c))) {
-      return std::nullopt;
+std::uint32_t compile_flags(NativeStdlibCall &c) {
+  std::uint32_t bits = 0;
+  if (auto v = c.keyword("flags"))
+    bits = regexp::flags(key_text(c, *v));
+  for (const auto &entry :
+       std::vector<std::pair<std::string, char>>{{"ignore_case", 'i'},
+                                                 {"multiline", 'm'},
+                                                 {"dot_all", 's'},
+                                                 {"extended", 'x'},
+                                                 {"ungreedy", 'U'}})
+    if (auto v = c.keyword(entry.first)) {
+      if (boolean(*v))
+        bits |= regexp::flag(entry.second);
+      else
+        bits &= ~regexp::flag(entry.second);
     }
-    const std::size_t digit = static_cast<std::size_t>(c - '0');
-    if (value > (std::numeric_limits<std::size_t>::max() - digit) / 10U) {
-      return std::nullopt;
-    }
-    value = value * 10U + digit;
-  }
-  return value;
+  return bits;
 }
-
-std::optional<std::string>
-expand_replacement(NativeStdlibCall &call, const RuntimeRegexpMatchValue &match,
-                   const std::string &replacement) {
-  std::string out;
-  out.reserve(replacement.size());
-  for (std::size_t i = 0; i < replacement.size();) {
-    if (replacement[i] != '$') {
-      out.push_back(replacement[i++]);
-      continue;
-    }
-    if (i + 1U >= replacement.size()) {
-      out.push_back('$');
-      ++i;
-      continue;
-    }
-    const char next = replacement[i + 1U];
-    if (next == '$') {
-      out.push_back('$');
-      i += 2U;
-      continue;
-    }
-    if (next == '&') {
-      if (const std::optional<std::string> text = group_text(match, 0U)) {
-        out += *text;
-      }
-      i += 2U;
-      continue;
-    }
-    if (std::isdigit(static_cast<unsigned char>(next))) {
-      std::size_t cursor = i + 1U;
-      while (cursor < replacement.size() &&
-             std::isdigit(static_cast<unsigned char>(replacement[cursor]))) {
-        ++cursor;
-      }
-      const std::optional<std::size_t> index =
-          parse_group_index(replacement.substr(i + 1U, cursor - (i + 1U)));
-      if (index.has_value()) {
-        if (const std::optional<std::string> text = group_text(match, *index)) {
-          out += *text;
-        }
-      }
-      i = cursor;
-      continue;
-    }
-    if (next == '{') {
-      const std::size_t close = replacement.find('}', i + 2U);
-      if (close == std::string::npos) {
-        call.fault("RegexpError", "unterminated replacement group name");
-        return std::nullopt;
-      }
-      const std::string name = replacement.substr(i + 2U, close - (i + 2U));
-      const std::optional<std::size_t> index = parse_group_index(name);
-      if (!index.has_value()) {
-        call.fault("RegexpError",
-                   "named regexp replacement groups are not available with "
-                   "the current engine");
-        return std::nullopt;
-      }
-      if (const std::optional<std::string> text = group_text(match, *index)) {
-        out += *text;
-      }
-      i = close + 1U;
-      continue;
-    }
-    out.push_back('$');
-    ++i;
-  }
-  return out;
-}
-
-SendStatus regexp_compile(NativeStdlibCall &call) {
-  if (call.args.size() != 1U || !call.require_no_block() ||
-      !call.reject_unknown_keywords({"flags"})) {
-    if (call.args.size() != 1U) {
-      return call.fault("TypeError", "Regexp.compile expects one Str");
-    }
+SendStatus compile(NativeStdlibCall &c) {
+  if (!c.require_arity(1) || !c.require_no_block() ||
+      !keywords(c, {"flags", "ignore_case", "multiline",
+                                  "dot_all", "extended", "ungreedy", "literal",
+                                  "match_limit"}))
     return SendStatus::Faulted;
+  auto source = text(c, c.args[0]);
+  const auto bits = compile_flags(c);
+  if (auto v = c.keyword("literal"); v && boolean(*v))
+    source = regexp::escape(source);
+  std::size_t limit = 1000000;
+  if (auto v = c.keyword("match_limit"); v && !v->is_null())
+    limit = nonnegative(*v, "match_limit");
+  if (limit > UINT32_MAX)
+    throw Error("ArgumentError", "match_limit exceeds uint32");
+  auto p = std::make_shared<RuntimeRegexpPatternValue>();
+  static_cast<regexp::Pattern &>(*p) =
+      regexp::compile(source, bits, static_cast<std::uint32_t>(limit));
+  if (c.selector == "fragment") {
+    regexp::validate_fragment(*p);
+    p->fragment = true;
   }
-  const std::optional<std::string> source =
-      required_text(call, call.args[0], "Regexp source");
-  if (!source.has_value()) {
-    return SendStatus::Faulted;
-  }
-  std::regex::flag_type flags = std::regex::ECMAScript;
-  if (const std::optional<Value> flag_value = call.keyword("flags")) {
-    const std::optional<std::regex::flag_type> parsed =
-        regexp_flags_from_value(call, *flag_value);
-    if (!parsed.has_value()) {
-      return SendStatus::Faulted;
-    }
-    flags = *parsed;
-  }
-  const std::optional<std::shared_ptr<RuntimeRegexpPatternValue>> pattern =
-      compile_regexp(call, *source, flags);
-  if (!pattern.has_value()) {
-    return SendStatus::Faulted;
-  }
-  *call.out = regexp_pattern_value(*pattern);
+  *c.out = Value::regexp_pattern(std::move(p));
   return SendStatus::Matched;
 }
-
-SendStatus regexp_escape(NativeStdlibCall &call) {
-  if (!call.require_arity(1) || !call.require_no_block() ||
-      !call.reject_unknown_keywords({})) {
+SendStatus compile_template(NativeStdlibCall &c) {
+  if (!c.require_arity(3) || !c.require_no_block() ||
+      !keywords(c, {}))
     return SendStatus::Faulted;
+  if (!c.args[0].is_list() || !c.args[1].is_list())
+    throw Error("TypeError", "regexp template expects chunk and value lists");
+  const auto &values = c.args[1].as_list()->items;
+  std::vector<std::string> chunks;
+  for (const auto &v : c.args[0].as_list()->items)
+    chunks.push_back(text(c, v));
+  if (chunks.size() != values.size() + 1)
+    throw Error("ArgumentError", "invalid regexp template shape");
+  const auto bits = regexp::flags(text(c, c.args[2]));
+  if (!values.empty())
+    regexp::validate_holes(chunks, bits);
+  std::string source = chunks[0];
+  for (std::size_t i = 0; i < values.size(); ++i) {
+    std::string part;
+    if (values[i].is_regexp_pattern()) {
+      auto p = pattern(values[i]);
+      if (!p->fragment)
+        throw Error("TypeError",
+                    "use Regexp.fragment for regexp syntax interpolation");
+      part = regexp::fragment_source(*p);
+    } else
+      part = regexp::escape(text(c, values[i]));
+    source += "(?:" + part + ")" + chunks[i + 1];
   }
-  const std::optional<std::string> source =
-      required_text(call, call.args[0], "Regexp.escape argument");
-  if (!source.has_value()) {
-    return SendStatus::Faulted;
-  }
-  std::string out;
-  out.reserve(source->size() * 2U);
-  for (char c : *source) {
-    switch (c) {
-    case '\\':
-    case '^':
-    case '$':
-    case '.':
-    case '|':
-    case '?':
-    case '*':
-    case '+':
-    case '(':
-    case ')':
-    case '[':
-    case ']':
-    case '{':
-    case '}':
-      out.push_back('\\');
-      break;
-    default:
-      break;
-    }
-    out.push_back(c);
-  }
-  *call.out = call.string_value(std::move(out));
+  auto p = std::make_shared<RuntimeRegexpPatternValue>();
+  static_cast<regexp::Pattern &>(*p) =
+      values.empty() ? regexp::compile_literal(source, bits)
+                     : regexp::compile(source, bits);
+  *c.out = Value::regexp_pattern(std::move(p));
   return SendStatus::Matched;
 }
-
-SendStatus regexp_pattern_dispatch(NativeStdlibCall &call) {
-  const std::shared_ptr<RuntimeRegexpPatternValue> pattern =
-      call.receiver.as_regexp_pattern();
-  if (pattern == nullptr) {
-    return call.fault("TypeError", "Regexp.Pattern value is null");
-  }
-  if (call.selector == "source" || call.selector == "to_str" ||
-      call.selector == "inspect") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    *call.out =
-        call.selector == "source"
-            ? call.string_value(pattern->source)
-            : call.string_value(runtime_regexp_pattern_to_string(*pattern));
-    return SendStatus::Matched;
-  }
-  if (call.selector == "match" || call.selector == "find" ||
-      call.selector == "match?" || call.selector == "matches?" ||
-      call.selector == "full_match" || call.selector == "full_match?" ||
-      call.selector == "=~" || call.selector == "!~") {
-    if (!call.require_arity(1) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    const std::optional<std::string> source =
-        required_text(call, call.args[0], "Regexp match input");
-    if (!source.has_value()) {
-      return SendStatus::Faulted;
-    }
-    const bool full =
-        call.selector == "full_match" || call.selector == "full_match?";
-    const std::optional<std::shared_ptr<RuntimeRegexpMatchValue>> match =
-        search_regexp(call, pattern, *source, full);
-    if (call.selector == "match?" || call.selector == "matches?" ||
-        call.selector == "full_match?" || call.selector == "!~") {
-      *call.out = Value::boolean(call.selector == "!~" ? !match.has_value()
-                                                       : match.has_value());
-      return SendStatus::Matched;
-    }
-    *call.out = match.has_value() ? regexp_match_value(*match) : Value::null();
-    return SendStatus::Matched;
-  }
-  return SendStatus::NotHandled;
-}
-
-SendStatus regexp_match_dispatch(NativeStdlibCall &call) {
-  const std::shared_ptr<RuntimeRegexpMatchValue> match =
-      call.receiver.as_regexp_match();
-  if (match == nullptr) {
-    return call.fault("TypeError", "Regexp.Match value is null");
-  }
-  if (call.selector == "text" || call.selector == "to_str" ||
-      call.selector == "inspect") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    *call.out = call.string_value(runtime_regexp_match_to_string(*match));
-    return SendStatus::Matched;
-  }
-  if (call.selector == "pattern") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    *call.out = regexp_pattern_value(match->pattern);
-    return SendStatus::Matched;
-  }
-  if (call.selector == "source") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    *call.out = call.string_value(match->source);
-    return SendStatus::Matched;
-  }
-  if (call.selector == "count" || call.selector == "size" ||
-      call.selector == "length") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    const std::size_t captures =
-        match->captures.empty() ? 0U : match->captures.size() - 1U;
-    *call.out = Value::integer(static_cast<std::int64_t>(captures));
-    return SendStatus::Matched;
-  }
-  if (call.selector == "[]" || call.selector == "group") {
-    if (!call.require_arity(1) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    if (!call.args[0].is_integer() || call.args[0].as_integer() < 0) {
-      return call.fault("TypeError", "regexp group index must be Int >= 0");
-    }
-    const std::optional<std::string> text =
-        group_text(*match, static_cast<std::size_t>(call.args[0].as_integer()));
-    *call.out = text.has_value() ? call.string_value(*text) : Value::null();
-    return SendStatus::Matched;
-  }
-  if (call.selector == "start" || call.selector == "finish" ||
-      call.selector == "end") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    if (match->captures.empty() || !match->captures[0].matched) {
-      *call.out = Value::null();
-      return SendStatus::Matched;
-    }
-    *call.out = Value::integer(static_cast<std::int64_t>(
-        call.selector == "start" ? match->captures[0].start
-                                 : match->captures[0].end));
-    return SendStatus::Matched;
-  }
-  if (call.selector == "captures") {
-    if (!call.require_arity(0) || !call.require_no_block() ||
-        !call.reject_unknown_keywords({})) {
-      return SendStatus::Faulted;
-    }
-    std::vector<Value> captures;
-    for (std::size_t i = 1; i < match->captures.size(); ++i) {
-      const std::optional<std::string> text = group_text(*match, i);
-      captures.push_back(text.has_value() ? call.string_value(*text)
-                                          : Value::null());
-    }
-    *call.out = call.make_list(std::move(captures));
-    return SendStatus::Matched;
-  }
-  return SendStatus::NotHandled;
-}
-
-SendStatus regexp_dispatch(NativeStdlibCall &call) {
-  if (call.kind != RuntimeNativeTypeKind::Regexp) {
-    return SendStatus::NotHandled;
-  }
-  if (call.receiver.is_regexp_pattern()) {
-    return regexp_pattern_dispatch(call);
-  }
-  if (call.receiver.is_regexp_match()) {
-    return regexp_match_dispatch(call);
-  }
-  if (call.selector == "compile" || call.selector == "new" ||
-      call.selector == "r" || call.selector == "__call__") {
-    return regexp_compile(call);
-  }
-  if (call.selector == "escape") {
-    return regexp_escape(call);
-  }
-  return SendStatus::NotHandled;
-}
-
-} // namespace
-
-std::string
-runtime_regexp_pattern_to_string(const RuntimeRegexpPatternValue &pattern) {
-  return "/" + pattern.source + "/";
-}
-
-std::string
-runtime_regexp_match_to_string(const RuntimeRegexpMatchValue &match) {
-  const std::optional<std::string> text = group_text(match, 0U);
-  return text.value_or(std::string{});
-}
-
-SendStatus regexp_string_match_operator(NativeStdlibCall &call,
-                                        const std::string &self) {
-  if (call.selector != "=~" && call.selector != "!~") {
-    return SendStatus::NotHandled;
-  }
-  if (call.args.size() != 1U || !call.block.is_null() ||
-      !call.reject_unknown_keywords({})) {
-    if (call.args.size() != 1U) {
-      return call.fault("TypeError", "regexp match operator expects one arg");
-    }
-    if (!call.block.is_null()) {
-      return call.fault("TypeError", "regexp match operator takes no block");
-    }
+SendStatus search(NativeStdlibCall &c,
+                  const std::shared_ptr<RuntimeRegexpPatternValue> &p,
+                  const std::string &s) {
+  if (!c.require_no_block() || !keywords(c, {"from"}))
     return SendStatus::Faulted;
-  }
-  if (!call.args[0].is_regexp_pattern()) {
-    return SendStatus::NotHandled;
-  }
-  const std::optional<std::shared_ptr<RuntimeRegexpPatternValue>> pattern =
-      regexp_pattern_arg(call, call.args[0], "regexp match operator");
-  if (!pattern.has_value()) {
+  std::size_t offset = 0;
+  if (auto v = c.keyword("from"))
+    offset = regexp::byte_offset(
+        s, static_cast<std::int64_t>(nonnegative(*v, "from")));
+  const bool full = c.selector == "full_match" || c.selector == "full_match?";
+  if (full && offset)
+    throw Error("ArgumentError", "full_match does not accept nonzero from");
+  auto captures = regexp::search(*p, s, offset, full);
+  if (c.selector == "match?" || c.selector == "matches?" ||
+      c.selector == "full_match?" || c.selector == "~=")
+    *c.out = Value::boolean(bool(captures));
+  else
+    *c.out = match_value(p, s, std::move(captures));
+  return SendStatus::Matched;
+}
+SendStatus replace(NativeStdlibCall &c,
+                   std::shared_ptr<RuntimeRegexpPatternValue> p,
+                   const std::string &s, std::size_t replacement_index) {
+  if (!(c.selector == "replace_first" ? keywords(c, {})
+                                      : keywords(c, {"count"})))
     return SendStatus::Faulted;
+  std::size_t limit = c.selector == "replace_first" ? 1 : SIZE_MAX;
+  if (auto v = c.keyword("count")) {
+    if (v->is_integer())
+      limit = nonnegative(*v, "count");
+    else if (key_text(c, *v) != "all")
+      throw Error("ArgumentError", "count must be Int or :all");
   }
-  const std::optional<std::shared_ptr<RuntimeRegexpMatchValue>> match =
-      search_regexp(call, *pattern, self, false);
-  if (call.selector == "!~") {
-    *call.out = Value::boolean(!match.has_value());
+  std::optional<std::vector<regexp::ReplacementPart>> parts;
+  if (c.block.is_null()) {
+    if (c.args.size() != replacement_index + 1)
+      throw Error("ArgumentError", "replacement or block required");
+    parts = regexp::replacement(*p, text(c, c.args[replacement_index]));
   } else {
-    *call.out = match.has_value() ? regexp_match_value(*match) : Value::null();
+    if (c.args.size() != replacement_index)
+      throw Error("ArgumentError",
+                  "replacement and block are mutually exclusive");
+    if (c.block_suspension_in_property_arm("regexp replacement"))
+      return SendStatus::Faulted;
   }
+  std::string out;
+  std::size_t last = 0, count = 0;
+  regexp::Cursor cursor;
+  while (count < limit) {
+    auto ranges = cursor.next(*p, s);
+    if (!ranges)
+      break;
+    const auto &r = (*ranges)[0];
+    out.append(s, last, r.start - last);
+    if (parts)
+      out += regexp::substitute(*parts, s, *ranges);
+    else {
+      auto b = c.call_block(c.block,
+                            {Value::regexp_match(make_match(p, s, *ranges))});
+      if (b.status == StdlibBlockStatus::Raised)
+        return c.raise(b.exception);
+      if (b.status != StdlibBlockStatus::Returned)
+        return SendStatus::Faulted;
+      out += text(c, b.value);
+    }
+    last = r.end;
+    ++count;
+  }
+  out.append(s, last, std::string::npos);
+  *c.out = c.string_value(std::move(out));
   return SendStatus::Matched;
 }
-
-SendStatus regexp_string_replace(NativeStdlibCall &call,
-                                 const std::string &self) {
-  if (call.selector != "replace" && call.selector != "replaced") {
-    return SendStatus::NotHandled;
-  }
-  if (call.args.empty() || !call.args[0].is_regexp_pattern()) {
-    return SendStatus::NotHandled;
-  }
-  if (!call.reject_unknown_keywords({"count"})) {
+SendStatus enumerate(NativeStdlibCall &c,
+                     std::shared_ptr<RuntimeRegexpPatternValue> p,
+                     const std::string &s) {
+  if (!keywords(c,
+          c.selector == "split"
+              ? std::initializer_list<const char *>{"limit", "keep_empty",
+                                                    "include_captures"}
+              : std::initializer_list<const char *>{}))
     return SendStatus::Faulted;
-  }
-  const std::optional<std::shared_ptr<RuntimeRegexpPatternValue>> pattern =
-      regexp_pattern_arg(call, call.args[0], "Str#replace");
-  if (!pattern.has_value()) {
+  const bool split = c.selector == "split", each = c.selector == "each_match";
+  if (each && c.block.is_null())
+    throw Error("ArgumentError", "each_match requires a block");
+  if (!each && !c.require_no_block())
     return SendStatus::Faulted;
+  bool keep = false, captures = false;
+  std::size_t limit = SIZE_MAX;
+  if (auto v = c.keyword("keep_empty"))
+    keep = boolean(*v);
+  if (auto v = c.keyword("include_captures"))
+    captures = boolean(*v);
+  if (auto v = c.keyword("limit"); v && !v->is_null()) {
+    limit = nonnegative(*v, "limit");
+    if (!limit)
+      throw Error("ArgumentError", "split limit must be positive or null");
   }
-  const std::optional<std::size_t> limit = replacement_limit(call);
-  if (!limit.has_value()) {
-    return SendStatus::Faulted;
-  }
-
-  std::optional<std::string> replacement;
-  if (call.block.is_null()) {
-    if (call.args.size() != 2U) {
-      return call.fault("TypeError",
-                        "regexp replace expects pattern and replacement");
-    }
-    replacement = required_text(call, call.args[1], "replacement");
-    if (!replacement.has_value()) {
-      return SendStatus::Faulted;
-    }
-  } else if (call.args.size() != 1U) {
-    return call.fault("TypeError",
-                      "regexp block replace expects only the pattern arg");
-  } else if (call.block_suspension_in_property_arm("regexp replace block")) {
-    return SendStatus::Faulted;
-  }
-
-  if (*limit == 0U) {
-    *call.out = call.string_value(self);
+  if (split) {
+    std::vector<Value> out;
+    for (const auto &v : regexp::split(*p, s, limit, keep, captures))
+      out.push_back(v ? c.string_value(*v) : Value::null());
+    *c.out = c.make_list(std::move(out));
     return SendStatus::Matched;
   }
-
-  std::string out;
-  std::size_t last_append = 0;
-  std::size_t search_offset = 0;
-  std::size_t replaced = 0;
-
-  try {
-    while (replaced < *limit && search_offset <= self.size()) {
-      std::smatch match;
-      const auto begin =
-          self.cbegin() + static_cast<std::ptrdiff_t>(search_offset);
-      if (!std::regex_search(begin, self.cend(), match, (*pattern)->compiled)) {
-        break;
-      }
-      const std::size_t match_start =
-          search_offset + static_cast<std::size_t>(match.position(0));
-      const std::size_t match_end =
-          match_start + static_cast<std::size_t>(match.length(0));
-      out.append(self, last_append, match_start - last_append);
-      const std::shared_ptr<RuntimeRegexpMatchValue> match_value =
-          make_match(*pattern, self, match, search_offset);
-
-      std::string subst;
-      if (replacement.has_value()) {
-        const std::optional<std::string> expanded =
-            expand_replacement(call, *match_value, *replacement);
-        if (!expanded.has_value()) {
-          return SendStatus::Faulted;
-        }
-        subst = *expanded;
-      } else {
-        StdlibBlockResult block =
-            call.call_block(call.block, {regexp_match_value(match_value)});
-        if (block.status == StdlibBlockStatus::Returned) {
-          const std::optional<std::string> text =
-              required_text(call, block.value, "regexp replace block result");
-          if (!text.has_value()) {
-            return SendStatus::Faulted;
-          }
-          subst = *text;
-        } else if (block.status == StdlibBlockStatus::Raised) {
-          return call.raise(block.exception);
-        } else {
-          return SendStatus::Faulted;
-        }
-      }
-      out += subst;
-      ++replaced;
-      last_append = match_end;
-      if (match_start == match_end) {
-        if (match_end >= self.size()) {
-          break;
-        }
-        search_offset = match_end + 1U;
-      } else {
-        search_offset = match_end;
-      }
-    }
-  } catch (const std::regex_error &error) {
-    return call.fault("RegexpError",
-                      std::string("regexp replace failed: ") + error.what());
+  std::vector<Value> out;
+  std::size_t count = 0;
+  regexp::Cursor cursor;
+  while (auto ranges = cursor.next(*p, s)) {
+    auto m = make_match(p, s, *ranges);
+    if (each) {
+      auto b = c.call_block(c.block, {Value::regexp_match(m)});
+      if (b.status == StdlibBlockStatus::Raised)
+        return c.raise(b.exception);
+      if (b.status != StdlibBlockStatus::Returned)
+        return SendStatus::Faulted;
+      ++count;
+    } else
+      out.push_back(Value::regexp_match(m));
   }
-
-  out.append(self, last_append, std::string::npos);
-  *call.out = call.string_value(std::move(out));
+  *c.out = each ? Value::integer(static_cast<std::int64_t>(count))
+                : c.make_list(std::move(out));
   return SendStatus::Matched;
 }
-
-RuntimeNativeModuleDescriptor regexp_module_descriptor() {
-  return {
-      {{"Regexp", RuntimeNativeTypeKind::Regexp}},
-      {{RuntimeNativeTypeKind::Regexp, &regexp_dispatch}},
-      {},
-      {{RuntimeNativeTypeKind::Regexp, "__call__"}},
-      {{"RegexpError", "Exception"}, {"RegexpCompileError", "RegexpError"}}};
+SendStatus pattern_dispatch(NativeStdlibCall &c) {
+  auto p = pattern(c.receiver);
+  const auto &sel = c.selector;
+  if (c.args.empty() && c.block.is_null() && c.kw_args.empty()) {
+    if (sel == "source" || sel == "to_str" || sel == "inspect")
+      *c.out = c.string_value(
+          sel == "source" ? p->source : runtime_regexp_pattern_to_string(*p));
+    else if (sel == "group_count")
+      *c.out = Value::integer(p->group_count);
+    else if (sel == "flags")
+      *c.out = c.string_value(regexp::flag_text(p->flags));
+    else if (sel == "names") {
+      std::vector<Value> names;
+      for (const auto &n : p->names)
+        names.push_back(c.string_value(n.first));
+      *c.out = c.make_list(std::move(names));
+    } else
+      return SendStatus::NotHandled;
+    return SendStatus::Matched;
+  }
+  if (sel != "replace" && sel != "replaced" && sel != "replace_first" &&
+      sel != "scan" && sel != "each_match" && sel != "split" &&
+      sel != "match" && sel != "find" && sel != "match?" && sel != "matches?" &&
+      sel != "full_match" && sel != "full_match?" &&
+      sel != "~=")
+    return SendStatus::NotHandled;
+  if (c.args.empty())
+    throw Error("ArgumentError", "regexp operation requires a source string");
+  const auto s = text(c, c.args[0]);
+  if (sel == "replace" || sel == "replaced" || sel == "replace_first")
+    return replace(c, p, s, 1);
+  if (!c.require_arity(1))
+    return SendStatus::Faulted;
+  if (sel == "scan" || sel == "each_match" || sel == "split")
+    return enumerate(c, p, s);
+  if (sel == "match" || sel == "find" || sel == "match?" || sel == "matches?" ||
+      sel == "full_match" || sel == "full_match?" ||
+      sel == "~=")
+    return search(c, p, s);
+  return SendStatus::NotHandled;
 }
-
-void register_regexp(NativeRegistry &registry) {
-  register_native_module_descriptor(registry, regexp_module_descriptor());
+SendStatus match_dispatch(NativeStdlibCall &c) {
+  auto m = c.receiver.as_regexp_match();
+  const auto &sel = c.selector;
+  if (sel == "==" || sel == "!=" || sel == "===")
+    return SendStatus::NotHandled;
+  if (!c.require_no_block() || !keywords(c, {}))
+    return SendStatus::Faulted;
+  if (sel == "[]" || sel == "group") {
+    if (!c.require_arity(1))
+      return SendStatus::Faulted;
+    *c.out = group_value(c, *m, group_index(c, *m, c.args[0]));
+    return SendStatus::Matched;
+  }
+  if (sel == "range" || sel == "byte_range") {
+    if (c.args.size() > 1)
+      throw Error("ArgumentError", "range expects at most one group");
+    const auto i = c.args.empty() ? 0 : group_index(c, *m, c.args[0]);
+    const auto &r = m->captures[i];
+    if (!r.matched) {
+      *c.out = Value::null();
+      return SendStatus::Matched;
+    }
+    auto range = make_intrusive<InstanceValue>();
+    range->class_index = kNativeSyntheticClassIndex;
+    range->ivars[kNativeRangeMarker] = Value::boolean(true);
+    range->ivars["start"] = Value::integer(
+        sel == "range" ? regexp::cp_offset(m->source, r.start) : r.start);
+    range->ivars["finish"] = Value::integer(
+        sel == "range" ? regexp::cp_offset(m->source, r.end) : r.end);
+    range->ivars["inclusive_end"] = Value::boolean(false);
+    range->ivars["step"] = Value::null();
+    *c.out = Value::instance(std::move(range));
+    return SendStatus::Matched;
+  }
+  if (sel == "begin" || sel == "end" || sel == "start" || sel == "finish" ||
+      sel == "byte_begin" || sel == "byte_end") {
+    if (c.args.size() > 1)
+      throw Error("ArgumentError", "offset expects at most one group");
+    const auto i = c.args.empty() ? 0 : group_index(c, *m, c.args[0]);
+    const auto &r = m->captures[i];
+    const bool begin = sel == "begin" || sel == "start" || sel == "byte_begin";
+    const auto b = begin ? r.start : r.end;
+    *c.out =
+        r.matched
+            ? Value::integer(static_cast<std::int64_t>(
+                  sel.rfind("byte_", 0) == 0 ? b
+                                             : regexp::cp_offset(m->source, b)))
+            : Value::null();
+    return SendStatus::Matched;
+  }
+  if (!c.require_arity(0))
+    return SendStatus::Faulted;
+  if (sel == "text" || sel == "to_str" || sel == "inspect")
+    *c.out = group_value(c, *m, 0);
+  else if (sel == "source")
+    *c.out = c.string_value(m->source);
+  else if (sel == "pattern")
+    *c.out = Value::regexp_pattern(m->pattern);
+  else if (sel == "count" || sel == "size" || sel == "length")
+    *c.out = Value::integer(m->captures.size() - 1);
+  else if (sel == "pre_match")
+    *c.out = c.string_value(m->source.substr(0, m->captures[0].start));
+  else if (sel == "post_match")
+    *c.out = c.string_value(m->source.substr(m->captures[0].end));
+  else if (sel == "captures") {
+    std::vector<Value> values;
+    for (std::size_t i = 1; i < m->captures.size(); ++i)
+      values.push_back(group_value(c, *m, i));
+    *c.out = c.make_list(std::move(values));
+  } else if (sel == "named_captures") {
+    std::vector<std::pair<std::string, Value>> values;
+    for (const auto &n : m->pattern->names)
+      values.emplace_back(n.first, group_value(c, *m, n.second));
+    *c.out = c.make_object(std::move(values));
+  } else
+    return SendStatus::NotHandled;
+  return SendStatus::Matched;
 }
-
-void register_regexp_runtime_module(RuntimeModuleRegistry &modules,
-                                    RuntimeDispatchRegistry &dispatch,
-                                    RuntimeTypeRegistry &types,
-                                    RuntimeErrorRegistry *errors) {
-  const RuntimeNativeModuleDescriptor descriptor = regexp_module_descriptor();
-  register_runtime_module_descriptor(modules, descriptor);
-  register_runtime_dispatch_descriptor(dispatch, descriptor);
-  register_runtime_type_descriptor(types, descriptor);
-  if (errors != nullptr) {
-    register_runtime_error_descriptor(*errors, descriptor);
+SendStatus dispatch(NativeStdlibCall &c) {
+  try {
+    if (c.receiver.is_regexp_pattern())
+      return pattern_dispatch(c);
+    if (c.receiver.is_regexp_match())
+      return match_dispatch(c);
+    if (c.selector == "default_match_limit") {
+      if (!c.require_arity(0))
+        return SendStatus::Faulted;
+      *c.out = Value::integer(1000000);
+      return SendStatus::Matched;
+    }
+    if (c.selector == "version") {
+      if (!c.require_arity(0))
+        return SendStatus::Faulted;
+      *c.out = c.make_object(
+          {{"engine", c.string_value("PCRE2")},
+           {"version", c.string_value(std::to_string(PCRE2_MAJOR) + "." +
+                                      std::to_string(PCRE2_MINOR))},
+           {"jit", Value::boolean(false)}});
+      return SendStatus::Matched;
+    }
+    if (c.selector == "try_compile") {
+      try {
+        auto status = compile(c);
+        if (status != SendStatus::Matched)
+          return status;
+        *c.out = make_result_value(true, *c.out);
+      } catch (const Error &e) {
+        if (e.kind != "RegexpCompileError")
+          throw;
+        auto error = std::make_shared<ErrorInstanceValue>();
+        error->error_id = *runtime_error_id(e.kind);
+        error->message = e.what();
+        *c.out =
+            make_result_value(false, Value::error_instance(std::move(error)));
+      }
+      return SendStatus::Matched;
+    }
+    if (c.selector == "compile" || c.selector == "new" || c.selector == "r" ||
+        c.selector == "__call__" || c.selector == "fragment")
+      return compile(c);
+    if (c.selector == "__compile_template")
+      return compile_template(c);
+    if (c.selector == "valid?") {
+      try {
+        auto status = compile(c);
+        if (status != SendStatus::Matched)
+          return status;
+        *c.out = Value::boolean(true);
+      } catch (const Error &e) {
+        if (e.kind != "RegexpCompileError")
+          throw;
+        *c.out = Value::boolean(false);
+      }
+      return SendStatus::Matched;
+    }
+    if (c.selector == "escape") {
+      if (!c.require_arity(1) || !c.require_no_block() ||
+          !keywords(c, {}))
+        return SendStatus::Faulted;
+      *c.out = c.string_value(regexp::escape(text(c, c.args[0])));
+      return SendStatus::Matched;
+    }
+    return SendStatus::NotHandled;
+  } catch (const Error &e) {
+    return c.fault(e.kind, e.what());
   }
 }
-
+} // namespace
+std::string
+runtime_regexp_pattern_to_string(const RuntimeRegexpPatternValue &p) {
+  return "/" + p.source + "/" + regexp::flag_text(p.flags);
+}
+std::string runtime_regexp_match_to_string(const RuntimeRegexpMatchValue &m) {
+  const auto &r = m.captures[0];
+  return m.source.substr(r.start, r.end - r.start);
+}
+SendStatus regexp_string_match_operator(NativeStdlibCall &c,
+                                        const std::string &s) {
+  try {
+    if (c.selector != "~=")
+      return SendStatus::NotHandled;
+    if (!c.require_arity(1))
+      return SendStatus::Faulted;
+    return search(c, pattern(c.args[0]), s);
+  } catch (const Error &e) {
+    return c.fault(e.kind, e.what());
+  }
+}
+SendStatus regexp_string_replace(NativeStdlibCall &c, const std::string &s) {
+  try {
+    if (c.args.empty())
+      return SendStatus::NotHandled;
+    return replace(c, pattern(c.args[0]), s, 1);
+  } catch (const Error &e) {
+    return c.fault(e.kind, e.what());
+  }
+}
+RuntimeNativeModuleDescriptor regexp_module_descriptor() {
+  return {{{"Regexp", RuntimeNativeTypeKind::Regexp}},
+          {{RuntimeNativeTypeKind::Regexp, &dispatch}},
+          {},
+          {{RuntimeNativeTypeKind::Regexp, "__call__"}},
+          {{"RegexpError", "Exception"},
+           {"RegexpCompileError", "RegexpError"},
+           {"RegexpGroupError", "RegexpError"},
+           {"RegexpMatchLimitError", "RegexpError"},
+           {"RegexpReplacementError", "RegexpError"}}};
+}
+void register_regexp(NativeRegistry &r) {
+  register_native_module_descriptor(r, regexp_module_descriptor());
+}
+void register_regexp_runtime_module(RuntimeModuleRegistry &m,
+                                    RuntimeDispatchRegistry &d,
+                                    RuntimeTypeRegistry &t,
+                                    RuntimeErrorRegistry *e) {
+  auto desc = regexp_module_descriptor();
+  register_runtime_module_descriptor(m, desc);
+  register_runtime_dispatch_descriptor(d, desc);
+  register_runtime_type_descriptor(t, desc);
+  if (e)
+    register_runtime_error_descriptor(*e, desc);
+}
 } // namespace sputnik::runtime

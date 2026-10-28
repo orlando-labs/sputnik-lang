@@ -295,10 +295,12 @@ bool value_equals(const Value &lhs, const Value &rhs) {
       return true;
     }
     return left != nullptr && right != nullptr &&
-           left->source == right->source && left->flags == right->flags;
+           left->source == right->source && left->flags == right->flags && left->fragment == right->fragment;
   }
   if (lhs.is_regexp_match()) {
-    return lhs.as_regexp_match() == rhs.as_regexp_match();
+    const auto left=lhs.as_regexp_match(),right=rhs.as_regexp_match();
+    return left==right || (left && right && left->source==right->source &&
+      value_equals(Value::regexp_pattern(left->pattern),Value::regexp_pattern(right->pattern)) && left->captures==right->captures);
   }
   if (lhs.is_foreign_handle()) {
     return lhs.as_foreign_handle() == rhs.as_foreign_handle();

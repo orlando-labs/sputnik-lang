@@ -1,474 +1,261 @@
-# DESIGN: Regexp standard-library module and `r` string tag
+# DESIGN: Regexp, Unicode matching and the `r` string tag
 
-Date: 2026-07-08
-Status: design / API-shape proposal - no code change in this doc
-Scope: a native `Regexp` stdlib module, the canonical `r` string-tag macro,
-compiled regexp and match values, replacement/splitting/scanning APIs, Unicode
-offset semantics, error classes, and the full-native coverage contract.
-Follows: `DESIGN-macro-system-2026-06-29.md` string-tag trigger,
-`DESIGN-multiline-string-literals-2026-06-29.md` text blocks, the immutable
-UTF-8 `Str` invariant from `DESIGN-stdlib-encoding-api-2026-06-29.md`, and the
-descriptor-routed native stdlib model in `runtime/stdlib_registry.*`.
+Date: 2026-07-08; revised 2026-10-28.
+Status: implemented core contract, with explicit deferred decisions below.
 
-This doc is the contract step. It stops short of the matcher VM/JIT details and
-native codegen patches, which are implementation work gated on this surface.
+The same PCRE2 8-bit engine is used for compiler validation, VM execution and
+full native execution. UTF and Unicode character properties (UCP) are always
+on. PCRE2 10.40+ is a build/runtime dependency. The implementation does not use
+`std::regex` for this module.
 
-## 1. The core shape
-
-`Regexp` is a pure native stdlib module. It owns two immutable runtime values:
-
-- `Regexp.Pattern` - a compiled regexp program plus its canonical source and
-  flags.
-- `Regexp.Match` - one successful match against a specific source string, with
-  full-match and capture ranges.
-
-The ergonomic literal surface is a string-tag macro:
+## 1. Literals, modifiers and source
 
 ```sputnik
-from Regexp import r
+from Regexp import r as rx
 
-digits = r"""\d+"""
-digits.match?("123")      # true
-digits.match?("abc")      # false
+digits = r"\d+"
+letters = r'^[a-z]+$'mi
+same = rx"^[a-z]+$"im
+unicode = r"\p{L}+"
 ```
 
-Plain untagged strings are not regexp literals:
+`r` is available from the prelude. A from-import alias has the same behavior.
+The head, opening delimiter and optional suffix must be adjacent. The suffix is
+stored in the string-template AST as `tag_suffix`, so it is available to other
+string-tag providers too; its meaning belongs to the provider.
+
+| Suffix / compile keyword | Meaning |
+| --- | --- |
+| `i` / `ignore_case` | Unicode case-insensitive matching |
+| `m` / `multiline` | `^` / `$` operate at line boundaries |
+| `s` / `dot_all` | `.` includes newline |
+| `x` / `extended` | Pattern whitespace and comments are insignificant |
+| `U` / `ungreedy` | Invert the default quantifier greediness |
+
+Order is immaterial. Unknown or duplicate suffix letters are compile-time
+errors. `u` is unnecessary; `g` is not supported because the operation selects
+one or all matches. `m` has no effect on `[a-z]` by itself.
+
+Inline modifiers remain supported, including scoped options:
 
 ```sputnik
-text = """\\d+"""         # ordinary Str, no tag macro expansion
-pat = r"""\d+"""          # Regexp.Pattern
+r"(?mi)^[a-z]+$"
+r"first(?i:second)"
+Regexp.compile(source, flags: "mi")
+Regexp.compile(source, multiline: true, ignore_case: true)
 ```
 
-That distinction is the important one. In this design, "plain" or "untagged"
-means no string-tag macro runs. It does not introduce a competing lexer prefix
-named `r`.
+Suffix and `flags:` establish initial compilation options. Explicit Bool
+keywords override their corresponding initial bits. Inline modifiers then obey
+PCRE2 scope rules. `Pattern.flags` is the canonical initial flag string
+(`imsxU` order), not a summary of scoped settings inside the source.
 
-## 2. Syntax surfaces
-
-### 2.1 Text-block tag
-
-The primary v1 surface is the already-implemented string-tag trigger:
+Short literals use `r"…"` or `r'…'`. Triple-quoted blocks require a newline after
+the opener and use the ordinary text-block normalization rules, including
+dedent, trailing whitespace removal, line joining and final newline handling.
+Use extended mode for a visually formatted pattern:
 
 ```sputnik
-pat = r"""
-  ^\p{L}+@\p{L}+\.\p{L}+$
-  """
+pattern = r"""
+  \A
+  (?<key>\w+) = (?<value>\d+)
+  \z
+  """x
 ```
 
-The tag head `r` must be adjacent to the string opener, with no whitespace, just
-like `sql"""..."""` and `html"""..."""`.
+The provider consumes authored escape parts (`AstStringEscape.source`), not
+cooked Sputnik escapes (`value`). Untagged strings retain ordinary string
+semantics. The lexer preserves source escapes for adjacent string-tag
+candidates, including aliases; string interpolation remains parsed in both
+single- and double-quoted tagged forms.
 
-The untagged text block is an ordinary `Str`. The tagged form is a macro
-invocation whose provider is the `Regexp` module.
+Static literals are checked during expansion, including literals in unused
+functions. A bounded 64-entry cache reuses immutable literal programs.
+Dynamic templates validate their static structure at expansion and
+compile the assembled pattern at execution. Errors identify the literal span
+and the PCRE2 byte offset in normalized pattern source, with the diagnostic
+location mapped back through text-block normalization to the authored source.
 
-### 2.2 Single-line tag
-
-Regexps often fit on one line. The regexp design therefore wants the string-tag
-trigger generalized from text blocks to any string literal opener:
+## 2. Module and pattern API
 
 ```sputnik
-from Regexp import r
+Regexp.compile(source,
+  flags: "", ignore_case: false, multiline: false, dot_all: false,
+  extended: false, ungreedy: false, literal: false, match_limit: null)
+Regexp.new(source, ...)               # alias of compile
+Regexp.try_compile(source, ...)       # Result[Pattern, RegexpCompileError]
+Regexp.valid?(source, ...)            # false only for invalid regexp syntax
+Regexp.escape(text)                   # Str; safe with extended mode
+Regexp.fragment(source, ...)          # explicitly trusted syntax, restricted v1
+Regexp.default_match_limit            # 1000000
+Regexp.version                        # engine, version, jit metadata
 
-word = r"\w+"
-email = r"^\S+@\S+$"
+pattern.source
+pattern.flags                        # initial flag string
+pattern.names                        # names in capture order
+pattern.group_count
+pattern.match(text, from: 0)          # Match?; search
+pattern.match?(text, from: 0)         # Bool; search
+pattern.full_match(text)              # Match?; whole subject
+pattern.full_match?(text)             # Bool; whole subject
+pattern.scan(text)                    # List[Match]
+pattern.each_match(text) |match|: ...  # streamed matches; returns count
+pattern.split(text, limit: null, keep_empty: false, include_captures: false)
+pattern.replace(text, replacement, count: :all)
+pattern.replace_first(text, replacement) # exactly one; no count: keyword
+pattern.replace(text) |match|: ...
 ```
 
-This is not a raw-string prefix. It is the same macro trigger as `r"""..."""`,
-applied to a single-line string literal. If the parser extension is staged after
-the module, `r"""..."""` remains the first shippable surface and `r"..."` is the
-next parser milestone.
+`source` and subjects are Str; patterns are compiled explicitly. `literal: true`
+escapes source before compilation and preserves literal whitespace even with
+extended mode. `valid?` and `try_compile` do not suppress option/type errors.
 
-### 2.3 Pattern source handed to `r`
+`from:` is a nonnegative codepoint offset in `0..text.length`. Negative offsets
+raise ArgumentError; offsets beyond the subject raise IndexError. The engine
+receives the whole subject and a start offset, preserving lookbehind and
+anchors. Full matching rejects a nonzero `from:`.
 
-The `r` tag consumes the template's authored source chunks after text-block
-dedent, not the cooked `Str` value after Sputnik string escapes. That keeps regexp
-escapes readable:
+`.full_match` uses engine anchoring at both ends. `^…$` is not equivalent:
+`$` may match before a final newline, and `m` changes anchor meaning. For
+explicit source anchors use `\A…\z`.
+
+The Str overloads `text.replace(pattern, replacement, count: ...)` and
+`text.replaced(...)` retain their existing pure behavior; block replacements
+are supported from the Str side as well. Substring replacements and ordinary
+`Str.split(Str)` keep their existing semantics.
+
+## 3. Symmetric match operator
 
 ```sputnik
-r"""\d+\s+\w+"""          # pattern source is \d+\s+\w+
+text ~= pattern                       # Bool, search
+pattern ~= text                       # same predicate
+not (text ~= pattern)                 # boolean negation
+
+if match = pattern.match(text):
+  print(match[1])
 ```
 
-The string-template AST therefore needs both views for tagged strings:
+`~=` means correspondence, with regexp search semantics. In particular,
+`"abc123" ~= r"\d+"` is true; whole-string checking remains explicit.
+Both arguments are evaluated exactly once, left to right. The supported pairs
+are `(Str, Pattern)` and `(Pattern, Str)`; their order does not change the result.
+Unsupported pairs raise TypeError. Match limits and engine errors propagate
+and never become `false`.
 
-- `source_chunks`: the dedented literal text exactly as authored, with
-  backslashes preserved for the tag.
-- `cooked_chunks`: the ordinary string-literal value view for tags that want
-  Sputnik escape handling.
+Comparison precedence (4) and left associativity match `==`. Logical `not`
+binds below comparisons, so `not text ~= pattern` means `not (text ~= pattern)`.
+Do not chain match predicates as though they were numeric comparisons.
 
-`Regexp.r` uses `source_chunks`. Plain untagged strings keep the ordinary `Str`
-lowering.
+The previous `=~` and `!~` operators are removed from the lexer, parser and
+both execution backends. Use `~=` for predicates, `not` for negation and
+`.match` for captures. There is no symbolic negative match operator.
 
-## 3. Module surface
+`~=` does not participate in collection equality/hash. Numeric tolerances,
+glob matching and a custom symmetric matcher protocol are deferred; two Str
+operands do not acquire implicit fuzzy semantics.
+
+## 4. Match values and Unicode
+
+A Match keeps its source and pattern alive. Capture strings are valid UTF-8.
+Public positions are Unicode codepoints, not grapheme clusters. Byte positions
+are explicit interop methods.
 
 ```sputnik
-import Regexp
-from Regexp import Pattern, Match, r
-
-pat = Regexp.compile("\\d+")
-pat = Regexp.compile(text, ignore_case: true, multiline: true)
-
-Regexp.escape("a+b?")                # "a\\+b\\?"
-Regexp.valid?("\\d+")                # true
-Regexp.try_compile("(")              # Result.err(Regexp.CompileError)
+match[0]                       # full match
+match[1]                       # numbered capture
+match[:name]                   # same as match["name"]
+match.group(:name)
+match.begin(:name)             # codepoint offset
+match.end(:name)
+match.start                    # group 0 begin
+match.finish                   # group 0 end
+match.byte_begin(:name)
+match.byte_end(:name)
+match.range(:name)             # half-open Range of codepoint positions
+match.byte_range(:name)        # half-open Range of UTF-8 byte positions
+match.text
+match.source
+match.pattern
+match.pre_match
+match.post_match
+match.captures
+match.named_captures
 ```
 
-Module methods:
+Unknown names and out-of-range indices raise RegexpGroupError. An unmatched
+optional group returns null, including its positions/ranges. An empty matched
+group returns `""` and a zero-width range. Duplicate capture names are rejected.
+Pattern equality uses authored normalized source, initial flags and fragment
+branding; Match equality uses source, pattern and capture ranges.
+
+`\C` is disabled with PCRE2_NEVER_BACKSLASH_C so a capture cannot cut a UTF-8
+codepoint into individual bytes. Invalid subject UTF is an error. Default
+newline convention is LF; BSR uses Unicode newline sequences. Explicit PCRE2
+newline directives are honored.
+
+## 5. Interpolation
 
 ```sputnik
-Regexp.compile(pattern,
-  ignore_case: false,
-  multiline: false,
-  dot_all: false,
-  extended: false,
-  ungreedy: false,
-  literal: false,
-  match_limit: null)                 # -> Regexp.Pattern
-
-Regexp.try_compile(pattern, ...)     # -> Result[Regexp.Pattern, Regexp.CompileError]
-Regexp.valid?(pattern, ...)          # -> Bool
-Regexp.escape(text)                  # -> Str, literal-safe regexp fragment
-Regexp.fragment(pattern)             # -> Regexp.Fragment, explicit syntax opt-in
-Regexp.default_match_limit           # -> Int?
-Regexp.version                       # -> Map with engine/build metadata
+prefix = "user+ #"
+pattern = r"\A#{prefix}\d+\z"x
 ```
 
-`literal: true` compiles `Regexp.escape(pattern)` with the supplied flags.
-`match_limit:` overrides the module default for a pattern; `null` uses the
-runtime default.
+An ordinary hole accepts Str data. It is escaped for literal matching and
+inserted as one noncapturing expression; metacharacters, spaces and `#` remain
+data even in extended mode. Do not call `Regexp.escape` before interpolation:
+that would insert the escape characters themselves.
 
-Pattern methods:
+Holes must occur at complete regexp-expression boundaries. The static template
+is compiled with sentinel capture groups, whose presence verifies that PCRE2
+actually parsed each hole as an expression. A hole inside a character class,
+escape sequence, quantifier, group header, `\Q…\E`, or extended-mode comment
+is rejected. Runtime assembly is compiled again after values are inserted.
+
+Trusted syntax needs an explicit fragment:
 
 ```sputnik
-pat.source                           # canonical pattern source
-pat.flags                            # [:unicode, :ignore_case, ...]
-pat.names                            # named capture names, in pattern order
-pat.group_count                      # number of capture groups
-
-pat.match(text, from: 0)             # -> Regexp.Match?    search semantics
-pat.match?(text, from: 0)            # -> Bool
-pat.full_match(text)                 # -> Regexp.Match?
-pat.full_match?(text)                # -> Bool
-
-pat.scan(text)                       # -> List[Regexp.Match]
-pat.each_match(text) { |m| ... }     # -> Int count delivered
-
-pat.split(text,
-  limit: null,
-  keep_empty: false,
-  include_captures: false)           # -> List[Str]
-
-pat.replace(text, replacement,
-  count: :all)                       # -> Str
-pat.replace_first(text, replacement) # -> Str
-pat.replace(text) { |m| ... }        # -> Str
+alternative = Regexp.fragment("cat|dog")
+pattern = r"\A#{alternative}\z"
 ```
 
-Match operators:
+Fragments are grouped with their own initial flag scope, so the result means `\A(?:cat|dog)\z`. V1 fragments
+cannot contain captures or whole-pattern recursion; capture numbering/name composition requires a separate
+contract. A normal Pattern is not silently treated as a trusted fragment.
+Interpolation evaluates expressions once, left to right. General non-Str
+stringification in holes is deferred.
 
-```sputnik
-text =~ pat                          # -> Regexp.Match?
-pat =~ text                          # -> Regexp.Match?
-text !~ pat                          # -> Bool
-pat !~ text                          # -> Bool
-```
+## 6. Iteration, replacement and split
 
-Recommended `Str` sugar, once value-method registration is in place:
+All global operations use the same progress algorithm. After an empty match,
+first retry an anchored nonempty match at the same position. If that fails,
+advance one codepoint (or one CRLF sequence when the pattern's newline mode
+requires it). The final empty match is delivered once.
 
-```sputnik
-text.match(pat)                      # == pat.match(text)
-text.match?(pat)
-text.scan(pat)
-text.split(pat, ...)
-text.replace(pat, replacement,
-  count: :all)                       # replace matches with a substitution Str
-text.replace_first(pat, replacement)
-text.replace(pat) { |m| ... }        # block required; block returns substitute
-text.replaced(pat, replacement, ...)
-text.replaced(pat) { |m| ... }
-```
-
-The module methods are the canonical surface; `Str` sugar is convenience only.
-
-## 4. Match operators
-
-Sputnik should add two regexp-specific infix operators:
-
-- `=~` - search match; returns `Regexp.Match?`.
-- `!~` - search non-match; returns `Bool`.
-
-Both operand orders are accepted when exactly one operand is a
-`Regexp.Pattern` and the other is a `Str`:
-
-```sputnik
-input =~ r"""^\d+"""                 # r"""^\d+""".match(input)
-r"""^\d+""" =~ input                 # same result
-
-input !~ r"""^\d+"""                 # (input =~ r"""^\d+""") == null
-r"""^\d+""" !~ input                 # same boolean
-```
-
-`=~` deliberately returns the match object, not a boolean, so it composes with
-capture extraction while still being naturally truthy/falsey in guards:
-
-```sputnik
-if m = input =~ r"""(?<name>\w+)=(\d+)""":
-  config[m[:name]] = Int.parse(m[2])
-```
-
-Because Sputnik already defines `$_` as the last expression result, the terse form
-also works when the match expression is the branch condition:
-
-```sputnik
-if input =~ r"""(?<name>\w+)=(\d+)""":
-  config[$_[:name]] = Int.parse($_[2])
-
-if r"""(?<name>\w+)=(\d+)""".match(input):
-  config[$_[:name]] = Int.parse($_[2])
-```
-
-Named binding is still the clearer form when the body is more than a tiny
-capture use, or when nested conditionals/calls would make `$_` easy to shadow by
-another expression result.
-
-`!~` is the boolean convenience form. It never returns a match value.
-
-The operator always uses `match` search semantics, not `full_match`. Full-string
-matching remains explicit through anchors or `.full_match`:
-
-```sputnik
-input =~ r"""^\d+$"""                # anchored search
-r"""\d+""".full_match(input)         # explicit full-match method
-```
-
-No implicit compile happens for `Str =~ Str` or `Str !~ Str`; that would hide
-allocation and diagnostics in an operator. Dynamic patterns must be compiled
-explicitly:
-
-```sputnik
-input =~ Regexp.compile(pattern_text)
-```
-
-Parser/lowering notes:
-
-- Add lexer tokens for `=~` and `!~`.
-- Put both operators at comparison precedence, beside `==`, `<=>`, and `in`
-  (currently precedence 4 in `Parser::infix_info`), left-associative.
-- Emit ordinary `AstBinary` with `op` `"=~"` / `"!~"` so HIR/native lowering can
-  route through the same selector-dispatch machinery as other operators.
-- Runtime dispatch accepts only the `(Str, Pattern)` and `(Pattern, Str)` pairs;
-  wrong operand shapes raise `TypeError`.
-
-## 5. Match values
-
-`Regexp.Match` is immutable and keeps the matched source `Str` alive so capture
-access is stable.
-
-```sputnik
-m = r"""(?<name>\w+)=(\d+)""".match("port=8080")
-
-m.text                 # "port=8080"      group 0
-m[0]                   # "port=8080"
-m[1]                   # "port"
-m[2]                   # "8080"
-m["name"]              # "port"
-m.group(:name)         # "port"
-
-m.range(0)             # 0...9            codepoint offsets
-m.range(:name)         # 0...4
-m.byte_range(:name)    # 0...4            UTF-8 byte offsets
-
-m.begin(0)             # 0
-m.end(0)               # 9
-m.pre_match            # text before group 0
-m.post_match           # text after group 0
-m.captures             # ["port", "8080"]
-m.named_captures       # {name: "port"}
-```
-
-Rules:
-
-- Group `0` is always the full match.
-- Group access accepts `Int`, `Symbol`, or `Str`.
-- An unmatched optional group returns `null`; an empty matched group returns
-  `""` with a zero-width range.
-- Unknown group names and out-of-range group numbers raise
-  `Regexp.GroupError`.
-- Public ranges are codepoint offsets, matching `Str#[]`, `slice`, `index`, and
-  `length`. Byte ranges exist for interop and engine debugging.
-
-## 6. Safe interpolation
-
-Regexp interpolation has the same security shape as SQL interpolation: authored
-static chunks are regexp syntax, but ordinary holes are data.
-
-```sputnik
-prefix = "user+"
-pat = r"""^#{prefix}\d+$"""
-```
-
-The hole above inserts `Regexp.escape(prefix)`, so the pattern means literal
-`user+` followed by digits. A plain string cannot smuggle regexp syntax through
-`#{...}`.
-
-Trusted syntax fragments require an explicit branded value:
-
-```sputnik
-frag = Regexp.fragment("\\d+")
-pat = r"""^id=#{frag}$"""
-```
-
-Surface:
-
-```sputnik
-Regexp.escape(text)                  # -> Str
-Regexp.fragment(pattern)             # -> Regexp.Fragment
-```
-
-`Regexp.fragment(pattern)` validates the fragment and brands it as regexp
-syntax. This is intentionally a loud constructor: ordinary user text should use
-`Regexp.escape(text)` or plain `#{text}` interpolation instead.
-
-For a static-only `r"""..."""`, the macro should validate the pattern during
-expansion and emit a literal-pattern constructor. For a template with data
-holes, the macro emits an internal `Regexp.compile_template(static_chunks,
-values, flags)` helper where ordinary values are escaped at runtime and trusted
-fragments are inserted as syntax.
-
-## 7. Flags and syntax
-
-Sputnik regexps are Unicode by default because `Str` is UTF-8 by construction.
-The engine always runs in UTF mode and Unicode-property mode.
-
-Flags:
-
-| Flag keyword | Inline | Meaning |
-| --- | --- | --- |
-| `:ignore_case` | `(?i)` | Unicode case-insensitive matching |
-| `:multiline` | `(?m)` | `^` and `$` match line boundaries |
-| `:dot_all` | `(?s)` | `.` includes newline |
-| `:extended` | `(?x)` | ignore pattern whitespace/comments |
-| `:ungreedy` | `(?U)` | invert greedy quantifier default |
-| `:unicode` | always on | UTF-8 and Unicode character properties |
-
-Tagged literals use inline flags:
-
-```sputnik
-pat = r"""(?im)^\w+$"""
-```
-
-Dynamic compile calls may use keyword flags. There is no suffix syntax such as
-`r"""..."""i` in v1; it is parser churn with little payoff.
-
-## 8. Engine contract
-
-The reference implementation should use PCRE2 in UTF + UCP mode, vendored or
-declared as a build dependency by the Sputnik build system. C++ `std::regex` is
-not acceptable for the reference engine: its Unicode behavior, diagnostics, and
-implementation quality are too inconsistent for a language contract.
-
-The language contract is "Sputnik regexp syntax is PCRE2-compatible UTF syntax
-with the Sputnik API semantics in this document." That gives the stdlib full
-coverage for:
-
-- character classes, Unicode properties, POSIX classes;
-- numbered and named captures;
-- backreferences;
-- lookahead and lookbehind where the engine accepts them;
-- atomic groups and possessive quantifiers;
-- lazy and greedy quantifiers;
-- inline flag scopes;
-- anchors and word boundaries.
-
-Backtracking engines can be abused. Every compiled pattern carries match limits:
-
-- `Regexp.default_match_limit` is host-configurable but deterministic inside a
-  run.
-- `Regexp.compile(..., match_limit: n)` pins a pattern-specific limit.
-- Exceeding the limit raises `Regexp.MatchLimitError`.
-
-This keeps the "full engine" choice compatible with service code. A future
-`Regexp.Linear` or `re2` package can offer a stricter linear-time subset without
-changing this module.
-
-## 9. Replacement semantics
-
-Replacement is available from both sides:
-
-```sputnik
-pat.replace(text, replacement, count: :all)
-text.replace(pat, replacement, count: :all)
-text.replaced(pat, replacement, count: :all)
-
-pat.replace_first(text, replacement)
-text.replace_first(pat, replacement)
-```
-
-The `Str` forms are pure methods returning a new string, matching the existing
-`Str#replace` / `Str#replaced(from, to)` substring family. When the first
-argument is a `Regexp.Pattern`, the method replaces regexp matches; when the
-first argument is a `Str`, it keeps the existing substring behavior.
-`replaced` is the canonical pure spelling, and `replace` remains the existing
-alias.
-
-Replacement strings use `$` references, not backslash references:
-
-```sputnik
-pat.replace("a=1 b=2", "${key}:$1")  # named and numbered captures
-"a=1 b=2".replace(pat, "${key}:$1")  # same replacement from the Str side
-```
+Thus `r"(?:|a)".scan("a")` yields full texts `["", "a", ""]` and replacing all
+of them with `"x"` yields `"xxx"`. Search always retains the original subject;
+restarting on a sliced suffix would break anchors and lookbehind.
 
 Replacement grammar:
 
-- `$0` is the full match.
-- `$1`..`$99` are numbered groups.
-- `${name}` is a named group.
-- `$$` is a literal dollar sign.
-- Any other `$` sequence is `Regexp.ReplacementError`.
+- `$0` and `$1`..`$99` reference groups; `${number}` supports larger indices.
+- `${name}` references a named group; `$$` is a literal dollar.
+- Unknown references and all other dollar sequences raise RegexpReplacementError.
+- Unmatched existing groups substitute empty text.
+- Replacement syntax is validated even when no match exists or `count: 0`.
+- `count` accepts a nonnegative Int or `:all`.
+- A replacement argument and a block are mutually exclusive. A block must
+  return Str; its output has no replacement grammar, so it also handles literal
+  user-supplied replacement strings. Exceptions/control transfer propagate.
 
-Backslash has no replacement magic. This avoids a second escaping language
-fighting Sputnik strings and regexp strings.
+`split` omits leading/trailing empty primary fields unless `keep_empty: true`,
+while preserving internal empty fields. `limit` is null or a positive Int; it
+counts primary fields before boundary-empty removal, and the last field holds
+the unsplit remainder. `limit: 1` performs no split; an empty subject still follows `keep_empty`. Captured separators are additional entries, excluded from the limit;
+unmatched captures are null. With captures enabled the type is List[Str?].
 
-Block replacement is preferred for nontrivial cases. This is a different method
-clause / argument pattern, not a different verb:
+## 7. Errors and resource limits
 
-```sputnik
-pat.replace(text) |m|:
-  m[:name].upcase()
-
-text.replace(pat) |m|:
-  m[:name].upcase()
-
-text.replaced(pat) |m|:
-  m[:name].upcase()
-```
-
-The block-required clause has a `Regexp.Pattern` argument and no replacement
-argument. A call with a pattern and no replacement must either provide a block
-or raise `ArgumentError`; it must not silently stringify `null` or do nothing.
-
-In block forms the block receives the `Regexp.Match` and must return a `Str` or
-a value accepted by `Sputnik.stringify` as a display string. Exceptions propagate
-normally.
-
-## 10. Splitting and scanning
-
-`scan` returns every non-overlapping match in source order. `each_match` streams
-matches to a block and returns the count, avoiding a large list.
-
-Zero-width matches are handled with the standard progress rule: after a
-zero-width match, scanning advances by one Unicode codepoint before attempting
-the next match. This prevents infinite loops while keeping output
-deterministic.
-
-`split` defaults to the useful text-processing behavior:
-
-- leading and trailing empty fields are dropped unless `keep_empty: true`;
-- captured separators are omitted unless `include_captures: true`;
-- `limit: n` returns at most `n` fields; `null` means no limit.
-
-## 11. Error surface
-
-New rescuable error classes:
+Canonical rescuable names are:
 
 ```text
 RegexpError < Exception
@@ -478,163 +265,46 @@ RegexpMatchLimitError < RegexpError
 RegexpReplacementError < RegexpError
 ```
 
-`RegexpCompileError` carries:
+Dotted names such as `Regexp.CompileError` are not introduced aliases.
+Static compile failures are compiler diagnostics; dynamic failures are rescuable.
+PCRE2 match/depth/heap limit failures map to RegexpMatchLimitError.
 
-- `message`
-- `pattern`
-- `offset` as a codepoint offset when it can be mapped
-- `byte_offset` for engine diagnostics
+Default match limit is 1000000; `match_limit:` is a uint32 override. Depth is
+bounded at 1000, heap at 32768 KiB. JIT is disabled in this revision so both
+execution backends use the same engine path. These are engine limits, not a
+wall-clock deadline or a cumulative budget for scan/replace/output allocation.
+Their exact firing points can change with PCRE2 versions. Deployments needing
+a total service budget still need input/output limits and cancellation policy.
 
-Diagnostics from static `r"""..."""` literals should point at the literal span
-and, when possible, the exact pattern offset inside the text block.
+## 8. `$_`, conditions and pattern matching
 
-## 12. Native runtime shape
+A completed condition publishes its original value to `$_` before entering a
+branch. `and`/`or` do not publish intermediate operand values. Therefore
+Match-returning `.match` can expose captures through `$_`; Bool-returning
+`~=` publishes Bool. Named assignment in a condition is a separate convenience
+for a local binding.
 
-Registration:
-
-- `RuntimeNativeTypeKind::Regexp` for the module object.
-- `RuntimeNativeTypeKind::RegexpPattern` and `RegexpMatch` only if type objects
-  are exposed as native paths; otherwise pattern/match are tail values with
-  module-owned dispatch.
-- `register_regexp(registry)` and `register_regexp_runtime_module(...)`, using
-  the descriptor route like `Url`, `Yaml`, and `Time`.
-- Error descriptors for every class in section 11.
-
-Value representation:
-
-```cpp
-struct RuntimeRegexpPatternValue {
-  std::string source;
-  RegexpFlags flags;
-  std::shared_ptr<const CompiledRegexp> compiled;
-  std::optional<std::uint64_t> match_limit;
-};
-
-struct RuntimeRegexpMatchValue {
-  Value source; // keeps the Str alive
-  std::shared_ptr<const RuntimeRegexpPatternValue> pattern;
-  std::vector<RegexpCaptureRange> captures; // byte + lazy codepoint ranges
-};
-```
-
-Both are cold tail kinds, like `RuntimeTimeValue`, `RuntimeUuidValue`, and
-`RuntimeAstNode`. Equality:
-
-- patterns compare by source and flags;
-- matches compare by source value, pattern value, and capture ranges.
-
-Frozen images and bytecode never serialize compiled engine pointers. They store
-source, flags, and limits; compiled programs are rebuilt deterministically when
-the image is loaded.
-
-## 13. Full-native coverage contract
-
-The regexp module is a pure compute stdlib. A program that uses only regexp
-compile/match/scan/split/replace and pure block replacements must be eligible
-for full native execution once the full-native backend reaches the text stdlib
-slice.
-
-Required native coverage:
-
-1. Native values for `Regexp.Pattern` and `Regexp.Match` in both value
-   representations.
-2. Direct C++ lowering or descriptor-routed calls for every method in sections
-   3, 4, 5, 9, and 10.
-3. Native backend support for `r"""..."""` literal-pattern construction without
-   VM fallback.
-4. Native block ABI coverage for `each_match` and block replacement.
-5. A build-time full-native gate: regexp fixtures must fail the build if any
-   regexp selector falls back to the VM.
-6. Backend-equivalence fixtures comparing VM and native output for captures,
-   Unicode offsets, replacements, split edge cases, and match-limit errors.
-
-This is "full native coverage" in Sputnik's native-backend sense: no bytecode
-wrapper and no whole-program VM fallback for the regexp workload.
-
-## 14. Pattern matching integration
-
-Do not make `Regexp.Pattern` a bare structural pattern in v1. Search vs
-full-match semantics are too easy to misunderstand.
-
-Use explicit calls:
+Predicates in a `case` belong in guards:
 
 ```sputnik
 case value:
-when r"""^\d+$""".full_match?(value):
-  ...
+  when _ if r"\d+".full_match?(value):
+    print("matched")
 ```
 
-For search semantics, the operator is fine in an ordinary condition:
+Bare Regexp structural patterns are not introduced.
 
-```sputnik
-if text =~ r"""error \d+""":
-  ...
-```
+## 9. Coverage and remaining decisions
 
-After the matcher protocol is settled for custom values, a future extension can
-add a named matcher such as:
+`make test-regexp-unicode` verifies Unicode, all modifiers, imports/aliases,
+interpolation, fragments, captures, positions, global progress, replacements,
+splitting and rescues in VM and full native without fallback. It also checks
+compile-time failures for malformed literals, bad modifiers, unsafe hole
+positions and `\C`. Existing regexp and `$_` tests remain required.
 
-```sputnik
-case text:
-when Regexp.full(r"""[A-Z]+"""):
-  ...
-when Regexp.contains(r"""error"""):
-  ...
-```
-
-The explicit wrapper names keep semantics readable.
-
-## 15. Documentation examples
-
-```sputnik
-from Regexp import r
-
-email = r"""(?i)^\S+@\S+\.\S+$"""
-
-if input =~ email:
-  print("ok")
-```
-
-```sputnik
-from Regexp import r
-
-pair = r"""(?<key>\w+)=(?<value>\d+)"""
-if m = "port=8080" =~ pair:
-  config = {m[:key]: Int.parse(m[:value])}
-```
-
-```sputnik
-from Regexp import r
-
-csvish = r"""\s*,\s*"""
-items = csvish.split("a, b, c")
-```
-
-```sputnik
-from Regexp import r
-
-slug = r"""[^\p{L}\p{N}]+"""
-out = slug.replace(title.downcase(), "-").trim("-")
-```
-
-## 16. Definition of done
-
-1. Parser/macro: `r"""..."""` expands through the existing string-tag path;
-   `r"..."` is either implemented or explicitly tracked as the single-line tag
-   follow-up.
-2. `Ast.StringTemplate` exposes source chunks for tags that need authored text.
-3. Static `r` literals validate at compile time and produce source-span
-   diagnostics.
-4. Lexer/parser support `=~` and `!~` as comparison-precedence `AstBinary`
-   operators.
-5. `runtime/stdlib_regexp.cpp` registers module paths, handlers, and error
-   descriptors through the descriptor model.
-6. `Value` supports pattern and match tail kinds in both representations.
-7. VM tests cover compile, invalid compile, match/full_match, `=~`, `!~`,
-   named captures, optional captures, Unicode codepoint ranges, scan, split,
-   replacement, block replacement, and match limits.
-8. Macro staging tests cover imported and aliased `r` tags and prove that
-   untagged `"""..."""` remains an ordinary `Str`.
-9. Native tests assert full native coverage for regexp workloads, including the
-   operators.
-10. Module docs and sidecar examples are generated for `Regexp`.
+Deferred decisions: non-Str interpolation conversion; capture-bearing or
+recursive fragment composition; approximate numeric/glob/custom
+matcher protocols; cumulative operation/deadline/output budgets; version-pinned
+frozen-image reproducibility. Compiler diagnostics map normalized literal offsets back through dedent,
+trimming and line joining. These limitations do not change the implemented
+Unicode semantics.

@@ -27,6 +27,18 @@ CPPFLAGS += '-DSPUTNIK_OPENSSL_LIB_DIR="$(OPENSSL_LIB_DIR)"'
 endif
 LDFLAGS += -lssl -lcrypto
 
+# Regexp uses the same PCRE2 UTF/UCP engine in the compiler, VM and native builds.
+PCRE2_INCLUDE_DIR ?= $(shell pkg-config --variable=includedir libpcre2-8 2>/dev/null)
+PCRE2_LIB_DIR ?= $(shell pkg-config --variable=libdir libpcre2-8 2>/dev/null)
+ifneq ($(strip $(PCRE2_INCLUDE_DIR)),)
+CPPFLAGS += -I$(PCRE2_INCLUDE_DIR) '-DSPUTNIK_PCRE2_INCLUDE_DIR="$(PCRE2_INCLUDE_DIR)"'
+endif
+ifneq ($(strip $(PCRE2_LIB_DIR)),)
+LDFLAGS += -L$(PCRE2_LIB_DIR)
+CPPFLAGS += '-DSPUTNIK_PCRE2_LIB_DIR="$(PCRE2_LIB_DIR)"'
+endif
+LDFLAGS += -lpcre2-8
+
 # Notebook config codecs use LibYAML's event parser on every execution host.
 YAML_PREFIX ?= $(firstword $(wildcard /opt/homebrew/opt/libyaml /usr/local/opt/libyaml))
 YAML_INCLUDE_DIR ?= $(if $(strip $(YAML_PREFIX)),$(YAML_PREFIX)/include,$(shell pkg-config --variable=includedir yaml-0.1 2>/dev/null))

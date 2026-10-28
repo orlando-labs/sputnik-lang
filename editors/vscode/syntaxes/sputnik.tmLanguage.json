@@ -114,7 +114,8 @@
         "0": { "name": "punctuation.definition.string.end.sputnik" }
       },
       "patterns": [
-        { "include": "#string-escape-raw" }
+        { "include": "#string-escape-raw" },
+        { "include": "#interpolation" }
       ]
     },
     "tagged-string-block": {
@@ -196,7 +197,8 @@
         "0": { "name": "punctuation.definition.string.end.sputnik" }
       },
       "patterns": [
-        { "include": "#string-escape-raw" }
+        { "include": "#string-escape-raw" },
+        { "include": "#interpolation" }
       ]
     },
     "string-double": {
@@ -351,7 +353,7 @@
       ]
     },
     "definition-function": {
-      "match": "(?<![\\p{L}\\p{N}_])(def)(?![\\p{L}\\p{N}_?!])\\s+(\\[\\][=?]?|\\*\\*|//|<=>|===|=~|!~|==|!=|<=|>=|<<|>>|[-+*/%&|^<>]|[\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
+      "match": "(?<![\\p{L}\\p{N}_])(def)(?![\\p{L}\\p{N}_?!])\\s+(\\[\\][=?]?|\\*\\*|//|<=>|===|~=|==|!=|<=|>=|<<|>>|[-+*/%&|^<>]|[\\p{L}_][\\p{L}\\p{N}_]*(?:!|\\?(?!=))?)",
       "captures": {
         "1": { "name": "storage.type.function.sputnik" },
         "2": { "name": "entity.name.function.sputnik" }
@@ -496,7 +498,7 @@
         },
         {
           "name": "variable.parameter.placeholder.sputnik",
-          "match": "(?<![\\p{L}\\p{N}_])(?:_[0-9]+(?![\\p{L}\\p{N}_])|\\$it(?:[1-9][0-9]*)?(?![\\p{L}\\p{N}_?]|!(?![=~])))"
+          "match": "(?<![\\p{L}\\p{N}_])(?:_[0-9]+(?![\\p{L}\\p{N}_])|\\$it(?:[1-9][0-9]*)?(?![\\p{L}\\p{N}_?]|!(?![=])))"
         },
         {
           "name": "variable.language.self.sputnik",
@@ -551,7 +553,7 @@
         },
         {
           "name": "keyword.operator.sputnik",
-          "match": "\\?=|//=|\\+=|-=|\\*=|/=|%=|===|<=>|<<|>>|\\*\\*|//|=~|!~|==|!=|<=|>=|->|\\?\\?|[-+*/%<>=&|^]"
+          "match": "\\?=|//=|\\+=|-=|\\*=|/=|%=|===|<=>|<<|>>|\\*\\*|//|~=|==|!=|<=|>=|->|\\?\\?|[-+*/%<>=&|^]"
         }
       ]
     },

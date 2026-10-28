@@ -45,6 +45,7 @@ tokens:
     - PIPE
     - CARET
     - EQUAL
+    - TILDE_EQUAL
     - EQUAL_EQUAL
     - EQUAL_EQUAL_EQUAL
     - BANG_EQUAL

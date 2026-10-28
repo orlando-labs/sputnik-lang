@@ -1479,7 +1479,7 @@ bool native_cpp_scalar_selector(const sputnik::bytecode::BcModule &module,
          *selector == "/" || *selector == "%" || *selector == "//" ||
          *selector == "**" || *selector == "<" || *selector == ">" ||
          *selector == "<=" || *selector == ">=" || *selector == "==" ||
-         *selector == "!=" || *selector == "=~" || *selector == "!~" ||
+         *selector == "!=" || *selector == "~=" ||
          *selector == "<=>" || *selector == "&" || *selector == "|" ||
          *selector == "^" || *selector == "<<" || *selector == ">>";
 }
@@ -1729,7 +1729,9 @@ bool native_cpp_regexp_selector(const std::string &selector,
            selector == "__call__" || selector == "escape" ||
            selector == "match" || selector == "find" || selector == "match?" ||
            selector == "matches?" || selector == "full_match" ||
-           selector == "full_match?" || selector == "=~" || selector == "!~" ||
+           selector == "full_match?" || selector == "~=" ||
+           selector == "fragment" || selector == "valid?" || selector == "try_compile" || selector == "scan" || selector == "split" ||
+           selector == "range" || selector == "byte_range" || selector == "begin" || selector == "end" || selector == "byte_begin" || selector == "byte_end" ||
            selector == "[]" || selector == "group") &&
           pos_count == 1U) ||
          ((selector == "source" || selector == "to_str" ||
@@ -1737,8 +1739,9 @@ bool native_cpp_regexp_selector(const std::string &selector,
            selector == "pattern" || selector == "count" || selector == "size" ||
            selector == "length" || selector == "start" ||
            selector == "finish" || selector == "end" ||
-           selector == "captures") &&
-          pos_count == 0U);
+           selector == "captures" || selector == "named_captures" || selector == "pre_match" || selector == "post_match" ||
+           selector == "flags" || selector == "names" || selector == "group_count" || selector == "range" || selector == "byte_range" || selector == "default_match_limit" || selector == "version" || selector == "begin" || selector == "byte_begin" || selector == "byte_end") &&
+          pos_count == 0U) || (selector == "__compile_template" && pos_count == 3U);
 }
 
 bool native_cpp_url_selector(const std::string &selector,
@@ -2842,26 +2845,12 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
         uuid_send = true;
       }
       bool regexp_send = false;
-      if (native_cpp_regexp_selector(selector, pos_count) && no_block) {
-        if ((selector == "compile" || selector == "new" || selector == "r" ||
-             selector == "__call__") &&
-            kw_count <= 1U) {
-          if (kw_count == 1U) {
-            std::uint32_t kw_symbol_id = 0;
-            if (!operand_u32_value(instruction, kw_index + 1U, &kw_symbol_id) ||
-                kw_symbol_id >= module.symbols.size() ||
-                module.symbols[kw_symbol_id] != "flags") {
-              *reason = "unsupported Regexp.compile keyword shape";
-              return false;
-            }
-          }
-          regexp_send = true;
-        } else if (kw_count == 0U) {
-          regexp_send = true;
-        }
+      if ((native_cpp_regexp_selector(selector, pos_count) && no_block) ||
+          (selector == "each_match" && pos_count == 1U && !no_block && kw_count == 0U)) {
+        regexp_send = true;
       }
       bool regexp_replace_send = false;
-      if ((selector == "replace" || selector == "replaced") &&
+      if ((selector == "replace" || selector == "replaced" || selector == "replace_first") &&
           (pos_count == 1U || pos_count == 2U) && kw_count <= 1U &&
           ((no_block && pos_count == 2U) || (!no_block && pos_count == 1U))) {
         if (kw_count == 1U) {
@@ -6600,14 +6589,8 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       } else if (selector == "!=") {
         write_reg_stmt(dst, "native_numeric_fast_eq(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ", true)");
-      } else if (selector == "=~") {
-        write_reg_stmt(dst, "native_regexp_match_operator(" +
-                                read_reg_expr(recv) + ", " +
-                                read_reg_expr(arg) + ", false)");
-      } else if (selector == "!~") {
-        write_reg_stmt(dst, "native_regexp_match_operator(" +
-                                read_reg_expr(recv) + ", " +
-                                read_reg_expr(arg) + ", true)");
+      } else if (selector == "~=") {
+        write_reg_stmt(dst, "native_regexp_match_operator(" + read_reg_expr(recv) + ", " + read_reg_expr(arg) + ")");
       } else if (selector == "<=>") {
         write_reg_stmt(dst, "native_numeric_fast_cmp(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
@@ -6688,12 +6671,15 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       } else if (native_cpp_regexp_selector(selector, pos_count) &&
                  selector != "[]" && selector != "count" &&
                  selector != "length" && selector != "size" &&
-                 selector != "to_str" && selector != "=~" && selector != "!~") {
+                 selector != "to_str") {
         const std::string regexp_send =
             "native_regexp_send(" + read_reg_expr(recv) +
             ", " + selector_expr + ", " + pos_args_expr(0U) + ", " +
             kw_args_expr() + ")";
-        if (selector == "new" && pos_count == 1U) {
+        if (selector == "split") {
+          write_reg_stmt(dst, "(" + read_reg_expr(recv) + ".tag == NativeValue::Tag::Regexp ? " + regexp_send +
+              " : native_string_split(" + read_reg_expr(recv) + ", " + read_reg_expr(arg) + "))");
+        } else if (selector == "new" && pos_count == 1U) {
           write_reg_stmt(dst, "(" + read_reg_expr(recv) +
                                   ".tag == NativeValue::Tag::BytesModule "
                                   "? native_bytes_new(" +
@@ -6922,7 +6908,10 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       } else if (selector == "split") {
         write_reg_stmt(dst, "native_string_split(" + read_reg_expr(recv) +
                                 ", " + read_reg_expr(arg) + ")");
-      } else if (selector == "replace" || selector == "replaced") {
+      } else if (selector == "each_match") {
+        write_reg_stmt(dst, "native_regexp_each(" + read_reg_expr(recv) + ", " + read_reg_expr(arg) + ", " +
+            read_reg_expr(static_cast<std::uint32_t>(block_reg)) + ")");
+      } else if (selector == "replace" || selector == "replaced" || selector == "replace_first") {
         write_reg_stmt(
             dst, "native_string_replace(" + read_reg_expr(recv) + ", " +
                      read_reg_expr(arg) + ", " +
@@ -6933,7 +6922,7 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                           ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
                           : "NativeValue::nullv()") +
                      ", " + (has_block ? "true" : "false") + ", " +
-                     kw_args_expr() + ")");
+                     kw_args_expr() + ", " + (selector == "replace_first" ? "true" : "false") + ")");
       } else if (selector == "slice") {
         write_reg_stmt(dst, "native_slice(" + read_reg_expr(recv) + ", " +
                                 read_reg_expr(arg) + ", " +
@@ -8921,7 +8910,7 @@ build_native_cpp_plan(const RunnableModuleArtifact &artifact,
   out << "#include <mutex>\n";
   out << "#include <optional>\n";
   out << "#include <charconv>\n";
-  out << "#include <regex>\n";
+  out << "#include \"runtime/regexp_engine.h\"\n";
   out << "#include <shared_mutex>\n";
   out << "#include <sstream>\n";
   out << "#include <stdexcept>\n";
@@ -9360,16 +9349,8 @@ private:
   out << "  NativeFsPath() = default;\n";
   out << "  explicit NativeFsPath(std::string p) : path(std::move(p)) {}\n";
   out << "};\n";
-  out << "struct NativeRegexp : NativeRcHeader {\n";
-  out << "  std::string source;\n";
-  out << "  std::regex::flag_type flags = std::regex::ECMAScript;\n";
-  out << "  std::regex compiled;\n";
-  out << "};\n";
-  out << "struct NativeRegexpCapture {\n";
-  out << "  bool matched = false;\n";
-  out << "  std::size_t start = 0;\n";
-  out << "  std::size_t end = 0;\n";
-  out << "};\n";
+  out << "struct NativeRegexp : NativeRcHeader, sputnik::regexp::Pattern {};\n";
+  out << "using NativeRegexpCapture = sputnik::regexp::Capture;\n";
   out << "struct NativeRegexpMatch : NativeRcHeader {\n";
   out << "  std::string source;\n";
   out << "  NativeValue pattern = NativeValue::nullv();\n";
@@ -12931,310 +12912,25 @@ static void native_append_keyword_call_spread(
   out << "  }\n";
   out << "  return NativeValue::list(std::move(parts));\n";
   out << "}\n\n";
-  out << R"SPUTNIKPP(static NativeValue sputnik_native_call_closure(
-    const NativeValue &value, const NativeArgsView &args);
-static NativeValue sputnik_native_call_scoped_closure(
-    const NativeValue &value, const NativeArgsView &args);
-
-static std::string native_regexp_pattern_to_string(
-    const NativeRegexp &pattern) {
-  return "/" + pattern.source + "/";
-}
-
-static std::optional<std::string> native_regexp_group_text(
-    const NativeRegexpMatch &match, std::size_t index) {
-  if (index >= match.captures.size()) return std::nullopt;
-  const NativeRegexpCapture &capture = match.captures[index];
-  if (!capture.matched || capture.start > capture.end ||
-      capture.end > match.source.size()) {
-    return std::nullopt;
-  }
-  return match.source.substr(capture.start, capture.end - capture.start);
-}
-
-static std::string native_regexp_match_to_string(
-    const NativeRegexpMatch &match) {
-  return native_regexp_group_text(match, 0U).value_or(std::string{});
-}
-
-static std::string native_regexp_text_arg(const NativeValue &value) {
-  if (native_value_is_string(value)) return native_string_text(value);
-  if (value.tag == NativeValue::Tag::Symbol) {
-    return native_symbol_text(value.scalar_value);
-  }
-  throw NativeBailout();
-}
-
-static std::regex::flag_type native_regexp_flags_from_value(
-    const NativeValue &value) {
-  const std::string text = native_regexp_text_arg(value);
-  std::regex::flag_type flags = std::regex::ECMAScript;
-  for (char c : text) {
-    if (c == 'i') {
-      flags |= std::regex::icase;
-      continue;
-    }
-    throw NativeBailout();
-  }
-  return flags;
-}
-
-static const NativeValue *native_regexp_kw(
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs,
-    const std::string &name) {
-  for (const auto &entry : kwargs) {
-    if (entry.first == name) return &entry.second;
-  }
-  return nullptr;
-}
-
-static void native_regexp_reject_unknown_kw(
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs,
-    std::initializer_list<const char *> allowed) {
-  for (const auto &entry : kwargs) {
-    bool matched = false;
-    for (const char *name : allowed) {
-      if (entry.first == name) {
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) throw NativeBailout();
-  }
-}
-
-static NativeValue native_regexp_compile_value(
-    const NativeValue &source_value,
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs) {
-  native_regexp_reject_unknown_kw(kwargs, {"flags"});
-  const std::string source = native_regexp_text_arg(source_value);
-  std::regex::flag_type flags = std::regex::ECMAScript;
-  if (const NativeValue *flag_value = native_regexp_kw(kwargs, "flags")) {
-    flags = native_regexp_flags_from_value(*flag_value);
-  }
-  NativeRegexp pattern;
-  pattern.source = source;
-  pattern.flags = flags;
-  try {
-    pattern.compiled = std::regex(pattern.source, pattern.flags);
-  } catch (const std::regex_error &) {
-    throw NativeBailout();
-  }
-  return NativeValue::regexp(std::move(pattern));
-}
-
-static NativeRegexpMatch native_regexp_make_match(
-    const NativeValue &pattern_value, const std::string &source,
-    const std::smatch &match, std::size_t base_offset) {
-  NativeRegexpMatch value;
-  value.source = source;
-  value.pattern = pattern_value;
-  value.captures.reserve(match.size());
-  for (std::size_t i = 0; i < match.size(); ++i) {
-    NativeRegexpCapture capture;
-    capture.matched = match[i].matched;
-    if (capture.matched) {
-      capture.start =
-          base_offset + static_cast<std::size_t>(match.position(i));
-      capture.end = capture.start + static_cast<std::size_t>(match.length(i));
-    }
-    value.captures.push_back(capture);
-  }
-  return value;
-}
-
-static NativeValue native_regexp_search_value(const NativeValue &pattern_value,
-                                              const NativeValue &source_value,
-                                              bool full_match,
-                                              bool bool_only,
-                                              bool negate) {
-  const NativeRegexp &pattern = as_regexp(pattern_value);
-  const std::string source = native_regexp_text_arg(source_value);
-  std::smatch match;
-  bool matched = false;
-  try {
-    matched = full_match ? std::regex_match(source, match, pattern.compiled)
-                         : std::regex_search(source, match, pattern.compiled);
-  } catch (const std::regex_error &) {
-    throw NativeBailout();
-  }
-  if (bool_only) return NativeValue::boolean(negate ? !matched : matched);
-  if (!matched) return NativeValue::nullv();
-  return NativeValue::regexp_match(
-      native_regexp_make_match(pattern_value, source, match, 0U));
-}
-
-static NativeValue native_regexp_match_operator(const NativeValue &lhs,
-                                                const NativeValue &rhs,
-                                                bool negate) {
-  if (lhs.tag == NativeValue::Tag::Regexp) {
-    return native_regexp_search_value(lhs, rhs, false, negate, negate);
-  }
-  if (rhs.tag == NativeValue::Tag::Regexp) {
-    return native_regexp_search_value(rhs, lhs, false, negate, negate);
-  }
-  throw NativeBailout();
-}
-
-static std::optional<std::size_t> native_regexp_parse_group_index(
-    const std::string &text) {
-  if (text.empty()) return std::nullopt;
-  std::size_t value = 0;
-  for (char c : text) {
-    if (!std::isdigit(static_cast<unsigned char>(c))) return std::nullopt;
-    const std::size_t digit = static_cast<std::size_t>(c - '0');
-    if (value >
-        (std::numeric_limits<std::size_t>::max() - digit) / 10U) {
-      return std::nullopt;
-    }
-    value = value * 10U + digit;
-  }
-  return value;
-}
-
-static std::string native_regexp_expand_replacement(
-    const NativeRegexpMatch &match, const std::string &replacement) {
-  std::string out;
-  out.reserve(replacement.size());
-  for (std::size_t i = 0; i < replacement.size();) {
-    if (replacement[i] != '$') {
-      out.push_back(replacement[i++]);
-      continue;
-    }
-    if (i + 1U >= replacement.size()) {
-      out.push_back('$');
-      ++i;
-      continue;
-    }
-    const char next = replacement[i + 1U];
-    if (next == '$') {
-      out.push_back('$');
-      i += 2U;
-      continue;
-    }
-    if (next == '&') {
-      if (const auto text = native_regexp_group_text(match, 0U)) out += *text;
-      i += 2U;
-      continue;
-    }
-    if (std::isdigit(static_cast<unsigned char>(next))) {
-      std::size_t cursor = i + 1U;
-      while (cursor < replacement.size() &&
-             std::isdigit(static_cast<unsigned char>(replacement[cursor]))) {
-        ++cursor;
-      }
-      const auto index = native_regexp_parse_group_index(
-          replacement.substr(i + 1U, cursor - (i + 1U)));
-      if (index.has_value()) {
-        if (const auto text = native_regexp_group_text(match, *index)) {
-          out += *text;
-        }
-      }
-      i = cursor;
-      continue;
-    }
-    if (next == '{') {
-      const std::size_t close = replacement.find('}', i + 2U);
-      if (close == std::string::npos) throw NativeBailout();
-      const std::string name = replacement.substr(i + 2U, close - (i + 2U));
-      const auto index = native_regexp_parse_group_index(name);
-      if (!index.has_value()) throw NativeBailout();
-      if (const auto text = native_regexp_group_text(match, *index)) {
-        out += *text;
-      }
-      i = close + 1U;
-      continue;
-    }
-    out.push_back('$');
-    ++i;
-  }
-  return out;
-}
-
-static std::size_t native_regexp_replace_limit(
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs) {
-  native_regexp_reject_unknown_kw(kwargs, {"count"});
-  const NativeValue *count_value = native_regexp_kw(kwargs, "count");
-  if (count_value == nullptr) return std::numeric_limits<std::size_t>::max();
-  if (count_value->tag == NativeValue::Tag::Integer) {
-    if (count_value->scalar_value < 0) throw NativeBailout();
-    return static_cast<std::size_t>(count_value->scalar_value);
-  }
-  if (native_regexp_text_arg(*count_value) == "all") {
-    return std::numeric_limits<std::size_t>::max();
-  }
-  throw NativeBailout();
-}
-
-static NativeValue native_regexp_replace_string(
-    const NativeValue &value, const NativeValue &pattern_value,
-    const NativeValue &replacement_value, bool has_replacement,
-    const NativeValue &block_value, bool has_block,
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs) {
-  if (!native_value_is_string(value)) throw NativeBailout();
-  const NativeRegexp &pattern = as_regexp(pattern_value);
-  const std::string source = native_string_text(value);
-  const std::size_t limit = native_regexp_replace_limit(kwargs);
-  if (limit == 0U) return value;
-  std::optional<std::string> replacement;
-  if (has_block) {
-    if (has_replacement) throw NativeBailout();
-  } else {
-    if (!has_replacement) throw NativeBailout();
-    replacement = native_regexp_text_arg(replacement_value);
-  }
-
-  std::string out;
-  std::size_t last_append = 0;
-  std::size_t search_offset = 0;
-  std::size_t replaced = 0;
-  while (replaced < limit && search_offset <= source.size()) {
-    std::smatch match;
-    const auto begin =
-        source.cbegin() + static_cast<std::ptrdiff_t>(search_offset);
-    try {
-      if (!std::regex_search(begin, source.cend(), match, pattern.compiled)) {
-        break;
-      }
-    } catch (const std::regex_error &) {
-      throw NativeBailout();
-    }
-    const std::size_t match_start =
-        search_offset + static_cast<std::size_t>(match.position(0));
-    const std::size_t match_end =
-        match_start + static_cast<std::size_t>(match.length(0));
-    out.append(source, last_append, match_start - last_append);
-    NativeValue match_value = NativeValue::regexp_match(
-        native_regexp_make_match(pattern_value, source, match, search_offset));
-    if (replacement.has_value()) {
-      out += native_regexp_expand_replacement(as_regexp_match(match_value),
-                                              *replacement);
-    } else {
-      out += native_regexp_text_arg(
-          sputnik_native_call_scoped_closure(block_value, {match_value}));
-    }
-    ++replaced;
-    last_append = match_end;
-    if (match_start == match_end) {
-      if (match_end >= source.size()) break;
-      search_offset = match_end + 1U;
-    } else {
-      search_offset = match_end;
-    }
-  }
-  out.append(source, last_append, std::string::npos);
-  return NativeValue::heap_string(std::move(out));
-}
-
-static NativeValue native_string_replace(
+  out <<
+#include "tools/sputnik/native_regexp.inc"
+      ;
+  out << R"SPUTNIKPP(static NativeValue native_string_replace(
     const NativeValue &value, const NativeValue &from_value,
     const NativeValue &to_value, bool has_to = true,
     const NativeValue &block_value = NativeValue::nullv(),
     bool has_block = false,
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs = {}) {
+    std::initializer_list<std::pair<std::string, NativeValue>> kwargs = {},
+    bool first = false) {
+  if (first && value.tag != NativeValue::Tag::Regexp)
+    throw NativeRaised{native_named_error("NoMethodError", "replace_first requires Regexp.Pattern")};
+  if (value.tag == NativeValue::Tag::Regexp) {
+    return native_regexp_replace_string(from_value, value, to_value, has_to,
+                                        block_value, has_block, kwargs, first);
+  }
   if (from_value.tag == NativeValue::Tag::Regexp) {
     return native_regexp_replace_string(value, from_value, to_value, has_to,
-                                        block_value, has_block, kwargs);
+                                        block_value, has_block, kwargs, first);
   }
   if (!native_value_is_string(value) || !native_value_is_string(from_value) ||
       !native_value_is_string(to_value) || !has_to || has_block ||
@@ -13258,138 +12954,6 @@ static NativeValue native_string_replace(
     start = pos + from.size();
   }
   return NativeValue::heap_string(replaced);
-}
-
-static NativeValue native_regexp_group_value(const NativeRegexpMatch &match,
-                                             const NativeValue &index_value) {
-  if (index_value.tag != NativeValue::Tag::Integer ||
-      index_value.scalar_value < 0) {
-    throw NativeBailout();
-  }
-  const auto text = native_regexp_group_text(
-      match, static_cast<std::size_t>(index_value.scalar_value));
-  return text.has_value() ? NativeValue::heap_string(*text)
-                          : NativeValue::nullv();
-}
-
-static NativeValue native_regexp_send(
-    const NativeValue &receiver, std::string_view selector,
-    std::initializer_list<NativeValue> args,
-    std::initializer_list<std::pair<std::string, NativeValue>> kwargs) {
-  const NativeValue *arg0 = args.size() >= 1U ? args.begin() : nullptr;
-  if (selector == "compile" || selector == "new" || selector == "r" ||
-      selector == "__call__") {
-    if (receiver.tag != NativeValue::Tag::RegexpModule ||
-        args.size() != 1U) {
-      throw NativeBailout();
-    }
-    return native_regexp_compile_value(*arg0, kwargs);
-  }
-  if (selector == "escape") {
-    if (receiver.tag != NativeValue::Tag::RegexpModule ||
-        args.size() != 1U) {
-      throw NativeBailout();
-    }
-    native_regexp_reject_unknown_kw(kwargs, {});
-    const std::string source = native_regexp_text_arg(*arg0);
-    std::string out;
-    out.reserve(source.size() * 2U);
-    for (char c : source) {
-      switch (c) {
-      case '\\':
-      case '^':
-      case '$':
-      case '.':
-      case '|':
-      case '?':
-      case '*':
-      case '+':
-      case '(':
-      case ')':
-      case '[':
-      case ']':
-      case '{':
-      case '}':
-        out.push_back('\\');
-        break;
-      default:
-        break;
-      }
-      out.push_back(c);
-    }
-    return NativeValue::heap_string(std::move(out));
-  }
-  native_regexp_reject_unknown_kw(kwargs, {});
-  if (receiver.tag == NativeValue::Tag::Regexp) {
-    if ((selector == "source" || selector == "to_str" ||
-         selector == "inspect") &&
-        args.size() == 0U) {
-      const NativeRegexp &pattern = as_regexp(receiver);
-      return selector == "source"
-                 ? NativeValue::heap_string(pattern.source)
-                 : NativeValue::heap_string(
-                       native_regexp_pattern_to_string(pattern));
-    }
-    if ((selector == "match" || selector == "find" ||
-         selector == "match?" || selector == "matches?" ||
-         selector == "full_match" || selector == "full_match?" ||
-         selector == "=~" || selector == "!~") &&
-        args.size() == 1U) {
-      const bool full =
-          selector == "full_match" || selector == "full_match?";
-      const bool bool_only = selector == "match?" ||
-                             selector == "matches?" ||
-                             selector == "full_match?" ||
-                             selector == "!~";
-      return native_regexp_search_value(receiver, *arg0, full, bool_only,
-                                        selector == "!~");
-    }
-    throw NativeBailout();
-  }
-  if (receiver.tag == NativeValue::Tag::RegexpMatch) {
-    const NativeRegexpMatch &match = as_regexp_match(receiver);
-    if ((selector == "text" || selector == "to_str" ||
-         selector == "inspect") &&
-        args.size() == 0U) {
-      return NativeValue::heap_string(native_regexp_match_to_string(match));
-    }
-    if (selector == "pattern" && args.size() == 0U) {
-      return match.pattern;
-    }
-    if (selector == "source" && args.size() == 0U) {
-      return NativeValue::heap_string(match.source);
-    }
-    if ((selector == "count" || selector == "size" ||
-         selector == "length") &&
-        args.size() == 0U) {
-      const std::size_t captures =
-          match.captures.empty() ? 0U : match.captures.size() - 1U;
-      return NativeValue::integer(static_cast<std::int64_t>(captures));
-    }
-    if ((selector == "[]" || selector == "group") && args.size() == 1U) {
-      return native_regexp_group_value(match, *arg0);
-    }
-    if ((selector == "start" || selector == "finish" ||
-         selector == "end") &&
-        args.size() == 0U) {
-      if (match.captures.empty() || !match.captures[0].matched) {
-        return NativeValue::nullv();
-      }
-      return NativeValue::integer(static_cast<std::int64_t>(
-          selector == "start" ? match.captures[0].start
-                              : match.captures[0].end));
-    }
-    if (selector == "captures" && args.size() == 0U) {
-      std::vector<NativeValue> captures;
-      for (std::size_t i = 1; i < match.captures.size(); ++i) {
-        const auto text = native_regexp_group_text(match, i);
-        captures.push_back(text.has_value() ? NativeValue::heap_string(*text)
-                                            : NativeValue::nullv());
-      }
-      return NativeValue::list(std::move(captures));
-    }
-  }
-  throw NativeBailout();
 }
 
 )SPUTNIKPP";
@@ -13498,10 +13062,12 @@ static bool native_value_equal(const NativeValue &lhs, const NativeValue &rhs) {
   case NativeValue::Tag::Regexp: {
     const NativeRegexp &left = as_regexp(lhs);
     const NativeRegexp &right = as_regexp(rhs);
-    return left.source == right.source && left.flags == right.flags;
+    return left.source == right.source && left.flags == right.flags && left.fragment == right.fragment;
   }
-  case NativeValue::Tag::RegexpMatch:
-    return lhs.heap_value == rhs.heap_value;
+  case NativeValue::Tag::RegexpMatch: {
+    const auto &a=as_regexp_match(lhs),&b=as_regexp_match(rhs);
+    return a.source==b.source && native_value_equal(a.pattern,b.pattern) && a.captures==b.captures;
+  }
   case NativeValue::Tag::Result: {
     const NativeResult &left = as_native_result(lhs);
     const NativeResult &right = as_native_result(rhs);
@@ -20532,12 +20098,12 @@ static NativeValue native_benchmark_send(
   out << "    const NativeRegexp &left = as_regexp(lhs);\n";
   out << "    const NativeRegexp &right = as_regexp(rhs);\n";
   out << "    const bool equal = left.source == right.source && "
-         "left.flags == right.flags;\n";
+         "left.flags == right.flags && left.fragment == right.fragment;\n";
   out << "    return NativeValue::boolean(negate ? !equal : equal);\n";
   out << "  }\n";
   out << "  if (lhs.tag == NativeValue::Tag::RegexpMatch && "
          "rhs.tag == NativeValue::Tag::RegexpMatch) {\n";
-  out << "    const bool equal = lhs.heap_value == rhs.heap_value;\n";
+  out << "    const bool equal = native_value_equal(lhs, rhs);\n";
   out << "    return NativeValue::boolean(negate ? !equal : equal);\n";
   out << "  }\n";
   out << "  if (lhs.tag == NativeValue::Tag::Result || "
@@ -27094,6 +26660,9 @@ const std::vector<std::string> &native_runtime_compile_flags() {
 #ifdef SPUTNIK_OPENSSL_INCLUDE_DIR
       "-I" SPUTNIK_OPENSSL_INCLUDE_DIR,
 #endif
+#ifdef SPUTNIK_PCRE2_INCLUDE_DIR
+      "-I" SPUTNIK_PCRE2_INCLUDE_DIR,
+#endif
 #ifdef SPUTNIK_YAML_INCLUDE_DIR
       "-I" SPUTNIK_YAML_INCLUDE_DIR,
 #endif
@@ -27507,6 +27076,10 @@ NativeExecutableBuildResult build_native_executable(
 #ifdef SPUTNIK_OPENSSL_LIB_DIR
   command.push_back("-L" SPUTNIK_OPENSSL_LIB_DIR);
 #endif
+#ifdef SPUTNIK_PCRE2_LIB_DIR
+  command.push_back("-L" SPUTNIK_PCRE2_LIB_DIR);
+#endif
+  command.push_back("-lpcre2-8");
   command.push_back("-lssl");
   command.push_back("-lyaml");
 #ifdef SPUTNIK_YAML_LIB_DIR

@@ -484,7 +484,7 @@ async function main() {
 
   const placeholderOperators = tokenize(
     grammar,
-    "$it!=0\n$it1!~pattern\n$it2[?0]",
+    "$it!=0\n$it1~=pattern\n$it2[?0]",
   );
   for (const [line, alias] of ["$it", "$it1", "$it2"].entries()) {
     assertScope(
@@ -512,7 +512,7 @@ async function main() {
     [
       "total += 1",
       "a ** b // c % d <=> e",
-      "a =~ pattern or a !~ pattern",
+      "a ~= pattern or a ~= pattern",
       "a << 2 >> 1",
       "first..last",
       "first...last",
@@ -526,8 +526,7 @@ async function main() {
   for (const operator of ["**", "//", "%", "<=>"]) {
     assertScope(operators, 1, operator, "keyword.operator.sputnik");
   }
-  assertScope(operators, 2, "=~", "keyword.operator.sputnik");
-  assertScope(operators, 2, "!~", "keyword.operator.sputnik");
+  assertScope(operators, 2, "~=", "keyword.operator.sputnik");
   assertScope(operators, 3, "<<", "keyword.operator.sputnik");
   assertScope(operators, 3, ">>", "keyword.operator.sputnik");
   assertScope(operators, 4, "..", "keyword.operator.range.sputnik");

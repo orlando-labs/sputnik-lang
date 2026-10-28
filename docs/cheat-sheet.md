@@ -266,6 +266,8 @@ Mixing inline `if … then … else …` with a sequence requires parentheses
 `sputnik lint file.s` warns about mixed conditionals (`L1001`), nested sequences
 and three or more actions on one line (`L1002`). `obj.then()` remains a method call.
 
+`r"\d+"` and `r'\d+'` create Unicode regexps. Append flags directly: `r"^[a-z]+$"mi` (`i`, `m`, `s`, `x`, `U`); inline `(?mi)` also works. `text ~= pattern` and `pattern ~= text` are the same search predicate; negate with `not`. Use `pattern.match(text)` for captures. In `r"#{text}"`, Str holes are escaped literal data. A completed condition publishes its result to `$_`; `and`/`or` do not publish intermediate operands.
+
 ## 8. Everyday collection recipes
 
 | Pattern | Idiom |

@@ -695,6 +695,8 @@ void shift_token_spans_from_interpolation(std::vector<lexer::Token> *tokens,
   for (lexer::Token &token : *tokens) {
     shift_position_from_interpolation(&token.span.start, base);
     shift_position_from_interpolation(&token.span.end, base);
+    for (auto &position : token.source_positions)
+      shift_position_from_interpolation(&position, base);
   }
 }
 
@@ -708,10 +710,9 @@ bool is_operator_method_name(lexer::TokenKind kind) {
          kind == lexer::TokenKind::Pipe || kind == lexer::TokenKind::Caret ||
          kind == lexer::TokenKind::LessLess ||
          kind == lexer::TokenKind::GreaterGreater ||
-         kind == lexer::TokenKind::EqualTilde ||
+         kind == lexer::TokenKind::TildeEqual ||
          kind == lexer::TokenKind::EqualEqual ||
          kind == lexer::TokenKind::EqualEqualEqual ||
-         kind == lexer::TokenKind::BangTilde ||
          kind == lexer::TokenKind::BangEqual ||
          kind == lexer::TokenKind::Less ||
          kind == lexer::TokenKind::LessEqual ||
@@ -4537,6 +4538,8 @@ std::unique_ptr<ast::Expr> Parser::parse_string_parts(
     } else if (token.lexeme[i] == '\n') lines.push_back(i + 1);
   }
   const auto offset_position_in_token = [&](const lexer::Token &, std::size_t offset) {
+    if (!token.source_positions.empty())
+      return token.source_positions[std::min(offset, token.source_positions.size() - 1)];
     const auto line = std::upper_bound(lines.begin(), lines.end(), offset) - lines.begin() - 1;
     auto position = token.span.start;
     position.offset += offset;
@@ -4711,6 +4714,11 @@ Parser::parse_postfix(std::unique_ptr<ast::Expr> expr, StopMode stop_mode) {
       current().span.start.offset == expr->span.end.offset) {
     const auto token = advance();
     auto literal = parse_string_literal_expr(token);
+    if (check(lexer::TokenKind::Identifier) && current().span.start.offset == token.span.end.offset) {
+      const auto suffix = advance();
+      literal->string_field("tag_suffix", suffix.lexeme);
+      literal->span.end = suffix.span.end;
+    }
     std::vector<std::unique_ptr<ast::Expr>> args;
     args.push_back(std::move(literal));
     auto tail = ast::make_expr("AstTailCall", token.span);
@@ -5132,7 +5140,7 @@ Parser::parse_call_arg(StopMode stop_mode, lexer::TokenKind closing_kind) {
     arg->node_field("expr", std::move(value));
     return arg;
   }
-  if (check(lexer::TokenKind::Identifier) &&
+  if ((check(lexer::TokenKind::Identifier) || check(lexer::TokenKind::KeywordFrom)) &&
       peek().kind == lexer::TokenKind::Colon) {
     const lexer::Token name = advance();
     advance();
@@ -5660,14 +5668,11 @@ bool Parser::infix_info(lexer::TokenKind kind, InfixInfo *info) const {
   case lexer::TokenKind::EqualEqual:
     *info = InfixInfo{4, Assoc::Left, "=="};
     return true;
-  case lexer::TokenKind::EqualTilde:
-    *info = InfixInfo{4, Assoc::Left, "=~"};
+  case lexer::TokenKind::TildeEqual:
+    *info = InfixInfo{4, Assoc::Left, "~="};
     return true;
   case lexer::TokenKind::EqualEqualEqual:
     *info = InfixInfo{4, Assoc::Left, "==="};
-    return true;
-  case lexer::TokenKind::BangTilde:
-    *info = InfixInfo{4, Assoc::Left, "!~"};
     return true;
   case lexer::TokenKind::BangEqual:
     *info = InfixInfo{4, Assoc::Left, "!="};

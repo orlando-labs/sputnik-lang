@@ -109,12 +109,12 @@ def main():
   else:
     check($_ == null, "safe navigation publishes the final source condition")
 
-  if "port=8080" =~ Regexp.compile("(\\w+)=(\\d+)"):
+  if Regexp.compile("(\\w+)=(\\d+)").match("port=8080"):
     check($_[1] == "port" and $_[2] == "8080", "regexp Match in condition")
   else:
     raise ValueError("regexp did not match")
 
-  if "port" !~ Regexp.compile("\\d+"):
+  if not ("port" ~= Regexp.compile("\\d+")):
     check($_ == true, "regexp non-match boolean in condition")
 
   print("PASS last result conditions")

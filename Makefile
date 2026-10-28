@@ -994,6 +994,12 @@ spec-sync-check:
 	python3 tests/spec_sync_test.py
 	python3 tools/spec_sync.py check
 
+.PHONY: test-regexp-unicode
+test: test-regexp-unicode
+test-regexp-unicode: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_regexp_tests
+	$(BUILD_DIR)/stdlib_regexp_tests
+	python3 tests/regexp_unicode_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/regexp-unicode
+
 .PHONY: test-last-result-conditions
 test: test-last-result-conditions
 test-last-result-conditions: $(BUILD_DIR)/sputnik

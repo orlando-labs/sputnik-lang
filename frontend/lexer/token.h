@@ -61,10 +61,9 @@ enum class TokenKind {
   SlashSlash,
   Percent,
   Equal,
-  EqualTilde,
+  TildeEqual,
   EqualEqual,
   EqualEqualEqual,
-  BangTilde,
   BangEqual,
   Less,
   LessLess,
@@ -123,6 +122,8 @@ struct Token {
   TokenKind kind;
   std::string lexeme;
   Span span;
+  // Normalized text-block bytes map back to the original source boundaries.
+  std::vector<Position> source_positions{};
 };
 
 struct Diagnostic {

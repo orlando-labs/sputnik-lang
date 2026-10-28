@@ -283,3 +283,13 @@ errors:
     parent: ProcessError
   - name: NotImplementedError
     parent: Exception
+  - name: RegexpError
+    parent: Exception
+  - name: RegexpCompileError
+    parent: RegexpError
+  - name: RegexpGroupError
+    parent: RegexpError
+  - name: RegexpMatchLimitError
+    parent: RegexpError
+  - name: RegexpReplacementError
+    parent: RegexpError

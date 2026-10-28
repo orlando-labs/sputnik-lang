@@ -7,7 +7,7 @@ description.ru: Регулярные выражения, поиск совпад
 description.en: Regular expressions, match searches and escaping literal text.
 note.ru: Regexp доступен из prelude. Неверный шаблон поднимает RegexpCompileError.
 note.en: Regexp is available from the prelude. Invalid patterns raise RegexpCompileError.
-drift_ignore: __call__ captures count end find finish full_match group inspect length new pattern r size source start text to_str
+drift_ignore: __compile_template __call__ captures count end find finish full_match group inspect length new pattern r size source start text to_str
 
 method: Regexp.compile(pattern, flags: "")
 ru: Компилирует строковый шаблон.
@@ -29,4 +29,90 @@ ru: Экранирует метасимволы для буквального п
 en: Escapes metacharacters for a literal search.
 example:
 Regexp.escape("a+b[c]")
+.end
+
+method: r"pattern"mi
+ru: Unicode-regexp с суффиксом модификаторов i, m, s, x, U; inline (?mi) также работает.
+en: Unicode regexp with modifier suffix i, m, s, x, U; inline (?mi) also works.
+example:
+r"^[a-z]+$"mi.match?("0\nABC")
+.end
+
+method: text ~= pattern
+ru: Симметричный предикат поиска. Для захватов используется pattern.match(text).
+en: Symmetric search predicate. Use pattern.match(text) for captures.
+example:
+"id=42" ~= r"\d+"
+.end
+
+method: Regexp.fragment(source)
+ru: Явно разрешает синтаксис в интерполяции. Обычные Str-вставки экранируются как данные.
+en: Explicit syntax interpolation. Ordinary Str holes are escaped as literal data.
+example:
+name = "a+b #"
+r"\A#{name}\z"x.full_match?(name)
+.end
+
+method: pattern.scan(text)
+ru: Возвращает непересекающиеся Match с корректным продвижением после пустого совпадения.
+en: Returns non-overlapping Match values with correct progress after empty matches.
+example:
+r"(?:|a)".scan("a").length
+.end
+
+method: pattern.replace(text, replacement, count: :all)
+ru: Заменяет совпадения; $0, $1 и ${name} ссылаются на захваты.
+en: Replaces matches; $0, $1 and ${name} reference captures.
+example:
+r"(?<key>\w+)=(\d+)".replace("port=8080", "${key}:$2")
+.end
+
+method: pattern.split(text, limit: null, keep_empty: false, include_captures: false)
+ru: Разделяет строку, сохраняя внутренние пустые поля. Захваты разделителя добавляются по запросу.
+en: Splits text, preserving internal empty fields. Separator captures can be included.
+example:
+r",".split("a,,b")
+.end
+
+method: Regexp.try_compile(source)
+ru: Возвращает Result с Pattern или RegexpCompileError.
+en: Returns a Result containing a Pattern or RegexpCompileError.
+example:
+Regexp.try_compile("[").err?
+.end
+
+method: Regexp.valid?(source)
+ru: Возвращает false для синтаксически неверного regexp, сохраняя ошибки параметров.
+en: Returns false for invalid regexp syntax; option errors still propagate.
+example:
+Regexp.valid?("[")
+.end
+
+method: pattern.each_match(text) |match|: ...
+ru: Передаёт совпадения в блок и возвращает их количество.
+en: Streams matches to the block and returns the number delivered.
+example:
+count = r"\d".each_match("1я2") |match|: match[0]
+count
+.end
+
+method: pattern.replace_first(text, replacement)
+ru: Заменяет только первое совпадение.
+en: Replaces only the first match.
+example:
+r"x".replace_first("xx", "y")
+.end
+
+method: Regexp.version
+ru: Метаданные PCRE2: движок, версия, включение JIT.
+en: PCRE2 metadata: engine, version and JIT status.
+example:
+Regexp.version["engine"]
+.end
+
+method: Regexp.default_match_limit
+ru: Начальный лимит работы движка: 1000000. Не является общим deadline операции.
+en: Default engine match limit: 1000000. This is not an operation-wide deadline.
+example:
+Regexp.default_match_limit
 .end

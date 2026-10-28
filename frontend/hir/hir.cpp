@@ -1979,7 +1979,9 @@ private:
   std::unique_ptr<Node> lower_expr(const ast::Expr &expr) {
     if (expr.kind == "AstQualifiedRef") {
       auto value = make_node("HLoadConst", expr.span);
-      value->string_field("path", string_value(expr, "module") + "." + string_value(expr, "name"));
+      const auto module = string_value(expr, "module");
+      value->string_field("path", module.empty() ? string_value(expr, "name")
+                                                : module + "." + string_value(expr, "name"));
       return value;
     }
     if (expr.kind == "AstThen") {

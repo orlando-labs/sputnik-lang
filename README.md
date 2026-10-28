@@ -9,6 +9,9 @@ Current baseline:
 - supported host targets for now: Linux and macOS;
 - OpenSSL 1.1.1 or 3.x development headers/libraries are required for HTTP TLS;
   `pkg-config` locates them, or set `OPENSSL_PREFIX=/path/to/openssl` (macOS: `brew install openssl@3 pkg-config`);
+- PCRE2 10.40+ development headers/libraries are required for Unicode regular
+  expressions (`brew install pcre2` or `apt install libpcre2-dev`); `pkg-config`
+  locates them, or set `PCRE2_INCLUDE_DIR` and `PCRE2_LIB_DIR`;
 - LibYAML development headers/libraries are required for notebook YAML config
   codecs (`brew install libyaml` or `apt install libyaml-dev`); `YAML_PREFIX`
   overrides discovery. TOML parsing uses the vendored MIT-licensed toml++ header;

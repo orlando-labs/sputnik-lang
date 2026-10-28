@@ -25732,6 +25732,14 @@ private:
     if (!ensure_lifecycle_access(frame, receiver)) {
       return SendStatus::Faulted;
     }
+    if (selector == "~=" &&
+        (args.size() != 1U ||
+         !((receiver.is_string() && args[0].is_regexp_pattern()) ||
+           (receiver.is_regexp_pattern() && args[0].is_string())))) {
+      raise_runtime_error(frame, "TypeError",
+                          "match operator expects one Str and one Regexp.Pattern");
+      return SendStatus::Faulted;
+    }
     if (selector == "for_each" || selector == "find" ||
         selector == "find_index" || selector == "find_with_index") {
       const auto status = apply_effect_iteration_or_search(
@@ -26437,7 +26445,7 @@ private:
           return true;
         };
 
-        if (selector == "=~" || selector == "!~") {
+        if (selector == "~=") {
           NativeStdlibCall call{
               *this,    &frame, receiver, RuntimeNativeTypeKind::Regexp,
               selector, args,   block,    kw_args,

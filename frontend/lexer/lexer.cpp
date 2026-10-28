@@ -215,12 +215,15 @@ LexResult Lexer::lex() {
       advance();
       emit(TokenKind::Percent, start, "%");
       break;
+    case '~':
+      advance();
+      if (!at_end() && current() == '=') {
+        advance(); emit(TokenKind::TildeEqual, start, "~=");
+      } else error(start, "expected '=' after '~'");
+      break;
     case '=':
       advance();
-      if (!at_end() && current() == '~') {
-        advance();
-        emit(TokenKind::EqualTilde, start, "=~");
-      } else if (!at_end() && current() == '=' && peek() == '=') {
+      if (!at_end() && current() == '=' && peek() == '=') {
         advance();
         advance();
         emit(TokenKind::EqualEqualEqual, start, "===");
@@ -233,10 +236,7 @@ LexResult Lexer::lex() {
       break;
     case '!':
       advance();
-      if (!at_end() && current() == '~') {
-        advance();
-        emit(TokenKind::BangTilde, start, "!~");
-      } else if (!at_end() && current() == '=') {
+      if (!at_end() && current() == '=') {
         advance();
         emit(TokenKind::BangEqual, start, "!=");
       } else {
@@ -296,10 +296,10 @@ LexResult Lexer::lex() {
             source_.substr(start.offset, position().offset - start.offset);
         const bool has_index = text.size() > 3;
         const bool valid_index = !has_index || text[3] != '0';
-        // '!=' and '!~' are operators, not identifier suffixes.
+        // '!=' is an operator, not an identifier suffix.
         const bool invalid_suffix =
             (current() == '?' && peek() != '=') ||
-            (current() == '!' && peek() != '=' && peek() != '~');
+            (current() == '!' && peek() != '=');
         const bool valid_boundary =
             at_end() || (!is_identifier_part_at(index_) && !invalid_suffix);
         if (valid_index && valid_boundary) {
@@ -625,7 +625,7 @@ void Lexer::lex_identifier_or_keyword() {
   const std::string text =
       source_.substr(start.offset, position().offset - start.offset);
   TokenKind keyword = TokenKind::Identifier;
-  const bool raw_regexp_tag = text == "r" && !at_end() &&
+  const bool raw_regexp_tag = !at_end() &&
                              (current() == '"' || current() == '\'');
   if (is_keyword_text(text, &keyword)) {
     emit(keyword, start, text);
@@ -798,7 +798,7 @@ void Lexer::lex_string(char quote, bool raw) {
       }
       continue;
     }
-    if (!raw && (quote == '"' || tagged) && current() == '#' && peek() == '{') {
+    if ((quote == '"' || tagged) && current() == '#' && peek() == '{') {
       const Position interpolation_start = position();
       advance();
       advance();
@@ -865,9 +865,12 @@ void Lexer::lex_text_block(bool raw) {
   // (including any newlines inside them) so dedent and the closer scan only
   // see line starts outside interpolation.
   std::vector<std::string> lines;
+  std::vector<std::vector<std::size_t>> line_offsets;
+  std::vector<std::size_t> newline_offsets;
   std::size_t closer_indent = 0;
   bool closed = false;
   while (!at_end()) {
+    const std::size_t line_start = index_;
     std::size_t indent = 0;
     while (!at_end() && current() == ' ') {
       ++indent;
@@ -888,8 +891,14 @@ void Lexer::lex_text_block(bool raw) {
       break;
     }
     std::string line(indent, ' ');
+    std::vector<std::size_t> offsets;
+    for (std::size_t i = 0; i < indent; ++i) offsets.push_back(line_start + i);
+    const auto append_source = [&](std::size_t from) {
+      line.append(source_, from, index_ - from);
+      for (std::size_t i = from; i < index_; ++i) offsets.push_back(i);
+    };
     while (!at_end() && !at_line_break()) {
-      if (!raw && current() == '#' && peek() == '{') {
+      if (current() == '#' && peek() == '{') {
         const std::size_t from = index_;
         const Position interpolation_start = position();
         advance();
@@ -897,11 +906,12 @@ void Lexer::lex_text_block(bool raw) {
         if (!consume_interpolation_in_string(interpolation_start)) {
           break;
         }
-        line.append(source_, from, index_ - from);
+        append_source(from);
         continue;
       }
       if (current() == '\\') {
-        line.push_back(advance());
+        const std::size_t from = index_;
+        advance();
         if (!at_end() && !at_line_break()) {
           const char escaped = current();
           if (!raw && escaped != 'n' && escaped != 'r' && escaped != 't' &&
@@ -910,13 +920,18 @@ void Lexer::lex_text_block(bool raw) {
             error_code(position(), "AMB_STRING_BAD_ESCAPE",
                        "invalid escape sequence in text block");
           }
-          line.push_back(advance());
+          advance();
         }
+        append_source(from);
         continue;
       }
-      line.push_back(advance());
+      const std::size_t from = index_;
+      advance();
+      append_source(from);
     }
     lines.push_back(std::move(line));
+    line_offsets.push_back(std::move(offsets));
+    newline_offsets.push_back(index_);
     if (!at_end()) {
       advance_line_break();
     }
@@ -926,12 +941,17 @@ void Lexer::lex_text_block(bool raw) {
   }
 
   std::string content;
-  for (std::string &line : lines) {
+  std::vector<std::size_t> content_offsets;
+  for (std::size_t n = 0; n < lines.size(); ++n) {
+    auto &line = lines[n];
+    auto &offsets = line_offsets[n];
     while (!line.empty() && (line.back() == ' ' || line.back() == '\t')) {
       line.pop_back();
+      offsets.pop_back();
     }
     if (line.empty()) {
       content.push_back('\n');
+      content_offsets.push_back(newline_offsets[n]);
       continue;
     }
     std::size_t leading = 0;
@@ -942,7 +962,9 @@ void Lexer::lex_text_block(bool raw) {
       error_code(start, "AMB_TEXTBLOCK_UNDERINDENT",
                  "text block line is indented less than the closing `\"\"\"`");
     }
-    line.erase(0, std::min(leading, closer_indent));
+    const auto removed = std::min(leading, closer_indent);
+    line.erase(0, removed);
+    offsets.erase(offsets.begin(), offsets.begin() + removed);
     // A trailing run of backslashes with odd length ends in the line
     // continuation marker: drop it and suppress this line's newline.
     std::size_t backslashes = 0;
@@ -953,14 +975,36 @@ void Lexer::lex_text_block(bool raw) {
     const bool continuation = (backslashes % 2U) == 1U;
     if (continuation) {
       line.pop_back();
+      offsets.pop_back();
     }
     content += line;
+    content_offsets.insert(content_offsets.end(), offsets.begin(), offsets.end());
     if (!continuation) {
       content.push_back('\n');
+      content_offsets.push_back(newline_offsets[n]);
     }
   }
 
   emit(TokenKind::String, start, "\"\"\"" + content + "\"\"\"");
+  std::vector<Position> original_positions;
+  Position original = start;
+  for (std::size_t i = start.offset; i < index_; ++i) {
+    original_positions.push_back(original);
+    ++original.offset;
+    if (source_[i] == '\r' || (source_[i] == '\n' && (i == 0 || source_[i - 1] != '\r'))) {
+      ++original.line;
+      original.col = 1;
+    } else if (source_[i] != '\n' && (static_cast<unsigned char>(source_[i]) & 0xc0) != 0x80) {
+      ++original.col;
+    }
+  }
+  original_positions.push_back(original);
+  auto &positions = result_.tokens.back().source_positions;
+  for (std::size_t i = 0; i < 3; ++i) positions.push_back(original_positions[i]);
+  for (auto offset : content_offsets) positions.push_back(original_positions[offset - start.offset]);
+  const auto content_end = content_offsets.empty() ? index_ - 3 : content_offsets.back() + 1;
+  positions.push_back(original_positions[content_end - start.offset]);
+  for (std::size_t i = index_ - 2; i <= index_; ++i) positions.push_back(original_positions[i - start.offset]);
 }
 
 bool Lexer::consume_interpolation_in_string(Position interpolation_start) {

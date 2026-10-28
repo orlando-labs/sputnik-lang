@@ -16,9 +16,9 @@ def main():
     score = score + 1
   if Regexp === digits and Regexp === m and digits == Regexp.new("\\d+"):
     score = score + 1
-  if (digits =~ "abc123")[0] == "123" and ("abc123" =~ digits)[0] == "123":
+  if (digits ~= "abc123") == true and ("abc123" ~= digits) == true:
     score = score + 1
-  if ("abc" !~ digits) and digits.match?("x9") and digits.full_match?("123"):
+  if not ("abc" ~= digits) and digits.match?("x9") and digits.full_match?("123"):
     score = score + 1
   if digits.source == "\\d+" and digits.to_str == "/\\d+/" and Regexp.escape("a+b[c]") == "a\\+b\\[c\\]":
     score = score + 1

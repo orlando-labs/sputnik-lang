@@ -7965,6 +7965,14 @@ Dotted access is member access regardless of receiver kind ("dot is a message; i
 - Consequence: `fn = Math.answer` binds the *result* of `answer`; extraction is spelled `fn = &Math.answer`.
 - Import-created local bindings (bare `c` after `import a.b.c`) are identifier reads and never invoke.
 
+Namespace lowering must preserve this distinction in both VM and native code:
+`import M as m; m.answer` invokes an exported zero-argument-callable function
+exactly once, whereas `from M import answer; answer` reads its callable value.
+`m.factory.()` first invokes `factory` and then calls the returned value;
+`&m.factory` invokes neither during reference construction. Exported classes
+remain class values on bare access. Required function parameters reject bare
+namespace access with `ArgumentError`, just as ordinary bare method access does.
+
 ### 6. Compatibility contract
 
 > The bare read form `x.name` is stable across `prop` ↔ nullary-`def` refactors. The explicit form `x.name()` is method-call syntax only and is stable only while `name` is method-shaped. Public APIs should document query members in bare form.

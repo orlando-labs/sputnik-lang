@@ -24510,7 +24510,15 @@ static std::string native_named_callable_type_name(
          "\"NoMethodError\", \"module export is unknown: \" + selector)};\n";
   out << "    if ((call_flags & "
       << sputnik::bytecode::kCallSiteFlagPropertyAccess
-      << "U) != 0U) return *member;\n";
+      << "U) != 0U) {\n";
+  out << "      if (member->tag != NativeValue::Tag::Closure) return *member;\n";
+  out << "      const auto method = native_method_descriptor(as_closure(*member)->code_id);\n";
+  out << "      if (!method) throw NativeBailout();\n";
+  out << "      if (!method->accepts_zero_arguments) "
+         "throw NativeRaised{native_named_error(\"ArgumentError\", "
+         "\"method `\" + selector + \"` is not bare-callable: it requires "
+         "arguments; use `\" + selector + \"(...)`\")};\n";
+  out << "    }\n";
   out << "    return sputnik_native_call_value(*member, args, kwargs, block);\n";
   out << "  }\n";
   out << "  const bool class_side = receiver.tag == NativeValue::Tag::Class;\n";
@@ -28146,8 +28154,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      // v9 includes resolved relative import identities in the expansion key.
-      "sputnik.build.cache.v9\n" + module.name + "\n" + module.path + "\n" +
+      // v10 preserves namespace bare reads instead of erasing them to values.
+      "sputnik.build.cache.v10\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
       stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material + prepared.import_material);
   const std::filesystem::path output_path =

@@ -507,7 +507,15 @@ void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
       if (alias_it != state.aliases.end()) {
         const Expr &member_tail = *tails->values.front();
         const std::string *member = find_string_field(member_tail, "name");
-        if (member != nullptr && !member->empty()) {
+        // Preserve bare member reads: unlike an imported identifier, M.f
+        // invokes an exported nullary function. Explicit calls (including the
+        // generated call inside &M.f) can reuse named-import linkage.
+        const std::string next_kind = tails->values.size() > 1U
+            ? tails->values[1]->kind : std::string{};
+        const bool explicit_call = next_kind == "AstTailCall" ||
+            next_kind == "AstTailBlockSuffix" ||
+            next_kind == "AstTailMultiblockSuffix";
+        if (member != nullptr && !member->empty() && explicit_call) {
           const std::string synthetic = "__sputnik_ns__" +
                                         sanitize_ns_ident(alias_it->first) +
                                         "__" + sanitize_ns_ident(*member);

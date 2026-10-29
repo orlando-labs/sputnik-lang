@@ -158,6 +158,12 @@ obj.member()                       # explicit method call; properties reject thi
 obj.member.()                      # read member, then call the resulting value
 callback.?.(42)                    # call only when callback is non-null
 
+import build_info as info
+info.version                       # namespace member: implicit nullary call
+from build_info import version
+version                            # imported identifier: function value
+version()                          # explicit call of that value
+
 "42".int                           # conversion property; also Int("42") / .to_int()
 value.cast(Int)                    # explicit conversion protocol
 value as Int                       # check existing type; NEVER convert

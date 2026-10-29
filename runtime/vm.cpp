@@ -31883,10 +31883,24 @@ private:
         raise_runtime_error(frame, "NoMethodError", "module export is unknown: " + path);
         return false;
       }
-      if (property_access) {
+      if (property_access && !member.is_closure()) {
         if (!write_reg(frame, dst, member)) return false;
         ++frame.pc;
         return true;
+      }
+      if (property_access) {
+        const auto *method = find_method_by_entry_code(member.as_closure()->code_id);
+        if (method == nullptr) {
+          set_fault(frame, "VMError", "module function signature is unknown: " + path);
+          return false;
+        }
+        if (!method_accepts_zero_arguments(frame, *method)) {
+          if (fault_.has_value()) return false;
+          raise_runtime_error(frame, "ArgumentError", "method `" + *selector +
+              "` is not bare-callable: it requires arguments; use `" +
+              *selector + "(...)`");
+          return false;
+        }
       }
       return invoke_callable_value(frame, member, args, kw_args, block, dst);
     }

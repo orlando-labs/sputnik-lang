@@ -1,6 +1,11 @@
 .DEFAULT_GOAL := all
 include mk/config.mk
 
+.PHONY: test-bare-namespace-calls
+test-bare-namespace-calls: $(BUILD_DIR)/sputnik
+	node tests/bare_namespace_calls_test.mjs $(BUILD_DIR)/sputnik --native
+test: test-bare-namespace-calls
+
 .PHONY: test-package-path
 test-package-path: $(BUILD_DIR)/sputnik $(BUILD_DIR)/build_tests $(BUILD_DIR)/package_store_tests
 	$(BUILD_DIR)/build_tests

@@ -188,6 +188,7 @@ FORMAT_FILES := \
 	runtime/module_loader.h \
 	runtime/native_bridge.cpp \
 	runtime/native_bridge.h \
+	runtime/membership_native.inc \
 	runtime/context.cpp \
 	runtime/context.h \
 	runtime/io.cpp \
@@ -1070,6 +1071,11 @@ test: test-native-byte-buffer
 test-native-bigint: $(BUILD_DIR)/sputnik
 	python3 tests/native_bigint_test.py $(BUILD_DIR)/sputnik
 test: test-native-bigint
+
+.PHONY: test-native-membership
+test-native-membership: $(BUILD_DIR)/sputnik
+	python3 tests/native_membership_test.py $(BUILD_DIR)/sputnik
+test: test-native-membership
 
 .PHONY: test-native-throw
 test-native-throw: $(BUILD_DIR)/sputnik

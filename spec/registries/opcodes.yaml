@@ -194,3 +194,5 @@ opcodes:
     byte: 0x4B
   - name: P_FAIL
     byte: 0x4C
+  - name: P_BEGIN
+    byte: 0x4F

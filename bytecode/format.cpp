@@ -1828,6 +1828,9 @@ bool decode_opcode(std::uint8_t raw, Opcode &opcode) {
   case 0x4C:
     opcode = Opcode::PFail;
     return true;
+  case 0x4F:
+    opcode = Opcode::PBegin;
+    return true;
   case 0x4D:
     opcode = Opcode::LoadNotebookSlot;
     return true;
@@ -4805,6 +4808,9 @@ InstructionFlow verify_instruction_flow(
     }
     break;
   }
+  case Opcode::PBegin:
+    operand_count_is(instruction, 0, errors);
+    break;
   case Opcode::PFail: {
     if (operand_count_is(instruction, 1, errors)) {
       if (instruction.operands[0].value != 0) {
@@ -6020,6 +6026,8 @@ std::string opcode_name(Opcode opcode) {
     return "P_COMMIT";
   case Opcode::PFail:
     return "P_FAIL";
+  case Opcode::PBegin:
+    return "P_BEGIN";
   case Opcode::LoadNotebookSlot:
     return "LOAD_NOTEBOOK_SLOT";
   case Opcode::StoreNotebookSlot:

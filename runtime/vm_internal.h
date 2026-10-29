@@ -418,6 +418,12 @@ struct Frame {
   FlatRegMap<PreparedSeqState> prepared_seq_regs;
   FlatRegMap<PreparedMapState> prepared_map_regs;
   FlatRegMap<Value> pending_pattern_bindings;
+  struct SuspendedPatternState {
+    FlatRegMap<PreparedSeqState> sequences;
+    FlatRegMap<PreparedMapState> maps;
+    FlatRegMap<Value> bindings;
+  };
+  std::vector<SuspendedPatternState> pattern_scopes;
 };
 
 // A collection loop owns one of these for the duration of repeated block

@@ -2,6 +2,7 @@
 #include "frontend/lexer/lexer.h"
 #include "frontend/parser/parser.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -1016,6 +1017,25 @@ void test_bare_nullary_diagnostics() {
          "an unexpanded parameterless block suffix remains a runtime call");
 }
 
+void test_membership_pattern_validation() {
+  expect(bind_any("def f(x):\n  case x:\n    when in: 1\n").ok() == false,
+         "membership needs a container expression");
+  expect_diagnostic_code(bind_any("def f(x):\n  case x:\n    when in: 1\n"), "E1012");
+  expect_diagnostic_code(bind_any(
+      "def f(x):\n  case x:\n    when (n, in [n]): n\n"), "E1011");
+  expect_diagnostic_code(bind_any(
+      "def f(x):\n  case x:\n    when n as in [n]: n\n"), "E1011");
+  expect_diagnostic_code(bind_any(
+      "def f(x):\n  case x:\n    when n as in [1] | in [2]: n\n"), "E1002");
+  const auto references = bind_any("def f(x):\n  case x:\n    when in missing_choices: 1\n");
+  expect(std::any_of(references.graph.references.begin(), references.graph.references.end(),
+      [](const auto &ref) { return ref.name == "missing_choices" && ref.ref_kind == "pattern_ref"; }),
+      "membership RHS records outer references");
+  expect(bind_any("def f(x, choices):\n  case x:\n"
+                  "    when in (choices | {1}): 1\n").ok(),
+         "parenthesized container expressions may contain pipe operators");
+}
+
 } // namespace
 
 int main() {
@@ -1046,6 +1066,7 @@ int main() {
   test_dynamic_pattern_same_pattern_reference_diagnostic();
   test_dynamic_pattern_outer_scope_reference_ok();
   test_invalid_pattern_context_diagnostics();
+  test_membership_pattern_validation();
   test_bind_call_shape_success();
   test_extract_call_shape_from_ast();
   test_bind_call_shape_from_ast_args();

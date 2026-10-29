@@ -3469,6 +3469,23 @@ private:
         append_value_root(roots, entry.value);
       }
     }
+    for (const auto &scope : frame.pattern_scopes) {
+      for (const auto &[reg, value] : scope.bindings) {
+        (void)reg;
+        append_value_root(roots, value);
+      }
+      for (const auto &[reg, sequence] : scope.sequences) {
+        (void)reg;
+        for (const auto &value : sequence.items) append_value_root(roots, value);
+      }
+      for (const auto &[reg, map] : scope.maps) {
+        (void)reg;
+        for (const auto &entry : map.entries) {
+          append_value_root(roots, entry.key);
+          append_value_root(roots, entry.value);
+        }
+      }
+    }
   }
 
   std::vector<Value> collect_gc_roots(Frame &fault_frame) {
@@ -3752,6 +3769,7 @@ private:
     case Opcode::RequireBlock:
     case Opcode::Safepoint:
     case Opcode::PCommit:
+    case Opcode::PBegin:
     case Opcode::PFail:
       return false;
     case Opcode::Move:
@@ -4116,6 +4134,7 @@ private:
     case Opcode::PHasKey:
     case Opcode::PTripleEq:
     case Opcode::PBind:
+    case Opcode::PBegin:
     case Opcode::PFail:
     case Opcode::TypeCheck:
       return false;
@@ -5560,6 +5579,7 @@ private:
     frame.prepared_seq_regs.clear();
     frame.prepared_map_regs.clear();
     frame.pending_pattern_bindings.clear();
+    frame.pattern_scopes.clear();
   }
 
   void recycle_frame(std::unique_ptr<Frame> frame) {
@@ -5610,6 +5630,7 @@ private:
     frame->prepared_seq_regs.clear();
     frame->prepared_map_regs.clear();
     frame->pending_pattern_bindings.clear();
+    frame->pattern_scopes.clear();
 
     std::vector<std::unique_ptr<Frame>> &bucket = frame_pool_[code_id];
     if (bucket.size() < kMaxPooledFramesPerCode) {
@@ -7272,6 +7293,15 @@ private:
     frame.prepared_seq_regs.clear();
     frame.prepared_map_regs.clear();
     frame.pending_pattern_bindings.clear();
+  }
+
+  void restore_pattern_scope(Frame &frame) {
+    if (frame.pattern_scopes.empty()) return;
+    auto saved = std::move(frame.pattern_scopes.back());
+    frame.pattern_scopes.pop_back();
+    frame.prepared_seq_regs = std::move(saved.sequences);
+    frame.prepared_map_regs = std::move(saved.maps);
+    frame.pending_pattern_bindings = std::move(saved.bindings);
   }
 
   bool has_active_pattern_state(const Frame &frame) const {
@@ -14446,6 +14476,7 @@ private:
       }
       clear_pattern_state(handler_target);
       handler_target.pending_pattern_bindings.clear();
+      handler_target.pattern_scopes.clear();
       handler_target.active_call_pc.reset();
       handler_target.pc = handler->handler_pc;
       return push_handler_frame_from_target(
@@ -14520,6 +14551,7 @@ private:
 
     clear_pattern_state(target);
     target.pending_pattern_bindings.clear();
+    target.pattern_scopes.clear();
     target.active_call_pc.reset();
     target.pc = handler->handler_pc;
     const std::uint32_t kind = handler_entry_kind(*handler);
@@ -14591,6 +14623,7 @@ private:
 
       clear_pattern_state(target);
       target.pending_pattern_bindings.clear();
+      target.pattern_scopes.clear();
       target.active_call_pc.reset();
       target.pc = handler->handler_pc;
 
@@ -14631,6 +14664,7 @@ private:
 
   bool is_pattern_opcode(Opcode opcode) const {
     switch (opcode) {
+    case Opcode::PBegin:
     case Opcode::PPrepSeq:
     case Opcode::PPrepMap:
     case Opcode::PCheckEq:
@@ -25724,6 +25758,53 @@ private:
     return SendStatus::Matched;
   }
 
+  SendStatus apply_membership_send(
+      Frame &frame, const Value &receiver, const std::string &selector,
+      const std::vector<Value> &args, const Value &block,
+      const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out) {
+    if (!kw_args.empty() || !block.is_null() ||
+        (selector == "in?" && args.size() != 1U)) {
+      raise_runtime_error(frame, "TypeError", selector == "in?"
+          ? "in? expects one container and no keywords or block"
+          : "one_of? accepts positional targets only");
+      return SendStatus::Faulted;
+    }
+    if (selector == "in?") {
+      bool handled = false;
+      if (!try_apply_protocol_send(frame, args[0], "contains?", {receiver}, out,
+                                   &handled)) {
+        return SendStatus::Faulted;
+      }
+      if (!handled || !out->is_bool()) {
+        raise_runtime_error(frame, "TypeError", !handled
+            ? "in? expects a container supporting contains?"
+            : "contains? must return Bool");
+        return SendStatus::Faulted;
+      }
+      return SendStatus::Matched;
+    }
+    for (const Value &target : args) {
+      if (!ensure_lifecycle_access(frame, target)) return SendStatus::Faulted;
+      Value equal = Value::null();
+      bool handled = false;
+      if (!try_apply_protocol_send(frame, receiver, "==", {target}, &equal,
+                                   &handled)) {
+        return SendStatus::Faulted;
+      }
+      if (!handled) equal = Value::boolean(value_equals(receiver, target));
+      if (!equal.is_bool()) {
+        raise_runtime_error(frame, "TypeError", "one_of? equality must return Bool");
+        return SendStatus::Faulted;
+      }
+      if (equal.as_bool()) {
+        *out = Value::boolean(true);
+        return SendStatus::Matched;
+      }
+    }
+    *out = Value::boolean(false);
+    return SendStatus::Matched;
+  }
+
   SendStatus try_apply_scalar_send(
       Frame &frame, const Value &receiver, const std::string &selector_text,
       const std::vector<Value> &args, const Value &block,
@@ -25731,6 +25812,10 @@ private:
     const SelectorKey selector(selector_text);
     if (!ensure_lifecycle_access(frame, receiver)) {
       return SendStatus::Faulted;
+    }
+    if (selector == "in?" || selector == "one_of?") {
+      return apply_membership_send(frame, receiver, selector_text, args, block,
+                                   kw_args, out);
     }
     if (selector == "~=" &&
         (args.size() != 1U ||
@@ -31743,7 +31828,7 @@ private:
       return false;
     }
     if (receiver.is_module_namespace() && *selector != "==" &&
-        *selector != "!=") {
+        *selector != "!=" && *selector != "in?" && *selector != "one_of?") {
       if (property_assignment) {
         raise_runtime_error(frame, "ReadOnlyPropertyError", "module exports are read-only");
         return false;
@@ -32422,6 +32507,17 @@ private:
       return false;
     }
     if (method == nullptr) {
+      if ((selector_key == "in?" || selector_key == "one_of?") &&
+          !property_assignment) {
+        Value result = Value::null();
+        if (apply_membership_send(frame, receiver, *selector, args, block,
+                                   kw_args, &result) != SendStatus::Matched) {
+          return false;
+        }
+        if (!write_reg(frame, dst, std::move(result))) return false;
+        ++frame.pc;
+        return true;
+      }
       // Any user container exposing each acquires the effect-only adapter.
       // Execute its ordinary method/block protocol, discarding only its result.
       if (selector_key == "for_each" && !property_access &&
@@ -32732,7 +32828,8 @@ private:
         frame.pc < frame.quick_code->instructions.size()) {
       quick = &frame.quick_code->instructions[frame.pc];
     }
-    if (!is_pattern_opcode(insn.opcode) && has_active_pattern_state(frame)) {
+    if (!is_pattern_opcode(insn.opcode) && frame.pattern_scopes.empty() &&
+        has_active_pattern_state(frame)) {
       if (!finalize_pattern_success(frame, false)) {
         return;
       }
@@ -34772,6 +34869,14 @@ private:
       ++frame.pc;
       return;
     }
+    case Opcode::PBegin: {
+      frame.pattern_scopes.push_back({std::move(frame.prepared_seq_regs),
+                                     std::move(frame.prepared_map_regs),
+                                     std::move(frame.pending_pattern_bindings)});
+      clear_pattern_state(frame);
+      ++frame.pc;
+      return;
+    }
     case Opcode::PCommit: {
       std::uint32_t base_slot = 0;
       std::uint32_t count = 0;
@@ -34797,6 +34902,7 @@ private:
       }
       frame.pending_pattern_bindings.clear();
       clear_pattern_state(frame);
+      restore_pattern_scope(frame);
       ++frame.pc;
       return;
     }
@@ -34806,6 +34912,7 @@ private:
         return;
       }
       clear_pattern_state(frame);
+      restore_pattern_scope(frame);
       if (mode == kPatternFailModeSoft) {
         ++frame.pc;
         return;

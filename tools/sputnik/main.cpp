@@ -1825,7 +1825,8 @@ bool native_cpp_clause_dispatch_supported(
     for (const sputnik::bytecode::Instruction &instruction :
          pattern->instructions) {
       if (instruction.opcode == sputnik::bytecode::Opcode::PBind ||
-          instruction.opcode == sputnik::bytecode::Opcode::PCommit) {
+          (instruction.opcode == sputnik::bytecode::Opcode::PCommit &&
+           instruction.operands[1].value != 0)) {
         return false;
       }
     }
@@ -1855,7 +1856,7 @@ bool native_cpp_package_member_selector(const sputnik::bytecode::BcModule &modul
 
 bool native_cpp_user_method_selector(const sputnik::bytecode::BcModule &module,
                                      const std::string &selector) {
-  if (selector == "instance_fields") {
+  if (selector == "instance_fields" || selector == "in?" || selector == "one_of?") {
     return true;
   }
   for (const sputnik::bytecode::BcMethod &method : module.methods) {
@@ -2344,7 +2345,10 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
     case Opcode::PPrepSeq:
     case Opcode::PCheckLenEq:
     case Opcode::PGetIndex:
+    case Opcode::PHasKey:
+    case Opcode::PGetKey:
     case Opcode::PCommit:
+    case Opcode::PBegin:
     case Opcode::PTripleEq:
     case Opcode::TripleEq:
     case Opcode::Raise:
@@ -2370,6 +2374,12 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       }
       break;
     }
+    case Opcode::PPrepMap:
+      if (instruction.operands.size() != 5U || instruction.operands[3].value != 0) {
+        *reason = "full/rest map pattern still uses VM fallback";
+        return false;
+      }
+      break;
     case Opcode::PCheckEq: {
       std::uint32_t constant = 0;
       if (!operand_u32_value(instruction, 1, &constant) ||
@@ -4100,10 +4110,14 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
       }
       enqueue(pc + 1U, next);
     } else if (instruction.opcode == Opcode::PTripleEq ||
-               instruction.opcode == Opcode::PCheckEq) {
+               instruction.opcode == Opcode::PCheckEq ||
+               instruction.opcode == Opcode::PHasKey) {
       if (operand_u32_value(instruction, 2, &target)) {
         enqueue(target, next);
       }
+      enqueue(pc + 1U, next);
+    } else if (instruction.opcode == Opcode::PPrepMap) {
+      if (operand_u32_value(instruction, 4, &target)) enqueue(target, next);
       enqueue(pc + 1U, next);
     } else if (instruction.opcode == Opcode::PFail) {
       if (!instruction.operands.empty() &&
@@ -5113,6 +5127,7 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
   if (uses_pattern_bindings) {
     out << "  std::unordered_map<std::uint32_t, NativeValue> "
            "pending_pattern_bindings;\n";
+    out << "  std::vector<decltype(pending_pattern_bindings)> pattern_binding_scopes;\n";
   }
   if (needs_outer_try) {
     out << "  try {\n";
@@ -6156,6 +6171,14 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         send_spread_site_flags =
             code.call_site_table[send_spread_site_id].flags;
       }
+      if (module.symbols[selector_id] == "in?" ||
+          module.symbols[selector_id] == "one_of?") {
+        write_reg_stmt(dst, "native_membership_send(" + read_reg_expr(receiver) +
+            ", native_symbol_text(" + std::to_string(selector_id) +
+            "U), spread_positional, spread_keywords, " + block_expr + ", true)");
+        emit_next(pc, next_scalar_state);
+        break;
+      }
       out << "  if (native_value_is_user_receiver(" << read_reg_expr(receiver)
           << ") || " << read_reg_expr(receiver)
           << ".tag == NativeValue::Tag::PackageModule) {\n";
@@ -6368,6 +6391,15 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         args_expr << "}";
         return args_expr.str();
       };
+      if (selector == "in?" || selector == "one_of?") {
+        write_reg_stmt(dst, "native_membership_send(" + read_reg_expr(recv) +
+            ", " + selector_expr + ", " + pos_args_expr(0U) + ", " +
+            call_kw_args_expr() + ", " +
+            (has_block ? read_reg_expr(static_cast<std::uint32_t>(block_reg))
+                       : "NativeValue::nullv()") + ", true)");
+        emit_next(pc, next_scalar_state);
+        break;
+      }
       if (native_cpp_has_package_namespaces(module) && selector != "==" &&
           selector != "!=" && selector != "===") {
         out << "  if (" << read_reg_expr(recv)
@@ -7746,10 +7778,18 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       emit_next(pc, next_scalar_state);
       break;
     }
+    case Opcode::PBegin:
+      if (uses_pattern_bindings) {
+        out << "  pattern_binding_scopes.push_back(std::move(pending_pattern_bindings));\n";
+        out << "  pending_pattern_bindings.clear();\n";
+      }
+      emit_next(pc, next_scalar_state);
+      break;
     case Opcode::PFail:
       if (instruction.operands[0].value == 0) {
         if (uses_pattern_bindings) {
           out << "  pending_pattern_bindings.clear();\n";
+          out << "  if (!pattern_binding_scopes.empty()) { pending_pattern_bindings = std::move(pattern_binding_scopes.back()); pattern_binding_scopes.pop_back(); }\n";
         }
         emit_next(pc, next_scalar_state);
       } else {
@@ -7886,6 +7926,44 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       emit_next(pc, next_scalar_state);
       break;
     }
+    case Opcode::PPrepMap: {
+      const auto dst = static_cast<std::uint32_t>(instruction.operands[0].value);
+      const auto source = static_cast<std::uint32_t>(instruction.operands[1].value);
+      const auto keys = static_cast<std::uint32_t>(instruction.operands[2].value);
+      const auto fail = static_cast<std::uint32_t>(instruction.operands[4].value);
+      std::string key_args = "{";
+      for (const auto key : module.const_pool[keys].items) {
+        if (key_args.size() > 1U) key_args += ", ";
+        key_args += "NativeValue::symbol_ref(" + std::to_string(key) + "U)";
+      }
+      key_args += "}";
+      write_reg_stmt(dst, "native_prepare_membership_map(" + read_reg_expr(source) + ", " + key_args + ")");
+      out << "  if (" << read_reg_expr(dst) << ".tag == NativeValue::Tag::Null) {\n";
+      emit_goto_pc(fail, next_scalar_state);
+      out << "  }\n";
+      emit_next(pc, next_scalar_state);
+      break;
+    }
+    case Opcode::PHasKey: {
+      const auto map = static_cast<std::uint32_t>(instruction.operands[0].value);
+      const auto key = static_cast<std::uint32_t>(instruction.operands[1].value);
+      const auto fail = static_cast<std::uint32_t>(instruction.operands[2].value);
+      out << "  if (!truthy(native_map_contains_key(" << read_reg_expr(map)
+          << ", NativeValue::symbol_ref(" << key << "U)))) {\n";
+      emit_goto_pc(fail, next_scalar_state);
+      out << "  }\n";
+      emit_next(pc, next_scalar_state);
+      break;
+    }
+    case Opcode::PGetKey: {
+      const auto dst = static_cast<std::uint32_t>(instruction.operands[0].value);
+      const auto map = static_cast<std::uint32_t>(instruction.operands[1].value);
+      const auto key = static_cast<std::uint32_t>(instruction.operands[2].value);
+      write_reg_stmt(dst, "native_map_lookup(" + read_reg_expr(map) +
+          ", NativeValue::symbol_ref(" + std::to_string(key) + "U), false)");
+      emit_next(pc, next_scalar_state);
+      break;
+    }
     case Opcode::PCommit: {
       std::uint32_t base_slot = 0;
       std::uint32_t count = 0;
@@ -7904,6 +7982,7 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                                  std::to_string(index) + "->second");
       }
       out << "  pending_pattern_bindings.clear();\n";
+      out << "  if (!pattern_binding_scopes.empty()) { pending_pattern_bindings = std::move(pattern_binding_scopes.back()); pattern_binding_scopes.pop_back(); }\n";
       emit_next(pc, next_scalar_state);
       break;
     }
@@ -11482,6 +11561,12 @@ static void native_collect_finished_cycles() {
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, "
          "const NativeKeywordArgsView &kwargs, NativeValue block);\n\n";
+  out << "static NativeValue native_membership_send("
+         "const NativeValue &receiver, const std::string &selector, "
+         "const NativeArgsView &args, const NativeKeywordArgsView &kwargs, "
+         "NativeValue block, bool dispatch_override);\n\n";
+  out << "static NativeValue native_prepare_membership_map("
+         "const NativeValue &source, const NativeArgsView &keys);\n\n";
   out << "static NativeValue native_atomic_send("
          "const NativeValue &receiver, const std::string &selector, "
          "const NativeArgsView &args, NativeValue block);\n\n";
@@ -14417,6 +14502,22 @@ static NativeValue native_contains(const NativeValue &value,
                                    const NativeValue &needle) {
   if (native_value_is_string(value)) {
     return native_string_contains(value, needle);
+  }
+  if (value.tag == NativeValue::Tag::Range) {
+    if (needle.tag != NativeValue::Tag::Integer) {
+      throw NativeRaised{native_named_error("TypeError", "Range#contains? expects Integer value")};
+    }
+    const auto &range = as_range(value);
+    const auto n = needle.scalar_value;
+    const bool ascending = range.step > 0;
+    if (range.has_start && (ascending ? n < range.start : n > range.start))
+      return NativeValue::boolean(false);
+    if (range.has_finish && (ascending
+        ? (range.inclusive_end ? n > range.finish : n >= range.finish)
+        : (range.inclusive_end ? n < range.finish : n <= range.finish)))
+      return NativeValue::boolean(false);
+    return NativeValue::boolean(!range.has_start ||
+        (static_cast<__int128>(n) - range.start) % range.step == 0);
   }
   if (native_is_sequence(value)) {
     const std::vector<NativeValue> items = native_sequence_items_copy(value);
@@ -24483,6 +24584,9 @@ static std::string native_named_callable_type_name(
          "\"TypeError\", \"present?/absent? accept no arguments or block\")};\n";
   out << "      return NativeValue::boolean(selector == \"present?\");\n";
   out << "    }\n";
+  out << "    if ((selector == \"in?\" || selector == \"one_of?\") && "
+         "(call_flags & " << sputnik::bytecode::kCallSiteFlagPropertyAssignment <<
+         "U) == 0U) return native_membership_send(receiver, selector, args, kwargs, block, false);\n";
   out << "    if (selector == \"==\" || selector == \"!=\") {\n";
   out << "      if (args.size() != 1U || !kwargs.empty() || "
          "block.tag != NativeValue::Tag::Null) "
@@ -24555,6 +24659,7 @@ static std::string native_named_callable_type_name(
   out << "  return property_assignment && !args.empty() ? *args.begin() "
          ": result;\n";
   out << "}\n\n";
+  out << "#include \"runtime/membership_native.inc\"\n";
   out << "static bool native_user_class_is_a("
          "std::uint32_t candidate, std::uint32_t ancestor) {\n";
   out << "  if (candidate == ancestor) return true;\n";

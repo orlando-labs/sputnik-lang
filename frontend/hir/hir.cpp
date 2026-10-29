@@ -1593,7 +1593,8 @@ private:
     if (node == nullptr) {
       return;
     }
-    if (node->kind == "PIrMatcherExpr" || node->kind == "PMatcherExpr") {
+    if (node->kind == "PIrMatcherExpr" || node->kind == "PMatcherExpr" ||
+        node->kind == "PIrMembership" || node->kind == "PMembership") {
       attach_matcher_expr(node, "expr_text");
     } else if (node->kind == "PIrDynamic" || node->kind == "PDynamic") {
       attach_matcher_expr(node, "matcher_text");
@@ -1684,7 +1685,8 @@ private:
       const ast::Expr *signature_override = nullptr,
       const ast::Expr *ast_signature = nullptr,
       const ast::Expr *handler_owner = nullptr,
-      bool nonlocal_return_block = false) {
+      bool nonlocal_return_block = false,
+      const ast::Expr *block_owner = nullptr) {
     Procedure procedure;
     procedure.id = "p" + std::to_string(procedures_.size());
     procedure.name = name;
@@ -1708,6 +1710,12 @@ private:
 
     ProcedureContext *saved = current_proc_;
     current_proc_ = &context;
+    if (block_owner != nullptr) {
+      // Container expressions in parameter patterns run inside this closure
+      // and must load its captures rather than the enclosing local registers.
+      auto patterns = build_block_param_patterns(*block_owner);
+      procedures_[procedure_index].param_patterns = std::move(patterns);
+    }
     lower_signature_defaults(procedures_[procedure_index].signature.get(),
                              ast_signature);
     std::vector<std::unique_ptr<Node>> statements;
@@ -3754,8 +3762,7 @@ private:
       const std::vector<CapturePlan> capture_plans =
           build_capture_plans(scope_index);
       signature_node = build_block_signature(expr, scope_index);
-      std::vector<std::unique_ptr<Node>> param_patterns =
-          build_block_param_patterns(expr);
+      std::vector<std::unique_ptr<Node>> param_patterns;
       std::vector<const ast::Expr *> body_items;
       if (const ast::Expr *body_expr = node_field(expr, "body")) {
         auto wrapper = make_node("AstExprStmt", body_expr->span);
@@ -3770,14 +3777,14 @@ private:
       const std::string procedure_id = lower_procedure(
           scope_index, "__block__", "closure", "__block__", signature,
           body_items, expr.span, capture_plans, signature_node.get(), nullptr,
-          nullptr, !bool_value(expr, "lambda_literal"));
+          nullptr, !bool_value(expr, "lambda_literal"), &expr);
       node->string_field("procedure", procedure_id);
       for (Procedure &procedure : procedures_) {
         if (procedure.id == procedure_id) {
           procedure.needs_nonlocal_return_target =
               procedure.nonlocal_return_block &&
               contains_nonlocal_return_for_block(expr);
-          procedure.param_patterns = clone_node_list(param_patterns);
+          param_patterns = clone_node_list(procedure.param_patterns);
           break;
         }
       }

@@ -297,6 +297,9 @@ private:
 
   std::unique_ptr<Node> parse_term_pattern() {
     if (const lexer::Token *token = peek()) {
+      if (token->kind == lexer::TokenKind::KeywordIn) {
+        return parse_membership();
+      }
       if (token->kind == lexer::TokenKind::LParen) {
         return parse_tuple();
       }
@@ -438,6 +441,34 @@ private:
     ++index_;
     auto node = make_node("PatPin", span_);
     node->string_field("name", name->lexeme);
+    return node;
+  }
+
+  std::unique_ptr<Node> parse_membership() {
+    ++index_; // in
+    const std::size_t start = index_;
+    int depth = 0;
+    while (!at_end()) {
+      const lexer::TokenKind kind = peek()->kind;
+      if (depth == 0 &&
+          (kind == lexer::TokenKind::Comma || kind == lexer::TokenKind::Pipe ||
+           kind == lexer::TokenKind::RParen || kind == lexer::TokenKind::RBracket ||
+           kind == lexer::TokenKind::RBrace)) {
+        break;
+      }
+      if (kind == lexer::TokenKind::LParen || kind == lexer::TokenKind::LBracket ||
+          kind == lexer::TokenKind::LBrace) {
+        ++depth;
+      } else if (kind == lexer::TokenKind::RParen || kind == lexer::TokenKind::RBracket ||
+                 kind == lexer::TokenKind::RBrace) {
+        --depth;
+      }
+      ++index_;
+    }
+    auto node = make_node("PatMembership", span_);
+    node->string_field("expr_text", start == index_ ? "" : trim_ascii(text_.substr(
+        tokens_[start].span.start.offset,
+        tokens_[index_ - 1U].span.end.offset - tokens_[start].span.start.offset)));
     return node;
   }
 
@@ -865,6 +896,11 @@ void append_unique_name(std::vector<std::string> *names,
 }
 
 std::unique_ptr<Node> compile_pattern_node(const ast::Expr &pattern) {
+  if (pattern.kind == "PatMembership") {
+    auto node = make_node("PIrMembership", pattern.span);
+    node->string_field("expr_text", string_value(pattern, "expr_text"));
+    return node;
+  }
   if (pattern.kind == "PatMatcherExpr") {
     auto node = make_node("PIrMatcherExpr", pattern.span);
     node->string_field("expr_text", string_value(pattern, "expr_text"));
@@ -1053,6 +1089,11 @@ std::unique_ptr<Node> compile_pattern_node(const ast::Expr &pattern) {
 }
 
 std::unique_ptr<Node> compile_match_program_node(const ast::Expr &pattern) {
+  if (pattern.kind == "PatMembership") {
+    auto node = make_node("PMembership", pattern.span);
+    node->string_field("expr_text", string_value(pattern, "expr_text"));
+    return node;
+  }
   if (pattern.kind == "PatMatcherExpr") {
     auto node = make_node("PMatcherExpr", pattern.span);
     node->string_field("expr_text", string_value(pattern, "expr_text"));
@@ -1289,7 +1330,8 @@ void collect_pattern_references_impl(const ast::Expr &pattern,
     append_unique_name(references, string_value(pattern, "name"));
     return;
   }
-  if (pattern.kind == "PatDynamic" || pattern.kind == "PatMatcherExpr") {
+  if (pattern.kind == "PatDynamic" || pattern.kind == "PatMatcherExpr" ||
+      pattern.kind == "PatMembership") {
     const std::string text = pattern.kind == "PatDynamic"
                                  ? string_value(pattern, "matcher_text")
                                  : string_value(pattern, "expr_text");
@@ -1364,9 +1406,15 @@ void validate_pattern_impl(const ast::Expr &pattern, PatternContext context,
     }
   }
 
-  if (pattern.kind == "PatDynamic") {
+  if (pattern.kind == "PatDynamic" || pattern.kind == "PatMembership") {
     std::unique_ptr<ast::Expr> matcher_expr = parse_matcher_expression_impl(
-        string_value(pattern, "matcher_text"), pattern.span);
+        string_value(pattern, pattern.kind == "PatDynamic" ? "matcher_text" : "expr_text"),
+        pattern.span);
+    if (pattern.kind == "PatMembership" && matcher_expr == nullptr) {
+      diagnostics->push_back(lexer::Diagnostic{
+          "E1012", "error", "pattern", "expected container expression after in",
+          pattern.span});
+    }
     if (matcher_expr != nullptr) {
       std::vector<std::string> matcher_refs;
       collect_name_references(*matcher_expr, &matcher_refs);
@@ -1375,8 +1423,8 @@ void validate_pattern_impl(const ast::Expr &pattern, PatternContext context,
             root_bindings.end()) {
           diagnostics->push_back(
               lexer::Diagnostic{"E1011", "error", "pattern",
-                                "pattern(expr) references binding introduced "
-                                "by same enclosing pattern",
+                                (pattern.kind == "PatMembership" ? "in expression" : "pattern(expr)") +
+                                    std::string(" references binding introduced by same enclosing pattern"),
                                 pattern.span});
           break;
         }

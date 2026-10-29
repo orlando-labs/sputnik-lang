@@ -178,7 +178,8 @@ enum class Opcode : std::uint8_t {
   PCommit = 0x4B,
   PFail = 0x4C,
   LoadNotebookSlot = 0x4D,
-  StoreNotebookSlot = 0x4E
+  StoreNotebookSlot = 0x4E,
+  PBegin = 0x4F // Suspend enclosing pattern state across expression evaluation.
 };
 
 // Code kinds are part of the on-disk CODE record ABI. Keep existing numeric

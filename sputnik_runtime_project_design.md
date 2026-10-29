@@ -1221,6 +1221,31 @@ HCall(callee = ClassObject, args, kwargs, block)
 - bare matcher expression в `def`-клаузаx, block params и pattern assignment;
 - dynamic pattern object в block params и pattern assignment;
 - ссылка из `pattern(expr)` на имя, вводимое тем же enclosing pattern.
+- ссылка из `in CONTAINER_EXPR` на имя того же enclosing pattern (`E1011`);
+- отсутствующее/невалидное выражение контейнера после `in` (`E1012`).
+
+`in CONTAINER_EXPR` является самостоятельным небиндящим паттерном во всех
+pattern contexts, включая вложенные структуры и block parameters. RHS
+разбирается как expression, заканчивающееся перед внешним `,`, `|` или закрывающим
+разделителем; внутренние разделители экранируются скобками. Выражение понижается
+в контексте исполняющей его процедуры (для block parameters — с captures блока).
+Структурные формы: `PatMembership(expr_text)` → `PIrMembership` / `PMembership`
+с присоединённым lowered expression. `P_BEGIN` (opcode `0x4F`, без операндов)
+сохраняет внешнее pattern state на стек и открывает явный scope: обычные инструкции
+вычисления RHS и `SEND in?` не завершают его автоматически. Вложенные pattern
+scopes сохраняют собственные prepared sequences/maps и pending bindings.
+`P_COMMIT` завершает успешный scope (в том числе с count=0), а `P_FAIL` завершает
+неуспешный; оба восстанавливают внешнее состояние. Старые программы без `P_BEGIN`
+сохраняют прежнюю implicit-finalization семантику. Далее идут точная проверка
+`true`/`false` и переход.
+Результат другого типа поднимает `TypeError`, включая объект типа `Bool`.
+
+Стандартные `in?` и `one_of?` доступны на каждом значении через общий fallback
+после lookup пользовательского метода и до `method_missing`. `in?` делегирует
+`contains?` контейнеру и проверяет `Bool`; `one_of?` вызывает receiver-side `==`
+по порядку с short-circuit и проверкой `Bool`, без распаковки одиночной коллекции.
+Неподдерживаемый контейнер, неверная арность `in?`, keywords/блоки и неверные
+результаты протоколов дают `TypeError`. VM и direct native сохраняют один контракт.
 
 ### 17.2. Runtime contract
 
@@ -1260,6 +1285,12 @@ match(p, value, env):
 
  PIN:
  return ok({}) if value_equals(value, env[p.name]) else fail()
+
+ MEMBERSHIP:
+ container = eval(p.container_expr, env)
+ matched = SEND value, :in?, [container]
+ raise TypeError unless matched is Bool
+ return ok({}) if matched else fail()
 
  AS_PATTERN:
  r = match(p.inner, value, env)
@@ -3046,6 +3077,7 @@ Pattern matching компилируется не в общие method send'ы, �
 
 | Инструкция | Семантика |
 |---|---|
+| `P_BEGIN` | сохранить внешнее состояние и открыть явный pattern scope; закрывается `P_COMMIT` или `P_FAIL` |
 | `P_PREP_SEQ dst, src, mode, fail` | проверить sequence-представимость (`native` или `deconstruct`), иначе jump в `fail` |
 | `P_PREP_MAP dst, src, keyset_id, needs_full, fail` | проверить map-представимость (`native` или `deconstruct_keys`), иначе jump в `fail` |
 | `P_CHECK_EQ src, const_id, fail` | сравнить по value-equality |

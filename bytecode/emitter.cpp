@@ -27,6 +27,16 @@ const ast::Expr *node_field(const ast::Expr &expr, const std::string &name) {
   return nullptr;
 }
 
+bool contains_membership_pattern(const ast::Expr &expr) {
+  if (expr.kind == "PMembership") return true;
+  for (const auto &field : expr.node_fields)
+    if (field.value && contains_membership_pattern(*field.value)) return true;
+  for (const auto &field : expr.list_fields)
+    for (const auto &value : field.values)
+      if (value && contains_membership_pattern(*value)) return true;
+  return false;
+}
+
 const ast::ListField *list_field(const ast::Expr &expr,
                                  const std::string &name) {
   for (const ast::ListField &field : expr.list_fields) {
@@ -581,6 +591,7 @@ private:
   std::uint32_t emit_load_constant_reg(std::uint32_t constant_id,
                                        const lexer::Span &span);
   void emit_type_error(const lexer::Span &span);
+  bool begin_pattern_scope(const ast::Expr &root);
   BcCode emit_rescue_handler(const ast::Expr &try_expr,
                              std::uint32_t *exception_slot);
   BcCode emit_ensure_handler(const ast::Expr &ensure_body,
@@ -620,6 +631,7 @@ private:
   const ast::Expr *body_override_ = nullptr;
   BcCode code_;
   std::uint32_t next_temp_ = 0;
+  std::uint32_t pattern_scope_depth_ = 0;
   std::unordered_map<std::uint32_t, std::uint32_t> pattern_assignment_slots_;
   bool preserve_last_result_ = false;
   std::optional<std::uint32_t> last_value_reg_;
@@ -1974,7 +1986,9 @@ BcCode CodeEmitter::emit_clause_pattern_probe(const ast::Expr &clause) {
   } else {
     std::vector<PatchRef> fail_patches;
     const std::uint32_t subject_reg = compile_clause_subject(clause);
+    const bool scoped = begin_pattern_scope(*root);
     compile_pattern_node(*root, subject_reg, &fail_patches);
+    if (scoped) --pattern_scope_depth_;
     if (bool_field(*match_program, "requires_commit")) {
       const auto commit = binding_commit_range(*match_program);
       if (!commit.has_value()) {
@@ -1988,6 +2002,8 @@ BcCode CodeEmitter::emit_clause_pattern_probe(const ast::Expr &clause) {
       }
     }
 
+    if (scoped && !bool_field(*match_program, "requires_commit"))
+      emit_instruction(Opcode::PCommit, {{0, false}, {0, false}}, clause.span);
     const std::uint32_t success_reg = alloc_temp();
     emit_instruction(Opcode::LoadBool, {{success_reg, false}, {1, false}},
                      clause.span);
@@ -2290,7 +2306,9 @@ void CodeEmitter::compile_param_pattern_prologues() {
       continue;
     }
 
+    const bool scoped = begin_pattern_scope(*root);
     compile_pattern_node(*root, *source_slot, &fail_patches);
+    if (scoped) --pattern_scope_depth_;
     if (bool_field(*match_program, "requires_commit")) {
       const auto commit = binding_commit_range(*match_program);
       if (!commit.has_value()) {
@@ -2303,6 +2321,8 @@ void CodeEmitter::compile_param_pattern_prologues() {
       emit_instruction(Opcode::PCommit,
                        {{commit->first, false}, {commit->second, false}},
                        param_pattern->span);
+    } else if (scoped) {
+      emit_instruction(Opcode::PCommit, {{0, false}, {0, false}}, param_pattern->span);
     }
   }
 
@@ -3155,6 +3175,13 @@ void CodeEmitter::emit_type_error(const lexer::Span &span) {
   emit_instruction(Opcode::Raise, {{error_reg, false}}, span);
 }
 
+bool CodeEmitter::begin_pattern_scope(const ast::Expr &root) {
+  if (pattern_scope_depth_ == 0 && !contains_membership_pattern(root)) return false;
+  emit_instruction(Opcode::PBegin, {}, root.span);
+  ++pattern_scope_depth_;
+  return true;
+}
+
 std::optional<std::uint32_t>
 CodeEmitter::local_slot_for_binding(const std::string &name,
                                     const lexer::Span &span) const {
@@ -3300,6 +3327,38 @@ void CodeEmitter::compile_pattern_node(const ast::Expr &node,
         Opcode::PTripleEq,
         {{matcher_reg, false}, {value_reg, false}, {-1, true}}, node.span);
     add_fail_patch(fail_patches, insn, 2);
+    return;
+  }
+  if (node.kind == "PMembership") {
+    const ast::Expr *container_expr = node_field(node, "matcher_expr");
+    if (container_expr == nullptr) {
+      diag(node.span, "BC2001", "membership pattern is missing container expr");
+      emit_fail_jump(fail_patches, node.span);
+      return;
+    }
+    const std::uint32_t container_reg = compile_expr(*container_expr);
+    const std::uint32_t result_reg =
+        emit_simple_send(node.span, value_reg, "in?", {container_reg});
+    const std::uint32_t true_id = owner_->intern_literal_constant("KEYWORD_TRUE", "true");
+    const std::uint32_t false_id = owner_->intern_literal_constant("KEYWORD_FALSE", "false");
+    const std::uint32_t true_reg = emit_load_constant_reg(true_id, node.span);
+    const std::uint32_t false_reg = emit_load_constant_reg(false_id, node.span);
+    const std::uint32_t is_true = alloc_temp();
+    const std::uint32_t is_false = alloc_temp();
+    // Ordinary TRIPLE_EQ probes do not discard enclosing sequence/map state
+    // when an OR alternative fails. Literal bool matchers also reject Bool
+    // itself, which a Bool type pattern would accept.
+    emit_instruction(Opcode::TripleEq,
+                     {{is_true, false}, {true_reg, false}, {result_reg, false}}, node.span);
+    const std::size_t success = emit_instruction(
+        Opcode::JumpIfTrue, {{is_true, false}, {-1, true}}, node.span);
+    emit_instruction(Opcode::TripleEq,
+                     {{is_false, false}, {false_reg, false}, {result_reg, false}}, node.span);
+    const std::size_t fail = emit_instruction(
+        Opcode::JumpIfTrue, {{is_false, false}, {-1, true}}, node.span);
+    add_fail_patch(fail_patches, fail, 1);
+    emit_type_error(node.span);
+    patch_operand(success, 1, current_pc(), false);
     return;
   }
   if (node.kind == "PMatcherExpr") {
@@ -4542,7 +4601,9 @@ std::uint32_t CodeEmitter::compile_match_dispatch(const ast::Expr &expr) {
       }
 
       std::vector<PatchRef> fail_patches;
+      const bool scoped = begin_pattern_scope(*root);
       compile_pattern_node(*root, scrutinee_reg, &fail_patches);
+      if (scoped) --pattern_scope_depth_;
 
       if (bool_field(*match_program, "requires_commit")) {
         const std::optional<std::pair<std::uint32_t, std::uint32_t>> commit =
@@ -4557,7 +4618,9 @@ std::uint32_t CodeEmitter::compile_match_dispatch(const ast::Expr &expr) {
         }
       }
 
-      std::vector<PatchRef> next_arm_patches = fail_patches;
+      if (scoped && !bool_field(*match_program, "requires_commit"))
+        emit_instruction(Opcode::PCommit, {{0, false}, {0, false}}, arm->span);
+      std::vector<PatchRef> next_arm_patches;
       if (const ast::Expr *guard = node_field(*arm, "guard")) {
         const std::uint32_t guard_reg = compile_expr(*guard);
         const std::size_t jump_next = emit_instruction(
@@ -4568,6 +4631,8 @@ std::uint32_t CodeEmitter::compile_match_dispatch(const ast::Expr &expr) {
       compile_seq_to_reg(*body, dst, body->span);
       end_jumps.push_back(
           emit_instruction(Opcode::Jump, {{-1, true}}, arm->span));
+      patch_fail_patches(fail_patches, current_pc());
+      if (scoped) emit_instruction(Opcode::PFail, {{kPatternFailModeSoft, false}}, arm->span);
       patch_fail_patches(next_arm_patches, current_pc());
     }
   }
@@ -4619,7 +4684,9 @@ std::uint32_t CodeEmitter::compile_clause_dispatch(const ast::Expr &expr) {
 
       std::vector<PatchRef> fail_patches;
       const std::uint32_t subject_reg = compile_clause_subject(*clause);
+      const bool scoped = begin_pattern_scope(*root);
       compile_pattern_node(*root, subject_reg, &fail_patches);
+      if (scoped) --pattern_scope_depth_;
 
       if (bool_field(*match_program, "requires_commit")) {
         const std::optional<std::pair<std::uint32_t, std::uint32_t>> commit =
@@ -4634,7 +4701,9 @@ std::uint32_t CodeEmitter::compile_clause_dispatch(const ast::Expr &expr) {
         }
       }
 
-      std::vector<PatchRef> next_clause_patches = fail_patches;
+      if (scoped && !bool_field(*match_program, "requires_commit"))
+        emit_instruction(Opcode::PCommit, {{0, false}, {0, false}}, clause->span);
+      std::vector<PatchRef> next_clause_patches;
       if (const ast::Expr *guard = node_field(*clause, "guard")) {
         const std::uint32_t guard_reg = compile_expr(*guard);
         const std::size_t jump_next = emit_instruction(
@@ -4645,6 +4714,8 @@ std::uint32_t CodeEmitter::compile_clause_dispatch(const ast::Expr &expr) {
       compile_seq_to_reg(*body, dst, body->span);
       end_jumps.push_back(
           emit_instruction(Opcode::Jump, {{-1, true}}, clause->span));
+      patch_fail_patches(fail_patches, current_pc());
+      if (scoped) emit_instruction(Opcode::PFail, {{kPatternFailModeSoft, false}}, clause->span);
       patch_fail_patches(next_clause_patches, current_pc());
     }
   }
@@ -4715,7 +4786,9 @@ std::uint32_t CodeEmitter::compile_pattern_assign(const ast::Expr &expr) {
     }
   }
   std::vector<PatchRef> fail_patches;
+  const bool scoped = begin_pattern_scope(*root);
   compile_pattern_node(*root, rhs_reg, &fail_patches);
+  if (scoped) --pattern_scope_depth_;
   pattern_assignment_slots_ = std::move(outer_slots);
   if (bool_field(*match_program, "requires_commit")) {
     if (!staged_slots.empty()) {
@@ -4730,6 +4803,8 @@ std::uint32_t CodeEmitter::compile_pattern_assign(const ast::Expr &expr) {
                        expr.span);
     }
   }
+  if (scoped && !bool_field(*match_program, "requires_commit"))
+    emit_instruction(Opcode::PCommit, {{0, false}, {0, false}}, expr.span);
   if (preserve_last_result_) {
     emit_instruction(Opcode::SetLast, {{rhs_reg, false}}, expr.span);
   }

@@ -26,6 +26,8 @@ Only `false` and `null` are falsy: `0`, `""`, `[]`, `{}` are truthy. Names may e
 | Bit operations | `& \| ^ << >>`; `^` is XOR, not power |
 | Logic | `not`, `and`, `or`; that precedence order; `and`/`or` short-circuit and return operands |
 | Membership | `x in xs`; `key in map`; `"sub" in text` → receiver's `contains?` |
+| Membership method | `x.in?(container)` → `container.contains?(x)`; exactly one container, `Bool` result |
+| Value alternatives | `x.one_of?(a, b)` / `x.one_of?(*targets)` → receiver-side `==`, short-circuit; no targets → `false` |
 | Default only for null | `value ?? fallback` (preserves `false` and `0`; specified, but see local binary note below) |
 | Default for falsy | `value or fallback` |
 | Assign a null default | `value ?= fallback`; preserves `false`, `0`, empty strings and collections |
@@ -96,6 +98,15 @@ Array.filled(3, 0)                 # repeated value; objects share one reference
 `[?key]` handles absence, not arbitrary errors, and is read-only syntax. Use `contains?(key)` / `has_index?(i)` to distinguish missing entries from stored `null`. `.?.` guards only a null receiver; protect each nullable step. Open ranges (`1..`, `1..:2`) need a finite bound before materialization/spread; slicing supplies one. Step zero is invalid.
 
 `?=` and `or=` evaluate the target once and evaluate the RHS only when a write is needed; they return the retained or assigned value. Indexed targets use optional lookup and ordinary assignment: a missing map key can be inserted, while an out-of-bounds array write raises `IndexError`. `a?=b` means `a ?= b`; use `ready? = false` to assign to a predicate-suffixed name.
+
+`in?` and `one_of?` work on every value, including `null`, `false`, collections,
+and type objects. `2.in?([1, 2])` is true; `2.one_of?([1, 2])` is false because
+an unspread collection is one target. `[1, 2].one_of?(*[[1, 2]])` is true.
+`one_of?` uses equality, never type/pattern matching: `5.one_of?(Int, 1..10)` is
+false. Both methods reject keywords/blocks and require `Bool` protocol results;
+unsupported `in?` containers raise `TypeError`. Argument expressions evaluate
+before comparisons begin; only comparisons short-circuit. User methods override
+the standard fallback normally.
 
 ## 3. Blocks and chains — spaces matter
 
@@ -208,10 +219,17 @@ def fact(n) if n > 0: n * fact(n - 1)
 | `Int`, `Point(x, y)`, `Point(x:, y:)` | Type/constant test; typed positional/key destructuring |
 | `whole as [a, b]`, `n as Int` | Bind whole value, then match the right-hand pattern |
 | `(0, x) \| (x, 0)` | Alternatives must bind the same names; wrap OR patterns inside block `\|…\|` |
+| `in choices`, `n as in choices`, `{status: in [409, 410]}` | Membership via `in?`; RHS is an expression, no new bindings; works in every pattern context |
 | `when 1..10:` | Matcher expression (`===`); only in `case` / `case!` |
 | `pattern(matcher) with {id:, **null}` | Dynamic matcher with explicit bindings; only case/clause-def contexts |
 
 First matching clause whose guard passes wins. Unmatched `case` returns `null`; `case!` and clause-def raise `MatchError`. User objects participate via `===`, `deconstruct()`, `deconstruct_keys(keys)`; dynamic matchers use `match(value)`. Rich function signatures use one `def` with `when` clauses; tuple clauses match positional arguments, map clauses match argument names.
+
+`in choices` evaluates the current container once when reached, including inside
+structures, block parameters, and assignment; a skipped arm does not evaluate it.
+RHS names refer to the outer environment and cannot read bindings introduced by
+the same pattern. Parenthesize expression-level `|`: `in (left | right)`.
+`Int | Str` matches types; `in [Int, Str]` checks membership among type objects.
 
 ## 7. Conditions and control flow
 

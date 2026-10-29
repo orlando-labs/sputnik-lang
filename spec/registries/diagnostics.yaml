@@ -73,7 +73,8 @@ diagnostics:
   - { code: E1008, severity: error, phase: pattern, condition: bare matcher expression outside case or case! }
   - { code: E1009, severity: error, phase: pattern, condition: dynamic pattern object in block params or pattern assignment }
   - { code: E1010, severity: error, phase: pattern, condition: pattern(expr) exports bindings without with map pattern }
-  - { code: E1011, severity: error, phase: pattern, condition: pattern(expr) references binding introduced by same enclosing pattern }
+  - { code: E1011, severity: error, phase: pattern, condition: pattern(expr) or membership expression references binding introduced by same enclosing pattern }
+  - { code: E1012, severity: error, phase: pattern, condition: missing or invalid container expression after in }
   - { code: E2001, severity: error, phase: parser, condition: duplicate package declaration }
   - { code: E2002, severity: error, phase: parser, condition: import outside contiguous import-zone }
   - { code: E2003, severity: error, phase: parser, condition: from import star is forbidden }

@@ -2130,6 +2130,15 @@ void CodeEmitter::analyze_integer_locals() {
         assignments[slot].push_back(node_field(*node, "expr"));
       }
     }
+    // A captured or watched cell can change through a different activation or
+    // the host. Its local assignments alone cannot prove an integer forever.
+    // In particular a later function value must still perform its bare call.
+    if (node->kind == "HWatchLocal" ||
+        (node->kind == "HCapture" && string_field(*node, "source_kind") == "local")) {
+      const auto slot = parse_slot(string_field(*node,
+          node->kind == "HWatchLocal" ? "slot" : "source_slot"), 'l');
+      if (slot < eligible.size()) eligible[slot] = 0U;
+    }
     for (const ast::NodeField &field : node->node_fields) {
       collect_ref(field.value.get(), collect_ref);
     }

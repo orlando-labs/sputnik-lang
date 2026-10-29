@@ -28189,8 +28189,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      // v11 invokes function-valued identifiers; & and call targets stay raw.
-      "sputnik.build.cache.v11\n" + module.name + "\n" + module.path + "\n" +
+      // v12 keeps bare reads dynamic when a local cell escapes to a capture/watch.
+      "sputnik.build.cache.v12\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
       stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material + prepared.import_material);
   const std::filesystem::path output_path =

@@ -50,6 +50,11 @@ def with_rest(*values, **keywords, &block): values.count + keywords.count + (if 
 def invoke_block(&block): block
 def forward_block(&block): invoke_block(&block)
 def required(value): value
+def through_rebound_capture():
+  value = 1
+  1.times:
+    value = &local_answer
+  value
 
 callback = &local_answer
 copy = &callback
@@ -63,6 +68,7 @@ raise ValueError("explicit call double invoked") unless local_answer() == 42
 raise ValueError("dot-call double invoked") unless local_answer.() == 42
 raise ValueError("grouped call double invoked") unless (local_answer)() == 42
 raise ValueError("function reads execute once") unless local_calls.count == 8
+raise ValueError("captured rebinding lost bare call") unless through_rebound_capture() == 42
 raise ValueError("free defaults") unless with_defaults == 42
 raise ValueError("free rest") unless with_rest == 42
 forwarded = forward_block: 42

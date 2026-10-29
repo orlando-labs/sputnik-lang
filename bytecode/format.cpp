@@ -4481,10 +4481,19 @@ InstructionFlow verify_instruction_flow(
     if (instruction.operands.size() == operand_index + 1U) {
       std::uint32_t site_id = 0;
       if (read_u32_operand(instruction, operand_index,
-                           "call-site id must be unsigned", errors, &site_id) &&
-          site_id >= code.call_site_table.size()) {
-        add_verify_error(errors, "BC1312", "call-site id is out of range",
-                         SectionKind::Code, 0);
+                           "call-site id must be unsigned", errors, &site_id)) {
+        if (site_id >= code.call_site_table.size()) {
+          add_verify_error(errors, "BC1312", "call-site id is out of range",
+                           SectionKind::Code, 0);
+        } else if ((code.call_site_table[site_id].flags &
+                    kCallSiteFlagBareIdentifier) != 0U &&
+                   (!is_call || pos_count != 0U || kw_count != 0U ||
+                    (block_reg >= 0 && block_reg != static_cast<std::int64_t>(
+                        std::numeric_limits<std::uint32_t>::max())))) {
+          add_verify_error(errors, "BC1310",
+              "bare identifier call must be CALL without arguments or block",
+              SectionKind::Code, 0);
+        }
       }
     }
     break;

@@ -2039,6 +2039,10 @@ bool CodeEmitter::expr_is_integer_for_specialization(
   if (is_integer_literal_expr(expr)) {
     return true;
   }
+  if (expr.kind == "HCall" && bool_field(expr, "bare_identifier")) {
+    const auto *value = node_field(expr, "callable");
+    return value && expr_is_integer_for_specialization(*value, candidates);
+  }
   if (expr.kind == "HLoadLocal") {
     const std::uint32_t slot = parse_slot(string_field(expr, "slot"), 'l');
     return slot < candidates.size() && candidates[slot] != 0U;
@@ -3733,6 +3737,11 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
     diag(expr.span, "BC2001",
          "break is forbidden in Sputnik iterator blocks; use next, find or "
          "throw/catch");
+  // Proven integer reads cannot invoke a function. Keep their existing
+  // register/unboxed arithmetic path instead of emitting a dynamic CALL.
+  if (opcode == Opcode::Call && bool_field(expr, "bare_identifier") &&
+      expr_is_integer_for_specialization(expr))
+    return compile_expr(*node_field(expr, "callable"));
   std::vector<InstructionOperand> operands;
   const std::uint32_t dst = alloc_temp();
   operands.push_back({dst, false});
@@ -3869,6 +3878,8 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
   if (opcode == Opcode::Send && bool_field(expr, "property_assignment")) {
     site_flags |= kCallSiteFlagPropertyAssignment;
   }
+  if (opcode == Opcode::Call && bool_field(expr, "bare_identifier"))
+    site_flags |= kCallSiteFlagBareIdentifier;
   const std::uint32_t site_id = emit_call_site(pc, site_symbol, site_flags);
   operands.push_back({site_id, false});
   Opcode emit_opcode = opcode;

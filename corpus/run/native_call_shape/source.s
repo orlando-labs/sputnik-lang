@@ -4,7 +4,7 @@ class CallShape:
 
   def total(head, *middle, tail, offset: 1, &blk):
     value = (@base + head + middle.count + tail + offset + @bonus) * @scale
-    if blk:
+    if &blk:
       blk(value)
     else:
       value

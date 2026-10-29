@@ -5991,7 +5991,7 @@ The patch preserves the following existing design decisions (as amended by the a
 5. Parser output remains syntax-faithful. A property declaration must not be erased into an ordinary method declaration at AST level.
 6. HIR is the semantic-core representation and must lower property get/set operations explicitly, or into ordinary send/call semantics with preserved property markers.
 7. Deterministic diagnostics, stack traces, disassembly and golden outputs must not expose raw memory addresses.
-8. This section does not add hidden side effects to bare ordinary identifiers (lexical binding reads remain value reads).
+8. Reading a function-valued identifier invokes it with zero arguments; `&name` reads the raw value. Non-function values and class objects remain ordinary values (2026-10-29 amendment).
 
 Recommended insertion point: after the existing sections on functions/methods/classes and callable references, with cross-references from postfix member access, assignment semantics, HIR lowering, MOP/reflection and diagnostics.
 
@@ -6043,18 +6043,29 @@ settings.cache_dir
 clock.monotonic_time
 ```
 
-Lexically bound bare identifiers remain intentionally different from implicit nullary function calls:
+Function-valued identifiers support implicit nullary calls:
 
 ```sputnik
 def f():
  42
 
-f # lexical binding read; not f()
+f # implicit f()
 f() # ordinary call
-&f # callable reference
+&f # read the function without invocation
+callback = &f
+callback # invoke the stored function
+&callback # extract the same function without invocation
 ```
 
-Bare ordinary identifiers that resolve lexically remain value access, not hidden call sites. Inside an instance/class method, a still-unresolved bare identifier falls back to `self.name`; this is member access and follows the accepted bare-nullary RFC. Thus inherited and included `prop`/nullary-`def` APIs expose the same concise read surface:
+Lexical lookup still takes precedence. Reading a function value invokes it once;
+other values, including classes and ordinary objects with `call`, are preserved.
+All-default/rest/optional-block functions are bare-callable; required arguments
+raise `ArgumentError`. `&f` bypasses invocation in assignments, returns,
+comparisons and arguments. Explicit `f()` and the block-pass `&block` operate on
+the raw target. Call results are not recursively invoked. Inside an
+instance/class method, a still-unresolved bare identifier falls back to
+`self.name`; this follows ordinary member access. Inherited and included
+`prop`/nullary-`def` APIs expose the same concise read surface:
 
 ```sputnik
 collection.size # property get OR implicit nullary send
@@ -6946,7 +6957,13 @@ This section is source-compatible with existing Sputnik code unless that code al
 
 `get` and `set` remain ordinary identifiers outside property arm-label position.
 
-Lexically resolved bare identifiers never become implicit call sites. A bare identifier unresolved after lexical/import/module lookup falls back to member access on `self` only in a procedure with an object receiver; otherwise it is an undefined-name error. Under the accepted bare-nullary RFC, this implicit-self access and explicit `receiver.name` both perform an implicit zero-argument send when `name` resolves to a zero-argument-callable method; methods with required parameters without defaults are not bare-callable and diagnose `AMB_BARE_NON_NULLARY` / `ArgumentError`.
+Lexically resolved function-valued identifiers perform implicit zero-argument
+calls; `&name` reads the value without calling. Other values retain ordinary
+read semantics. An identifier unresolved after lexical/import/module lookup
+falls back to member access on `self` only in a procedure with an object
+receiver; otherwise it is an undefined-name error. Implicit-self access and
+explicit `receiver.name` both invoke zero-argument-callable methods; required
+parameters reject bare calls with `ArgumentError`.
 
 Existing callable reference syntax remains unchanged:
 
@@ -7919,8 +7936,10 @@ obj.member.?.()
 ```
 
 `&target` never invokes the target. Bare identifiers that resolve to locals,
-parameters, captures, import-created bindings or module bindings are ordinary
-value reads and are never implicit call sites. In an object method only, a
+parameters, captures, import-created bindings or module bindings invoke a
+function value with zero arguments, or preserve a non-function value. Use `&f`
+to obtain a function value. Explicit `f()` invokes the raw target exactly once.
+In an object method only, a
 still-unresolved ordinary identifier is resolved as `self.name`; without an
 object receiver it is an undefined-name error.
 
@@ -7958,16 +7977,18 @@ Block suffix is call syntax and follows the same rule: a property member cannot 
 
 ### 5. Namespace and class-side access
 
-Dotted access is member access regardless of receiver kind ("dot is a message; identifier is a value"):
+Dotted access is member access regardless of receiver kind:
 
 - `Build.version` where `version` is a zero-argument-callable class-side method performs an implicit call; `Build.version()` is the explicit spelling.
 - Module-namespace access follows the same dispatch: a nullary module function invokes; one requiring arguments diagnoses `AMB_BARE_NON_NULLARY`; a value export is a plain read.
 - Consequence: `fn = Math.answer` binds the *result* of `answer`; extraction is spelled `fn = &Math.answer`.
-- Import-created local bindings (bare `c` after `import a.b.c`) are identifier reads and never invoke.
+- Import-created function bindings accept ordinary bare calls. `&c` extracts
+  the imported function without invocation.
 
 Namespace lowering must preserve this distinction in both VM and native code:
 `import M as m; m.answer` invokes an exported zero-argument-callable function
-exactly once, whereas `from M import answer; answer` reads its callable value.
+exactly once, as does `from M import answer; answer`. Both `&m.answer` and
+`&answer` construct references without invoking the target.
 `m.factory.()` first invokes `factory` and then calls the returned value;
 `&m.factory` invokes neither during reference construction. Exported classes
 remain class values on bare access. Required function parameters reject bare
@@ -11224,7 +11245,8 @@ This is exactly equivalent to:
 {name: name}
 ```
 
-The right-hand side is an ordinary lexical binding read. The shorthand applies
+The right-hand side is an ordinary identifier evaluation (and invokes a function
+value); write `name: &name` to pass a function. The shorthand applies
 only to bare identifier keys; explicit symbol keys (`{:name:}`), string keys and
 expression keys still require an explicit value.
 
@@ -13515,7 +13537,8 @@ CallArg::= Expr
 Ordering restrictions are semantic/parser validation rules, not precedence rules.
 `Identifier ":"` is same-name keyword argument shorthand and is accepted only at
 an argument boundary. It is exactly equivalent to `Identifier ":" Identifier`,
-where the value side is an ordinary lexical binding read.
+where the value side is an ordinary identifier evaluation, including a bare
+call if it holds a function. Use `name: &name` to forward a function value.
 
 ---
 

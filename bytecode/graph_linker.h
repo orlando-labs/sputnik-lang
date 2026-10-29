@@ -24,7 +24,7 @@ struct GraphModule {
 // Bump when merged-image semantics or the linker-visible bytecode ABI changes.
 // Consumers use this to invalidate cached linked graphs independently of the
 // source-module artifact cache.
-inline constexpr std::uint32_t kGraphLinkerAbiVersion = 6U;
+inline constexpr std::uint32_t kGraphLinkerAbiVersion = 7U;
 
 // Persisted source-level import-as declarations, independent of local slots.
 frontend::ImportAliases module_import_aliases(const BcModule &module);

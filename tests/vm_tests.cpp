@@ -3978,7 +3978,7 @@ void test_execute_emitted_case_map_rest() {
 }
 
 void test_execute_scattered_pattern_assignment() {
-  auto emitted = emit_ok("def hold(&block): block\n"
+  auto emitted = emit_ok("def hold(&block): &block\n"
                          "def unpack(a, untouched, b):\n"
                          "  getter = hold(): (a, b)\n"
                          "  (a, b) = (b, a)\n"
@@ -4277,7 +4277,7 @@ void test_execute_emitted_v20_9_named_multiblock() {
           "def add_one(value): value + 1\n"
           "def invoke(value, &done:): done(value)\n"
           "callback = &add_one\n"
-          "invoke(41, done: callback)\n");
+          "invoke(41, done: &callback)\n");
   expect(callable_values.ok() && callable_values.value.is_integer() &&
              callable_values.value.as_integer() == 42,
          "prebuilt callable values satisfy named callable parameters");

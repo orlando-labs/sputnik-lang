@@ -3,7 +3,7 @@ class Callable:
 
   def call(value, offset: 0, &blk):
     result = @base + value + offset
-    return blk(result) if blk
+    return blk(result) if &blk
     result
 
 def main():

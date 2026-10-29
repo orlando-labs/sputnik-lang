@@ -478,6 +478,8 @@ private:
   std::string compile_send(const ast::Expr &expr, const std::string &op) {
     std::vector<Operand> operands;
     std::vector<Attribute> attrs;
+    if (bool_field(expr, "bare_identifier"))
+      attrs.push_back(attr("bare_identifier", "true"));
 
     if (op == "send") {
       const ast::Expr *receiver = node_field(expr, "receiver");

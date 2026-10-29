@@ -6102,6 +6102,19 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       operand_u32_value(instruction, 0, &dst);
       operand_u32_value(instruction, 1, &callee);
       operand_u32_value(instruction, 2, &pos_count);
+      const auto call_kw_index = 3U + pos_count;
+      std::uint32_t call_kw_count = 0;
+      operand_u32_value(instruction, call_kw_index, &call_kw_count);
+      std::uint32_t call_site_id = 0;
+      if (operand_u32_value(instruction, call_kw_index + 2U + call_kw_count * 2U,
+                            &call_site_id) &&
+          call_site_id < code.call_site_table.size() &&
+          (code.call_site_table[call_site_id].flags &
+           sputnik::bytecode::kCallSiteFlagBareIdentifier) != 0U) {
+        write_reg_stmt(dst, "native_bare_identifier(" + read_reg_expr(callee) + ")");
+        emit_next(pc, next_scalar_state);
+        break;
+      }
       std::ostringstream expr;
       expr << "sputnik_native_call_value(" << read_reg_expr(callee) << ", {";
       for (std::uint32_t index = 0; index < pos_count; ++index) {
@@ -21574,6 +21587,28 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "}\n\n";
   out << "static NativeValue sputnik_native_call_scoped_closure(const NativeValue &value, const NativeArgsView &args) { return sputnik_native_call_closure_with_keywords(value, args, {}, NativeValue::nullv()); }\n";
   out << "static NativeValue sputnik_native_call_value("
+         "const NativeValue &, const NativeArgsView &, "
+         "const NativeKeywordArgsView &, NativeValue);\n";
+  out << R"SPUTNIKPP(static NativeValue native_bare_identifier(const NativeValue &value) {
+  if (value.tag == NativeValue::Tag::Closure) {
+    const auto method = native_method_descriptor(as_closure(value)->code_id);
+    if (method && !method->accepts_zero_arguments)
+      throw NativeRaised{native_named_error("ArgumentError",
+          "function is not bare-callable: it requires arguments; use f(...) or &f")};
+    return sputnik_native_call_value(value, {}, {}, NativeValue::nullv());
+  }
+  if (value.tag == NativeValue::Tag::PrintFunction)
+    return sputnik_native_call_value(value, {}, {}, NativeValue::nullv());
+  if (value.tag == NativeValue::Tag::DescFunction ||
+      value.tag == NativeValue::Tag::ResultOkFunction ||
+      value.tag == NativeValue::Tag::ResultErrFunction)
+    throw NativeRaised{native_named_error("ArgumentError",
+        "function is not bare-callable: it requires arguments; use f(...) or &f")};
+  return value;
+}
+
+)SPUTNIKPP";
+  out << "static NativeValue sputnik_native_call_value("
          "const NativeValue &value, const NativeArgsView &args, "
          "const NativeKeywordArgsView &kwargs, "
          "NativeValue block) {\n";
@@ -28154,8 +28189,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      // v10 preserves namespace bare reads instead of erasing them to values.
-      "sputnik.build.cache.v10\n" + module.name + "\n" + module.path + "\n" +
+      // v11 invokes function-valued identifiers; & and call targets stay raw.
+      "sputnik.build.cache.v11\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
       stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material + prepared.import_material);
   const std::filesystem::path output_path =

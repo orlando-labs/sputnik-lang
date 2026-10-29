@@ -5880,6 +5880,37 @@ private:
     if (fault_.has_value()) {
       return FastCallStatus::Faulted;
     }
+    if (site_id && (call_site_flags(frame, *site_id) &
+                    bytecode::kCallSiteFlagBareIdentifier) != 0U) {
+      const Value value = read_reg(frame, callee_reg);
+      if (fault_) return FastCallStatus::Faulted;
+      if (!value.is_closure() && !value.is_native_function()) {
+        if (!write_reg(frame, dst, value)) return FastCallStatus::Faulted;
+        ++frame.pc;
+        return FastCallStatus::Matched;
+      }
+      bool accepts_zero = true;
+      if (value.is_closure()) {
+        const auto closure = value.as_closure();
+        const auto *method = closure ? find_method_by_entry_code(closure->code_id) : nullptr;
+        if (method) accepts_zero = method_accepts_zero_arguments(frame, *method);
+        else if (closure) {
+          const auto *code = lookup_code(closure->code_id);
+          if (code && !ensure_closure_arity(frame, *code, 0U))
+            return FastCallStatus::Faulted;
+        }
+      } else {
+        const auto kind = value.as_native_function().kind;
+        accepts_zero = kind == RuntimeNativeFunctionKind::Print ||
+            kind == RuntimeNativeFunctionKind::P || kind == RuntimeNativeFunctionKind::Pp;
+      }
+      if (fault_) return FastCallStatus::Faulted;
+      if (!accepts_zero) {
+        raise_runtime_error(frame, "ArgumentError",
+            "function is not bare-callable: it requires arguments; use f(...) or &f");
+        return FastCallStatus::Faulted;
+      }
+    }
     if (callee_reg >= frame.regs.size() ||
         callee_reg >= frame.initialized.size() ||
         frame.initialized[callee_reg] == 0U ||

@@ -2185,7 +2185,22 @@ private:
       return node;
     }
     if (expr.kind == "AstName") {
-      return lower_name(expr, "name");
+      auto value = lower_name(expr, "name");
+      // Member/property reads already perform their one implicit invocation.
+      // A lexical read may dynamically hold a function, so preserve the raw
+      // load under a bare CALL. Explicit call and & contexts bypass this arm.
+      if (value->kind == "HLoadLocal" || value->kind == "HLoadCapture" ||
+          value->kind == "HLoadConst" || value->kind == "HLoadName" ||
+          value->kind == "HLoadNotebookSlot") {
+        auto call = make_node("HCall", expr.span);
+        call->bool_field("bare_identifier", true);
+        call->string_field("binding_name", string_value(expr, "name"));
+        call->node_field("callable", std::move(value));
+        call->list_field("pos_args", {});
+        call->list_field("kw_args", {});
+        return call;
+      }
+      return value;
     }
     if (expr.kind == "AstPlaceholder") {
       return lower_name(expr, "placeholder");
@@ -2454,6 +2469,8 @@ private:
       const ast::Expr *value =
           node_field(expr, ref_kind == "binding" ? "target" : "closure");
       if (value != nullptr) {
+        if (ref_kind == "binding" && value->kind == "AstName")
+          return lower_name(*value, "name");
         return lower_expr(*value);
       }
       auto node = make_node("HUnsupported", expr.span);
@@ -3210,7 +3227,18 @@ private:
       node->string_field("source_kind", expr.kind);
       return node;
     }
-    std::unique_ptr<Node> current = lower_expr(*base);
+    const bool explicit_call = tail_limit != 0U && tails != nullptr &&
+        (tails->values.front()->kind == "AstTailCall" ||
+         tails->values.front()->kind == "AstTailDotCall" ||
+         tails->values.front()->kind == "AstTailSafeCall" ||
+         tails->values.front()->kind == "AstTailBlockSuffix" ||
+         tails->values.front()->kind == "AstTailMultiblockSuffix");
+    const ast::Expr *target = base;
+    if (explicit_call)
+      while (target->kind == "AstGroup")
+        target = node_field_required(*target, "expr");
+    std::unique_ptr<Node> current = explicit_call && target->kind == "AstName"
+        ? lower_name(*target, "name") : lower_expr(*base);
     return lower_postfix_tails(base, tails, 0, tail_limit, std::move(current));
   }
 
@@ -3676,7 +3704,11 @@ private:
       return node;
     }
 
-    const ast::Expr &target = *pos_args->values.front();
+    const ast::Expr *raw_target = pos_args->values.front().get();
+    // watch takes a binding reference, not the result of evaluating its name.
+    if (raw_target->kind == "HCall" && bool_value(*raw_target, "bare_identifier"))
+      raw_target = node_field_required(*raw_target, "callable");
+    const ast::Expr &target = *raw_target;
     if (target.kind == "HLoadLocal") {
       auto node = make_node("HWatchLocal", send->span);
       node->string_field("slot", string_value(target, "slot"));
@@ -3712,7 +3744,8 @@ private:
         // block channel. The referenced local already holds a callable.
         if (block_pass != nullptr) {
           if (const ast::Expr *value = node_field(*arg, "value")) {
-            *block_pass = lower_expr(*value);
+            *block_pass = value->kind == "AstName"
+                ? lower_name(*value, "name") : lower_expr(*value);
           }
         }
       } else if (arg->kind == "AstKeywordArg" ||

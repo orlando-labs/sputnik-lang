@@ -1,5 +1,12 @@
 # Design closures for the bare-nullary + `.()` RFC
 
+2026-10-29 amendment: lexical function-valued identifiers now invoke with zero
+arguments, including imports, parameters, captures and local callback values.
+`&f` reads the raw value; explicit `f()` and block-pass `&block` do not first
+invoke a bare read. This supersedes the historical "identifier is a value"
+ruling below. Module namespace bare access is implemented in VM and full native
+code; see `tests/bare_namespace_calls_test.mjs`.
+
 Status: **implemented and specced 2026-06-12; zero-argument-callable amendment 2026-10-03.** The RFC lives at
 `docs/engineering/rfc-bare-nullary-and-dotcall-v1.md`; the unified spec
 carries the integrated section `Bare-nullary member access and dot-call

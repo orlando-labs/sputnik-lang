@@ -1,7 +1,7 @@
 def check(condition):
   raise ValueError("scattered pattern assignment regression") unless condition
 
-def hold(&block): block
+def hold(&block): &block
 
 def unpack(a, untouched, b):
   getter = hold(): (a, b)

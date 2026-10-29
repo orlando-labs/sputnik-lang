@@ -26,7 +26,7 @@ def return_runs_ensure(log):
 saved = [null]
 
 def save_block(&blk):
-  saved[0] = blk
+  saved[0] = &blk
 
 def create_escaped_block():
   save_block:

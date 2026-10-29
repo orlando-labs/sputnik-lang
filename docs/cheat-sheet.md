@@ -161,8 +161,13 @@ callback.?.(42)                    # call only when callback is non-null
 import build_info as info
 info.version                       # namespace member: implicit nullary call
 from build_info import version
-version                            # imported identifier: function value
-version()                          # explicit call of that value
+version                            # imported function: implicit nullary call
+version()                          # explicit call, exactly once
+callback = &version                # copy the function without calling it
+callback                           # invoke the stored function
+copy = &callback                   # read that function value without calling
+apply((&callback))                 # positional function value
+apply(&callback)                   # forward through the block channel
 
 "42".int                           # conversion property; also Int("42") / .to_int()
 value.cast(Int)                    # explicit conversion protocol

@@ -1,18 +1,18 @@
-; sputnik.bc.v1 sha256=3875956e6c86fa279ae6cd98a830ef2c9056e3e0fe2de326f19a1f2575dc16f8
+; sputnik.bc.v1 sha256=6b077261ea40030f9ed04dd886c35d1fec0e5c733c6895ecf741f956327f70cf
 .header format=1.0 language=1.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
 .sections
   STRS offset=344 size=72 align=1 flags=0
-  SYMS offset=416 size=109 align=1 flags=0
-  KONS offset=525 size=65 align=1 flags=0
-  CODE offset=590 size=389 align=1 flags=0
-  METH offset=979 size=176 align=1 flags=0
-  CLAS offset=1155 size=88 align=1 flags=0
-  DEPS offset=1243 size=4 align=1 flags=0
-  EXPT offset=1247 size=46 align=1 flags=0
-  INIT offset=1293 size=9 align=1 flags=0
-  SPAN offset=1302 size=1096 align=1 flags=0
-  LINE offset=2398 size=172 align=1 flags=0
-  LOCS offset=2570 size=104 align=1 flags=0
+  SYMS offset=416 size=119 align=1 flags=0
+  KONS offset=535 size=65 align=1 flags=0
+  CODE offset=600 size=426 align=1 flags=0
+  METH offset=1026 size=176 align=1 flags=0
+  CLAS offset=1202 size=88 align=1 flags=0
+  DEPS offset=1290 size=4 align=1 flags=0
+  EXPT offset=1294 size=46 align=1 flags=0
+  INIT offset=1340 size=9 align=1 flags=0
+  SPAN offset=1349 size=1174 align=1 flags=0
+  LINE offset=2523 size=184 align=1 flags=0
+  LOCS offset=2707 size=104 align=1 flags=0
 .strs
   s0 "id"
   s1 "param"
@@ -22,24 +22,25 @@
   s5 "@масса"
   s6 "class"
 .syms
-  y0 :Timestamped
-  y1 :touch!
-  y2 :Particle
-  y3 :Entity
-  y4 :Serializable
-  y5 :find
-  y6 :id
-  y7 :init
-  y8 :масса
-  y9 :α
+  y0 :<call>
+  y1 :Timestamped
+  y2 :touch!
+  y3 :Particle
+  y4 :Entity
+  y5 :Serializable
+  y6 :find
+  y7 :id
+  y8 :init
+  y9 :масса
+  y10 :α
 .kons
   k0 key_set []
   k1 path []
-  k2 path [3]
-  k3 path [0]
-  k4 path [4]
-  k5 path [6]
-  k6 path [8, 9]
+  k2 path [4]
+  k3 path [1]
+  k4 path [5]
+  k5 path [7]
+  k6 path [9, 10]
   k7 integer 1
 .code
 code c1 kind=module regs=1 flags=0
@@ -56,12 +57,15 @@ code c2 kind=method regs=1 flags=0
   span 0..1 corpus/bc/disasm/object_model/source.s:6:3-6:15
   span 1..2 corpus/bc/disasm/object_model/source.s:6:3-6:15
   span 2..3 corpus/bc/disasm/object_model/source.s:6:3-6:15
-code c3 kind=method regs=1 flags=0
+code c3 kind=method regs=2 flags=0
   local l0 name=s0(id) role=s1(param) binding=s2(local)
-  0000 CLOSE_UPVALUES 0
-  0001 RETURN 0
-  span 0..1 corpus/bc/disasm/object_model/source.s:11:3-12:7
+  0000 CALL 1 0 0 0 4294967295 0
+  0001 CLOSE_UPVALUES 0
+  0002 RETURN 1
+  callsite pc=0 slot=0 sym=y0 flags=4
+  span 0..1 corpus/bc/disasm/object_model/source.s:12:5-12:7
   span 1..2 corpus/bc/disasm/object_model/source.s:11:3-12:7
+  span 2..3 corpus/bc/disasm/object_model/source.s:11:3-12:7
 code c4 kind=method regs=3 flags=0
   local l0 name=s3(масса) role=s1(param) binding=s2(local)
   local l1 name=s4(α) role=s1(param) binding=s2(local)
@@ -81,21 +85,21 @@ code c5 kind=default_thunk regs=3 flags=0
   span 1..2 corpus/bc/disasm/object_model/source.s:13:3-13:26
   span 2..3 corpus/bc/disasm/object_model/source.s:13:3-13:26
 .methods
-  m0 selector=y1(touch!) owner=0 signature=k1 entry=c2 flags=1
-  m1 selector=y5(find) owner=1 signature=k5 entry=c3 flags=2
-    param external=y6(id) local=s0(id) flags=0
-  m2 selector=y7(init) owner=1 signature=k6 entry=c4 flags=1
-    param external=y8(масса) local=s3(масса) flags=0
-    param external=y9(α) local=s4(α) flags=2
+  m0 selector=y2(touch!) owner=0 signature=k1 entry=c2 flags=1
+  m1 selector=y6(find) owner=1 signature=k5 entry=c3 flags=2
+    param external=y7(id) local=s0(id) flags=0
+  m2 selector=y8(init) owner=1 signature=k6 entry=c4 flags=1
+    param external=y9(масса) local=s3(масса) flags=0
+    param external=y10(α) local=s4(α) flags=2
     default_thunk c5
     auto_assign local=s3(масса) target=s5(@масса) flags=0
 .classes
-  c0 name=y0(Timestamped) super=- ivar_schema=k0 methods=0+1 flags=1 kind=mixin
-  c1 name=y2(Particle) super=k2(Entity) ivar_schema=k0 methods=1+2 flags=0 includes=[k3(Timestamped)] extends=[k4(Serializable)]
+  c0 name=y1(Timestamped) super=- ivar_schema=k0 methods=0+1 flags=1 kind=mixin
+  c1 name=y3(Particle) super=k2(Entity) ivar_schema=k0 methods=1+2 flags=0 includes=[k3(Timestamped)] extends=[k4(Serializable)]
 .deps
 .exports
-  export y0(Timestamped) kind=s6(class) target=0 visibility=1
-  export y2(Particle) kind=s6(class) target=1 visibility=1
+  export y1(Timestamped) kind=s6(class) target=0 visibility=1
+  export y3(Particle) kind=s6(class) target=1 visibility=1
 .init
   entry c1 flags=0
 .line
@@ -105,8 +109,9 @@ code c5 kind=default_thunk regs=3 flags=0
   c2 pc=0 line=6
   c2 pc=1 line=6
   c2 pc=2 line=6
-  c3 pc=0 line=11
+  c3 pc=0 line=12
   c3 pc=1 line=11
+  c3 pc=2 line=11
   c4 pc=0 line=13
   c4 pc=1 line=13
   c4 pc=2 line=13
@@ -114,7 +119,7 @@ code c5 kind=default_thunk regs=3 flags=0
   c5 pc=1 line=13
   c5 pc=2 line=13
 .locs
-  c3 l0 name=s0(id) 0..2
+  c3 l0 name=s0(id) 0..3
   c4 l0 name=s3(масса) 0..3
   c4 l1 name=s4(α) 0..3
   c5 l0 name=s3(масса) 0..3

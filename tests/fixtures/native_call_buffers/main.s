@@ -26,7 +26,7 @@ class PlainCounter:
 def mixed_read(receiver): receiver.read
 def mixed_value(receiver, value): receiver.typed_value(value)
 
-def keep(&block): block
+def keep(&block): &block
 
 def churn(items, text, &block): _churn(items, text, block)
 

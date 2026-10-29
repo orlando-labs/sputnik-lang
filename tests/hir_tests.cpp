@@ -507,8 +507,6 @@ void test_builtin_send_lowering() {
          "static builtin send lowers to HSend");
   expect(string_field(*static_expr, "selector") == "touch",
          "static send selector unquoted");
-  expect(!contains_kind(*static_expr, "HCall"),
-         "static builtin send is not HCall");
 
   const sputnik::ast::Expr *dynamic_stmt = list_item(*invoke->body, "items", 1);
   expect(dynamic_stmt != nullptr, "dynamic send stmt exists");
@@ -517,8 +515,9 @@ void test_builtin_send_lowering() {
          "dynamic builtin send lowers to HSendDyn");
   const sputnik::ast::Expr *selector_expr =
       node_field(*dynamic_expr, "selector_expr");
-  expect(selector_expr != nullptr && selector_expr->kind == "HLoadLocal",
-         "dynamic selector stays as expression");
+  expect(selector_expr != nullptr && selector_expr->kind == "HCall" &&
+             bool_field(*selector_expr, "bare_identifier"),
+         "dynamic selector retains ordinary identifier evaluation");
   expect(list_item(*dynamic_expr, "pos_args", 0) != nullptr,
          "dynamic send forwards extra positional args");
   const sputnik::ast::Expr *kw = list_item(*dynamic_expr, "kw_args", 0);
@@ -663,7 +662,8 @@ void test_conditional_chain_lowering() {
   expect(let != nullptr && let->kind == "HLet", "receiver is bound before guard");
   const auto *binding = node_field(*let, "binding");
   expect(binding != nullptr && binding->kind == "HStoreLocal" &&
-             node_field(*binding, "expr")->kind == "HLoadLocal",
+             node_field(*binding, "expr")->kind == "HCall" &&
+             bool_field(*node_field(*binding, "expr"), "bare_identifier"),
          "receiver binding evaluates original receiver once");
   const auto *branch = node_field(*let, "body");
   expect(branch != nullptr && branch->kind == "HIf", "guard uses ordinary HIf");
@@ -699,7 +699,7 @@ void test_string_interpolation_lowering() {
          "expression part lowers to HStringify");
   expect(string_field(*second, "mode") == "display", "stringify mode");
   const sputnik::ast::Expr *inner = node_field(*second, "expr");
-  expect(inner != nullptr && inner->kind == "HLoadLocal",
+  expect(inner != nullptr && inner->kind == "HCall" && bool_field(*inner, "bare_identifier"),
          "stringify wraps lowered expression");
 }
 
@@ -737,7 +737,7 @@ void test_w13_operator_lowering() {
   expect(string_field(*in_expr, "selector") == "contains?",
          "in selector is contains?");
   expect(node_field(*in_expr, "receiver") != nullptr &&
-             node_field(*in_expr, "receiver")->kind == "HLoadLocal",
+             bool_field(*node_field(*in_expr, "receiver"), "bare_identifier"),
          "in receiver is rhs collection");
 
   const sputnik::ast::Expr *and_stmt = list_item(*ops->body, "items", 1);
@@ -807,7 +807,7 @@ void test_compare_chain_lowering() {
   expect(ascending != nullptr && ascending->kind == "HCompareChain",
          "ascending chain lowers to HCompareChain");
   expect(node_field(*ascending, "first") != nullptr &&
-             node_field(*ascending, "first")->kind == "HLoadLocal",
+             bool_field(*node_field(*ascending, "first"), "bare_identifier"),
          "ascending first operand lowers");
   const sputnik::ast::Expr *ascending_first_link =
       list_item(*ascending, "links", 0);
@@ -939,9 +939,9 @@ void test_clause_method_lowering() {
          "area clause expr lowered");
   const sputnik::ast::Expr *area_recv = node_field(*area_expr, "receiver");
   const sputnik::ast::Expr *area_arg = list_item(*area_expr, "pos_args", 0);
-  expect(area_recv != nullptr && area_recv->kind == "HLoadLocal",
+  expect(area_recv != nullptr && bool_field(*area_recv, "bare_identifier"),
          "pattern receiver lowers to local");
-  expect(area_arg != nullptr && area_arg->kind == "HLoadLocal",
+  expect(area_arg != nullptr && bool_field(*area_arg, "bare_identifier"),
          "pattern arg lowers to local");
 
   const sputnik::ast::Expr *fact = module_item_by_name(program, "fact");
@@ -1011,7 +1011,7 @@ void test_case_pattern_lowering() {
   const sputnik::ast::Expr *body_stmt = list_item(*body, "items", 0);
   const sputnik::ast::Expr *body_expr =
       body_stmt == nullptr ? nullptr : node_field(*body_stmt, "expr");
-  expect(body_expr != nullptr && body_expr->kind == "HLoadLocal",
+  expect(body_expr != nullptr && bool_field(*body_expr, "bare_identifier"),
          "case body uses pattern local");
 }
 
@@ -1371,7 +1371,7 @@ void test_pattern_assignment_lowering() {
               "PSeqList",
       "pattern assignment compiled list match program");
   expect(node_field(*expr, "value") != nullptr &&
-             node_field(*expr, "value")->kind == "HLoadLocal",
+             bool_field(*node_field(*expr, "value"), "bare_identifier"),
          "pattern assignment rhs lowered");
 }
 
@@ -1389,7 +1389,7 @@ void test_index_assignment_lowering() {
   expect(string_field(*expr, "selector") == "[]=",
          "index assignment selector");
   expect(node_field(*expr, "receiver") != nullptr &&
-             node_field(*expr, "receiver")->kind == "HLoadLocal",
+             bool_field(*node_field(*expr, "receiver"), "bare_identifier"),
          "index assignment receiver lowered");
   expect(list_item(*expr, "pos_args", 0) != nullptr &&
              list_item(*expr, "pos_args", 1) != nullptr &&
@@ -1412,7 +1412,7 @@ void test_default_param_lowering() {
   expect(default_expr != nullptr && default_expr->kind == "HSend",
          "default expression lowered to HSend");
   const sputnik::ast::Expr *receiver = node_field(*default_expr, "receiver");
-  expect(receiver != nullptr && receiver->kind == "HLoadLocal",
+  expect(receiver != nullptr && bool_field(*receiver, "bare_identifier"),
          "default expression reads local slot");
 }
 
@@ -1578,9 +1578,10 @@ void test_direct_capture_lowering() {
   expect(block_expr != nullptr && block_expr->kind == "HSend",
          "direct capture body lowers to HSend");
   const sputnik::ast::Expr *captured_arg = list_item(*block_expr, "pos_args", 0);
-  expect(captured_arg != nullptr && captured_arg->kind == "HLoadCapture",
-         "captured param lowers to HLoadCapture");
-  expect(string_field(*captured_arg, "slot") == "u0", "captured param slot");
+  expect(captured_arg != nullptr && bool_field(*captured_arg, "bare_identifier") &&
+             node_field(*captured_arg, "callable")->kind == "HLoadCapture",
+         "captured param evaluates its function value if present");
+  expect(string_field(*node_field(*captured_arg, "callable"), "slot") == "u0", "captured param slot");
 }
 
 void test_indented_block_suffix_lowering() {
@@ -1694,9 +1695,9 @@ void test_nested_capture_propagation() {
       list_item(*inner_block->body, "items", 0);
   expect(inner_stmt != nullptr, "inner block stmt exists");
   const sputnik::ast::Expr *inner_expr = node_field(*inner_stmt, "expr");
-  expect(inner_expr != nullptr && inner_expr->kind == "HLoadCapture",
+  expect(inner_expr != nullptr && bool_field(*inner_expr, "bare_identifier"),
          "inner body loads propagated capture");
-  expect(string_field(*inner_expr, "slot") == "u0", "inner body capture slot");
+  expect(string_field(*node_field(*inner_expr, "callable"), "slot") == "u0", "inner body capture slot");
 }
 
 void test_property_lowering() {
@@ -1807,7 +1808,7 @@ void test_implicit_self_bare_name_lowering() {
       list_item(*shadowed_action->body, "items", 1);
   const sputnik::ast::Expr *shadowed_expr =
       shadowed_stmt == nullptr ? nullptr : node_field(*shadowed_stmt, "expr");
-  expect(shadowed_expr != nullptr && shadowed_expr->kind == "HLoadLocal",
+  expect(shadowed_expr != nullptr && bool_field(*shadowed_expr, "bare_identifier"),
          "lexical local shadows implicit self member");
 
   const sputnik::hir::Program module_function =
@@ -1819,7 +1820,8 @@ void test_implicit_self_bare_name_lowering() {
                                : list_item(*module_action->body, "items", 0);
   const sputnik::ast::Expr *module_expr =
       module_stmt == nullptr ? nullptr : node_field(*module_stmt, "expr");
-  expect(module_expr != nullptr && module_expr->kind == "HLoadName",
+  expect(module_expr != nullptr && bool_field(*module_expr, "bare_identifier") &&
+             node_field(*module_expr, "callable")->kind == "HLoadName",
          "bare name without object self remains unresolved name lookup");
 }
 

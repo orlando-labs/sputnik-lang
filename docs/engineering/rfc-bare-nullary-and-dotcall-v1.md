@@ -1019,17 +1019,30 @@ Bare-call is accepted as ergonomic read/query syntax, not as a ban on parenthese
 
 ### 13.5. Bare identifiers and implicit `self`
 
-Resolution is lexical first. A local, parameter, capture, import or
-module-level binding named `f` remains an ordinary value read and is never
-invoked implicitly.
+Resolution is lexical first. Reading a local, parameter, capture, import or
+module-level binding named `f` invokes its function value with zero arguments.
+This includes functions stored in variables (`callback = &f; callback`) and
+passed as parameters. All-default, rest and optional-block signatures accept
+bare calls; required arguments raise `ArgumentError`. Non-function values,
+including classes and ordinary objects with a `call` method, remain values.
+
+`&f` reads the binding without invocation. Use it to assign, return, compare or
+pass a function value. `f()` invokes the raw target once; it does not first
+perform a bare read. `&block` in a call's block channel also forwards the raw
+function. A call's returned value is never recursively invoked.
+
+The existing `&name` trailing call argument still selects the block channel:
+`apply(&callback)`. To pass the function as an ordinary positional value, use
+`apply((&callback))`; keyword values use `apply(callback: &callback)`.
 
 Only when no such binding exists and the current procedure has an object
 receiver does bare `f` become the member read `self.f`. It therefore invokes a
 zero-argument-callable method (or reads a property) through ordinary dynamic
 linearization. Without an object receiver, an unresolved bare identifier is
-an error. This preserves first-class lexical functions while allowing
-controllers and mixin-heavy DSLs to use inherited APIs without repetitive
-`self.` prefixes.
+an error. First-class functions remain available through explicit `&`
+references. This 2026-10-29 amendment supersedes the previous rule that lexical
+identifiers always read values, including the earlier "dot is a message;
+identifier is a value" rationale.
 
 ---
 
@@ -1265,7 +1278,9 @@ class Box:
 2. Whether property getter/setter callable references should become first-class and what spelling they should use.
 3. Whether effect annotations should influence bare-call diagnostics.
 4. Whether formatter should normalize query-like explicit calls `obj.empty?()` to `obj.empty?`.
-5. Whether top-level nullary functions should ever receive bare-call syntax. This RFC says no.
+5. Resolved 2026-10-29: function-valued identifiers, including imports,
+   parameters and captured/local function values, accept bare calls; `&f`
+   extracts the value without invocation.
 6. Resolved: a zero-argument-callable `!` method accepts ordinary bare-call
    syntax without a dedicated warning or strict-profile error.
 7. Whether `expr.()` should support block suffix directly:

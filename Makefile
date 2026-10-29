@@ -1,6 +1,23 @@
 .DEFAULT_GOAL := all
 include mk/config.mk
 
+.PHONY: test-package-path
+test-package-path: $(BUILD_DIR)/sputnik $(BUILD_DIR)/build_tests $(BUILD_DIR)/package_store_tests
+	$(BUILD_DIR)/build_tests
+	$(BUILD_DIR)/package_store_tests
+	node tests/path_dependencies_test.mjs --native
+	node tests/relative_imports_test.mjs --native
+
+.PHONY: test-package-manifest
+test-package-manifest: $(BUILD_DIR)/sputnik $(BUILD_DIR)/build_tests
+	$(BUILD_DIR)/build_tests
+	python3 tests/package_manifest_workflow_test.py $(BUILD_DIR)/sputnik
+test: test-package-manifest
+
+.PHONY: test-workspace-packages
+test-workspace-packages: $(BUILD_DIR)/sputnik
+	python3 tests/workspace_packages_test.py --sputnik $(BUILD_DIR)/sputnik --native
+
 # Opt-in Linux toolchain gate: Clang 19+ with matching LLVM and LLD tools.
 .PHONY: test-native-parallel
 test-native-parallel: $(BUILD_DIR)/sputnik
@@ -25,7 +42,7 @@ MIR_SRCS := optimizer/mir.cpp
 NATIVE_SRCS := optimizer/native.cpp
 FROZEN_SRCS := frozen/image.cpp
 PROFILE_SRCS := profile/capabilities.cpp profile/effects.cpp profile/replay.cpp profile/data.cpp profile/wasm_accel.cpp profile/modern.cpp
-BUILD_SRCS := buildsys/build.cpp
+BUILD_SRCS := buildsys/build.cpp buildsys/entry.cpp
 BYTECODE_SRCS := bytecode/format.cpp bytecode/emitter.cpp bytecode/graph_linker.cpp
 IO_SRCS := runtime/io.cpp runtime/reactor.cpp runtime/tls.cpp
 DIGEST_SRCS := runtime/digest.cpp
@@ -646,6 +663,9 @@ test: build-tests
 	grep -q '"native_vm_independent": true' $(BUILD_DIR)/native-http-reader-build.json
 	$(BUILD_DIR)/native-http-reader > $(BUILD_DIR)/native-http-reader.out
 	grep -q '^true$$' $(BUILD_DIR)/native-http-reader.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_qualified_binding/main.s --target native --require-full-native -o $(BUILD_DIR)/native-qualified-binding > $(BUILD_DIR)/native-qualified-binding-build.json
+	$(BUILD_DIR)/native-qualified-binding > $(BUILD_DIR)/native-qualified-binding.out
+	grep -q '^PASS qualified binding and call line boundaries$$' $(BUILD_DIR)/native-qualified-binding.out
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-lifetime
 	python3 tests/native_cycle_lifetime_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-cycle-checkpoint-loop tests/fixtures/native_cycle_checkpoint_loop/main.s
 	python3 tests/native_scalar_safepoint_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-scalar-safepoint

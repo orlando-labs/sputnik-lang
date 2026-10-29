@@ -891,9 +891,14 @@ PackageDecl::= "package" ModulePath
 ImportDecl::= ImportModuleDecl
  | FromImportDecl
 
-ImportModuleDecl::= "import" ModulePath [ "as" Name ]
+ImportSource::= ModulePath | RelativeImportString
 
-FromImportDecl::= "from" ModulePath "import" ImportName { "," ImportName } [ "," ]
+RelativeImportString::= StaticStringLiteral
+  # decoded value starts with ./ or ../; no interpolation, NUL or line breaks
+
+ImportModuleDecl::= "import" ImportSource [ "as" Name ]
+
+FromImportDecl::= "from" ImportSource "import" ImportName { "," ImportName } [ "," ]
 
 ImportName::= Name [ "as" Name ]
 
@@ -3073,7 +3078,9 @@ iterator-вызовов, в том числе через indexed adapter. `BREAK
 
 ### 8.5. Pattern opcodes
 
-Pattern matching компилируется не в общие method send'ы, а в ограниченное семейство pattern-инструкций поверх того же register VM.
+Структурные проверки pattern matching используют семейство pattern-инструкций
+поверх того же register VM. Вычисляемые membership-паттерны дополнительно
+исполняют обычные выражения и method sends внутри явного pattern scope.
 
 | Инструкция | Семантика |
 |---|---|
@@ -5343,24 +5350,19 @@ Typed checker обязан поддерживать flow-sensitive narrowing к�
 
 ### 3.1. Manifest и source layout
 
-Package-level tooling стандартизуется через manifest `sputnik.toml`.
+Сборка и упаковка используют один `sputnik.build.yaml` / `.yml` / `.json`
+со schema `sputnik.build.v1`. Для пакета задаются `name`, `version`,
+`source_root` и точный список `files`. Имя `src/net/http.s` относительно `src`
+выводится как `net.http`; `module_names` нужен только для явных исключений.
+Декларация `package` в исходнике, если присутствует, должна совпадать с этим именем.
+Библиотеке не обязательны `root` или `entry`. Dependencies, capability requests,
+profiles и native build facts находятся в этом же manifest. Capability requests
+не дают разрешений host. Source root не включает файлы автоматически.
 
-Минимально обязательные поля manifest:
-
-```toml
-package = "net.http"
-version = "1.2.0"
-sputnik = "1.0"
-sources = ["src"]
-profile = "dynamic" # or "typed"
-```
-
-Нормативно:
-
-- manifest `package` задаёт artifact/package id;
-- каждый source file внутри пакета обязан иметь `package`, равный этому id либо начинающийся с него как с dotted-prefix;
-- package version использует semver;
-- package build profile (`dynamic`, `typed`, `frozen`, `typed+frozen`) выбирается tooling, а не source grammar.
+Архив содержит сгенерированный `sputnik.build.json` того же schema и inventory
+`checksums.sha256`; отдельного authored package manifest нет. Path dependencies
+при упаковке проверяются и фиксируются версиями, при установке из исходного
+каталога устанавливаются рекурсивно.
 
 ### 3.2. Publish unit и registry model
 
@@ -5778,7 +5780,7 @@ Frozen image несовместим с hot reload и требует already-froz
 | `W9.1` | Sputnik/Typed checker core | G10 | `TypeTerm`, flow engine, invariance, exhaustiveness | `W3.4`, `W8.4` | typed corpus зелёный и не меняет dynamic behavior |
 | `W9.2` | open-class/open-mixin/`extend` runtime path | G11 | transactions, invalidation, world-open semantics | `W5.4`, `W8.2` | open-world mutation работает без ambiguous dispatch |
 | `W9.3` | reflection mirrors | G11 | `sputnik.reflect` read-only mirrors | `W9.2` | mirrors детерминированы и не открывают mutation backdoor |
-| `W9.4` | package/registry/signing/lockfile tooling | G11 | `sputnik.toml`, `.sputnikpkg`, `sputnik.lock`, signatures | `W8.2`, `W8.4` | reproducible package artifacts и install/publish smoke работают |
+| `W9.4` | package/registry/signing/lockfile tooling | G11 | `sputnik.build.yaml`, `.sputnikpkg`, `sputnik.lock`, signatures | `W8.2`, `W8.4` | reproducible package artifacts и install/publish smoke работают |
 | `W9.5` | hot reload as package-swap | G11 | compatible reload / incompatibility guards | `W9.4`, `W9.2` | reload success/failure paths наблюдаемо стабильны |
 
 ### 3.11. W10 — advanced concurrency и native profiles
@@ -7098,7 +7100,7 @@ Title: SPEC-SYNC <artifact> <mismatch>
 
 #### `ISS-061` package manifest, lockfile and `.sputnikpkg` bundle
 
-- `T-061.1` зафиксировать `sputnik.toml`, package table, lockfile and bundle layout.
+- `T-061.1` зафиксировать `sputnik.build.yaml`, package table, lockfile and bundle layout.
 - `T-061.2` реализовать build/export/package pipeline для publishable artifacts.
 - `T-061.3` собрать corpus на manifest/package-prefix invariants и bundle round-trips.
 

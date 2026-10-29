@@ -90,11 +90,14 @@ sputnik pkg install ./my-package
 sputnik pkg install ./build-manifest-package --version 1.2.0
 ```
 
-A source directory requires `sputnik.toml` or one `sputnik.build.yaml`,
-`sputnik.build.yml`, or `sputnik.build.json`. TOML supplies its package version;
-build manifests require `--version`. Installing a source directory compiles its
-declared modules into an artifact, then installs it in the shared home.
-`--signing-key` uses the existing package signature verifier.
+A source directory requires one `sputnik.build.yaml`, `sputnik.build.yml`, or
+`sputnik.build.json`. It declares its version, or the caller supplies `--version`.
+Installation builds the normalized tar source distribution and installs it in
+the shared home under `<name>/<version>/<variant>/`. It preserves the checkout.
+Path dependencies are installed recursively from their declaring directories;
+registry dependencies are installed at their exact versions. An explicit local
+source directory retains its existing native build behavior. Native registry
+artifacts require `--allow-native --build-from-source`.
 
 Exact transitive dependencies are installed from the same registry, reusing
 already installed versions. Installation verifies artifact digests and bytecode;
@@ -135,14 +138,23 @@ an installed version are unlinked without deleting their external targets.
 
 ## Resolution
 
-The search anchor is the entry source's directory, the build manifest's
-directory, or the `.sputnikbook` directory. It is not the working directory.
-No parent-directory traversal is performed. A projectless console searches only
-the shared home.
+Source entry commands need no manifest. Local imports resolve relative to
+the entry file, using dotted names as subdirectories and optionally stripping
+the entry's package prefix. Only imports are followed; unrelated source files
+are not scanned. Installed packages work without `dependencies`.
 
-1. Explicit project/build modules and explicitly linked notebook dependencies.
-2. Packages under `<anchor>/packages/`.
-3. Packages in `SPUTNIK_PKG_HOME`.
+The package search anchor is the nearest optional `sputnik.build.json` /
+`.yaml` / `.yml` above the source entry, or its directory when none exists.
+The optional configuration can contain only dependency overrides or template
+formats; it needs no source list or entry declaration. Explicit manifest and
+notebook commands anchor to their input directory. Packages are searched at
+that anchor and in the shared home, independently of the working directory.
+A projectless console searches only the shared home.
+
+1. Explicit project/build modules, reachable local source imports and explicitly linked notebook dependencies.
+2. Explicit `dependencies` path bindings and local sources pinned by a graph lock.
+3. Packages under `<anchor>/packages/`.
+4. Packages in `SPUTNIK_PKG_HOME`.
 
 Builtin runtime namespaces retain their reserved identity. Local package
 directory names need not match imports: the manifest's module table is the
@@ -164,7 +176,7 @@ Discovery and import
 resolution never download packages. A missing import reports searched paths
 and suggests `sputnik pkg install`.
 
-`sputnik run <build-manifest>` and native `sputnik build` use the same resolver.
+`sputnik run <file.s>`, manifest execution and native `sputnik build` use the same resolver.
 VM graph cache keys include the resolved package fingerprints. Notebook opening
 does not discover, compile or load shared packages; explicit Apply/evaluation
 does. Ordinary notebook Run retains its loaded generation. Installed native
@@ -178,8 +190,21 @@ Build manifests can pin package identities independently of module names:
 "dependencies": {"some-library": "1.2.0"}
 ```
 
-`sputnik.toml` continues to use its `[dependencies]` exact-version table.
-Source scripts and notebooks also read the adjacent `sputnik.toml` when present.
+Dependencies are optional: imports discover installed providers without a
+repeated package list. A declaration constrains selection rather than granting
+permission to import. A build dependency may also name a live directory:
+
+```yaml
+dependencies:
+  some-library: {path: ../some-library}
+```
+
+A path object accepts an optional exact `version` consistency check. Each path
+is relative to its declaring manifest; conflicting identities/versions are
+errors. Packing validates the local package and records its declared version
+without the development path. Installing from the source directory recursively
+installs those local dependencies first. Source scripts and notebooks read the
+same adjacent build configuration.
 Version ranges are not implemented; incompatible requirements fail explicitly.
 
 ```sh
@@ -189,8 +214,12 @@ sputnik pkg lock sputnik.build.json
 
 These commands write an adjacent `sputnik.lock` with schema
 `sputnik.packages.lock.v1`, selected package identities, versions and SHA-256
-artifact fingerprints. Source overrides fingerprint the manifest, declared
-Sputnik sources and native sources/headers. Later runs enforce the lock without
+artifact fingerprints. For mutable source directories, `digest` fingerprints
+package identity and declared dependency edges, while `source_kind = "path"`
+and `source` identify the directory relative to the lock. It does not freeze
+working-tree bytes. Source/native/template contents separately invalidate build
+caches. A lock can locate its previously selected local roots even when the
+consumer omits `dependencies`. Later runs enforce the graph lock without
 rewriting it. Running `pkg lock` again deliberately resolves current versions.
 An import that introduces a package absent from the lock fails until the lock
 is updated. Local overrides shadow the entire installed package, including
@@ -208,6 +237,12 @@ version ordering, locking, graph-cache invalidation, unused initializers,
 malformed artifacts, prepared native reuse with an unavailable compiler, and
 trusted native imports in a notebook. `package_store_tests` additionally checks
 Apply/Run snapshot behavior and ambiguous providers.
+
+`node tests/path_dependencies_test.mjs --native` checks transitive paths,
+manifest-relative resolution from a different CWD, live macro/template edits,
+source/identity conflicts, locked installed imports without dependencies, and
+strict native execution. It uses an isolated package home and no registry
+network access.
 
 `make test-package-directory-install` specifically verifies absolute, relative
 and symlink source directories, the default and overridden package homes,

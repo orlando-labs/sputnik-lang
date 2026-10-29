@@ -1075,13 +1075,13 @@ default. Raw output requires an explicit audited type/helper.
 
 ### 12.3. External `.html.sv` files (implemented 2026-10-26)
 
-Views use the common compiler source-format registry and `@template` declaration:
+Views use the common compiler source-format registry and `template` declaration:
 
 ```sputnik
 package app.views.posts
 export index
 
-@template("./posts/index.html.sv")
+template("./posts/index.html.sv")
 def index(posts, title: "Posts")
 ```
 
@@ -1783,7 +1783,7 @@ responsibilities.
 - inline `Html` string-tag macro and escaping model;
 - typed Sputnik-module views;
 - compiler source-format registry and external `.html.sv` bodies (implemented);
-- typed function signatures declared with `@template`.
+- typed function signatures declared with `template`.
 
 ### Phase 6 — ORM web readiness
 

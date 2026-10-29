@@ -1,12 +1,15 @@
-schema: sputnik.build.v1
-name: notebook.ui
-root: notebook.ui
+schema: "sputnik.build.v1"
+name: "notebook.ui"
+version: "0.1.0"
+source_root: "src"
 profiles:
-  required: [core.v1]
+  required:
+    - "core.v1"
   optional: []
   forbidden: []
-modules:
-  - name: audio
-    path: src/audio.s
-  - name: notebook.ui
-    path: src/notebook_ui.s
+files:
+  - "src/audio.s"
+  - "src/notebook_ui.s"
+  - "README.md"
+module_names:
+  "src/notebook_ui.s": "notebook.ui"

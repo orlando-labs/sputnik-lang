@@ -11,7 +11,7 @@ source files.
 package app.views.posts
 export index
 
-@template("./posts/index.html.sv")
+template "./posts/index.html.sv"
 def index(posts, title: "Posts")
 ```
 
@@ -23,8 +23,15 @@ retain the ordinary language distinction. Types, defaults, variadic parameters
 and argument validation use the normal function machinery. Several declarations
 can share one `.s` module or use the same template body. Class methods, native
 functions, macros, existing bodies and unattached annotations are rejected.
-An ordinary annotation immediately above `@template` remains attached to the
+An ordinary annotation immediately above `template` remains attached to the
 completed declaration.
+
+`template` is a compiler-provided annotation using the ordinary sigil-less call
+surface described in the macro-system design, not a decorator syntax. `@name`
+and `@@name` keep their instance/class variable meaning, including `@template`.
+An explicit module binding/import named `template` shadows this compiler-provided binding;
+function-local calls and member access are ordinary expressions. Source loading
+belongs to the host's input preparation pass, so the macro VM gains no IO access.
 
 ```yaml
 schema: sputnik.build.v1
@@ -141,4 +148,4 @@ execution.
 VS Code and Vim recognize `.html.sv`, `.cmd.sv`, `.sql.sv` and `.text.sv`, with
 embedded Sputnik expressions and control headers. Custom suffixes can be mapped
 to the Sputnik View language/filetype. Bare `.sv` remains available for
-SystemVerilog. `@template` is highlighted in `.s` declarations and notebook code.
+SystemVerilog. `template` is highlighted in `.s` declarations and notebook code.

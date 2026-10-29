@@ -2077,6 +2077,38 @@ void test_execute_emitted_inherited_implicit_receiver_method_call() {
          "the receiver ancestry");
 }
 
+void test_execute_emitted_call_line_boundaries() {
+  const auto exec = execute_emitted_init(
+      "def with_block(&block): block()\n"
+      "def finish(value): value\n"
+      "def tuple_result():\n"
+      "  with_block:\n"
+      "    99\n"
+      "  (3, 4)\n"
+      "def bare_result():\n"
+      "  with_block:\n"
+      "    99\n"
+      "  finish 7\n"
+      "tuple_result() == (3, 4) and bare_result() == 7\n");
+  expect(exec.ok(), "expressions after a block must not become call arguments");
+  expect(exec.value.is_bool() && exec.value.as_bool(),
+         "implicit tuple and bare call results after a block");
+}
+
+void test_execute_emitted_native_type_qualified_name_collision() {
+  const auto exec = execute_emitted_init(
+      "from net.http import Client as HttpClient\n"
+      "class Client:\n"
+      "  def init(root): null\n"
+      "client = HttpClient(timeout: 1.0, redirects: :off)\n"
+      "matches = HttpClient === client\n"
+      "client.close!\n"
+      "matches\n");
+  expect(exec.ok(), "qualified native type must not resolve a local class leaf");
+  expect(exec.value.is_bool() && exec.value.as_bool(),
+         "aliased net.http.Client retains its own identity");
+}
+
 void test_execute_emitted_exclusive_slice_end_boundary() {
   const sputnik::runtime::ExecutionResult string_slice = execute_emitted_init(
       "slot = \":name\"\n"
@@ -13478,6 +13510,8 @@ int main() {
   test_execute_emitted_class_matcher();
   test_execute_emitted_implicit_receiver_method_call();
   test_execute_emitted_inherited_implicit_receiver_method_call();
+  test_execute_emitted_call_line_boundaries();
+  test_execute_emitted_native_type_qualified_name_collision();
   test_execute_emitted_exclusive_slice_end_boundary();
   test_execute_emitted_integer_specialized_ops();
   test_execute_emitted_numeric_equality_and_new_ops();

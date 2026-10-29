@@ -132,9 +132,9 @@ void usage(std::ostream &out) {
   out << "  sputnik sputnikbc-dump <file>\n";
   out << "  sputnik sputnikbc-verify <file>\n";
   out << "  sputnik sputnikbc-disasm <file>\n";
-  out << "  sputnik package-manifest <sputnik.toml>\n";
-  out << "  sputnik package-lock <sputnik.toml>\n";
-  out << "  sputnik package-build <sputnik.toml> <out.sputnikpkg> "
+  out << "  sputnik package-manifest <sputnik.build.yaml>\n";
+  out << "  sputnik package-lock <sputnik.build.yaml>\n";
+  out << "  sputnik package-build <sputnik.build.yaml> <out.sputnikpkg> "
          "[--sign-key <key>] [--key-id <id>]\n";
   out << "  sputnik package-inspect <file.sputnikpkg>\n";
   out << "  sputnik package-verify <file.sputnikpkg> [--sign-key <key>]\n";
@@ -142,7 +142,7 @@ void usage(std::ostream &out) {
          "[--sign-key <key>]\n";
   out << "  sputnik package-publish <file.sputnikpkg> <registry-dir> "
          "[--sign-key <key>]\n";
-  out << "  sputnik capabilities-check <sputnik.toml> [--grant "
+  out << "  sputnik capabilities-check <sputnik.build.yaml> [--grant "
          "<cap[=target]>...]\n";
   out << "  sputnik replay-check <file.sputniktrace>\n";
   out << "  sputnik trace-inspect <file.sputniktrace>\n";
@@ -157,7 +157,7 @@ void usage(std::ostream &out) {
   out << "  sputnik contract-check <file.sputnikmodern>\n";
   out << "  sputnik privacy-check <file.sputnikmodern>\n";
   out << "  sputnik workflow-check <file.sputnikmodern>\n";
-  out << "  sputnik image-build <sputnik.toml> <out.sputnikimg> "
+  out << "  sputnik image-build <sputnik.build.yaml> <out.sputnikimg> "
          "[--sign-key <key>] [--key-id <id>]\n";
   out << "  sputnik image-inspect <file.sputnikimg>\n";
   out << "  sputnik image-verify <file.sputnikimg> [--sign-key <key>]\n";
@@ -531,6 +531,7 @@ struct CompiledModuleArtifact {
 struct PreparedSource {
   sputnik::parser::ParseModuleResult parsed;
   sputnik::templates::PrepareResult templates;
+  std::string import_material;
 };
 
 sputnik::templates::PrepareResult prepare_template_inputs(
@@ -548,14 +549,21 @@ sputnik::templates::PrepareResult prepare_template_inputs(
 }
 
 PreparedSource prepare_source_text(const std::string &source, const std::string &path,
-    const std::vector<sputnik::templates::SourceFormat> &formats = {}) {
+    const std::vector<sputnik::templates::SourceFormat> &formats = {},
+    sputnik::pkg::PackageResolver *context = nullptr) {
   auto lexed = lex_source(source, path);
   if (!lexed.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(lexed.diagnostics));
   sputnik::parser::Parser parser(lexed.tokens);
   PreparedSource result;
   result.parsed = parser.parse_module_unit();
   if (!result.parsed.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(result.parsed.diagnostics));
+  std::unique_ptr<sputnik::pkg::PackageResolver> owned;
+  if (!context) {
+    owned = std::make_unique<sputnik::pkg::PackageResolver>(std::filesystem::absolute(path).parent_path());
+    context = owned.get();
+  }
   result.templates = prepare_template_inputs(result.parsed.items, source, path, formats);
+  result.import_material = context->prepare_imports(result.parsed.items, path, result.parsed.module_name);
   return result;
 }
 
@@ -671,9 +679,12 @@ CompiledModuleArtifact compile_source_to_module_artifact(
 }
 
 sputnik::macros::MacroProviderMap installed_macro_providers(
-    const std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
+    std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
     const std::string &path,
-    const std::vector<sputnik::pkg::PackageDependency> &dependencies = {});
+    const std::vector<sputnik::pkg::PackageDependency> &dependencies = {},
+    sputnik::pkg::PackageResolver *context = nullptr);
+
+std::string synthetic_module_name_for_path(const std::string &path);
 
 sputnik::bytecode::BcModule compile_prepared_source_to_module(
     PreparedSource &prepared, const std::string &source, const std::string &source_path,
@@ -681,8 +692,10 @@ sputnik::bytecode::BcModule compile_prepared_source_to_module(
     const std::vector<sputnik::capability::CapabilityRequest> &capabilities,
     const sputnik::macros::MacroProviderMap *macro_providers) {
   auto &parse_result = prepared.parsed;
-  if (!expected_module_name.empty() &&
-      parse_result.module_name != expected_module_name) {
+  if (parse_result.module_name.empty() && expected_module_name.rfind("sputnik.local.m", 0) == 0)
+    parse_result.module_name = expected_module_name;
+  if (!expected_module_name.empty() && parse_result.module_name != expected_module_name &&
+      !(parse_result.module_name.empty() && expected_module_name == synthetic_module_name_for_path(source_path))) {
     throw std::runtime_error("manifest module '" + expected_module_name +
                              "' does not match source package '" +
                              parse_result.module_name + "' in " + source_path);
@@ -977,11 +990,59 @@ struct RunnableModuleArtifact {
 RunnableModuleArtifact resolve_runnable_packages(RunnableModuleArtifact artifact,
                                                  const std::string &path);
 
+struct SourceConfiguration {
+  std::filesystem::path directory;
+  std::filesystem::path file;
+  sputnik::build::BuildManifest manifest;
+  bool has_package = false;
+};
+
+std::optional<SourceConfiguration> source_configuration(const std::string &path) {
+  namespace fs = std::filesystem;
+  const auto entry = fs::canonical(path);
+  for (auto directory = entry.parent_path();; directory = directory.parent_path()) {
+    fs::path selected;
+    for (const auto *name : {"sputnik.build.json", "sputnik.build.yaml", "sputnik.build.yml"}) {
+      if (!fs::is_regular_file(directory / name)) continue;
+      if (!selected.empty()) throw std::runtime_error("ambiguous build configuration in " + directory.string());
+      selected = directory / name;
+    }
+    if (!selected.empty()) {
+      auto settings = sputnik::build::parse_build_configuration(read_file(selected.string()), selected.string());
+      if (!settings.ok()) throw std::runtime_error(sputnik::build::diagnostics_to_string(settings.diagnostics));
+      auto lexed = lex_source(read_file(entry.string()), entry.string());
+      if (!lexed.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(lexed.diagnostics));
+      sputnik::parser::Parser parser(lexed.tokens);
+      auto parsed = parser.parse_module_unit();
+      if (!parsed.ok()) throw std::runtime_error(sputnik::lexer::diagnostics_to_json(parsed.diagnostics));
+      auto &manifest = settings.manifest;
+      manifest.entry = entry.string();
+      manifest.root_module = parsed.module_name.empty() ? synthetic_module_name_for_path(path) : parsed.module_name;
+      if (manifest.name.empty()) manifest.name = manifest.root_module;
+      const auto existing = std::find_if(manifest.modules.begin(), manifest.modules.end(),
+          [&](const auto &module) { return module.name == manifest.root_module; });
+      if (existing == manifest.modules.end()) manifest.modules.push_back({manifest.root_module, entry.string(), false, {}});
+      else if (fs::canonical(directory / existing->path) != entry)
+        throw std::runtime_error("entry has a conflicting module provider: " + manifest.root_module);
+      return SourceConfiguration{directory, selected, std::move(manifest), !parsed.module_name.empty()};
+    }
+    if (directory == directory.root_path()) return std::nullopt;
+  }
+}
+
+RunnableModuleArtifact compile_configured_source(
+    const SourceConfiguration &configuration,
+    const std::optional<EntryExecutionMode> &forced_entry_mode,
+    const std::vector<sputnik::capability::CapabilityRequest> &capabilities);
+
 RunnableModuleArtifact compile_source_to_runnable_module(
     const std::string &path,
     const std::optional<EntryExecutionMode> forced_entry_mode = std::nullopt,
     const std::vector<sputnik::capability::CapabilityRequest> &capabilities =
         {}, bool resolve_packages = true) {
+  if (resolve_packages)
+    if (const auto configuration = source_configuration(path))
+      return compile_configured_source(*configuration, forced_entry_mode, capabilities);
   const std::string source = read_file(path);
   sputnik::lexer::LexResult lex_result = lex_source(source, path);
   if (!lex_result.ok()) {
@@ -1000,10 +1061,13 @@ RunnableModuleArtifact compile_source_to_runnable_module(
 
   // F1.5: expand macro calls, then quote/unquote, before binding.
   {
+    sputnik::pkg::PackageResolver context(std::filesystem::absolute(path).parent_path());
+    context.source_entry(path, parse_result.module_name.empty() ? synthetic_module_name_for_path(path) : parse_result.module_name);
+    context.prepare_imports(parse_result.items, path, parse_result.module_name);
     const sputnik::macros::ExpandResult macro_result =
         sputnik::macros::expand_macros(parse_result.items,
                                      parse_result.module_name, source,
-                                     installed_macro_providers(parse_result.items, path));
+                                     installed_macro_providers(parse_result.items, path, {}, &context));
     if (!macro_result.ok) {
       throw std::runtime_error("macro expansion error: " + macro_result.error);
     }
@@ -1886,8 +1950,17 @@ bool native_cpp_system_selector(const std::string &selector) {
 }
 
 bool native_cpp_open_protocol_selector(const std::string &selector) {
+  // A library can accept an RNG supplied by its caller without importing the
+  // concrete Generator class. Keep those calls in normal native user dispatch.
+  if (selector == "rand!" || selector == "randn!" || selector == "randperm!")
+    return true;
   return selector == "around_controller" || selector == "start" ||
-         selector == "ready?" || selector == "stop";
+         selector == "ready?" || selector == "stop" ||
+         selector == "start_request" || selector == "authorized_request" ||
+         selector == "record_error" || selector == "finish_exception" ||
+         selector == "finish_response" || selector == "attach_server" ||
+         selector == "record_shutdown" || selector == "metrics" ||
+         selector == "set_integration_pool";
 }
 
 bool native_cpp_user_constructor_shape(const sputnik::bytecode::BcModule &module,
@@ -2062,6 +2135,20 @@ native_cpp_class_index_for_path(const sputnik::bytecode::BcModule &module,
         module.symbols[symbol] == qualified_path) {
       return index;
     }
+  }
+  static const auto native_modules = [] {
+    sputnik::runtime::RuntimeModuleRegistry registry;
+    sputnik::runtime::RuntimeDispatchRegistry dispatch;
+    sputnik::runtime::RuntimeTypeRegistry types;
+    sputnik::runtime::register_builtin_runtime_modules(registry, dispatch, types);
+    sputnik::runtime::register_core_prelude_bindings(registry);
+    sputnik::runtime::register_legacy_native_type_paths(registry);
+    return registry;
+  }();
+  if (qualified_path.find('.') != std::string::npos &&
+      (native_modules.binding_for_path(qualified_path).has_value() ||
+       native_cpp_declared_error_path(module, qualified_path, false))) {
+    return std::nullopt;
   }
   std::optional<std::uint32_t> found;
   for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
@@ -17930,7 +18017,7 @@ static NativeValue native_url_percent_decode(const NativeValue &module,
   std::string error;
   if (!sputnik::runtime::runtime_url_percent_decode(
           native_string_text(text_value), false, &decoded, &error)) {
-    throw NativeBailout();
+    throw NativeRaised{native_named_error("UrlDecodeError", error)};
   }
   return native_url_string(decoded);
 }
@@ -27691,7 +27778,7 @@ int run_package_command(int argc, char **argv) {
       argc == 3) {
     const std::string manifest_source = read_file(argv[2]);
     const sputnik::pkg::PackageManifestResult manifest =
-        sputnik::pkg::parse_manifest_toml(manifest_source, argv[2]);
+        sputnik::pkg::parse_manifest(manifest_source, argv[2]);
     if (!manifest.ok()) {
       std::cerr << package_diagnostics_to_string(manifest.diagnostics);
       return 1;
@@ -27711,7 +27798,7 @@ int run_package_command(int argc, char **argv) {
         parse_package_build_options(argc, argv, 4);
     const std::string manifest_source = read_file(manifest_path);
     const sputnik::pkg::PackageManifestResult manifest =
-        sputnik::pkg::parse_manifest_toml(manifest_source, manifest_path);
+        sputnik::pkg::parse_manifest(manifest_source, manifest_path);
     if (!manifest.ok()) {
       std::cerr << package_diagnostics_to_string(manifest.diagnostics);
       return 1;
@@ -27970,21 +28057,27 @@ harvest_macro_exports(const std::string &source, const std::string &path) {
 // Imported source providers must be staged before the entry is lowered. A
 // graph pass after bytecode emission cannot recover unexpanded macro syntax.
 sputnik::macros::MacroProviderMap installed_macro_providers(
-    const std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
+    std::vector<std::unique_ptr<sputnik::ast::Expr>> &items,
     const std::string &path,
-    const std::vector<sputnik::pkg::PackageDependency> &dependencies) {
+    const std::vector<sputnik::pkg::PackageDependency> &dependencies,
+    sputnik::pkg::PackageResolver *context) {
   sputnik::macros::MacroProviderMap providers;
-  sputnik::pkg::PackageResolver resolver(std::filesystem::absolute(path).parent_path());
-  resolver.require(dependencies);
+  std::unique_ptr<sputnik::pkg::PackageResolver> owned;
+  if (!context) {
+    owned = std::make_unique<sputnik::pkg::PackageResolver>(std::filesystem::absolute(path).parent_path());
+    context = owned.get();
+    context->require(dependencies);
+  }
   sputnik::runtime::RuntimeModuleRegistry natives;
   sputnik::runtime::RuntimeDispatchRegistry dispatch;
   sputnik::runtime::RuntimeTypeRegistry types;
   sputnik::runtime::register_builtin_runtime_modules(natives, dispatch, types);
   sputnik::runtime::register_core_prelude_bindings(natives);
   std::set<std::string> visited;
+  context->prepare_imports(items, path, "");
   const auto replacements = sputnik::frontend::collect_import_aliases(items);
-  std::function<void(const std::vector<std::unique_ptr<sputnik::ast::Expr>> &)> visit;
-  visit = [&](const auto &module_items) {
+  std::function<void(std::vector<std::unique_ptr<sputnik::ast::Expr>> &)> visit;
+  visit = [&](auto &module_items) {
     const auto local_aliases = sputnik::frontend::collect_import_aliases(module_items);
     for (const auto &item : module_items) {
       if (!item || item->kind != "AstImportStmt") continue;
@@ -28000,13 +28093,14 @@ sputnik::macros::MacroProviderMap installed_macro_providers(
         if (existing != providers.end()) providers[field->value] = existing->second;
         continue;
       }
-      const auto resolved = resolver.resolve(name);
+      const auto resolved = context->resolve(name);
       if (!resolved || resolved->source.empty()) continue;
       auto lexed = lex_source(resolved->source, resolved->path);
       if (!lexed.ok()) continue;
       sputnik::parser::Parser parser(lexed.tokens);
       auto parsed = parser.parse_module_unit();
       if (!parsed.ok()) continue;
+      context->prepare_imports(parsed.items, resolved->path, name);
       auto exports = sputnik::macros::collect_macro_exports(parsed.items);
       if (!exports.empty()) {
         providers[name] = exports;
@@ -28019,48 +28113,6 @@ sputnik::macros::MacroProviderMap installed_macro_providers(
   return providers;
 }
 
-// Stage a provider from its built artifact's persisted macro section (§11)
-// when the artifact is fresh — its recorded source hash matches the current
-// source — skipping the source re-parse. Returns nullopt when the artifact
-// is missing, stale, has no macro section (older artifact or no macros), or
-// the section fails to decode; the caller falls back to the source harvest.
-std::optional<std::vector<sputnik::macros::MacroExport>>
-macro_exports_from_artifact(const std::filesystem::path &artifact_path,
-                            const std::string &source_hash,
-                            const std::string &module_path) {
-  std::error_code exists_error;
-  if (!std::filesystem::exists(artifact_path, exists_error) || exists_error) {
-    return std::nullopt;
-  }
-  std::vector<std::uint8_t> bytes;
-  try {
-    bytes = read_bytes(artifact_path.string());
-  } catch (const std::exception &) {
-    return std::nullopt;
-  }
-  sputnik::bytecode::DecodeResult decoded =
-      sputnik::bytecode::deserialize_module(bytes);
-  if (!decoded.ok()) {
-    return std::nullopt;
-  }
-  if (module_attr_text(decoded.module, "sputnik.build.source_hash") !=
-      source_hash) {
-    return std::nullopt;
-  }
-  const std::string payload =
-      module_attr_text(decoded.module, sputnik::macros::kMacroExportsAttrKey);
-  if (payload.empty()) {
-    return std::nullopt;
-  }
-  std::string error;
-  std::vector<sputnik::macros::MacroExport> exports =
-      sputnik::macros::parse_macro_exports(payload, module_path, &error);
-  if (!error.empty()) {
-    return std::nullopt;
-  }
-  return exports;
-}
-
 sputnik::build::BuildArtifactRecord build_one_module(
     const sputnik::build::BuildModule &module,
     const std::filesystem::path &root_dir, const std::filesystem::path &out_dir,
@@ -28070,10 +28122,10 @@ sputnik::build::BuildArtifactRecord build_one_module(
     const sputnik::macros::MacroProviderMap *macro_providers = nullptr,
     const std::string &macro_material = {},
     const std::vector<sputnik::templates::SourceFormat> &formats = {},
-    const std::vector<sputnik::pkg::PackageDependency> &dependencies = {}) {
+    sputnik::pkg::PackageResolver *context = nullptr) {
   const std::filesystem::path source_path = root_dir / module.path;
   const std::string source = read_file(source_path.string());
-  auto prepared = prepare_source_text(source, source_path.string(), formats);
+  auto prepared = prepare_source_text(source, source_path.string(), formats, context);
   auto effective_providers = macro_providers ? *macro_providers : sputnik::macros::MacroProviderMap{};
   std::string installed_material;
   if (!prepared.templates.providers.empty()) {
@@ -28082,7 +28134,7 @@ sputnik::build::BuildArtifactRecord build_one_module(
       for (const auto &macro : entry.second)
         if (macro.def) installed_material += entry.first + "\n" + sputnik::ast::ast_module_to_json(*macro.def, "") + "\n";
     }
-    for (auto &entry : installed_macro_providers(prepared.parsed.items, source_path.string(), dependencies)) {
+    for (auto &entry : installed_macro_providers(prepared.parsed.items, source_path.string(), {}, context)) {
       if (effective_providers.count(entry.first)) continue;
       for (const auto &macro : entry.second)
         if (macro.def) installed_material += entry.first + "\n" + sputnik::ast::ast_module_to_json(*macro.def, "") + "\n";
@@ -28094,10 +28146,10 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      // v7 includes external source-format registrations and input/provider digests.
-      "sputnik.build.cache.v7\n" + module.name + "\n" + module.path + "\n" +
+      // v9 includes resolved relative import identities in the expansion key.
+      "sputnik.build.cache.v9\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
-      stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material);
+      stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material + prepared.import_material);
   const std::filesystem::path output_path =
       out_dir / (safe_artifact_name(module.name) + ".sputnikbc");
   const std::filesystem::path cache_path =
@@ -28255,6 +28307,34 @@ std::vector<sputnik::pkg::PackageNativeExtension>
 resolved_native_extensions(const sputnik::pkg::PackageResolver &resolver) {
   std::vector<sputnik::pkg::PackageNativeExtension> result;
   for (const auto &package : resolver.selected()) {
+
+    if (!package.artifact_path.empty() && !package.manifest.native_extensions.empty()) {
+      // Installation already prepared and verified this adapter. Consumers use
+      // those immutable bytes without rebinding SDKs or recompiling sources.
+      sputnik::pkg::verify_prepared_native(package);
+      std::istringstream descriptor(read_file((package.directory / "native-library.meta").string()));
+      std::string target, relative, digest;
+      std::getline(descriptor, target); std::getline(descriptor, relative); std::getline(descriptor, digest);
+      const auto library = std::filesystem::canonical(package.directory / relative);
+      const auto within = library.lexically_relative(package.directory);
+      if (target != native_target_triple() || within.empty() || *within.begin() == ".." ||
+          digest != sputnik::lexer::sha256_hex(read_file(library.string())))
+        throw std::runtime_error("installed native library changed or targets another platform; reinstall " + package.manifest.name);
+      sputnik::pkg::PackageNativeExtension extension;
+      extension.name = package.manifest.native_extensions.front().name;
+      extension.kind = "prebuilt";
+      extension.library = library.string();
+      extension.provider_prepared = true;
+      for (const auto &original : package.manifest.native_extensions) {
+        extension.symbols.insert(extension.symbols.end(), original.symbols.begin(), original.symbols.end());
+        extension.types.insert(extension.types.end(), original.types.begin(), original.types.end());
+        extension.errors.insert(extension.errors.end(), original.errors.begin(), original.errors.end());
+        extension.blocking_symbols.insert(extension.blocking_symbols.end(), original.blocking_symbols.begin(), original.blocking_symbols.end());
+        extension.required_runtime_features.insert(extension.required_runtime_features.end(), original.required_runtime_features.begin(), original.required_runtime_features.end());
+      }
+      result.push_back(std::move(extension));
+      continue;
+    }
     const char *provider_cache = std::getenv("SPUTNIK_NATIVE_EXT_CACHE");
     const auto prepared = sputnik::pkg::prepare_native_providers(
         package.manifest, package.directory, std::filesystem::absolute(
@@ -28288,7 +28368,8 @@ resolved_native_extensions(const sputnik::pkg::PackageResolver &resolver) {
 
 void resolve_graph_packages(
     std::vector<sputnik::bytecode::GraphModule> *modules,
-    const std::string &root, sputnik::pkg::PackageResolver *resolver) {
+    const std::string &root, sputnik::pkg::PackageResolver *resolver,
+    const std::vector<sputnik::templates::SourceFormat> &formats = {}) {
   sputnik::runtime::RuntimeModuleRegistry native_modules;
   sputnik::runtime::RuntimeDispatchRegistry dispatch;
   sputnik::runtime::RuntimeTypeRegistry types;
@@ -28315,7 +28396,7 @@ void resolve_graph_packages(
       if (lexed.ok()) {
         sputnik::parser::Parser parser(lexed.tokens);
         auto parsed = parser.parse_module_unit();
-        if (parsed.ok()) macro_providers = installed_macro_providers(parsed.items, source_path);
+        if (parsed.ok()) macro_providers = installed_macro_providers(parsed.items, source_path, {}, resolver);
       }
     }
   }
@@ -28341,9 +28422,13 @@ void resolve_graph_packages(
               throw std::runtime_error(
                   sputnik::bytecode::verify_errors_to_json(decoded.errors));
             module = std::move(decoded.module);
-          } else
-            module = compile_source_text_to_module(resolved->source,
-                                                   resolved->path, name, {}, &macro_providers);
+          } else {
+            auto prepared = prepare_source_text(resolved->source, resolved->path, formats, resolver);
+            for (auto &entry : installed_macro_providers(prepared.parsed.items, resolved->path, {}, resolver))
+              macro_providers.emplace(entry.first, std::move(entry.second));
+            module = compile_prepared_source_to_module(prepared, resolved->source,
+                                                       resolved->path, name, {}, &macro_providers);
+          }
           const auto index = modules->size();
           modules->push_back({name, resolved->path, std::move(module), false});
           found = by_name.emplace(name, index).first;
@@ -28365,6 +28450,7 @@ resolve_runnable_packages(RunnableModuleArtifact artifact,
                           const std::string &path) {
   sputnik::pkg::PackageResolver resolver(
       std::filesystem::absolute(path).parent_path());
+  resolver.source_entry(path, artifact.module_name);
   std::vector<sputnik::bytecode::GraphModule> modules;
   modules.push_back({artifact.module_name, path, artifact.module, false});
   resolve_graph_packages(&modules, artifact.module_name, &resolver);
@@ -28387,52 +28473,94 @@ void build_manifest_modules(
     const std::filesystem::path &manifest_dir,
     const std::filesystem::path &out_dir,
     const std::filesystem::path &cache_dir, bool cache_enabled,
-    sputnik::build::BuildSummary *summary) {
+    sputnik::build::BuildSummary *summary,
+    sputnik::pkg::PackageResolver *resolver) {
+  for (const auto &module : manifest.modules)
+    if (module.name == manifest.root_module) resolver->source_entry(manifest_dir / module.path, module.name);
   std::vector<BuiltStdlibAbi> stdlib_abis;
-  for (const sputnik::build::BuildModule &module : manifest.stdlib_modules) {
-    sputnik::build::BuildArtifactRecord artifact =
-        build_one_module(module, manifest_dir, out_dir, cache_dir,
-                         manifest.profiles, {}, cache_enabled);
-    BuiltStdlibAbi abi;
-    abi.name = module.name;
-    abi.abi_hash = array_from_hex32(artifact.abi_hash);
-    stdlib_abis.push_back(std::move(abi));
+  for (const auto &module : manifest.stdlib_modules) {
+    auto artifact = build_one_module(module, manifest_dir, out_dir, cache_dir,
+                                    manifest.profiles, {}, cache_enabled);
+    summary->inputs.push_back(std::filesystem::absolute(manifest_dir / module.path).lexically_normal().string());
+    stdlib_abis.push_back({module.name, array_from_hex32(artifact.abi_hash)});
     summary->artifacts.push_back(std::move(artifact));
   }
 
-  // Cross-module macro staging (§11): a parse-only pre-pass harvests every
-  // module's `export macro` table before anything compiles, so staging is
-  // independent of build order (the manifest parser sorts modules by name).
-  sputnik::macros::MacroProviderMap macro_providers;
+  // Discover imports before expansion. Project modules and package providers
+  // share the same build-scoped resolver, including external template imports.
+  std::vector<sputnik::build::BuildModule> sources = manifest.modules;
+  std::set<std::string> known;
+  for (const auto &module : sources) known.insert(module.name);
+  sputnik::runtime::RuntimeModuleRegistry natives;
+  sputnik::runtime::RuntimeDispatchRegistry dispatch;
+  sputnik::runtime::RuntimeTypeRegistry types;
+  sputnik::runtime::register_builtin_runtime_modules(natives, dispatch, types);
+  sputnik::runtime::register_core_prelude_bindings(natives);
+  sputnik::runtime::register_legacy_native_type_paths(natives);
+  sputnik::frontend::ImportAliases replacements;
+  for (const auto &module : manifest.modules) {
+    if (module.name != manifest.root_module) continue;
+    auto prepared = prepare_source_text(read_file((manifest_dir / module.path).string()),
+                                       (manifest_dir / module.path).string(), manifest.source_formats, resolver);
+    replacements = sputnik::frontend::collect_import_aliases(prepared.parsed.items);
+  }
+  sputnik::macros::MacroProviderMap providers;
   std::string macro_material;
-  for (const sputnik::build::BuildModule &module : manifest.modules) {
-    const std::string module_source =
-        read_file((manifest_dir / module.path).string());
-    const std::string module_source_hash =
-        sputnik::lexer::sha256_hex(module_source);
-    // Prefer the persisted artifact macro section of a fresh build output;
-    // fall back to the parse-only source harvest.
-    std::vector<sputnik::macros::MacroExport> exports;
-    std::optional<std::vector<sputnik::macros::MacroExport>> from_artifact =
-        macro_exports_from_artifact(
-            out_dir / (safe_artifact_name(module.name) + ".sputnikbc"),
-            module_source_hash, module.path);
-    if (from_artifact.has_value()) {
-      exports = std::move(*from_artifact);
-    } else {
-      exports = harvest_macro_exports(module_source, module.path);
-    }
+  for (std::size_t index = 0; index < sources.size(); ++index) {
+    const auto module = sources[index];
+    const auto path = std::filesystem::absolute(manifest_dir / module.path).lexically_normal();
+    const auto source = read_file(path.string());
+    auto prepared = prepare_source_text(source, path.string(), manifest.source_formats, resolver);
+    auto exports = sputnik::macros::collect_macro_exports(prepared.parsed.items);
     if (!exports.empty()) {
-      macro_material +=
-          "macro-provider\n" + module.name + "\n" + module_source_hash + "\n";
-      macro_providers[module.name] = std::move(exports);
+      providers[module.name] = std::move(exports);
+      macro_material += "macro-provider\n" + module.name + "\n" +
+                        sputnik::lexer::sha256_hex(source) + prepared.templates.cache_material + "\n";
+    }
+    const auto aliases = sputnik::frontend::collect_import_aliases(prepared.parsed.items);
+    for (const auto &item : prepared.parsed.items) {
+      if (!item || item->kind != "AstImportStmt") continue;
+      const auto field = std::find_if(item->string_fields.begin(), item->string_fields.end(),
+          [](const auto &entry) { return entry.name == "module_path"; });
+      if (field == item->string_fields.end()) continue;
+      auto name = replacements.resolve(aliases.resolve(field->value));
+      const auto foreign = sputnik::frontend::foreign_import_provider(name);
+      if (!foreign.empty()) name = foreign;
+      if (natives.has_namespace(name) || known.count(name)) continue;
+      const auto resolved = resolver->resolve(name);
+      if (!resolved) continue; // The graph linker reports missing imports.
+      known.insert(name);
+      if (!resolved->source.empty()) sources.push_back({name, resolved->path, false, {}});
+      else if (!resolved->bytecode.empty()) {
+        const auto decoded = sputnik::bytecode::deserialize_module(resolved->bytecode);
+        if (!decoded.ok()) throw std::runtime_error("invalid package bytecode: " + name);
+        const auto payload = module_attr_text(decoded.module, sputnik::macros::kMacroExportsAttrKey);
+        if (!payload.empty()) {
+          std::string error;
+          providers[name] = sputnik::macros::parse_macro_exports(payload, resolved->path, &error);
+          if (!error.empty()) throw std::runtime_error(error);
+          macro_material += name + "\n" + payload;
+        }
+      }
     }
   }
-  for (const sputnik::build::BuildModule &module : manifest.modules) {
-    summary->artifacts.push_back(build_one_module(
-        module, manifest_dir, out_dir, cache_dir, manifest.profiles,
-        stdlib_abis, cache_enabled, &macro_providers, macro_material, manifest.source_formats, manifest.dependencies));
+  for (const auto &module : sources) {
+    auto artifact = build_one_module(module, manifest_dir, out_dir, cache_dir,
+        manifest.profiles, stdlib_abis, cache_enabled, &providers, macro_material,
+        manifest.source_formats, resolver);
+    summary->inputs.push_back(std::filesystem::absolute(manifest_dir / module.path).lexically_normal().string());
+    for (const auto &input : artifact.template_inputs) summary->inputs.push_back(input.first);
+    summary->artifacts.push_back(std::move(artifact));
   }
+  for (const auto &package : resolver->selected()) {
+    for (const auto *file : {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"})
+      if (std::filesystem::is_regular_file(package.directory / file)) summary->inputs.push_back((package.directory / file).string());
+    for (const auto &extension : package.manifest.native_extensions)
+      for (const auto *paths : {&extension.sources, &extension.headers})
+        for (const auto &path : *paths) summary->inputs.push_back((package.directory / path).string());
+  }
+  std::sort(summary->inputs.begin(), summary->inputs.end());
+  summary->inputs.erase(std::unique(summary->inputs.begin(), summary->inputs.end()), summary->inputs.end());
 }
 
 std::string vm_graph_cache_key(
@@ -28516,12 +28644,12 @@ int run_build_command(int argc, char **argv) {
   summary.profiles = parsed.manifest.profiles;
 
   try {
-    build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
-                           options.cache_enabled, &summary);
-    auto graph_modules = decode_native_graph_modules(summary);
     sputnik::pkg::PackageResolver package_resolver(std::filesystem::absolute(manifest_path).parent_path());
     package_resolver.require(parsed.manifest.dependencies);
-    resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver);
+    build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
+                           options.cache_enabled, &summary, &package_resolver);
+    auto graph_modules = decode_native_graph_modules(summary);
+    resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver, parsed.manifest.source_formats);
     if (options.target == "native" || options.target == "both") {
       sputnik::build::BuildArtifactRecord *root_record = nullptr;
       for (sputnik::build::BuildArtifactRecord &artifact : summary.artifacts) {
@@ -28563,7 +28691,9 @@ int run_build_command(int argc, char **argv) {
       const std::filesystem::path native_source_path =
           out_dir /
           (safe_artifact_name(parsed.manifest.root_module) + ".native.cpp");
-      auto combined_extensions = parsed.manifest.native_extensions;
+      auto combined_extensions = sputnik::pkg::prepare_native_providers(
+          sputnik::build::package_manifest(parsed.manifest), manifest_dir,
+          std::filesystem::absolute(cache_dir / "native-providers"));
       const auto package_extensions = resolved_native_extensions(package_resolver);
       combined_extensions.insert(combined_extensions.end(), package_extensions.begin(), package_extensions.end());
       const std::vector<sputnik::pkg::PackageNativeExtension> native_extensions =
@@ -28895,6 +29025,36 @@ std::filesystem::path vm_build_cache_root(
   return manifest_dir / ".sputnik" / "vm";
 }
 
+RunnableModuleArtifact compile_configured_source(
+    const SourceConfiguration &configuration,
+    const std::optional<EntryExecutionMode> &forced_entry_mode,
+    const std::vector<sputnik::capability::CapabilityRequest> &capabilities) {
+  const auto &manifest = configuration.manifest;
+  sputnik::pkg::PackageResolver resolver(configuration.directory);
+  resolver.require(manifest.dependencies);
+  const auto cache = vm_build_cache_root(configuration.directory);
+  sputnik::build::BuildSummary summary;
+  summary.name = manifest.name;
+  summary.root_module = manifest.root_module;
+  summary.target = "vm";
+  summary.profiles = manifest.profiles;
+  build_manifest_modules(manifest, configuration.directory, cache / "out", cache / "cache", true, &summary, &resolver);
+  summary.inputs.push_back(configuration.file.string());
+  const auto temporary = cache / (".inputs." + std::to_string(::getpid()) + ".json");
+  write_file(temporary.string(), sputnik::build::summary_to_json(summary));
+  std::filesystem::rename(temporary, cache / "inputs.json");
+  auto modules = decode_native_graph_modules(summary);
+  resolve_graph_packages(&modules, manifest.root_module, &resolver, manifest.source_formats);
+  const auto root = std::find_if(modules.begin(), modules.end(), [&](const auto &module) { return module.name == manifest.root_module; });
+  if (root == modules.end()) throw std::runtime_error("source entry was not compiled: " + manifest.entry);
+  const auto mode = forced_entry_mode.value_or(default_entry_mode_for(configuration.has_package, root->module));
+  auto linked = link_native_graph(modules, manifest.root_module, mode, capabilities);
+  if (!linked.ok) throw std::runtime_error(sputnik::build::diagnostics_to_string(linked.diagnostics));
+  linked.artifact.package_extensions = augment_native_extensions_from_source(resolved_native_extensions(resolver), linked.artifact.module);
+  linked.artifact.package_locations = resolver.selected();
+  return std::move(linked.artifact);
+}
+
 void *dynamic_symbol(void *handle, const std::string &symbol,
                      const std::filesystem::path &library_path) {
   (void)::dlerror();
@@ -28953,7 +29113,7 @@ std::filesystem::path prepare_native_extension_library(
   const std::filesystem::path artifact_dir = cache_root / cache_key;
   const std::filesystem::path library_path =
       artifact_dir /
-      ("sputnik_manifest_extensions" + native_shared_library_suffix());
+      ("sputnik_manifest_extensions_" + cache_key.substr(0, 16) + native_shared_library_suffix());
   std::vector<std::string> objects;
   std::vector<std::string> link_libraries;
   std::size_t object_index = 0;
@@ -29034,9 +29194,10 @@ std::filesystem::path prepare_native_extension_library(
 
     std::vector<std::string> link = {cxx};
 #if defined(__APPLE__)
-    link.insert(link.end(), {"-dynamiclib", "-Wl,-undefined,dynamic_lookup"});
+    link.insert(link.end(), {"-dynamiclib", "-Wl,-undefined,dynamic_lookup",
+        "-Wl,-install_name,@rpath/" + library_path.filename().string()});
 #else
-    link.push_back("-shared");
+    link.insert(link.end(), {"-shared", "-Wl,-soname," + library_path.filename().string()});
 #endif
     link.insert(link.end(), objects.begin(), objects.end());
     append_native_library_paths(&link, extensions, manifest_dir, artifact_dir);
@@ -29282,6 +29443,23 @@ void load_installed_package_extensions(
   }
 }
 
+std::string package_toolchain_revision(const std::string &executable) {
+  namespace fs = std::filesystem;
+  fs::path compiler(executable);
+  if (!fs::exists(compiler) && !compiler.has_parent_path()) {
+    std::istringstream paths(std::getenv("PATH") ? std::getenv("PATH") : "");
+    std::string directory;
+    while (std::getline(paths, directory, ':')) {
+      const auto candidate = fs::path(directory) / compiler;
+      if (::access(candidate.c_str(), X_OK) == 0) {
+        compiler = candidate;
+        break;
+      }
+    }
+  }
+  return sputnik::pkg::file_sha256(fs::canonical(compiler));
+}
+
 int run_distribution_command(int argc, char **argv) {
   namespace fs = std::filesystem;
   const std::string verb = argv[2];
@@ -29300,7 +29478,7 @@ int run_distribution_command(int argc, char **argv) {
     throw std::runtime_error(
         "pkg build requires a source directory or manifest");
   auto input = fs::absolute(argv[3]);
-  if (fs::is_directory(input) && !fs::exists(input / "sputnik.toml")) {
+  if (fs::is_directory(input)) {
     fs::path selected;
     for (const auto *name :
          {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"}) {
@@ -29317,20 +29495,7 @@ int run_distribution_command(int argc, char **argv) {
   fs::path output;
   std::string version;
   sputnik::pkg::DistributionBuildOptions options;
-  fs::path compiler(argv[0]);
-  if (!fs::exists(compiler) && !compiler.has_parent_path()) {
-    std::istringstream paths(std::getenv("PATH") ? std::getenv("PATH") : "");
-    std::string directory;
-    while (std::getline(paths, directory, ':')) {
-      const auto candidate = fs::path(directory) / compiler;
-      if (::access(candidate.c_str(), X_OK) == 0) {
-        compiler = candidate;
-        break;
-      }
-    }
-  }
-  options.toolchain_revision =
-      sputnik::pkg::file_sha256(fs::canonical(compiler));
+  options.toolchain_revision = package_toolchain_revision(argv[0]);
   for (int i = 4; i < argc; ++i) {
     const std::string flag = argv[i];
     if (i + 1 >= argc)
@@ -29353,7 +29518,7 @@ int run_distribution_command(int argc, char **argv) {
     throw std::runtime_error("pkg build requires --out <artifact.sputnikpkg>");
   if (fs::weakly_canonical(output) == fs::canonical(input) ||
       (fs::is_directory(input) &&
-       fs::weakly_canonical(output) == fs::canonical(input) / "sputnik.toml"))
+       fs::weakly_canonical(output) == fs::canonical(input) / "sputnik.build.yaml"))
     throw std::runtime_error(
         "package output would overwrite its input manifest");
   const auto root = fs::is_directory(input)
@@ -29362,35 +29527,21 @@ int run_distribution_command(int argc, char **argv) {
   sputnik::pkg::PackageManifest manifest;
   if (fs::is_directory(input))
     manifest = sputnik::pkg::read_source_package(input).manifest;
-  else if (input.extension() == ".toml") {
-    const auto parsed = sputnik::pkg::parse_manifest_toml(
-        read_file(input.string()), input.string());
-    if (!parsed.ok())
-      throw std::runtime_error(
-          package_diagnostics_to_string(parsed.diagnostics));
+  else {
+    const auto parsed = sputnik::pkg::parse_manifest(read_file(input.string()), input.string());
+    if (!parsed.ok()) throw std::runtime_error(package_diagnostics_to_string(parsed.diagnostics));
     manifest = parsed.manifest;
-  } else {
-    const auto parsed = sputnik::build::parse_build_manifest(
-        read_file(input.string()), input.string());
-    if (!parsed.ok())
-      throw std::runtime_error(
-          sputnik::build::diagnostics_to_string(parsed.diagnostics));
-    if (!parsed.manifest.stdlib_modules.empty() ||
-        !parsed.manifest.profiles.numeric_int.empty() ||
-        !parsed.manifest.profiles.numeric_overflow.empty() ||
-        !parsed.manifest.profiles.forbidden_features.empty() ||
-        std::any_of(parsed.manifest.profiles.required_features.begin(),
-                    parsed.manifest.profiles.required_features.end(),
-                    [](const auto &feature) { return feature != "core.v1" && feature != "ffi.v1"; }))
-      throw std::runtime_error("distribution build requires an explicit "
-                               "package manifest for build-only profiles");
-    manifest.name = parsed.manifest.name;
-    manifest.version = "local";
-    manifest.root_module = parsed.manifest.root_module;
-    manifest.native_extensions = parsed.manifest.native_extensions;
-    manifest.dependencies = parsed.manifest.dependencies;
-    for (const auto &m : parsed.manifest.modules)
-      manifest.modules.push_back({m.name, m.path});
+  }
+  // Local overrides describe development selection. A distributable package pins
+  // the declared identity/version of each local dependency, never its host path.
+  for (auto &dependency : manifest.dependencies) if (dependency.source == "path") {
+    const auto local = sputnik::pkg::read_source_package(root / dependency.path);
+    if (local.manifest.name != dependency.name || local.manifest.version == "local" ||
+        (!dependency.version.empty() && dependency.version != local.manifest.version))
+      throw std::runtime_error("path dependency identity/version mismatch: " + dependency.name);
+    dependency.version = local.manifest.version;
+    dependency.source = "registry";
+    dependency.path.clear();
   }
   if (!version.empty())
     manifest.version = version;
@@ -29429,8 +29580,14 @@ int run_distribution_command(int argc, char **argv) {
     if (providers.count(module.name))
       throw std::runtime_error("macro-provider module must retain source: " +
                                module.name);
-    return compile_source_to_bytecode(module.path, module.name,
-                                      manifest.capabilities, &providers);
+    auto compiled = compile_source_text_to_module(
+        read_file(module.path), module.path, module.name, manifest.capabilities, &providers);
+    reconcile_manifest_numeric_profile(&compiled, manifest.profiles, module.path);
+    compiled.required_features = manifest.profiles.required_features;
+    compiled.optional_features = manifest.profiles.optional_features;
+    compiled.forbidden_features = manifest.profiles.forbidden_features;
+    compiled.profile_flags = sputnik::build::profile_flags_for(manifest.profiles);
+    return sputnik::bytecode::serialize_module(compiled);
   };
   std::cout << sputnik::pkg::distribution_to_json(
       sputnik::pkg::build_distribution(manifest, root, output, options));
@@ -29479,7 +29636,8 @@ int run_pkg_command(int argc, char **argv) {
   }
   if (argc >= 4 && std::string(argv[2]) == "lock") {
     const std::string path = argv[3];
-    const auto directory = fs::absolute(path).parent_path();
+    const auto configuration = is_sputnik_source_path(path) ? source_configuration(path) : std::nullopt;
+    const auto directory = configuration ? configuration->directory : fs::absolute(path).parent_path();
     sputnik::pkg::PackageResolver resolver(directory,
                                            sputnik::pkg::package_home(), false);
     for (int i=4; i<argc; ++i) {
@@ -29495,26 +29653,30 @@ int run_pkg_command(int argc, char **argv) {
     }
     std::vector<sputnik::bytecode::GraphModule> modules;
     std::string root;
-    if (is_sputnik_source_path(path)) {
+    std::vector<sputnik::templates::SourceFormat> formats;
+    if (is_sputnik_source_path(path) && !configuration) {
       const auto artifact =
           compile_source_to_runnable_module(path, std::nullopt, {}, false);
       root = artifact.module_name;
+      resolver.source_entry(path, root);
       modules.push_back({root, path, artifact.module, false});
     } else {
-      const auto parsed =
-          sputnik::build::parse_build_manifest(read_file(path), path);
+      const auto parsed = configuration
+          ? sputnik::build::BuildManifestResult{configuration->manifest, {}}
+          : sputnik::build::parse_build_manifest(read_file(path), path);
       if (!parsed.ok())
         throw std::runtime_error(
             sputnik::build::diagnostics_to_string(parsed.diagnostics));
       root = parsed.manifest.root_module;
+      formats = parsed.manifest.source_formats;
       resolver.require(parsed.manifest.dependencies);
       sputnik::build::BuildSummary summary;
       const auto cache = vm_build_cache_root(directory);
       build_manifest_modules(parsed.manifest, directory, cache / "out",
-                             cache / "cache", true, &summary);
+                             cache / "cache", true, &summary, &resolver);
       modules = decode_native_graph_modules(summary);
     }
-    resolve_graph_packages(&modules, root, &resolver);
+    resolve_graph_packages(&modules, root, &resolver, formats);
     const auto lock = directory / "sputnik.lock";
     const auto temporary =
         directory / (".sputnik.lock." + std::to_string(::getpid()));
@@ -29575,8 +29737,10 @@ int run_pkg_command(int argc, char **argv) {
     if (explicit_registry && registry != pin->second.source) throw std::runtime_error("registry differs from sputnik.lock");
     registry = pin->second.source;
   }
+  std::set<std::string> source_admissions;
   const auto install_policy = [&](const std::string &name, bool root) {
     auto selected = policy;
+    if (source_admissions.count(name)) { selected.allow_native = true; selected.build_from_source = true; }
     for (const auto &entry : native_constraints) if (entry.second.package == name) selected.native_requirements.push_back(entry.second);
     if (!root) selected.variant.clear();
     if (!locked_file.empty()) {
@@ -29698,52 +29862,40 @@ int run_pkg_command(int argc, char **argv) {
       };
   fs::path input(argv[3]);
   if (fs::is_directory(input)) {
-    auto source = sputnik::pkg::read_source_package(input);
-    if (source.manifest.version == "local") {
-      if (requested_version.empty())
-        throw std::runtime_error(
-            "installing a build-manifest directory requires --version");
-      source.manifest.version = requested_version;
-    } else if (!requested_version.empty() &&
-               source.manifest.version != requested_version)
-      throw std::runtime_error(
-          "source manifest version does not match --version");
-    sputnik::macros::MacroProviderMap providers;
-    for (const auto &module : source.manifest.modules) {
-      auto exports = harvest_macro_exports(
-          read_file((source.directory / module.path).string()), module.path);
-      if (!exports.empty())
-        providers[module.name] = std::move(exports);
-    }
-    std::vector<sputnik::pkg::PackageModuleBlob> blobs;
-    for (const auto &module : source.manifest.modules)
-      blobs.push_back(
-          {module.name,
-           module.path,
-           {},
-           compile_source_to_bytecode((source.directory / module.path).string(),
-                                      module.name, source.manifest.capabilities,
-                                      &providers)});
-    sputnik::pkg::PackageBuildOptions options;
-    options.target_triple = native_target_triple();
-    options.native_blobs = collect_native_blobs(
-        source.manifest.native_extensions, source.directory.string());
-    const auto built =
-        sputnik::pkg::build_package_artifact(source.manifest, blobs, options);
-    if (!built.ok)
-      throw std::runtime_error(
-          package_diagnostics_to_string(built.diagnostics));
-    fs::create_directories(home);
-    const auto temporary =
-        home / (".install-" + std::to_string(::getpid()) + ".sputnikpkg");
-    write_file(temporary.string(), built.serialized);
-    try {
+    std::set<fs::path> source_stack;
+    std::map<std::string, fs::path> source_roots;
+    std::function<void(const fs::path &, const std::string &)> install_source;
+    install_source = [&](const fs::path &directory, const std::string &override_version) {
+      auto source = sputnik::pkg::read_source_package(directory);
+      source_admissions.insert(source.manifest.name);
+      const auto bound = source_roots.emplace(source.manifest.name, source.directory);
+      if (!bound.second && bound.first->second != source.directory)
+        throw std::runtime_error("conflicting path dependencies for " + source.manifest.name);
+      if (!source_stack.insert(source.directory).second) throw std::runtime_error("package dependency cycle: " + source.manifest.name);
+      if (source.manifest.version == "local") {
+        if (override_version.empty()) throw std::runtime_error("source package requires version or --version");
+        source.manifest.version = override_version;
+      } else if (!override_version.empty() && source.manifest.version != override_version)
+        throw std::runtime_error("source manifest version does not match requested version");
+      for (auto &dependency : source.manifest.dependencies) if (dependency.source == "path") {
+        const auto local = sputnik::pkg::read_source_package(source.directory / dependency.path);
+        if (local.manifest.name != dependency.name || local.manifest.version == "local" ||
+            (!dependency.version.empty() && dependency.version != local.manifest.version))
+          throw std::runtime_error("path dependency identity/version mismatch: " + dependency.name);
+        install_source(local.directory, dependency.version);
+        dependency.version = local.manifest.version; dependency.source = "registry"; dependency.path.clear();
+      }
+      fs::create_directories(home);
+      const auto temporary = home / (".install-" + std::to_string(::getpid()) + "-" +
+          sputnik::lexer::sha256_hex(source.directory.string()).substr(0,16) + ".sputnikpkg");
+      struct Remove { fs::path path; ~Remove() { std::error_code error; fs::remove(path, error); } } remove{temporary};
+      sputnik::pkg::DistributionBuildOptions build_options;
+      build_options.toolchain_revision = package_toolchain_revision(argv[0]);
+      sputnik::pkg::build_distribution(source.manifest, source.directory, temporary, build_options);
       install(temporary, source.manifest.name, source.manifest.version);
-    } catch (...) {
-      fs::remove(temporary);
-      throw;
-    }
-    fs::remove(temporary);
+      source_stack.erase(source.directory);
+    };
+    install_source(input, requested_version);
   } else if (fs::is_regular_file(input))
     install(input, {}, requested_version);
   else {
@@ -29844,12 +29996,15 @@ int run_command(int argc, char **argv) {
   summary.out_dir = out_dir.string();
   summary.cache_dir = cache_dir.string();
   summary.profiles = parsed.manifest.profiles;
-  build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
-                         true, &summary);
-  auto graph_modules = decode_native_graph_modules(summary);
   sputnik::pkg::PackageResolver package_resolver(std::filesystem::absolute(input_path).parent_path());
   package_resolver.require(parsed.manifest.dependencies);
-  resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver);
+  build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
+                         true, &summary, &package_resolver);
+  auto graph_modules = decode_native_graph_modules(summary);
+  const auto inputs_temporary = vm_cache_root / (".inputs." + std::to_string(::getpid()) + ".json");
+  write_file(inputs_temporary.string(), sputnik::build::summary_to_json(summary));
+  std::filesystem::rename(inputs_temporary, vm_cache_root / "inputs.json");
+  resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver, parsed.manifest.source_formats);
 
   const sputnik::build::BuildArtifactRecord *root_record = nullptr;
   for (const sputnik::build::BuildArtifactRecord &artifact : summary.artifacts) {
@@ -29864,7 +30019,7 @@ int run_command(int argc, char **argv) {
   }
   std::string package_cache_material = package_resolver.lockfile();
   for (const auto &package : package_resolver.selected())
-    package_cache_material += "\n" + package.directory.string();
+    package_cache_material += "\n" + package.directory.string() + "\n" + package.digest;
   const std::string graph_key = sputnik::lexer::sha256_hex(vm_graph_cache_key(
       summary, parsed.manifest.root_module, options.capability_grants) + package_cache_material);
   const std::filesystem::path graph_path =
@@ -29953,7 +30108,9 @@ int run_command(int argc, char **argv) {
     }
     const std::vector<sputnik::pkg::PackageNativeExtension> native_extensions =
         augment_native_extensions_from_source(
-            parsed.manifest.native_extensions, application_metadata);
+            sputnik::pkg::prepare_native_providers(
+                sputnik::build::package_manifest(parsed.manifest), manifest_dir,
+                std::filesystem::absolute(native_extension_cache_root(manifest_dir))), application_metadata);
     require_native_extension_grants(native_extensions,
                                     application_metadata,
                                     options.capability_grants);
@@ -29980,7 +30137,7 @@ int run_capabilities_command(int argc, char **argv) {
   }
   const std::string manifest_source = read_file(argv[2]);
   const sputnik::pkg::PackageManifestResult manifest =
-      sputnik::pkg::parse_manifest_toml(manifest_source, argv[2]);
+      sputnik::pkg::parse_manifest(manifest_source, argv[2]);
   if (!manifest.ok()) {
     std::cerr << package_diagnostics_to_string(manifest.diagnostics);
     return 1;
@@ -30126,7 +30283,7 @@ int run_image_command(int argc, char **argv) {
         parse_package_build_options(argc, argv, 4);
     const std::string manifest_source = read_file(manifest_path);
     const sputnik::pkg::PackageManifestResult manifest =
-        sputnik::pkg::parse_manifest_toml(manifest_source, manifest_path);
+        sputnik::pkg::parse_manifest(manifest_source, manifest_path);
     if (!manifest.ok()) {
       std::cerr << package_diagnostics_to_string(manifest.diagnostics);
       return 1;
@@ -30387,6 +30544,10 @@ int main(int argc, char **argv) {
         std::cerr << sputnik::lexer::diagnostics_to_json(
             parse_result.diagnostics);
         return 1;
+      }
+      if (command != "parse" && command != "lint") {
+        sputnik::pkg::PackageResolver imports(std::filesystem::absolute(path).parent_path());
+        imports.prepare_imports(parse_result.items, path, parse_result.module_name);
       }
       if (command == "lint") {
         const auto warnings = sputnik::lint::one_liners(parse_result.items);

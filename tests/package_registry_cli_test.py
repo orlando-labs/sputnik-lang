@@ -23,11 +23,8 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-cli-') as temporary:
     for name in ['base', 'lib']:
         directory = root/name; directory.mkdir()
         (directory/'main.s').write_text(f'package test.{name}\nexport answer\ndef answer(): 42\n')
-        dependencies = '[dependencies]\n"test/base"="1.0.0"\n' if name == 'lib' else ''
-        (directory/'sputnik.toml').write_text('schema="sputnik.package-manifest.v1"\n[package]\n'
-            f'name="test/{name}"\nversion="1.0.0"\nroot="test.{name}"\n'
-            '[artifact]\nvariant="source"\n[[modules]]\n'
-            f'name="test.{name}"\nsource="main.s"\n'+dependencies)
+        dependencies = 'dependencies:\n  \"test/base\": \"1.0.0\"\n' if name == 'lib' else ''
+        (directory/'sputnik.build.yaml').write_text(f'schema: "sputnik.build.v1"\nname: "test/{name}"\nversion: "1.0.0"\nsource_root: "."\nfiles:\n  - "main.s"\nmodule_names:\n  main.s: "test.{name}"\nartifact:\n  variant: "source"\n'+dependencies)
         archive = root/(name+'.sputnikpkg')
         cli('pkg', 'build', str(directory), '--out', str(archive))
         packages[name] = archive.read_bytes()

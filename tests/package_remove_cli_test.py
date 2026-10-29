@@ -33,9 +33,8 @@ def main():
             path = root / "checkouts" / f"{name}-{version}"
             path.mkdir(parents=True)
             (path / "source.s").write_text(f"package {module}\n{body}")
-            (path / "sputnik.toml").write_text(
-                f'[package]\nname = "{name}"\nversion = "{version}"\nroot = "{module}"\n'
-                f'\n[[modules]]\nname = "{module}"\npath = "source.s"\n')
+            (path / "sputnik.build.yaml").write_text(
+                f'schema: "sputnik.build.v1"\nname: "{name}"\nversion: "{version}"\nsource_root: "."\nfiles:\n  - "source.s"\nmodule_names:\n  source.s: "{module}"\n')
             return path
 
         v1 = source("remove-library", "1.0.0", "remove_calc", "export answer\ndef answer(): 41\n")
@@ -85,7 +84,7 @@ def main():
         outside = root / "outside data"
         outside.mkdir()
         (outside / "keep.txt").write_text("outside")
-        (custom_home / "remove-library/2.0.0/external").symlink_to(outside, target_is_directory=True)
+        (custom_home / "remove-library/2.0.0/source/external").symlink_to(outside, target_is_directory=True)
         output = cli("pkg", "remove", "remove-library", env=custom_env)
         assert "remove-library@1.0.0" in output and "remove-library@2.0.0" in output
         assert not (custom_home / "remove-library/1.0.0").exists()
@@ -95,7 +94,7 @@ def main():
         assert not list(custom_home.glob(".remove-*"))
 
         # Corrupted package bytes must not prevent uninstalling an installation.
-        artifact = default_home / "peer-library/1.0.0/peer-library-1.0.0.sputnikpkg"
+        artifact = default_home / "peer-library/1.0.0/source/peer-library-1.0.0.sputnikpkg"
         artifact.write_text("corrupted package")
         cli("pkg", "uninstall", "peer-library", "--version", "1.0.0")
         assert not (default_home / "peer-library").exists()
@@ -109,15 +108,15 @@ def main():
         version_dir.rename(stored_version)
         version_dir.symlink_to(stored_version, target_is_directory=True)
         assert "symlinked package version" in cli("pkg", "remove", "remove-library", ok=False)
-        assert (stored_version / "modules.index").exists()
+        assert (stored_version / "source/modules.index").exists()
         version_dir.unlink()
         stored_version.rename(version_dir)
         cli("pkg", "uninstall", "remove-library")
 
         # Native artifacts, extracted sources and caches belong to the version.
         fixtures = Path(__file__).resolve().parent / "fixtures"
-        cli("pkg", "install", fixtures / "native_class_demo", "--version", "1.0.0", env=custom_env)
-        native_dir = custom_home / "nat.box/1.0.0"
+        cli("pkg", "install", fixtures / "native_class_demo", "--version", "1.0.0", "--allow-native", "--build-from-source", env=custom_env)
+        native_dir = custom_home / "nat.box/1.0.0/source"
         assert (native_dir / "native-library.meta").is_file()
         assert (native_dir / ".native").is_dir()
         cli("pkg", "remove", "nat.box", env=custom_env)

@@ -2,19 +2,21 @@
 
 Status: implemented for the `W11.1` capability/sandbox baseline.
 
-`sputnik.toml` supports a restricted `[capabilities]` section. Manifest entries
+`sputnik.build.yaml` supports a `capabilities` mapping. Manifest entries
 are deny-by-default requests; host policy grants are supplied separately and the
 runtime uses only the resolved requested/granted intersection.
 
 Supported manifest forms:
 
-```toml
-[capabilities]
-fs.read = ["./data"]
-net.connect = ["api.example.com:443"]
-time = true
-random = true
-ffi = false
+```yaml
+capabilities:
+  fs.read:
+    - "./data"
+  net.connect:
+    - "api.example.com:443"
+  time: true
+  random: true
+  ffi: false
 ```
 
 The parser canonicalizes profile aliases such as `time`, `random`, `ffi`,
@@ -30,7 +32,7 @@ runtime worlds all observe the same host-resource contract.
 The CLI preflight is:
 
 ```sh
-sputnik capabilities-check sputnik.toml --grant fs.read=./data --grant time.now
+sputnik capabilities-check sputnik.build.yaml --grant fs.read=./data --grant time.now
 ```
 
 It emits `sputnik.capabilities.v1` JSON with requested, granted, effective, and

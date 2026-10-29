@@ -45,6 +45,57 @@ void install(const fs::path &root, const fs::path &home,
   write(path, built.serialized);
   (void)sputnik::pkg::install_in_home(path, home);
 }
+
+void path_dependencies(const fs::path &root) {
+  const auto app = root / "path-consumer", a = root / "local-a", b = root / "local-b";
+  fs::create_directories(app);
+  const auto manifest = [](const std::string &name, const std::string &dependencies = "") {
+    return "name: \"" + name + "\"\nversion: \"1.0.0\"\nsource_root: src\nfiles: [\"src/main.s\"]\nmodule_names: {\"src/main.s\": \"" + name + "\"}\n" + dependencies;
+  };
+  write(a / "sputnik.build.yaml", manifest("local.a", "dependencies:\n  local.b: {path: \"../local-b\"}\n"));
+  write(a / "src/main.s", "package local.a\nimport local.b\n");
+  write(b / "sputnik.build.yaml", manifest("local.b"));
+  write(b / "src/main.s", "package local.b\nexport answer\ndef answer(): 1\n");
+  write(app / "sputnik.build.yaml", manifest("consumer", "dependencies:\n  local.a: \"1.0.0\"\n"));
+  const std::vector<sputnik::pkg::PackageDependency> dependencies = {{"local.a", {}, "path", {}, "../local-a"}};
+  sputnik::pkg::PackageResolver first(app, root / "empty-home");
+  first.require(dependencies);
+  expect(first.resolve("local.b").has_value() && first.selected().size() == 2, "transitive YAML path resolves relative to its declaring package");
+  const auto lock = first.lockfile(), fingerprint = first.selected().back().digest;
+  write(app / "sputnik.lock", lock);
+  write(b / "src/main.s", "package local.b\nexport answer\ndef answer(): 2\n");
+  sputnik::pkg::PackageResolver changed(app, root / "empty-home");
+  changed.require(dependencies);
+  expect(changed.lockfile() == lock && changed.selected().back().digest != fingerprint, "local edits preserve graph lock but change content fingerprint");
+  expect(changed.resolve("local.b")->source.find("2") != std::string::npos, "locked local source remains live");
+  sputnik::pkg::PackageResolver imports_only(app, root / "empty-home");
+  expect(imports_only.resolve("local.a").has_value(), "lock supplies previously resolved local sources without repeating dependency declarations");
+  bool rejected = false;
+  try { changed.require({{"local.b", "2.0.0", "registry", {}}}); }
+  catch (const std::exception &) { rejected = true; }
+  expect(rejected, "transitive exact-version conflict is rejected");
+  write(root / "other-b/sputnik.build.yaml", manifest("local.b"));
+  write(root / "other-b/src/main.s", "package local.b\n");
+  rejected = false;
+  try {
+    sputnik::pkg::PackageResolver conflict(app, root / "empty-home");
+    conflict.require({dependencies.front(), {"local.b", {}, "path", {}, "../other-b"}});
+  } catch (const std::exception &) { rejected = true; }
+  expect(rejected, "two canonical roots cannot provide the same package identity");
+  rejected = false;
+  try {
+    sputnik::pkg::PackageResolver mismatch(app, root / "empty-home");
+    mismatch.require({{"wrong.name", {}, "path", {}, "../local-a"}});
+  } catch (const std::exception &) { rejected = true; }
+  expect(rejected, "dependency key must match the package manifest name");
+  write(a / "sputnik.build.yaml", manifest("local.a"));
+  rejected = false;
+  try {
+    sputnik::pkg::PackageResolver altered(app, root / "empty-home");
+    altered.require(dependencies);
+  } catch (const std::exception &) { rejected = true; }
+  expect(rejected, "changing local dependency edges requires a lock update");
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -135,6 +186,7 @@ int main(int argc, char **argv) {
   const auto created = ::mkdtemp(pattern);
   expect(created != nullptr, "temporary directory");
   const fs::path root(created), home = root / "home";
+  path_dependencies(root);
   const auto *previous = std::getenv("SPUTNIK_PKG_HOME");
   const std::string saved = previous ? previous : "";
   const bool had_previous = previous != nullptr;

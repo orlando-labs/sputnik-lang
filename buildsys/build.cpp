@@ -6,13 +6,15 @@
 #include <set>
 #include <sstream>
 #include <utility>
+#include <fstream>
+#include <functional>
 
 namespace sputnik::build {
 
 namespace {
 
 struct JsonValue {
-  enum class Kind { Null, Bool, String, Array, Object };
+  enum class Kind { Null, Bool, String, Number, Array, Object };
 
   Kind kind = Kind::Null;
   bool bool_value = false;
@@ -113,6 +115,8 @@ private:
       fail("unexpected end of input");
       return {};
     }
+    struct Depth { unsigned &value; ~Depth() { --value; } } depth{depth_};
+    if (++depth_ > 64) { fail("manifest nesting exceeds 64"); return {}; }
     const char c = source_[pos_];
     if (c == '"') {
       JsonValue value;
@@ -143,6 +147,13 @@ private:
     if (source_.compare(pos_, 4, "null") == 0) {
       pos_ += 4;
       return {};
+    }
+    if (std::isdigit(static_cast<unsigned char>(c))) {
+      JsonValue value; value.kind = JsonValue::Kind::Number;
+      const auto begin = pos_;
+      while (pos_ < source_.size() && std::isdigit(static_cast<unsigned char>(source_[pos_]))) ++pos_;
+      value.string_value = source_.substr(begin, pos_ - begin);
+      return value;
     }
     fail("expected JSON value");
     return {};
@@ -239,6 +250,7 @@ private:
       if (!consume(':')) {
         return value;
       }
+      if (value.object_value.count(key)) { fail("duplicate object key: " + key); return value; }
       value.object_value[key] = parse_value();
       skip_ws();
       if (pos_ < source_.size() && source_[pos_] == ',') {
@@ -257,6 +269,7 @@ private:
   const std::string &source_;
   std::string path_;
   std::size_t pos_ = 0;
+  unsigned depth_ = 0;
   bool ok_ = true;
   std::vector<BuildDiagnostic> diagnostics_;
 };
@@ -277,7 +290,7 @@ std::string trim(std::string value) {
 
 bool yaml_key_char(char c) {
   return std::isalnum(static_cast<unsigned char>(c)) != 0 || c == '_' ||
-         c == '-' || c == '.';
+         c == '-' || c == '.' || c == '/';
 }
 
 std::size_t yaml_key_colon(const std::string &text) {
@@ -606,6 +619,7 @@ private:
       if (!split_mapping(line.text, &key, &rest, line.line_no)) {
         break;
       }
+      if (value.object_value.count(key)) { fail(line.line_no, "duplicate mapping key: " + key); return value; }
       ++pos_;
       if (rest.empty()) {
         if (pos_ < lines_.size() && lines_[pos_].indent > indent) {
@@ -827,6 +841,7 @@ private:
       if (!split_mapping(entry, &key, &rest, line_no)) {
         return value;
       }
+      if (value.object_value.count(key)) { fail(line_no, "duplicate mapping key: " + key); return value; }
       value.object_value[key] = parse_inline_value(rest, line_no);
       if (!ok_) {
         return value;
@@ -990,6 +1005,23 @@ void emit_module_array(std::ostringstream &out, const char *name,
   out << "]";
 }
 
+void read_native_libraries(const JsonValue &item, std::vector<pkg::PackageNativeLibrary> &out,
+                           const std::string &path, std::vector<BuildDiagnostic> &diagnostics) {
+  const auto *libraries = member(item, "libraries");
+  if (!libraries) return;
+  if (libraries->kind != JsonValue::Kind::Array) {
+    diagnostics.push_back(diagnostic("BuildManifestError", "libraries must be an array", path)); return;
+  }
+  for (const auto &entry : libraries->array_value) {
+    pkg::PackageNativeLibrary library;
+    if (!read_string_member(entry, "path", &library.path))
+      diagnostics.push_back(diagnostic("BuildManifestError", "native library requires path", path));
+    read_string_member(entry, "role", &library.role);
+    read_string_member(entry, "abi", &library.abi);
+    out.push_back(std::move(library));
+  }
+}
+
 bool read_native_extensions(
     const JsonValue &root, const std::string &path,
     std::vector<sputnik::pkg::PackageNativeExtension> *out,
@@ -1013,6 +1045,15 @@ bool read_native_extensions(
     sputnik::pkg::PackageNativeExtension extension;
     read_string_member(item, "name", &extension.name);
     read_string_member(item, "language", &extension.language);
+    read_string_member(item, "kind", &extension.kind);
+    read_string_member(item, "library", &extension.library);
+    if (const auto *abi = member(item, "sputnik_ext_abi")) {
+      if ((abi->kind != JsonValue::Kind::String && abi->kind != JsonValue::Kind::Number) || abi->string_value != "1")
+        diagnostics->push_back(diagnostic("BuildManifestError", "sputnik_ext_abi must be 1", path));
+    }
+    read_string_array_member(item, "requirements", &extension.requirements);
+    read_string_array_member(item, "required_runtime_features", &extension.required_runtime_features);
+    read_native_libraries(item, extension.libraries, path, *diagnostics);
     read_string_array_member(item, "sources", &extension.sources);
     read_string_array_member(item, "headers", &extension.headers);
     read_string_array_member(item, "include_dirs", &extension.include_dirs);
@@ -1032,6 +1073,14 @@ bool read_native_extensions(
           path));
     }
     if (const JsonValue *symbols = member(item, "symbols")) {
+      if (symbols->kind == JsonValue::Kind::Object) {
+        for (const auto &[name, value] : symbols->object_value) {
+          if (value.kind != JsonValue::Kind::String)
+            diagnostics->push_back(diagnostic("BuildManifestError", "native symbols must map names to strings", path));
+          else extension.symbols.push_back({name, value.string_value});
+        }
+      } else if (symbols->kind != JsonValue::Kind::Array)
+        diagnostics->push_back(diagnostic("BuildManifestError", "native symbols must be a mapping or array", path));
       for (const JsonValue &entry : symbols->array_value) {
         sputnik::pkg::PackageNativeSymbol symbol;
         read_string_member(entry, "logical", &symbol.logical);
@@ -1077,8 +1126,152 @@ bool read_native_extensions(
   return true;
 }
 
+// Source/build/package metadata share one YAML/JSON grammar.
+void read_package_fields(const JsonValue &root, const std::string &path,
+                         BuildManifestResult &result) {
+  namespace fs = std::filesystem;
+  auto &m = result.manifest.package;
+  const auto error = [&](const std::string &message) {
+    result.diagnostics.push_back(diagnostic("BuildManifestError", message, path));
+  };
+  const auto text = [&](const JsonValue &object, const char *key, std::string &dest) {
+    if (member(object, key) && !read_string_member(object, key, &dest))
+      error(std::string(key) + " must be a string");
+  };
+  const auto strings = [&](const JsonValue &object, const char *key, std::vector<std::string> &dest) {
+    if (member(object, key) && !read_string_array_member(object, key, &dest))
+      error(std::string(key) + " must be an array of strings");
+  };
+  text(root, "version", m.version);
+  text(root, "kind", m.kind);
+  text(root, "source_root", m.source_root);
+  strings(root, "files", m.files);
+  m.explicit_files = member(root, "files") != nullptr;
+  const auto safe_path = [](const std::string &value) {
+    const fs::path p(value);
+    if (value.empty() || p.is_absolute() || value.find('\\') != std::string::npos || value.find('\0') != std::string::npos) return false;
+    for (const auto &part : p) if (part == "..") return false;
+    return true;
+  };
+  if (!safe_path(m.source_root)) error("source_root must be a package-relative directory");
+  if (const auto *names = member(root, "module_names")) {
+    if (names->kind != JsonValue::Kind::Object) error("module_names must map file paths to module names");
+    else for (const auto &[file, name] : names->object_value) {
+      if (name.kind != JsonValue::Kind::String || name.string_value.empty()) error("module_names values must be nonempty strings");
+      else m.module_names[file] = name.string_value;
+    }
+  }
+  std::set<std::string> files, names;
+  for (const auto &module : result.manifest.modules) names.insert(module.name);
+  for (const auto &file : m.files) {
+    if (!safe_path(file) || !files.insert(file).second) {
+      error("invalid or duplicate package file: " + file); continue;
+    }
+    const fs::path p(file);
+    const auto suffix = p.extension().string();
+    bool source = suffix == ".s" || suffix == ".spu" || suffix == ".sputnik";
+    if (!source && suffix != ".sputnikbc") continue;
+    const auto relative = p.lexically_normal().lexically_relative(fs::path(m.source_root).lexically_normal());
+    if ((relative.empty() || *relative.begin() == "..") && !m.module_names.count(file)) { error("module file is outside source_root: " + file); continue; }
+    auto stem = relative; stem.replace_extension();
+    std::string name = stem.generic_string(); std::replace(name.begin(), name.end(), '/', '.');
+    const auto override = m.module_names.find(file);
+    if (override != m.module_names.end()) name = override->second;
+    if (name.empty() || !names.insert(name).second) { error("duplicate module name: " + name); continue; }
+    result.manifest.modules.push_back({name, file, false, {}});
+  }
+  for (const auto &[file, name] : m.module_names)
+    if (!files.count(file)) error("module_names refers to a file absent from files: " + file);
+  if (const auto *caps = member(root, "capabilities")) {
+    if (caps->kind != JsonValue::Kind::Object) error("capabilities must be a mapping");
+    else for (const auto &[key, value] : caps->object_value) {
+      const auto canonical = capability::canonical_names_for_manifest_key(key);
+      if (canonical.empty()) { error("unknown capability: " + key); continue; }
+      if (value.kind == JsonValue::Kind::Bool) {
+        if (value.bool_value) for (const auto &name : canonical)
+          m.capabilities.push_back(capability::make_capability(name, {}, {}, capability::kCapabilityFlagWildcardTarget));
+      } else if (value.kind == JsonValue::Kind::Array) {
+        for (const auto &target : value.array_value) {
+          if (target.kind != JsonValue::Kind::String) { error("capability targets must be strings"); continue; }
+          for (const auto &name : canonical) m.capabilities.push_back(capability::make_capability(name, target.string_value));
+        }
+      } else error("capabilities require boolean or string-array values");
+    }
+  }
+  const auto dependencies = [&](const JsonValue &object, const char *key, std::vector<pkg::PackageDependency> &dest) {
+    if (const auto *values = member(object, key)) {
+      if (values->kind != JsonValue::Kind::Object) { error(std::string(key) + " must map package names to versions"); return; }
+      for (const auto &[name, version] : values->object_value) {
+        if (version.kind != JsonValue::Kind::String || version.string_value.empty()) error("artifact dependencies require exact versions");
+        else { pkg::PackageDependency d; d.name = name; d.version = version.string_value; dest.push_back(std::move(d)); }
+      }
+    }
+  };
+  if (const auto *artifact = member(root, "artifact")) {
+    if (artifact->kind != JsonValue::Kind::Object) error("artifact must be a mapping");
+    else {
+      text(*artifact, "variant", m.variant); text(*artifact, "limit_profile", m.limit_profile); text(*artifact, "bundle", m.bundle);
+      dependencies(*artifact, "dependencies", m.artifact_dependencies);
+      dependencies(*artifact, "build_dependencies", m.artifact_build_dependencies);
+    }
+  }
+  if (const auto *target = member(root, "target")) {
+    if (target->kind != JsonValue::Kind::Object) error("target must be a mapping");
+    else {
+      text(*target, "os", m.target.os);
+      text(*target, "arch", m.target.arch);
+      text(*target, "min_os", m.target.min_os);
+      text(*target, "libc", m.target.libc);
+      text(*target, "min_libc", m.target.min_libc);
+      text(*target, "compute_backend", m.target.compute_backend);
+      text(*target, "cuda_version", m.target.cuda_version);
+      text(*target, "min_cuda_driver", m.target.min_cuda_driver);
+      strings(*target, "cpu_features", m.target.cpu_features);
+      strings(*target, "compute_backends", m.target.compute_backends);
+      strings(*target, "cuda_architectures", m.target.cuda_architectures);
+    }
+  }
+  if (const auto *values = member(root, "native_requirements")) {
+    if (values->kind != JsonValue::Kind::Array) error("native_requirements must be an array");
+    else for (const auto &item : values->array_value) {
+      if (item.kind != JsonValue::Kind::Object) { error("native_requirements entries must be mappings"); continue; }
+      pkg::PackageNativeRequirement value;
+      text(item, "id", value.id);
+      text(item, "kind", value.kind);
+      text(item, "version", value.version);
+      text(item, "abi", value.abi);
+      text(item, "build_id", value.build_id);
+      text(item, "provider", value.provider);
+      text(item, "runtime", value.runtime);
+      text(item, "package", value.package);
+      strings(item, "libraries", value.libraries);
+      m.native_requirements.push_back(std::move(value));
+    }
+  }
+  if (const auto *values = member(root, "native_providers")) {
+    if (values->kind != JsonValue::Kind::Array) error("native_providers must be an array");
+    else for (const auto &item : values->array_value) {
+      if (item.kind != JsonValue::Kind::Object) { error("native_providers entries must be mappings"); continue; }
+      pkg::PackageNativeProvider value;
+      text(item, "id", value.id);
+      text(item, "kind", value.kind);
+      text(item, "version", value.version);
+      text(item, "abi", value.abi);
+      text(item, "build_id", value.build_id);
+      text(item, "runtime_build_id", value.runtime_build_id);
+      strings(item, "include_dirs", value.include_dirs);
+      strings(item, "library_dirs", value.library_dirs);
+      strings(item, "link_libraries", value.link_libraries);
+      strings(item, "files", value.files);
+      read_native_libraries(item, value.libraries, path, result.diagnostics);
+      m.native_providers.push_back(std::move(value));
+    }
+  }
+}
+
 BuildManifestResult manifest_from_value(const JsonValue &root,
-                                        const std::string &path) {
+                                       const std::string &path,
+                                       bool require_entry = true) {
   BuildManifestResult result;
   if (root.kind != JsonValue::Kind::Object) {
     result.diagnostics.push_back(diagnostic(
@@ -1096,11 +1289,13 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
         "unsupported build manifest schema '" + result.manifest.schema + "'",
         path));
   }
-  if (!read_string_member(root, "name", &result.manifest.name)) {
+  if (member(root, "entry") && (!read_string_member(root, "entry", &result.manifest.entry) || result.manifest.entry.empty()))
+    result.diagnostics.push_back(diagnostic("BuildManifestError", "'entry' must be a nonempty source path", path));
+  if (!read_string_member(root, "name", &result.manifest.name) && require_entry && result.manifest.entry.empty() && !member(root, "files")) {
     result.diagnostics.push_back(
         diagnostic("BuildManifestError", "missing string 'name'", path));
   }
-  if (!read_string_member(root, "root", &result.manifest.root_module)) {
+  if (!read_string_member(root, "root", &result.manifest.root_module) && require_entry && result.manifest.entry.empty() && !member(root, "files")) {
     result.diagnostics.push_back(
         diagnostic("BuildManifestError", "missing string 'root'", path));
   }
@@ -1187,13 +1382,29 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
                &result.diagnostics);
   if (const auto *dependencies = member(root, "dependencies")) {
     if (dependencies->kind != JsonValue::Kind::Object)
-      result.diagnostics.push_back(diagnostic("BuildManifestError", "'dependencies' must map package names to exact version strings", path));
+      result.diagnostics.push_back(diagnostic("BuildManifestError", "'dependencies' must map package names to exact versions or {path, version?}", path));
     else for (const auto &entry : dependencies->object_value) {
-      if (entry.first.empty() || entry.second.kind != JsonValue::Kind::String || entry.second.string_value.empty())
-        result.diagnostics.push_back(diagnostic("BuildManifestError", "package dependencies require nonempty names and version strings", path));
-      else result.manifest.dependencies.push_back({entry.first, entry.second.string_value, "registry", {}});
+      pkg::PackageDependency dependency;
+      dependency.name = entry.first;
+      bool valid = !entry.first.empty();
+      if (entry.second.kind == JsonValue::Kind::String) {
+        dependency.version = entry.second.string_value;
+        valid = valid && !dependency.version.empty();
+      } else if (entry.second.kind == JsonValue::Kind::Object) {
+        dependency.source = "path";
+        valid = valid && read_string_member(entry.second, "path", &dependency.path) && !dependency.path.empty();
+        for (const auto &field : entry.second.object_value) {
+          if (field.first == "version")
+            valid = valid && read_string_member(entry.second, "version", &dependency.version) && !dependency.version.empty();
+          else if (field.first != "path") valid = false;
+        }
+      } else valid = false;
+      if (!valid)
+        result.diagnostics.push_back(diagnostic("BuildManifestError", "dependencies require an exact version or {path: directory, version?: exact}", path));
+      else result.manifest.dependencies.push_back(std::move(dependency));
     }
   }
+  read_package_fields(root, path, result);
   read_native_extensions(root, path, &result.manifest.native_extensions,
                          &result.diagnostics);
 
@@ -1219,15 +1430,18 @@ BuildManifestResult manifest_from_value(const JsonValue &root,
     }
   }
 
-  if (result.manifest.modules.empty()) {
+  if (require_entry && result.manifest.modules.empty() && result.manifest.entry.empty() && result.manifest.package.kind != "native") {
     result.diagnostics.push_back(diagnostic(
-        "BuildManifestError", "at least one module entry is required", path));
+        "BuildManifestError", "an entry source or at least one modules entry is required", path));
   }
+  if (result.manifest.root_module.empty())
+    for (const auto &module : result.manifest.modules)
+      if (module.name == result.manifest.name) result.manifest.root_module = module.name;
   bool root_found = false;
   for (const BuildModule &module : result.manifest.modules) {
     root_found = root_found || module.name == result.manifest.root_module;
   }
-  if (!root_found && !result.manifest.root_module.empty()) {
+  if (require_entry && !root_found && result.manifest.entry.empty() && !result.manifest.root_module.empty()) {
     result.diagnostics.push_back(
         diagnostic("BuildManifestError",
                    "root module is not declared in modules: " +
@@ -1276,18 +1490,34 @@ BuildManifestResult parse_build_manifest_yaml(const std::string &source,
   return manifest_from_value(root, path);
 }
 
-BuildManifestResult parse_build_manifest(const std::string &source,
-                                         const std::string &path) {
-  for (const char c : source) {
-    if (std::isspace(static_cast<unsigned char>(c)) != 0) {
-      continue;
-    }
-    if (c == '{' || c == '[') {
-      return parse_build_manifest_json(source, path);
-    }
-    return parse_build_manifest_yaml(source, path);
+BuildManifestResult parse_build_configuration(const std::string &source,
+                                             const std::string &path) {
+  const auto first = source.find_first_not_of(" \t\r\n");
+  if (first != std::string::npos && (source[first] == '{' || source[first] == '[')) {
+    JsonParser parser(source, path);
+    const auto root = parser.parse();
+    if (!parser.ok()) { BuildManifestResult result; result.diagnostics = parser.diagnostics(); return result; }
+    return manifest_from_value(root, path, false);
   }
-  return parse_build_manifest_yaml(source, path);
+  YamlParser parser(source, path);
+  const auto root = parser.parse();
+  if (!parser.ok()) { BuildManifestResult result; result.diagnostics = parser.diagnostics(); return result; }
+  return manifest_from_value(root, path, false);
+}
+
+pkg::PackageManifest package_manifest(const BuildManifest &manifest) {
+  auto result = manifest.package;
+  result.schema = manifest.schema;
+  result.profiles = manifest.profiles;
+  result.name = manifest.name;
+  result.root_module = manifest.root_module;
+  result.dependencies = manifest.dependencies;
+  result.native_extensions = manifest.native_extensions;
+  for (const auto &module : manifest.modules) {
+    const auto extension = std::filesystem::path(module.path).extension();
+    result.modules.push_back({module.name, module.path, extension == ".sputnikbc" ? "bytecode" : "source"});
+  }
+  return result;
 }
 
 BuildProfileSet normalize_profiles(BuildProfileSet profiles) {
@@ -1345,38 +1575,56 @@ bool runtime_supports_feature(const std::string &feature) {
 }
 
 std::string manifest_to_json(const BuildManifest &manifest) {
-  std::ostringstream out;
-  out << "{\n";
-  out << "  \"schema\": \"" << json_escape(manifest.schema) << "\",\n";
-  out << "  \"name\": \"" << json_escape(manifest.name) << "\",\n";
-  out << "  \"root\": \"" << json_escape(manifest.root_module) << "\",\n";
-  emit_profile_set(out, manifest.profiles, "  ");
-  out << ",\n";
-  emit_module_array(out, "stdlib", manifest.stdlib_modules, "  ");
-  out << ",\n";
-  emit_module_array(out, "modules", manifest.modules, "  ");
-  if (!manifest.source_formats.empty()) {
-    out << ",\n  \"source_formats\": [";
-    for (std::size_t i = 0; i < manifest.source_formats.size(); ++i) {
-      const auto &format = manifest.source_formats[i];
-      if (i) out << ',';
-      out << "\n    {\"suffix\": \"" << json_escape(format.suffix)
-          << "\", \"module\": \"" << json_escape(format.module)
-          << "\", \"macro\": \"" << json_escape(format.macro) << "\"}";
-    }
-    out << "\n  ]";
+  const auto package_text = pkg::render_manifest(package_manifest(manifest));
+  JsonParser parser(package_text, {});
+  auto root = parser.parse();
+  std::ostringstream extra;
+  extra << "{";
+  emit_module_array(extra, "stdlib", manifest.stdlib_modules, "");
+  if (!manifest.package.explicit_files && manifest.package.files.empty() && !manifest.modules.empty()) {
+    // Bootstrap/custom application builds may use absolute module mappings.
+    root.object_value.erase("files");
+    root.object_value.erase("module_names");
+    root.object_value.erase("source_root");
+    extra << ",";
+    emit_module_array(extra, "modules", manifest.modules, "");
   }
-  if (!manifest.dependencies.empty()) {
-    out << ",\n  \"dependencies\": {";
-    for (std::size_t i = 0; i < manifest.dependencies.size(); ++i) {
-      if (i) out << ',';
-      out << "\n    \"" << json_escape(manifest.dependencies[i].name) << "\": \""
-          << json_escape(manifest.dependencies[i].version) << "\"";
-    }
-    out << "\n  }";
+  if (!manifest.entry.empty()) extra << ",\"entry\":\"" << json_escape(manifest.entry) << "\"";
+  extra << ",\"source_formats\":[";
+  for (std::size_t i = 0; i < manifest.source_formats.size(); ++i) {
+    const auto &f = manifest.source_formats[i];
+    if (i) extra << ',';
+    extra << "{\"suffix\":\"" << json_escape(f.suffix) << "\",\"module\":\"" << json_escape(f.module)
+          << "\",\"macro\":\"" << json_escape(f.macro) << "\"}";
   }
-  out << "\n}\n";
-  return out.str();
+  extra << "]}";
+  const auto extra_text = extra.str();
+  JsonParser extras(extra_text, {});
+  const auto additions = extras.parse();
+  for (const auto &[key, value] : additions.object_value) root.object_value[key] = value;
+  std::function<std::string(const JsonValue &)> encode = [&](const JsonValue &value) -> std::string {
+    switch (value.kind) {
+    case JsonValue::Kind::Null: return "null";
+    case JsonValue::Kind::Bool: return value.bool_value ? "true" : "false";
+    case JsonValue::Kind::String: return "\"" + json_escape(value.string_value) + "\"";
+    case JsonValue::Kind::Number: return value.string_value;
+    case JsonValue::Kind::Array: {
+      std::string out = "[";
+      for (const auto &item : value.array_value) { if (out.size() > 1) out += ','; out += encode(item); }
+      return out + "]";
+    }
+    case JsonValue::Kind::Object: {
+      std::string out = "{";
+      for (const auto &[key, item] : value.object_value) {
+        if (out.size() > 1) out += ',';
+        out += "\"" + json_escape(key) + "\":" + encode(item);
+      }
+      return out + "}";
+    }
+    }
+    return "null";
+  };
+  return encode(root) + "\n";
 }
 
 std::string summary_to_json(const BuildSummary &summary) {
@@ -1387,6 +1635,12 @@ std::string summary_to_json(const BuildSummary &summary) {
   out << "  \"name\": \"" << json_escape(summary.name) << "\",\n";
   out << "  \"root\": \"" << json_escape(summary.root_module) << "\",\n";
   out << "  \"target\": \"" << json_escape(summary.target) << "\",\n";
+  out << "  \"inputs\": [";
+  for (std::size_t i = 0; i < summary.inputs.size(); ++i) {
+    if (i) out << ',';
+    out << '"' << json_escape(summary.inputs[i]) << '"';
+  }
+  out << "],\n";
   out << "  \"out_dir\": \"" << json_escape(summary.out_dir) << "\",\n";
   out << "  \"cache_dir\": \"" << json_escape(summary.cache_dir) << "\",\n";
   out << "  \"native_output\": \"" << json_escape(summary.native_output_path)

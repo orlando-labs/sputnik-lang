@@ -1,0 +1,124 @@
+{
+  "schema": "sputnik.workspace-packages.check.v1",
+  "registry": "/private/tmp/sputnik-yaml-check/workspace-final/registry",
+  "home": "/private/tmp/sputnik-yaml-check/workspace-final/home",
+  "packages": [
+    {
+      "name": "sqlite3",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/sqlite3",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/sqlite3/0.1.0/sqlite3-0.1.0.sputnikpkg",
+      "sha256": "sha256:9eb3993060e2dd46613fa9dee291b5c99d43b47d2657762a0c94bcb5efaabc89"
+    },
+    {
+      "name": "orm",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/orm",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orm/0.1.0/orm-0.1.0.sputnikpkg",
+      "sha256": "sha256:76dc1c5ff7e1c75d33104e796b278245f1e77fa5f61cb4f1b00c48bb46cda764"
+    },
+    {
+      "name": "orbit",
+      "version": "1.0.0-rc.1",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit/1.0.0-rc.1/orbit-1.0.0-rc.1.sputnikpkg",
+      "sha256": "sha256:2472f078fda22585a00e74c5b5d27130606b7ea6fa77caed725dfe07dcdcdc8d"
+    },
+    {
+      "name": "plot",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/plot",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/plot/0.1.0/plot-0.1.0.sputnikpkg",
+      "sha256": "sha256:bd97ebfd1d7adedb30af4831cdd6f6ef4b9a56f58fda1711017f433225ea2686"
+    },
+    {
+      "name": "pycall",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/pycall",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/pycall/0.1.0/pycall-0.1.0.sputnikpkg",
+      "sha256": "sha256:0c73099aa7b57e6bfb20ccf4be1910ba0c1ad0f975e88df51f588a3accdb5d59"
+    },
+    {
+      "name": "rbcall",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/rbcall",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/rbcall/0.1.0/rbcall-0.1.0.sputnikpkg",
+      "sha256": "sha256:ecaa51ab01466d9087f77e5d69a18a8723b88ef4aafb63f6ac43962b2796feaa"
+    },
+    {
+      "name": "orbit-oauth",
+      "version": "0.1.0-dev",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit/packages/orbit-oauth",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit-oauth/0.1.0-dev/orbit-oauth-0.1.0-dev.sputnikpkg",
+      "sha256": "sha256:168a9f40b6a8ace4f735c63f6d382605f60a2a482e26ba95ca07d115f85deea6"
+    },
+    {
+      "name": "orbit-oauth-github",
+      "version": "0.1.0-dev",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit/packages/orbit-oauth-github",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit-oauth-github/0.1.0-dev/orbit-oauth-github-0.1.0-dev.sputnikpkg",
+      "sha256": "sha256:8708cab8be74ca9269fae587ec633f48bf1b93fa720cb206fb265d813d53511a"
+    },
+    {
+      "name": "orbit-orm",
+      "version": "1.0.0-rc.1",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit/packages/orbit-orm",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit-orm/1.0.0-rc.1/orbit-orm-1.0.0-rc.1.sputnikpkg",
+      "sha256": "sha256:d5a4652d1371ae89212a29d4f91f9b17b9ed6ff8e8a2592587235c3d6e890f94"
+    },
+    {
+      "name": "orbit-session",
+      "version": "0.1.0-dev",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit/packages/orbit-session",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit-session/0.1.0-dev/orbit-session-0.1.0-dev.sputnikpkg",
+      "sha256": "sha256:606900c2d24db9a566165d5a1458b93f9f425c6e7a3ecbf8f2f02ec7cac8e02e"
+    },
+    {
+      "name": "orbit-session-orm",
+      "version": "0.1.0-dev",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit/packages/orbit-session-orm",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit-session-orm/0.1.0-dev/orbit-session-orm-0.1.0-dev.sputnikpkg",
+      "sha256": "sha256:03e2ea0537b65dafa5d626fc9e86e32bb017eb0bf59a91cba703ab312b199eaa"
+    },
+    {
+      "name": "orbit-vite",
+      "version": "0.1.0-dev",
+      "source": "/Users/slowpilot/workspace/sputnik/orbit/packages/orbit-vite",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/orbit-vite/0.1.0-dev/orbit-vite-0.1.0-dev.sputnikpkg",
+      "sha256": "sha256:c6b6322b48358392adb1013fa8426c79c24005d5600273349eb730004b1c837c"
+    },
+    {
+      "name": "notebook-core",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/sputnik-notebook/packages/notebook-core",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/notebook-core/0.1.0/notebook-core-0.1.0.sputnikpkg",
+      "sha256": "sha256:43a0b2c92ff53dd5b89818af38b0c15dcd960a123562dc331ff89ad82fd3924f"
+    },
+    {
+      "name": "notebook.ui",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/sputnik-lang/packages/notebook_ui",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/notebook.ui/0.1.0/notebook.ui-0.1.0.sputnikpkg",
+      "sha256": "sha256:032d090baff0ba564af0fca254a5dfcef54431ed13d2e4ac5757c48afeec4856"
+    },
+    {
+      "name": "progressbar",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/sputnik-lang/packages/progressbar",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/progressbar/0.1.0/progressbar-0.1.0.sputnikpkg",
+      "sha256": "sha256:e170de3b89c0522145745e4f73ec32526fc6031f4c9382648c85a56d05d4c858"
+    },
+    {
+      "name": "system_io",
+      "version": "0.1.0",
+      "source": "/Users/slowpilot/workspace/sputnik/sputnik-lang/packages/system_io",
+      "artifact": "/private/tmp/sputnik-yaml-check/workspace-final/registry/system_io/0.1.0/system_io-0.1.0.sputnikpkg",
+      "sha256": "sha256:d8a5670a027966ea6ed3e867dd6d16f275faafc20c6b47352293279ef53c4c72"
+    }
+  ],
+  "checks": [
+    "installed Python/Ruby VM without SDK bindings or compiler",
+    "installed Python/Ruby full native without SDK bindings",
+    "installed System IO/SQLite without SDK bindings or compiler"
+  ]
+}

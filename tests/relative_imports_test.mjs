@@ -1,0 +1,98 @@
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, mkdir, writeFile, readFile, realpath, symlink, rm } from 'node:fs/promises'
+import os from 'node:os'
+import path from 'node:path'
+import assert from 'node:assert/strict'
+
+const compiler = path.resolve(process.argv.slice(2).find(value => !value.startsWith('--')) || 'build/sputnik')
+const native = process.argv.includes('--native')
+const root = await mkdtemp(path.join(os.tmpdir(), 'sputnik-relative-'))
+async function write(file, data) { await mkdir(path.dirname(file), { recursive: true }); await writeFile(file, data) }
+function run(args, error) {
+  const child = spawnSync(compiler, args, { cwd: os.tmpdir(), encoding: 'utf8', env: { ...process.env, SPUTNIK_PKG_HOME: path.join(root, 'packages'), SPUTNIK_VM_CACHE: path.join(root, 'cache') }, maxBuffer: 16 * 1024 * 1024 })
+  if (error) { assert.notEqual(child.status, 0); assert.match(child.stdout + child.stderr, error); return }
+  assert.equal(child.status, 0, child.error?.message || child.stdout + child.stderr)
+  return child.stdout.trim()
+}
+try {
+  const entry = path.join(root, 'app/test/main.s')
+  const value = path.join(root, 'app/backend/value.s')
+  await write(value, 'package app.value\nexport Item, answer\nprint "initialized"\nclass Item\ndef answer(): 42\n')
+  await write(path.join(root, 'app/backend/service.s'), 'package service\nfrom "./value" import answer\nexport result\ndef result(): answer()\n')
+  await symlink('value.s', path.join(root, 'app/backend/alias.s'))
+  await write(entry, 'package main\nimport "../backend/value" as first\nimport "../backend/./alias.s" as second\nfrom "../backend/service.s" import result\nprint first.Item == second.Item\nprint result()\n')
+  assert.equal(run(['run', entry]), 'initialized\ntrue\n42', 'canonical module initializes once across aliases and symlinks')
+  await write(path.join(root, 'app/backend/plain.s'), 'export number\ndef number(): 8\n')
+  await write(path.join(root, 'app/test/plain.s'), 'from "../backend/plain" import number\nprint number()\n')
+  assert.equal(run(['run', path.join(root, 'app/test/plain.s')]), '8', 'imported source needs no package declaration')
+  await write(path.join(root, 'app/test/default.s'), 'import "../backend/service"\nprint service.result()\n')
+  assert.equal(run(['run', path.join(root, 'app/test/default.s')]), 'initialized\n42', 'default alias is the file basename')
+  for (const extension of ['spu', 'sputnik']) {
+    await write(path.join(root, `app/backend/only_${extension}.${extension}`), `package only_${extension}\nexport answer\ndef answer(): 5\n`)
+    await write(path.join(root, `app/test/${extension}.s`), `from "../backend/only_${extension}" import answer\nprint answer()\n`)
+    assert.equal(run(['run', path.join(root, `app/test/${extension}.s`)]), '5', `omitted .${extension} is resolved`)
+  }
+  await write(path.join(root, 'app/backend/helpers.s'), 'package helpers\nexport number\ndef number(): 9\n')
+  await write(path.join(root, 'app/backend/ordinary.s'), 'package ordinary\nfrom helpers import number\nexport result\ndef result(): number()\n')
+  await write(path.join(root, 'app/test/ordinary.s'), 'from "../backend/ordinary" import result\nprint result()\n')
+  assert.equal(run(['run', path.join(root, 'app/test/ordinary.s')]), '9', 'transitive local imports retain importer directory')
+  await write(path.join(root, 'app/backend/macros.s'), 'package macros\nexport macro greeting\nmacro def greeting(): return Ast.lift("hello")\n')
+  await write(path.join(root, 'app/test/macro.s'), 'from "../backend/macros" import greeting\nprint greeting()\n')
+  assert.equal(run(['run', path.join(root, 'app/test/macro.s')]), 'hello', 'relative macro providers stage before expansion')
+  await write(path.join(root, "app/backend/quote's.s"), 'package quoted\nexport answer\ndef answer(): 6\n')
+  await write(path.join(root, 'app/test/quoted.s'), "from '../backend/quote\\'s.s' import answer\nprint answer()\n")
+  assert.equal(run(['run', path.join(root, 'app/test/quoted.s')]), '6', 'single-quoted paths decode escapes')
+  await write(path.join(root, 'app/sputnik.build.json'), '{}')
+  assert.equal(run(['run', entry]), 'initialized\ntrue\n42', 'configured source and standalone source agree')
+  const build = path.join(root, 'out')
+  const cache = path.join(root, 'build-cache')
+  await write(path.join(root, 'app/sputnik.build.json'), JSON.stringify({ entry: 'test/main.s' }))
+  const summary = JSON.parse(run(['build', path.join(root, 'app/sputnik.build.json'), '--target', 'bytecode', '--out-dir', build, '--cache-dir', cache]))
+  assert(summary.inputs.includes(await realpath(value)), 'all relative source inputs are tracked')
+  assert.equal(run(['run', entry]), 'initialized\ntrue\n42')
+  const original = await readFile(value, 'utf8')
+  await write(value, original.replace('42', '43'))
+  assert.equal(run(['run', entry]), 'initialized\ntrue\n43', 'relative source edits invalidate graph caches')
+  await write(value, original.replace('package app.value', 'package app.renamed'))
+  assert.equal(run(['run', entry]), 'initialized\ntrue\n42', 'module declaration changes invalidate importing code')
+  await write(value, original)
+  await write(path.join(root, 'app/backend/view_tags.s'), 'package view_tags\nexport macro source\nstring_tag macro def source(t as Ast.StringTemplate): return Ast.lift(t.source)\n')
+  await write(path.join(root, 'app/backend/screen.s'), 'package screen\nexport screen\ntemplate "./screen.text.sv"\ndef screen()\n')
+  await write(path.join(root, 'app/backend/screen.text.sv'), 'external')
+  await write(path.join(root, 'app/test/view.s'), 'from "../backend/screen" import screen\nprint screen()\n')
+  await write(path.join(root, 'app/sputnik.build.json'), JSON.stringify({ source_formats: [{ suffix: '.text.sv', module: 'view_tags', macro: 'source' }] }))
+  assert.equal(run(['run', path.join(root, 'app/test/view.s')]), 'external', 'relative modules retain local external template providers')
+  await write(path.join(root, 'app/backend/cycle_a.s'), 'package cycle_a\nimport "./cycle_b" as b\n')
+  await write(path.join(root, 'app/backend/cycle_b.s'), 'package cycle_b\nimport "./cycle_a" as a\n')
+  await write(path.join(root, 'app/test/cycle.s'), 'import "../backend/cycle_a" as a\n')
+  run(['run', path.join(root, 'app/test/cycle.s')], /dependency cycle|cycle detected|cyclic import/i)
+  await write(path.join(root, 'app/test/self.s'), 'import "./self" as current\n')
+  run(['run', path.join(root, 'app/test/self.s')], /dependency cycle|cycle detected|cyclic import/i)
+  await write(path.join(root, 'app/test/exports.s'), 'from "../backend/value" import Missing\n')
+  run(['run', path.join(root, 'app/test/exports.s')], /Missing/)
+  await write(path.join(root, 'app/backend/value.spu'), 'package other\n')
+  run(['run', entry], /ambiguous local module/)
+  await rm(path.join(root, 'app/backend/value.spu'))
+  await write(path.join(root, 'app/backend/other.s'), 'package app.value\nexport Item\nclass Item\n')
+  await write(path.join(root, 'app/test/conflict.s'), 'import "../backend/value" as a\nimport "../backend/other" as b\n')
+  run(['run', path.join(root, 'app/test/conflict.s')], /conflicting local module providers/)
+  await write(path.join(root, 'app/test/missing.s'), 'import "../backend/absent" as missing\n')
+  run(['run', path.join(root, 'app/test/missing.s')], /relative module.*was not found/)
+  for (const literal of ['"backend/value"', '"/absolute/value"', '"../#{name}"', '"../bad\\npath"']) {
+    await write(path.join(root, 'app/test/invalid.s'), `import ${literal} as invalid\n`)
+    run(['run', path.join(root, 'app/test/invalid.s')], /IMPORT_PATH/)
+  }
+  if (native) {
+    const binary = path.join(root, 'native')
+    const nativeEntry = path.join(root, 'app/test/native.s')
+    await write(nativeEntry, 'package native_entry\nimport "../backend/value" as first\nimport "../backend/alias.s" as second\nfrom "../backend/service" import result\nfrom "../backend/plain" import number\nfrom "../backend/macros" import greeting\nfrom "../backend/screen" import screen\nprint first.Item == second.Item\nprint result()\nprint number()\nprint greeting()\nprint screen()\n')
+    const report = JSON.parse(run(['build', nativeEntry, '-o', binary, '--target', 'native', '--require-full-native']))
+    assert.equal(report.native_full_coverage, true)
+    assert.equal(report.native_vm_independent, true)
+    const result = spawnSync(binary, [], { cwd: os.tmpdir(), encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    assert.equal(result.stdout.trim(), 'initialized\ntrue\n42\n8\nhello\nexternal')
+    console.log(`PASS full-native relative imports: ${report.native_code_count}/${report.bytecode_code_count}, no fallback`)
+  }
+  console.log('PASS relative imports: importer context, aliases, identity, macros, nameless sources, diagnostics and build inputs')
+} finally { await rm(root, { recursive: true, force: true }) }

@@ -1,6 +1,7 @@
 #include "package/package.h"
 
 #include "frontend/lexer/token.h"
+#include "buildsys/build.h"
 
 #include <algorithm>
 #include <cctype>
@@ -42,153 +43,10 @@ std::string trim(const std::string &value) {
   return value.substr(start, end - start);
 }
 
-std::string strip_comment(const std::string &line) {
-  bool in_string = false;
-  bool escaped = false;
-  for (std::size_t i = 0; i < line.size(); ++i) {
-    const char c = line[i];
-    if (escaped) {
-      escaped = false;
-      continue;
-    }
-    if (c == '\\' && in_string) {
-      escaped = true;
-      continue;
-    }
-    if (c == '"') {
-      in_string = !in_string;
-      continue;
-    }
-    if (c == '#' && !in_string) {
-      return line.substr(0, i);
-    }
-  }
-  return line;
-}
 
-bool unquote_toml_string(const std::string &raw, std::string *out) {
-  const std::string value = trim(raw);
-  if (value.size() < 2U || value.front() != '"' || value.back() != '"') {
-    *out = value;
-    return true;
-  }
-  std::string decoded;
-  for (std::size_t i = 1; i + 1U < value.size(); ++i) {
-    const char c = value[i];
-    if (c != '\\') {
-      decoded.push_back(c);
-      continue;
-    }
-    if (i + 2U >= value.size()) {
-      return false;
-    }
-    const char escaped = value[++i];
-    switch (escaped) {
-    case '"':
-    case '\\':
-      decoded.push_back(escaped);
-      break;
-    case 'n':
-      decoded.push_back('\n');
-      break;
-    case 'r':
-      decoded.push_back('\r');
-      break;
-    case 't':
-      decoded.push_back('\t');
-      break;
-    default:
-      return false;
-    }
-  }
-  *out = decoded;
-  return true;
-}
 
-bool parse_toml_bool(const std::string &raw, bool *out) {
-  const std::string value = trim(raw);
-  if (value == "true") {
-    *out = true;
-    return true;
-  }
-  if (value == "false") {
-    *out = false;
-    return true;
-  }
-  return false;
-}
 
-bool parse_toml_string_array(const std::string &raw,
-                             std::vector<std::string> *out) {
-  const std::string value = trim(raw);
-  if (value.size() < 2U || value.front() != '[' || value.back() != ']') {
-    return false;
-  }
-  std::vector<std::string> items;
-  std::string current;
-  bool in_string = false;
-  bool escaped = false;
-  bool expecting_item = true;
-  for (std::size_t i = 1; i + 1U < value.size(); ++i) {
-    const char c = value[i];
-    if (in_string) {
-      if (escaped) {
-        switch (c) {
-        case '"':
-        case '\\':
-          current.push_back(c);
-          break;
-        case 'n':
-          current.push_back('\n');
-          break;
-        case 'r':
-          current.push_back('\r');
-          break;
-        case 't':
-          current.push_back('\t');
-          break;
-        default:
-          return false;
-        }
-        escaped = false;
-        continue;
-      }
-      if (c == '\\') {
-        escaped = true;
-        continue;
-      }
-      if (c == '"') {
-        in_string = false;
-        items.push_back(current);
-        current.clear();
-        expecting_item = false;
-        continue;
-      }
-      current.push_back(c);
-      continue;
-    }
-    if (std::isspace(static_cast<unsigned char>(c)) != 0) {
-      continue;
-    }
-    if (c == ',') {
-      if (expecting_item) {
-        return false;
-      }
-      expecting_item = true;
-      continue;
-    }
-    if (c == '"' && expecting_item) {
-      in_string = true;
-      continue;
-    }
-    return false;
-  }
-  if (in_string || escaped || (expecting_item && !items.empty())) {
-    return false;
-  }
-  *out = std::move(items);
-  return true;
-}
+
 
 std::string json_escape(const std::string &value) {
   std::ostringstream out;
@@ -883,499 +741,22 @@ PackageRegistryResult registry_write(const std::string &serialized,
 
 } // namespace
 
-PackageManifestResult parse_manifest_toml(const std::string &source,
-                                          const std::string &path) {
-  enum class Section {
-    None,
-    Package,
-    Modules,
-    Dependencies,
-    Capabilities,
-    Native,
-    NativeSymbols,
-    NativeTypes,
-    NativeErrors, Artifact, Target, Files, ArtifactDependencies, NativeLibraries,
-    NativeRequirements, NativeProviders, ArtifactBuildDependencies
-  };
-
+PackageManifestResult parse_manifest(const std::string &source,
+                                     const std::string &path) {
   PackageManifestResult result;
-  Section section = Section::None;
-  PackageModule *current_module = nullptr;
-  PackageNativeExtension *current_native = nullptr;
-  PackageNativeType *current_native_type = nullptr;
-  PackageNativeError *current_native_error = nullptr;
-  PackageNativeLibrary *current_library = nullptr;
-  PackageNativeRequirement *requirement = nullptr;
-  PackageNativeProvider *provider = nullptr;
-
-  std::istringstream input(source);
-  std::string raw_line;
-  std::size_t line_no = 0;
-  while (std::getline(input, raw_line)) {
-    ++line_no;
-    const std::string line = trim(strip_comment(raw_line));
-    if (line.empty()) {
-      continue;
-    }
-    if (line == "[[native_requirements]]") {
-      result.manifest.native_requirements.push_back({});
-      requirement = &result.manifest.native_requirements.back();
-      section = Section::NativeRequirements;
-      continue;
-    }
-    if (line == "[[native_providers]]") {
-      result.manifest.native_providers.push_back({});
-      provider = &result.manifest.native_providers.back();
-      section = Section::NativeProviders;
-      continue;
-    }
-    if (line == "[[native_providers.libraries]]") {
-      if (!provider) result.diagnostics.push_back(diagnostic(
-          "PackageManifestError", "provider library needs a provider", path));
-      else {
-        provider->libraries.push_back({});
-        current_library = &provider->libraries.back();
-      }
-      section = Section::NativeLibraries;
-      continue;
-    }
-    if (line == "[artifact.build-dependencies]") {
-      section = Section::ArtifactBuildDependencies;
-      continue;
-    }
-    if (line == "[artifact]" ||
- line == "[target]" || line == "[files]" ||
-        line == "[artifact.dependencies]") {
-      section = line == "[artifact]" ? Section::Artifact :
-                line == "[target]" ? Section::Target :
-                line == "[files]" ? Section::Files : Section::ArtifactDependencies;
-      continue;
-    }
-    if (line == "[[native.libraries]]") {
-      if (current_native == nullptr) {
-        result.diagnostics.push_back(diagnostic("PackageManifestError",
-            "native.libraries must follow native", path));
-      } else {
-        current_native->libraries.push_back({});
-        current_library = &current_native->libraries.back();
-      }
-      section = Section::NativeLibraries;
-      continue;
-    }
-    if (line == "[package]") {
-      section = Section::Package;
-      current_module = nullptr;
-      current_native = nullptr;
-      current_native_type = nullptr;
-      current_native_error = nullptr;
-      continue;
-    }
-    if (line == "[dependencies]") {
-      section = Section::Dependencies;
-      current_module = nullptr;
-      current_native = nullptr;
-      current_native_type = nullptr;
-      current_native_error = nullptr;
-      continue;
-    }
-    if (line == "[capabilities]") {
-      section = Section::Capabilities;
-      current_module = nullptr;
-      current_native = nullptr;
-      current_native_type = nullptr;
-      current_native_error = nullptr;
-      continue;
-    }
-    if (line == "[[modules]]" || line == "[[module]]") {
-      result.manifest.modules.push_back({});
-      current_module = &result.manifest.modules.back();
-      current_native = nullptr;
-      current_native_type = nullptr;
-      current_native_error = nullptr;
-      section = Section::Modules;
-      continue;
-    }
-    if (line == "[[native]]" || line == "[[native_extensions]]") {
-      result.manifest.native_extensions.push_back({});
-      current_native = &result.manifest.native_extensions.back();
-      current_native_type = nullptr;
-      current_native_error = nullptr;
-      current_module = nullptr;
-      section = Section::Native;
-      continue;
-    }
-    if (line == "[native.symbols]") {
-      current_module = nullptr;
-      current_native_type = nullptr;
-      current_native_error = nullptr;
-      if (current_native == nullptr) {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "[native.symbols] must follow a [[native]] section", path));
-      }
-      section = Section::NativeSymbols;
-      continue;
-    }
-    if (line == "[[native.types]]") {
-      current_module = nullptr;
-      current_native_error = nullptr;
-      if (current_native == nullptr) {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "[[native.types]] must follow a [[native]] section", path));
-        current_native_type = nullptr;
-      } else {
-        current_native->types.push_back({});
-        current_native_type = &current_native->types.back();
-      }
-      section = Section::NativeTypes;
-      continue;
-    }
-    if (line == "[[native.errors]]") {
-      current_module = nullptr;
-      current_native_type = nullptr;
-      if (current_native == nullptr) {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "[[native.errors]] must follow a [[native]] section", path));
-        current_native_error = nullptr;
-      } else {
-        current_native->errors.push_back({});
-        current_native_error = &current_native->errors.back();
-      }
-      section = Section::NativeErrors;
-      continue;
-    }
-    if (!line.empty() && line.front() == '[') {
-      std::ostringstream message;
-      message << "unsupported manifest section at line " << line_no << ": "
-              << line;
-      result.diagnostics.push_back(
-          diagnostic("PackageManifestError", message.str(), path));
-      continue;
-    }
-
-    const std::size_t equals = line.find('=');
-    if (equals == std::string::npos) {
-      std::ostringstream message;
-      message << "expected key/value pair at line " << line_no;
-      result.diagnostics.push_back(
-          diagnostic("PackageManifestError", message.str(), path));
-      continue;
-    }
-    std::string key = trim(line.substr(0, equals));
-    if (!key.empty() && key.front() == '"') {
-      std::string decoded_key;
-      if (unquote_toml_string(key, &decoded_key)) key = decoded_key;
-    }
-    std::string value;
-    if (!unquote_toml_string(line.substr(equals + 1U), &value)) {
-      std::ostringstream message;
-      message << "invalid string literal at line " << line_no;
-      result.diagnostics.push_back(
-          diagnostic("PackageManifestError", message.str(), path));
-      continue;
-    }
-
-    switch (section) {
-    case Section::Package:
-      if (key == "kind") { result.manifest.kind = value; }
-      else if (key == "name") {
-        result.manifest.name = value;
-      } else if (key == "version") {
-        result.manifest.version = value;
-      } else if (key == "root" || key == "root_module" || key == "module") {
-        result.manifest.root_module = value;
-      }
-      break;
-    case Section::Modules:
-      if (current_module == nullptr) {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "module key/value pair must appear inside [[modules]]", path));
-        break;
-      }
-      if (key == "name") {
-        current_module->name = value;
-      } else if (key == "path" || key == "source" || key == "bytecode") {
-        if (!current_module->path.empty())
-          result.diagnostics.push_back(diagnostic("PackageManifestError",
-              "module must have exactly one source or bytecode path", path));
-        current_module->path = value;
-        current_module->representation = key == "bytecode" ? "bytecode" : "source";
-      }
-      break;
-    case Section::ArtifactBuildDependencies:
-    case Section::ArtifactDependencies:
-    case Section::Dependencies: {
-      PackageDependency dependency;
-      dependency.name = key;
-      dependency.version = value;
-      dependency.source = "registry";
-      (section == Section::ArtifactBuildDependencies ? result.manifest.artifact_build_dependencies
-       : section == Section::ArtifactDependencies ? result.manifest.artifact_dependencies
-                                                : result.manifest.dependencies)
-          .push_back(std::move(dependency));
-      break;
-    }
-    case Section::Capabilities: {
-      const std::vector<std::string> names =
-          capability::canonical_names_for_manifest_key(key);
-      if (names.empty()) {
-        result.diagnostics.push_back(
-            diagnostic("PackageManifestError",
-                       "unsupported capability key: " + key, path));
-        break;
-      }
-      bool bool_value = false;
-      if (parse_toml_bool(value, &bool_value)) {
-        if (bool_value) {
-          for (const std::string &name : names) {
-            result.manifest.capabilities.push_back(capability::make_capability(
-                name, "*", "manifest boolean request",
-                capability::kCapabilityFlagWildcardTarget));
-          }
-        }
-        break;
-      }
-      std::vector<std::string> targets;
-      if (parse_toml_string_array(value, &targets)) {
-        for (const std::string &target : targets) {
-          for (const std::string &name : names) {
-            result.manifest.capabilities.push_back(
-                capability::make_capability(name, target));
-          }
-        }
-        break;
-      }
-      std::string string_value;
-      const std::string raw_value = trim(line.substr(equals + 1U));
-      if (!raw_value.empty() && raw_value.front() == '"' &&
-          unquote_toml_string(raw_value, &string_value)) {
-        for (const std::string &name : names) {
-          result.manifest.capabilities.push_back(
-              capability::make_capability(name, string_value));
-        }
-        break;
-      }
-      result.diagnostics.push_back(
-          diagnostic("PackageManifestError",
-                     "capability values must be boolean, string, or string "
-                     "array at line " +
-                         std::to_string(line_no),
-                     path));
-      break;
-    }
-    case Section::Native: {
-      if (current_native == nullptr) {
-        break;
-      }
-      if (key == "name") {
-        current_native->name = value;
-        break;
-      }
-      if (key == "language") {
-        current_native->language = value;
-        break;
-      }
-      if (key == "kind") { current_native->kind = value; break; }
-      if (key == "library") { current_native->library = value; break; }
-      if (key == "sputnik_ext_abi") {
-        if (value != "1") result.diagnostics.push_back(diagnostic(
-            "PackageManifestError", "unsupported Sputnik extension ABI", path));
-        current_native->sputnik_ext_abi_version = 1;
-        break;
-      }
-      std::vector<std::string> *array_target = nullptr;
-      if (key == "requirements") {
-        array_target = &current_native->requirements;
-      } else if (key == "required_runtime_features") {
-        array_target = &current_native->required_runtime_features;
-      } else if (key == "sources") {
-        array_target = &current_native->sources;
-      } else if (key == "headers") {
-        array_target = &current_native->headers;
-      } else if (key == "include_dirs") {
-        array_target = &current_native->include_dirs;
-      } else if (key == "defines") {
-        array_target = &current_native->defines;
-      } else if (key == "cxxflags") {
-        array_target = &current_native->cxxflags;
-      } else if (key == "link_libraries") {
-        array_target = &current_native->link_libraries;
-      } else if (key == "library_dirs") {
-        array_target = &current_native->library_dirs;
-      } else if (key == "runtime_library_dirs") {
-        array_target = &current_native->runtime_library_dirs;
-      } else if (key == "blocking_symbols") {
-        array_target = &current_native->blocking_symbols;
-      }
-      if (array_target == nullptr) {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "unsupported [[native]] key at line " + std::to_string(line_no) +
-                ": " + key,
-            path));
-        break;
-      }
-      // unquote_toml_string left the raw `["a", "b"]` text in `value`.
-      if (!parse_toml_string_array(value, array_target)) {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "[[native]] '" + key + "' must be a string array at line " +
-                std::to_string(line_no),
-            path));
-      }
-      break;
-    }
-    case Section::NativeSymbols: {
-      if (current_native == nullptr) {
-        break;
-      }
-      std::string logical;
-      if (!unquote_toml_string(key, &logical)) {
-        logical = key;
-      }
-      current_native->symbols.push_back({logical, value});
-      break;
-    }
-    case Section::NativeTypes:
-      if (current_native_type == nullptr) {
-        break;
-      }
-      if (key == "sputnik") {
-        current_native_type->sputnik = value;
-      } else if (key == "tag") {
-        current_native_type->tag = value;
-      } else if (key == "ownership") {
-        current_native_type->ownership = value;
-      } else if (key == "destructor") {
-        current_native_type->destructor = value;
-      } else {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "unsupported [[native.types]] key at line " +
-                std::to_string(line_no) + ": " + key,
-            path));
-      }
-      break;
-    case Section::NativeErrors:
-      if (current_native_error == nullptr) {
-        break;
-      }
-      if (key == "name") {
-        current_native_error->name = value;
-      } else if (key == "parent") {
-        current_native_error->parent = value;
-      } else if (key == "default_message") {
-        current_native_error->default_message = value;
-      } else if (key == "default_exit_code") {
-        current_native_error->default_exit_code = value;
-      } else {
-        result.diagnostics.push_back(diagnostic(
-            "PackageManifestError",
-            "unsupported [[native.errors]] key at line " +
-                std::to_string(line_no) + ": " + key,
-            path));
-      }
-      break;
-    case Section::Artifact:
-      if (key == "variant") result.manifest.variant = value;
-      else if (key == "limit_profile") result.manifest.limit_profile = value;
-      else if (key == "bundle") result.manifest.bundle = value;
-      else result.diagnostics.push_back(diagnostic("PackageManifestError", "unknown artifact field: " + key, path));
-      break;
-    case Section::Target:
-      if (key == "os") result.manifest.target.os = value;
-      else if (key == "arch") result.manifest.target.arch = value;
-      else if (key == "min_os") result.manifest.target.min_os = value;
-      else if (key == "libc") result.manifest.target.libc = value;
-      else if (key == "min_libc") result.manifest.target.min_libc = value;
-      else if (key == "compute_backend") result.manifest.target.compute_backend = value;
-      else if (key == "cuda_version") result.manifest.target.cuda_version = value;
-      else if (key == "min_cuda_driver") result.manifest.target.min_cuda_driver = value;
-      else if (key == "cpu_features" || key == "compute_backends" || key == "cuda_architectures") {
-        auto &values = key == "cpu_features" ? result.manifest.target.cpu_features : key == "compute_backends" ? result.manifest.target.compute_backends : result.manifest.target.cuda_architectures;
-        if (!parse_toml_string_array(value, &values)) result.diagnostics.push_back(diagnostic("PackageManifestError", "target field requires string array", path));
-      } else result.diagnostics.push_back(diagnostic("PackageManifestError", "unknown target field: " + key, path));
-      break;
-    case Section::Files:
-      if (key != "include" || !parse_toml_string_array(value, &result.manifest.files))
-        result.diagnostics.push_back(diagnostic("PackageManifestError", "files.include requires string array", path));
-      break;
-    case Section::NativeRequirements: {
-      if (!requirement) break;
-      std::string *target = nullptr;
-      if (key == "id") target = &requirement->id;
-      else if (key == "kind") target = &requirement->kind;
-      else if (key == "version") target = &requirement->version;
-      else if (key == "abi") target = &requirement->abi;
-      else if (key == "build_id") target = &requirement->build_id;
-      else if (key == "provider") target = &requirement->provider;
-      else if (key == "runtime") target = &requirement->runtime;
-      else if (key == "package") target = &requirement->package;
-      if (target) *target = value;
-      else if (key != "libraries" || !parse_toml_string_array(value, &requirement->libraries))
-        result.diagnostics.push_back(diagnostic("PackageManifestError", "unknown/invalid requirement field: " + key, path));
-      break;
-    }
-    case Section::NativeProviders: {
-      if (!provider) break;
-      std::string *target = nullptr;
-      if (key == "id") target = &provider->id;
-      else if (key == "kind") target = &provider->kind;
-      else if (key == "version") target = &provider->version;
-      else if (key == "abi") target = &provider->abi;
-      else if (key == "build_id") target = &provider->build_id;
-      else if (key == "runtime_build_id") target = &provider->runtime_build_id;
-      if (target) *target = value;
-      else {
-        std::vector<std::string> *array = nullptr;
-        if (key == "include_dirs") array = &provider->include_dirs;
-        else if (key == "library_dirs") array = &provider->library_dirs;
-        else if (key == "link_libraries") array = &provider->link_libraries;
-        else if (key == "files") array = &provider->files;
-        if (!array || !parse_toml_string_array(value, array))
-          result.diagnostics.push_back(diagnostic("PackageManifestError", "unknown/invalid provider field: " + key, path));
-      }
-      break;
-    }
-    case Section::NativeLibraries:
-
-      if (!current_library) break;
-      if (key == "path") current_library->path = value;
-      else if (key == "role") current_library->role = value;
-      else if (key == "abi") current_library->abi = value;
-      else result.diagnostics.push_back(diagnostic("PackageManifestError", "unknown native library field: " + key, path));
-      break;
-    case Section::None:
-      if (key == "schema" && value == "sputnik.package-manifest.v1") {
-        result.manifest.schema = value;
-        break;
-      }
-      result.diagnostics.push_back(diagnostic(
-          "PackageManifestError",
-          "manifest key/value pair must appear inside a section", path));
-      break;
-    }
-  }
-
-  if (result.manifest.root_module.empty() && !result.manifest.modules.empty()) {
-    result.manifest.root_module = result.manifest.modules.front().name;
-  }
-
+  auto parsed = build::parse_build_configuration(source, path);
+  for (const auto &d : parsed.diagnostics)
+    result.diagnostics.push_back({"PackageManifestError", d.message, d.path});
+  if (!parsed.ok()) return result;
+  result.manifest = build::package_manifest(parsed.manifest);
   if (result.manifest.name.empty()) {
     result.diagnostics.push_back(
-        diagnostic("PackageManifestError", "package.name is required", path));
-  }
-  if (result.manifest.version.empty()) {
-    result.diagnostics.push_back(diagnostic(
-        "PackageManifestError", "package.version is required", path));
+        diagnostic("PackageManifestError", "name is required", path));
   }
   if (result.manifest.modules.empty() && result.manifest.kind != "native") {
     result.diagnostics.push_back(
         diagnostic("PackageManifestError",
-                   "at least one [[modules]] entry is required", path));
+                   "at least one module source in files is required", path));
   }
 
   std::set<std::string> module_names;
@@ -1396,14 +777,14 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
       module_names.find(result.manifest.root_module) == module_names.end()) {
     result.diagnostics.push_back(
         diagnostic("PackageManifestError",
-                   "package root module is not declared in [[modules]]: " +
+                   "package root module is not declared in the module inventory: " +
                        result.manifest.root_module,
                    path));
   }
 
   std::set<std::string> dependency_names;
   for (const PackageDependency &dependency : result.manifest.dependencies) {
-    if (dependency.name.empty() || dependency.version.empty()) {
+    if (dependency.name.empty() || (dependency.version.empty() && dependency.path.empty())) {
       result.diagnostics.push_back(
           diagnostic("PackageManifestError",
                      "dependencies require name and version", path));
@@ -1420,17 +801,17 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
   for (const PackageNativeExtension &native : result.manifest.native_extensions) {
     if (native.name.empty()) {
       result.diagnostics.push_back(diagnostic(
-          "PackageManifestError", "[[native]] entries require a name", path));
+          "PackageManifestError", "native_extensions entries require a name", path));
     } else if (!native_names.insert(native.name).second) {
       result.diagnostics.push_back(diagnostic(
           "PackageManifestError",
-          "duplicate [[native]] extension: " + native.name, path));
+          "duplicate native extension: " + native.name, path));
     }
     for (const PackageNativeSymbol &symbol : native.symbols) {
       if (symbol.logical.empty() || symbol.symbol.empty()) {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "[native.symbols] entries require a logical name and a symbol",
+            "native extension symbols require a logical name and a symbol",
             path));
       }
     }
@@ -1438,32 +819,32 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
       if (type.sputnik.empty() || type.tag.empty()) {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "[[native.types]] entries require 'sputnik' and 'tag'", path));
+            "native extension types require 'sputnik' and 'tag'", path));
       }
       if (type.ownership != "owned" && type.ownership != "borrowed" &&
           type.ownership != "collected") {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "[[native.types]] ownership must be owned, borrowed, or collected",
+            "native type ownership must be owned, borrowed, or collected",
             path));
       }
       if ((type.ownership == "owned" || type.ownership == "collected") &&
           type.destructor.empty()) {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "owned/collected [[native.types]] require a destructor", path));
+            "owned/collected native types require a destructor", path));
       }
       if (type.ownership == "borrowed" && !type.destructor.empty()) {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "borrowed [[native.types]] must not declare a destructor", path));
+            "borrowed native types must not declare a destructor", path));
       }
     }
     for (const PackageNativeError &error : native.errors) {
       if (error.name.empty()) {
         result.diagnostics.push_back(diagnostic(
             "PackageManifestError",
-            "[[native.errors]] entries require a name", path));
+            "native extension errors require a name", path));
       }
     }
   }
@@ -1474,6 +855,128 @@ PackageManifestResult parse_manifest_toml(const std::string &source,
   result.manifest.capabilities =
       sorted_capabilities(result.manifest.capabilities);
   return result;
+}
+
+std::string render_manifest(const PackageManifest &m) {
+  namespace fs = std::filesystem;
+  const auto quote = [](const std::string &value) { return "\"" + json_escape(value) + "\""; };
+  using Fields = std::vector<std::pair<std::string, std::string>>;
+  const auto object = [&](const Fields &fields) {
+    std::string out = "{";
+    for (const auto &f : fields) { if (out.size() > 1) out += ','; out += quote(f.first) + ":" + f.second; }
+    return out + "}";
+  };
+  const auto list = [&](const std::vector<std::string> &values, bool raw = false) {
+    std::string out = "[";
+    for (const auto &value : values) { if (out.size() > 1) out += ','; out += raw ? value : quote(value); }
+    return out + "]";
+  };
+  const auto deps = [&](const std::vector<PackageDependency> &values) {
+    Fields fields;
+    auto sorted = values; std::sort(sorted.begin(), sorted.end(), [](const auto &a, const auto &b) { return a.name < b.name; });
+    for (const auto &d : sorted) {
+      if (d.source == "path") {
+        Fields local{{"path", quote(d.path)}};
+        if (!d.version.empty()) local.push_back({"version", quote(d.version)});
+        fields.push_back({d.name, object(local)});
+      } else fields.push_back({d.name, quote(d.version)});
+    }
+    return object(fields);
+  };
+  const auto libraries = [&](const std::vector<PackageNativeLibrary> &values) {
+    std::vector<std::string> items;
+    for (const auto &l : values) items.push_back(object({{"path", quote(l.path)}, {"role", quote(l.role)}, {"abi", quote(l.abi)}}));
+    return list(items, true);
+  };
+  std::set<std::string> files(m.files.begin(), m.files.end());
+  Fields names;
+  for (const auto &module : m.modules) {
+    files.insert(module.path);
+    auto relative = fs::path(module.path).lexically_relative(m.source_root); relative.replace_extension();
+    auto inferred = relative.generic_string(); std::replace(inferred.begin(), inferred.end(), '/', '.');
+    if (inferred != module.name) names.push_back({module.path, quote(module.name)});
+  }
+  std::vector<std::string> native;
+  for (const auto &n : m.native_extensions) {
+    Fields f{{"name", quote(n.name)}, {"kind", quote(n.kind)}, {"language", quote(n.language)}};
+    if (n.kind == "prebuilt") { f.push_back({"library", quote(n.library)}); f.push_back({"sputnik_ext_abi", std::to_string(n.sputnik_ext_abi_version)}); }
+    f.push_back({"requirements", list(n.requirements)});
+    f.push_back({"sources", list(n.sources)});
+    f.push_back({"headers", list(n.headers)});
+    f.push_back({"include_dirs", list(n.include_dirs)});
+    f.push_back({"defines", list(n.defines)});
+    f.push_back({"cxxflags", list(n.cxxflags)});
+    f.push_back({"link_libraries", list(n.link_libraries)});
+    f.push_back({"library_dirs", list(n.library_dirs)});
+    f.push_back({"runtime_library_dirs", list(n.runtime_library_dirs)});
+    f.push_back({"blocking_symbols", list(n.blocking_symbols)});
+    f.push_back({"required_runtime_features", list(n.required_runtime_features)});
+    Fields symbols; for (const auto &s : n.symbols) symbols.push_back({s.logical, quote(s.symbol)});
+    f.push_back({"symbols", object(symbols)});
+    std::vector<std::string> types;
+    for (const auto &value : n.types) types.push_back(object({{"sputnik", quote(value.sputnik)}, {"tag", quote(value.tag)}, {"ownership", quote(value.ownership)}, {"destructor", quote(value.destructor)}}));
+    f.push_back({"types", list(types, true)});
+    std::vector<std::string> errors;
+    for (const auto &value : n.errors) errors.push_back(object({{"name", quote(value.name)}, {"parent", quote(value.parent)}, {"default_message", quote(value.default_message)}, {"default_exit_code", quote(value.default_exit_code)}}));
+    f.push_back({"errors", list(errors, true)});
+    f.push_back({"libraries", libraries(n.libraries)});
+    native.push_back(object(f));
+    for (const auto *items : {&n.sources, &n.headers}) files.insert(items->begin(), items->end());
+    if (n.kind == "prebuilt") files.insert(n.library);
+    for (const auto &l : n.libraries) files.insert(l.path);
+  }
+  std::vector<std::string> native_requirements;
+  for (const auto &value : m.native_requirements) {
+    Fields f{{"id", quote(value.id)}, {"kind", quote(value.kind)}, {"version", quote(value.version)}, {"abi", quote(value.abi)}, {"build_id", quote(value.build_id)}, {"provider", quote(value.provider)}, {"runtime", quote(value.runtime)}, {"package", quote(value.package)}};
+    f.push_back({"libraries", list(value.libraries)});
+    native_requirements.push_back(object(f));
+  }
+  std::vector<std::string> native_providers;
+  for (const auto &value : m.native_providers) {
+    Fields f{{"id", quote(value.id)}, {"kind", quote(value.kind)}, {"version", quote(value.version)}, {"abi", quote(value.abi)}, {"build_id", quote(value.build_id)}, {"runtime_build_id", quote(value.runtime_build_id)}};
+    f.push_back({"include_dirs", list(value.include_dirs)});
+    f.push_back({"library_dirs", list(value.library_dirs)});
+    f.push_back({"link_libraries", list(value.link_libraries)});
+    f.push_back({"files", list(value.files)});
+    f.push_back({"libraries", libraries(value.libraries)});
+    files.insert(value.files.begin(), value.files.end());
+    for (const auto &l : value.libraries) files.insert(l.path);
+    native_providers.push_back(object(f));
+  }
+  Fields target{{"os", quote(m.target.os)}, {"arch", quote(m.target.arch)}, {"min_os", quote(m.target.min_os)}, {"libc", quote(m.target.libc)}, {"min_libc", quote(m.target.min_libc)}, {"compute_backend", quote(m.target.compute_backend)}, {"cuda_version", quote(m.target.cuda_version)}, {"min_cuda_driver", quote(m.target.min_cuda_driver)}};
+  target.push_back({"cpu_features", list(m.target.cpu_features)});
+  target.push_back({"compute_backends", list(m.target.compute_backends)});
+  target.push_back({"cuda_architectures", list(m.target.cuda_architectures)});
+  Fields caps;
+  std::map<std::string, std::vector<std::string>> targets;
+  std::set<std::string> wildcard;
+  for (const auto &cap : m.capabilities) {
+    if (cap.flags & capability::kCapabilityFlagWildcardTarget) wildcard.insert(cap.name);
+    else targets[cap.name].push_back(cap.target);
+  }
+  for (const auto &name : wildcard) caps.push_back({name, "true"});
+  for (const auto &[name, values] : targets) if (!wildcard.count(name)) caps.push_back({name, list(values)});
+  Fields root{{"schema", quote("sputnik.build.v1")}, {"name", quote(m.name)}, {"version", quote(m.version)},
+    {"kind", quote(m.kind)}, {"source_root", quote(m.source_root)}, {"files", list({files.begin(), files.end()})},
+    {"module_names", object(names)}, {"dependencies", deps(m.dependencies)}, {"capabilities", object(caps)},
+    {"artifact", object({{"variant", quote(m.variant)}, {"limit_profile", quote(m.limit_profile)}, {"bundle", quote(m.bundle)},
+      {"dependencies", deps(m.artifact_dependencies)}, {"build_dependencies", deps(m.artifact_build_dependencies)}})},
+    {"target", object(target)}, {"native_extensions", list(native, true)},
+    {"native_requirements", list(native_requirements, true)}, {"native_providers", list(native_providers, true)}};
+  if (!m.root_module.empty()) root.push_back({"root", quote(m.root_module)});
+  auto required = m.profiles.required_features;
+  if (required.empty()) required.push_back("core.v1");
+  if (!m.native_extensions.empty() && std::find(required.begin(), required.end(), "ffi.v1") == required.end() &&
+      std::find(m.profiles.optional_features.begin(), m.profiles.optional_features.end(), "ffi.v1") == m.profiles.optional_features.end()) required.push_back("ffi.v1");
+  Fields profiles{{"required", list(required)}, {"optional", list(m.profiles.optional_features)}, {"forbidden", list(m.profiles.forbidden_features)}};
+  if (!m.profiles.numeric_int.empty() || !m.profiles.numeric_overflow.empty()) {
+    Fields numeric;
+    if (!m.profiles.numeric_int.empty()) numeric.push_back({"int", quote(m.profiles.numeric_int)});
+    if (!m.profiles.numeric_overflow.empty()) numeric.push_back({"overflow", quote(m.profiles.numeric_overflow)});
+    profiles.push_back({"numeric", object(numeric)});
+  }
+  root.push_back({"profiles", object(profiles)});
+  return object(root) + "\n";
 }
 
 std::string manifest_to_json(const PackageManifest &manifest) {
@@ -1503,7 +1006,9 @@ std::string manifest_to_json(const PackageManifest &manifest) {
     }
     out << "\n    {\"name\":\"" << json_escape(dependencies[i].name)
         << "\",\"version\":\"" << json_escape(dependencies[i].version)
-        << "\",\"source\":\"" << json_escape(dependencies[i].source) << "\"}";
+        << "\",\"source\":\"" << json_escape(dependencies[i].source) << "\"";
+    if (!dependencies[i].path.empty()) out << ",\"path\":\"" << json_escape(dependencies[i].path) << "\"";
+    out << '}';
   }
   out << "\n  ],\n";
   out << "  \"capabilities\": [";
@@ -1657,11 +1162,17 @@ build_package_artifact(const PackageManifest &manifest,
                        const std::vector<PackageModuleBlob> &modules,
                        const PackageBuildOptions &options) {
   PackageBuildResult result;
-  if (manifest.name.empty() || manifest.version.empty() ||
-      manifest.root_module.empty()) {
+  for (const auto &dependency : manifest.dependencies) {
+    if (dependency.source == "path") {
+      result.diagnostics.push_back(diagnostic("PackageBuildError",
+          "local path dependencies cannot be distributed; replace them with versioned dependencies: " + dependency.name));
+      return result;
+    }
+  }
+  if (manifest.name.empty() || manifest.version.empty()) {
     result.diagnostics.push_back(
         diagnostic("PackageBuildError",
-                   "package manifest requires name, version, and root module"));
+                   "package manifest requires name and version"));
     return result;
   }
 

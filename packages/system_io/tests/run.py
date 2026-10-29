@@ -24,10 +24,14 @@ root.mkdir(); outside.mkdir()
 fixture = work / "package"
 fixture.mkdir()
 (fixture / "main.s").write_text("package tests.file\nexport value\ndef value(): 42\n")
-(fixture / "sputnik.toml").write_text('schema="sputnik.package-manifest.v1"\n[package]\nname="tests/file"\nversion="1.0.0"\nroot="tests.file"\n[[modules]]\nname="tests.file"\nsource="main.s"\n')
+(fixture / 'sputnik.build.yaml').write_text(json.dumps(dict(name='tests/file',version='1.0.0',files=['main.s'],module_names={'main.s':'tests.file'})))
 subprocess.run([str(sdk / "build/sputnik"), "pkg", "build", str(fixture), "--out", str(root / "archive.sputnikpkg")], check=True, capture_output=True)
 subprocess.run([str(sdk / "build/sputnik"), "pkg", "build", str(fixture), "--modules", "bytecode", "--out", str(root / "archive-bytecode.sputnikpkg")], check=True, capture_output=True)
-manifest = json.loads((package / "sputnik.build.json").read_text())
+manifest = {key: json.loads(value) for key,value in (line.split(': ',1) for line in (package/'sputnik.build.yaml').read_text().splitlines())}
+source_root = Path(manifest.pop('source_root', '.'))
+module_names = manifest.pop('module_names', {})
+manifest['modules'] = [dict(name=module_names.get(path,'.'.join(Path(path).relative_to(source_root).with_suffix('').parts)),path=path)
+                       for path in manifest.pop('files') if Path(path).suffix in ['.s','.spu','.sputnik']]
 manifest["root"] = "system_io.selftest"
 manifest["modules"].append({"name": "system_io.selftest", "path": "tests/selftest.s"})
 for module in manifest["modules"]:
@@ -37,7 +41,7 @@ for extension in manifest["native_extensions"]:
         extension[key] = [str((package / value).resolve()) if not value.startswith("/") else value for value in extension[key]]
 build = work / "test.build.json"
 build.write_text(json.dumps(manifest))
-env = dict(os.environ, SYSTEM_IO_SELFTEST="working")
+env = dict(os.environ, SYSTEM_IO_SELFTEST="working", SPUTNIK_NATIVE_PROVIDERS=":".join(str(package/"build/release-providers"/kind) for kind in ["runtime","sdk"]))
 env.setdefault("SPUTNIK_NATIVE_RUNTIME_ROOT", str(sdk))
 env.setdefault("SPUTNIK_NATIVE_RT_CACHE", str(sdk / "build/native-runtime"))
 env.setdefault("SPUTNIK_NATIVE_RT_JOBS", "2")

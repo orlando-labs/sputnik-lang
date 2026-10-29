@@ -679,7 +679,8 @@ bool has_package_imports(const std::vector<sputnik::notebook::CellSource> &sourc
     for (const auto &item : analysis.items) {
       if (!item || item->kind != "AstImportStmt") continue;
       for (const auto &field : item->string_fields)
-        if (field.name == "module_path" && !modules.has_namespace(field.value)) return true;
+        if (field.name == "module_path" &&
+            (field.value == "notebook.ui" || !modules.has_namespace(field.value))) return true;
     }
   }
   return false;
@@ -2599,6 +2600,14 @@ void apply_project_input_changes(Session *session, const std::set<std::string> &
   }
   const auto executed = execute_automatic_plan(session, session->backend.get(), plan, false, {});
   session->status = executed.complete ? "project inputs updated; Watch consumers evaluated" : "project input evaluation failed";
+}
+
+bool has_pending_runtime_events(const Session &session) {
+  if (!session.backend || !session.backend->world) return false;
+  const auto polled = session.backend->world->poll_watch_events(
+      session.backend->watch_cursor, 1);
+  return polled.status != sputnik::runtime::RuntimeWatchPollStatus::Ok ||
+         !polled.events.empty();
 }
 
 RuntimeEventPumpResult

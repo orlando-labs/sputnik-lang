@@ -75,10 +75,10 @@ void write_archive(const fs::path &path, Files files,
           "tar write");
     archive_entry_free(entry);
   };
-  member("sputnik.toml");
+  member("sputnik.build.json");
   member("checksums.sha256");
   for (const auto &entry : files)
-    if (entry.first != "sputnik.toml" && entry.first != "checksums.sha256")
+    if (entry.first != "sputnik.build.json" && entry.first != "checksums.sha256")
       member(entry.first);
   if (duplicate)
     member(special);
@@ -130,7 +130,7 @@ int main() {
     close(inspected_fd);
     auto large_manifest = m;
     large_manifest.limit_profile = "native-large";
-    Files hostile{{"sputnik.toml", render_distribution_manifest(large_manifest)},
+    Files hostile{{"sputnik.build.json", render_distribution_manifest(large_manifest)},
                   {"../payload", "must not be inspected"}};
     write_archive(root / "profile-mismatch.sputnikpkg", hostile);
     const int mismatch_fd = open((root / "profile-mismatch.sputnikpkg").c_str(), O_RDONLY);
@@ -221,12 +221,17 @@ int main() {
     bad.erase("src/demo.s");
     negative("missing declared module", bad);
     bad = files;
-    bad["sputnik.toml"] += "\n[package]\nversion = \"2.0.0\"\n";
+    bad["sputnik.build.json"] += R"yaml(schema: "sputnik.build.v1"
+name: null
+version: "2.0.0"
+source_root: "."
+files: []
+)yaml";
     negative("duplicate metadata field", bad);
     bad = files;
-    bad["sputnik.toml"].replace(
-        bad["sputnik.toml"].find("limit_profile = \"standard\""), 26,
-        "limit_profile = \"unlimited\"");
+    bad["sputnik.build.json"].replace(
+        bad["sputnik.build.json"].find("\"limit_profile\":\"standard\""), 26,
+        "\"limit_profile\":\"unlimited\"");
     negative("unknown budget profile", bad);
     bad = files;
     bad["hidden.sputnikbc"] = "bad";

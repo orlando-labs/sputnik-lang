@@ -1,0 +1,1 @@
+{"schema":"torch.package-install.v1","variant":"macos-aarch64-prebuilt-bytecode-runtime","install":"passed","vm":"passed","backends":["cpu","mps"],"mps_fallback":false,"external_providers":false,"runtime_compiler":false}

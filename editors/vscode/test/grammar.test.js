@@ -107,8 +107,12 @@ async function main() {
   const viewTokens = tokenize(view, '<h1>#{title}</h1>\n%for value in values:\n  #{value}');
   assertScope(viewTokens, 1, '%for', 'keyword.control.template.sputnik');
   assertNoScopePrefix(viewTokens, 0, 'title', 'string.unquoted');
-  assertScope(tokenize(grammar, '@template("./page.html.sv")'), 0, '@template', 'storage.modifier.template.sputnik');
+  assertScope(tokenize(grammar, 'template("./page.html.sv")'), 0, 'template', 'storage.modifier.template.sputnik');
   assert.ok(grammar, "Sputnik grammar failed to load");
+  const imports = tokenize(grammar, 'import "../backend/models" as models\nfrom "./helpers.s" import Item');
+  assertScope(imports, 0, 'import', 'keyword.declaration.sputnik');
+  assertScope(imports, 0, '../backend/models', 'string.quoted.double.sputnik');
+  assertScope(imports, 1, './helpers.s', 'string.quoted.double.sputnik');
 
   const loops = tokenize(grammar, [
     'html"""',

@@ -1,0 +1,104 @@
+{
+  "schema": "torch.additional-verification.v2",
+  "corrections": {
+    "state_dict": "transformed_values returns read-only snapshots while preserving mutable model buffers",
+    "native_rng": "caller-supplied rand!/randn!/randperm! use native user dispatch without requiring a local concrete class declaration"
+  },
+  "rng_protocol": {
+    "vm": true,
+    "native": true,
+    "native_full_coverage": true,
+    "native_vm_independent": true,
+    "bytecode_fallback": false
+  },
+  "torch_suites": {
+    "status": "passed",
+    "backends": [
+      "cpu",
+      "mps"
+    ],
+    "modes": [
+      "vm",
+      "full-native"
+    ],
+    "mps_fallback": false,
+    "result": {
+      "schema": "torch.rng-state-verification.v1",
+      "losses": {
+        "cpu_vm": true,
+        "cpu_native": true,
+        "mps_vm": true,
+        "mps_native": true
+      },
+      "normalization": {
+        "cpu_vm": true,
+        "cpu_native": true,
+        "mps_vm": true,
+        "mps_native": true
+      },
+      "mps_fallback": false
+    },
+    "builds": {
+      "losses": {
+        "status": "ok",
+        "target": "native",
+        "root": "torch.losses_test",
+        "native_hash": "b4323a80c75b0f518e363b7b8186c53b85f4afb257e787349c54a1ca59b15631",
+        "native_bytecode_fallback": false,
+        "native_graph_full_coverage": true,
+        "native_graph_vm_independent": true,
+        "native_graph_runtime_bridge": false,
+        "native_graph_module_count": 171,
+        "native_graph_code_count": 2219,
+        "native_graph_native_code_count": 2219,
+        "native_graph_vm_fallback_code_count": 0,
+        "diagnostics": []
+      },
+      "losses_mps": {
+        "status": "ok",
+        "target": "native",
+        "root": "torch.losses_mps_test",
+        "native_hash": "cfd665d6a77646ed9dd188e0c7493ca0fec1972c99ded55b48ab9f7d903e1a8b",
+        "native_bytecode_fallback": false,
+        "native_graph_full_coverage": true,
+        "native_graph_vm_independent": true,
+        "native_graph_runtime_bridge": false,
+        "native_graph_module_count": 172,
+        "native_graph_code_count": 2221,
+        "native_graph_native_code_count": 2221,
+        "native_graph_vm_fallback_code_count": 0,
+        "diagnostics": []
+      },
+      "normalization": {
+        "status": "ok",
+        "target": "native",
+        "root": "torch.normalization_test",
+        "native_hash": "bf847a7ca6559647d722c0166331fd939ab8c752779eb946c4f428e0d82d8fba",
+        "native_bytecode_fallback": false,
+        "native_graph_full_coverage": true,
+        "native_graph_vm_independent": true,
+        "native_graph_runtime_bridge": false,
+        "native_graph_module_count": 171,
+        "native_graph_code_count": 2227,
+        "native_graph_native_code_count": 2227,
+        "native_graph_vm_fallback_code_count": 0,
+        "diagnostics": []
+      },
+      "normalization_mps": {
+        "status": "ok",
+        "target": "native",
+        "root": "torch.normalization_mps_test",
+        "native_hash": "d8a5f301db442c50aead677908c1eb56e14f14cb93558e7e38ea23f3b3551c04",
+        "native_bytecode_fallback": false,
+        "native_graph_full_coverage": true,
+        "native_graph_vm_independent": true,
+        "native_graph_runtime_bridge": false,
+        "native_graph_module_count": 172,
+        "native_graph_code_count": 2229,
+        "native_graph_native_code_count": 2229,
+        "native_graph_vm_fallback_code_count": 0,
+        "diagnostics": []
+      }
+    }
+  }
+}

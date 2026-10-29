@@ -1,0 +1,42 @@
+{
+  "sputnik-lang": {
+    "passed": true,
+    "details": ""
+  },
+  "sputnik-registry": {
+    "passed": true,
+    "details": ""
+  },
+  "sputnik-notebook": {
+    "passed": true,
+    "details": ""
+  },
+  "sqlite3": {
+    "passed": true,
+    "details": ""
+  },
+  "orm": {
+    "passed": true,
+    "details": ""
+  },
+  "orbit": {
+    "passed": true,
+    "details": ""
+  },
+  "plot": {
+    "passed": true,
+    "details": ""
+  },
+  "pycall": {
+    "passed": true,
+    "details": ""
+  },
+  "rbcall": {
+    "passed": true,
+    "details": ""
+  },
+  "torch": {
+    "passed": true,
+    "details": ""
+  }
+}

@@ -158,10 +158,18 @@ int main() {
   rejects([&] { load_directory_dependency(project.directory, doc.dependencies[0]); }, "symlink escape rejected");
   fs::remove(package / "src/calc.s");
   fs::rename(package / "src/calc.saved", package / "src/calc.s");
-  write(package / "sputnik.toml", "[package]\nname = \"calc\"\nversion = \"1.0.0\"\nroot = \"calc\"\n"
-      "[[modules]]\nname = \"calc\"\npath = \"src/calc.s\"\n"
-      "[[modules]]\nname = \"helper\"\npath = \"src/helper.s\"\n");
-  require(load_directory_dependency(project.directory, doc.dependencies[0]).size() == 2, "sputnik.toml source map");
+  write(package / "sputnik.build.yaml", R"yaml(schema: "sputnik.build.v1"
+name: "calc"
+version: "1.0.0"
+source_root: "."
+files:
+  - "src/calc.s"
+  - "src/helper.s"
+module_names:
+  "src/calc.s": "calc"
+  "src/helper.s": "helper"
+)yaml");
+  require(load_directory_dependency(project.directory, doc.dependencies[0]).size() == 2, "sputnik.build.yaml source map");
   // Declaring an artifact is inert. Trust and hash checks precede dlopen.
   auto native_dependency = doc.dependencies[0];
   native_dependency.extra["native_library"] = "\"fake.so\"";

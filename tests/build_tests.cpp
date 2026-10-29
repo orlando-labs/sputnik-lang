@@ -133,6 +133,36 @@ void test_yaml_manifest_parses_and_normalizes() {
          "YAML native extension capabilities should be rejected");
 }
 
+void test_path_dependencies() {
+  const auto settings = sputnik::build::parse_build_configuration(R"JSON({"dependencies":{"local":{"path":"../local"}}})JSON");
+  expect(settings.ok() && settings.manifest.modules.empty(), "source configuration needs no source inventory or entry");
+  const auto entry = sputnik::build::parse_build_manifest_json(R"JSON({"entry":"backend/main.s"})JSON");
+  expect(entry.ok() && entry.manifest.entry == "backend/main.s", "explicit build entry needs no root or name");
+  expect(sputnik::build::parse_build_manifest_json(sputnik::build::manifest_to_json(entry.manifest)).ok(), "entry JSON roundtrips");
+  for (const auto *value : {"null", "false", "[]", "\"\""})
+    expect(!sputnik::build::parse_build_configuration(std::string("{\"entry\":") + value + "}").ok(), "invalid entry rejected");
+  const auto parsed = sputnik::build::parse_build_manifest_json(R"JSON({
+    "schema":"sputnik.build.v1", "name":"app", "root":"app",
+    "modules":[{"name":"app","path":"backend/app.s"}],
+    "dependencies":{"local":{"path":"../local checkout","version":"1.2.3"},"installed":"2.0.0"}
+  })JSON");
+  expect(parsed.ok(), "path dependency parses beside an exact installed version");
+  const auto again = sputnik::build::parse_build_manifest_json(sputnik::build::manifest_to_json(parsed.manifest));
+  expect(again.ok(), "path dependency JSON roundtrip");
+  bool local = false;
+  for (const auto &dependency : again.manifest.dependencies)
+    if (dependency.name == "local") local = dependency.source == "path" && dependency.path == "../local checkout" && dependency.version == "1.2.3";
+  expect(local, "roundtrip preserves path and optional version");
+  const auto yaml = sputnik::build::parse_build_manifest_yaml(
+      "schema: sputnik.build.v1\nname: app\nroot: app\nmodules:\n  - name: app\n    path: app.s\ndependencies:\n  local: {path: ../local}\n");
+  expect(yaml.ok() && yaml.manifest.dependencies.front().version.empty(), "YAML path needs no version");
+  for (const auto &value : {"{}", "{\"path\":\"\"}", "{\"path\":42}", "{\"path\":\".\",\"typo\":true}"}) {
+    const auto invalid = sputnik::build::parse_build_manifest_json(
+        std::string("{\"schema\":\"sputnik.build.v1\",\"name\":\"app\",\"root\":\"app\",\"modules\":[{\"name\":\"app\",\"path\":\"app.s\"}],\"dependencies\":{\"local\":") + value + "}}");
+    expect(!invalid.ok(), "malformed path dependency rejected");
+  }
+}
+
 void test_manifest_rejects_profile_conflict() {
   const std::string source =
       "{\"schema\":\"sputnik.build.v1\",\"name\":\"bad\",\"root\":\"bad.main\","
@@ -256,9 +286,39 @@ void test_source_format_registry_roundtrip() {
       again.manifest.source_formats[0].suffix == ".cmd.sv", "source-format registry roundtrips");
 }
 
+void test_package_inventory_and_metadata() {
+  const auto parsed = sputnik::build::parse_build_manifest_yaml(R"yaml(
+name: demo-library
+version: "1.2.3"
+profiles: {numeric: {int: BigInt, overflow: checked}}
+source_root: src
+files: [src/demo/value.s, src/odd.s, LICENSE]
+module_names: {src/odd.s: demo.extra}
+dependencies: {other: "2.0.0"}
+capabilities:
+  fs.read: ["./data"]
+  time.now: true
+)yaml");
+  expect(parsed.ok(), "file-based library needs no root module or entry: " + sputnik::build::diagnostics_to_string(parsed.diagnostics));
+  expect(parsed.manifest.modules.size() == 2 && parsed.manifest.modules[0].name == "demo.value", "module names derive from source-root-relative paths");
+  const auto m = sputnik::build::package_manifest(parsed.manifest);
+  expect(m.version == "1.2.3" && m.files.size() == 3 && m.capabilities.size() == 2, "version, inventory and capability requests retained");
+  const auto roundtrip = sputnik::build::parse_build_manifest_json(sputnik::build::manifest_to_json(parsed.manifest));
+  expect(roundtrip.ok() && roundtrip.manifest.modules.size() == 2 && roundtrip.manifest.package.capabilities.size() == 2 && roundtrip.manifest.package.version == "1.2.3" && roundtrip.manifest.profiles.numeric_int == "BigInt", "complete package metadata roundtrips through build JSON");
+  const auto absolute = sputnik::build::parse_build_manifest_json(R"JSON({"name":"custom","root":"custom","modules":[{"name":"custom","path":"/tmp/custom.s"}]})JSON");
+  const auto absolute_again = sputnik::build::parse_build_manifest_json(sputnik::build::manifest_to_json(absolute.manifest));
+  expect(absolute_again.ok() && absolute_again.manifest.modules[0].path == "/tmp/custom.s", "custom absolute build mappings remain supported");
+  expect(!sputnik::build::parse_build_configuration("name: first\nname: second\n").ok(), "duplicate YAML metadata rejected");
+  expect(!sputnik::build::parse_build_configuration("{\"name\":\"first\",\"name\":\"second\"}").ok(), "duplicate JSON metadata rejected");
+  expect(!sputnik::build::parse_build_configuration("source_root: ../outside\n").ok(), "escaping source root rejected");
+  expect(!sputnik::build::parse_build_configuration("files: [src/demo.s, src/demo.s]\n").ok(), "duplicate file rejected");
+}
+
 } // namespace
 
 int main() {
+  test_package_inventory_and_metadata();
+  test_path_dependencies();
   test_source_format_registry_roundtrip();
   test_manifest_parses_and_normalizes();
   test_yaml_manifest_parses_and_normalizes();

@@ -17,7 +17,7 @@ Implemented surface:
   [runtime/frozen_image.h](../../runtime/frozen_image.h:1)
   and [runtime/frozen_image.cpp](../../runtime/frozen_image.cpp:1)
 - CLI commands in [tools/sputnik/main.cpp](../../tools/sputnik/main.cpp:1):
-  - `sputnik image-build <sputnik.toml> <out.sputnikimg>`
+  - `sputnik image-build <sputnik.build.yaml> <out.sputnikimg>`
   - `sputnik image-inspect <file.sputnikimg>`
   - `sputnik image-verify <file.sputnikimg>`
 

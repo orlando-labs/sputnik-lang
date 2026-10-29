@@ -77,10 +77,10 @@ with tempfile.TemporaryDirectory(prefix="sputnik-external-") as temporary:
     declaration = source / "main.s"
     module_text = declaration.read_text()
     for old, new, code in [
-        ('@template("./args.cmd.sv")', '@template("./missing.cmd.sv")', "TEMPLATE_INPUT"),
-        ('@template("./args.cmd.sv")', '@template(path)', "TEMPLATE_PATH"),
+        ('template "./args.cmd.sv"', 'template "./missing.cmd.sv"', "TEMPLATE_INPUT"),
+        ('template "./args.cmd.sv"', 'template(path)', "TEMPLATE_PATH"),
         ('def command(values, prefix: "--item=")', 'def command(values, prefix: "--item="): null', "TEMPLATE_DECLARATION"),
-        ('@template("./args.cmd.sv")', '@template("./args.cmd.sv")\n', "TEMPLATE_DECLARATION"),
+        ('template "./args.cmd.sv"', 'template "./args.cmd.sv"\n', "TEMPLATE_DECLARATION"),
     ]:
         declaration.write_text(module_text.replace(old, new, 1))
         failure = build(ok=False)

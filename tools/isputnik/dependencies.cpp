@@ -72,19 +72,7 @@ std::vector<BundledModuleSource> load_directory_dependency(
   std::string root_module;
   fs::path manifest_dir = root;
   const auto explicit_manifest = extra_string(dependency, "manifest");
-  if (explicit_manifest.empty() && fs::exists(root / "sputnik.toml")) {
-    const auto path = checked_member(root, "sputnik.toml");
-    const auto parsed = sputnik::pkg::parse_manifest_toml(read_source(path, &budget), path.string());
-    if (!parsed.ok()) {
-      std::string errors;
-      for (const auto &diagnostic : parsed.diagnostics) errors += diagnostic.message + "\n";
-      throw std::runtime_error(path.string() + ": " + errors);
-    }
-    modules = parsed.manifest.modules;
-    root_module = parsed.manifest.root_module;
-    if (!parsed.manifest.dependencies.empty())
-      throw std::runtime_error("registry/versioned package dependencies are not supported by notebook directory links yet: " + path.string());
-  } else {
+  {
     std::string manifest = explicit_manifest;
     if (manifest.empty()) for (const auto name : {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"}) {
       if (fs::exists(root / name)) {
@@ -92,11 +80,13 @@ std::vector<BundledModuleSource> load_directory_dependency(
         manifest = name;
       }
     }
-    if (manifest.empty()) throw std::runtime_error("no sputnik.toml or sputnik.build manifest in " + root.string());
+    if (manifest.empty()) throw std::runtime_error("no sputnik.build manifest in " + root.string());
     const auto path = checked_member(root, manifest);
     manifest_dir = path.parent_path();
     const auto parsed = sputnik::build::parse_build_manifest(read_source(path, &budget), path.string());
     if (!parsed.ok()) throw std::runtime_error(sputnik::build::diagnostics_to_string(parsed.diagnostics));
+    if (!parsed.manifest.dependencies.empty())
+      throw std::runtime_error("registry/versioned package dependencies are not supported by notebook directory links yet: " + path.string());
     // Do not silently change numeric semantics: source preambles are supported,
     // build-only numeric overrides need the ordinary package build pipeline.
     if (!parsed.manifest.profiles.numeric_int.empty() || !parsed.manifest.profiles.numeric_overflow.empty())

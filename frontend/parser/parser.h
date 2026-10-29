@@ -90,6 +90,7 @@ private:
   maybe_postfix_conditional(std::unique_ptr<ast::Expr> stmt);
   std::unique_ptr<ast::Expr> parse_package_decl();
   std::unique_ptr<ast::Expr> parse_import_decl();
+  std::string parse_import_path(bool &relative);
   std::unique_ptr<ast::Expr> parse_from_import_decl();
   std::unique_ptr<ast::Expr> parse_export_stmt();
   std::unique_ptr<ast::Expr>

@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <string>
+#include <map>
 #include <vector>
 
 namespace sputnik::pkg {
@@ -19,6 +20,7 @@ struct PackageDependency {
   std::string version;
   std::string source = "registry";
   std::string checksum;
+  std::string path;
 };
 
 struct PackageModule {
@@ -120,10 +122,24 @@ struct PackageNativeExtension {
   std::vector<PackageNativeError> errors;
 };
 
+struct PackageProfileSet {
+  std::vector<std::string> required_features;
+  std::vector<std::string> optional_features;
+  std::vector<std::string> forbidden_features;
+  // sputnik.numeric-profile.v1 manifest mirror (profiles.numeric). Empty means
+  // unspecified: source preambles (or the Int64/checked defaults) apply.
+  std::string numeric_int;
+  std::string numeric_overflow;
+};
+
 struct PackageManifest {
   std::string name;
   std::string version;
   std::string root_module;
+  PackageProfileSet profiles;
+  std::string source_root = ".";
+  bool explicit_files = false;
+  std::map<std::string, std::string> module_names;
   std::vector<PackageModule> modules;
   std::vector<PackageDependency> dependencies;
   std::vector<capability::CapabilityRequest> capabilities;
@@ -234,10 +250,11 @@ struct PackageRegistryResult {
   std::vector<PackageDiagnostic> diagnostics;
 };
 
-PackageManifestResult parse_manifest_toml(const std::string &source,
-                                          const std::string &path = {});
+PackageManifestResult parse_manifest(const std::string &source,
+                                     const std::string &path = {});
 
 std::string manifest_to_json(const PackageManifest &manifest);
+std::string render_manifest(const PackageManifest &manifest);
 std::string render_lockfile(const PackageManifest &manifest);
 std::vector<PackageNativeExtensionMetadata>
 native_extension_metadata(const std::vector<PackageNativeExtension> &extensions,

@@ -398,6 +398,10 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
                                  bool force_all, bool show_running,
                                  const EvaluationProgress &progress);
 
+// Owner-thread, read-only readiness probe against the acknowledged cursor.
+// Notification hints may outlive the events consumed by explicit execution.
+bool has_pending_runtime_events(const Session &session);
+
 // Drains bounded RuntimeWorld watch batches and evaluates their automatic
 // kernel plans. This must run on the Session owner thread: producer/waiter
 // threads may only wake that owner. A successor cursor is published only after

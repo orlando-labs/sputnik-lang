@@ -53,7 +53,7 @@ untagged strings keep percent lines literal. The provider preserves interpolatio
 semantics: HTML escaping, SQL parameters, or opaque command arguments. Only
 `%for` is implemented; `%if` is not. See [the provider contract](engineering/string-template-loops-v1.md).
 
-External bodies use a declaration-only function: `@template("./page.html.sv")`
+External bodies use a declaration-only function: `template("./page.html.sv")`
 immediately above `def page(title as Str, subtitle: "")`. Its parameters/imports
 are visible in the body. Register `source_formats` (`suffix`, `module`, `macro`)
 in the build manifest; call the function normally. `.sv` files need no delimiters
@@ -123,6 +123,15 @@ result = numbers
 ```
 
 **No space before a dot** keeps it inside a one-line block; **space + dot** resumes the outer chain. A block attaches to the nearest call on its left. Numbered arguments exist only inside blocks without `|…|`, must use consecutive positions, and always belong to the nearest block. `map($it * 2)` is not block syntax.
+
+Bare calls also accept `name: expression` or an indented `name:` block, including
+expression position (`result = name: value`). The inline colon touches the name;
+`name :symbol` does not start an inline block. Map bodies such as
+`json: {ok: true}` use the same general syntax.
+
+Bare call arguments cannot start on another line. For multiline arguments,
+open `method(` on the call's line. An expression `(a, b)` after a completed
+block is a separate tuple, including when used as an implicit return.
 
 Conditional chain segments use `.call(args) if condition` or `.call if condition |x|: body` (also `unless`). A skipped segment passes its receiver through unchanged and skips its arguments/block. Its condition does not guard later segments. Adjacent `.a().b()` calls belong to one segment; whitespace before the next dot starts another.
 
@@ -383,12 +392,25 @@ Structured scopes join children. The spec's explicit root scope is `async |task|
 package app.users                    # first non-comment form; optional for scripts
 import net.http as http              # bare import net.http binds http
 from app.models import User as Person
+import "../backend/models" as models
+from "../backend/models.s" import Account
 
 def display(user): user.name
 export display, Person as User       # private by default; explicit re-export
 ```
 
 Imports are static, top-level, before ordinary declarations/statements. Imported names are live, read-only aliases. `.s`, `.spu`, and `.sputnik` source files are accepted. From the repository root: `build/sputnik program.s` runs a file; `build/sputnik parse program.s` inspects syntax.
+
+`sputnik run backend/main.s` and `sputnik build backend/main.s -o build/app`
+need no manifest. String paths starting with `./` or `../` are relative to the
+importing file, without interpolation. Extensions are optional; the default
+alias is the filename stem. Equivalent paths/symlinks initialize one module once.
+Named local imports search the importer and entry directories (dots map
+to subdirectories; the entry's package prefix may be stripped). Installed
+packages need no `dependencies`. Optional nearest `sputnik.build.json` / YAML
+settings can hold path overrides and template formats without listing sources
+or repeating the entry. `sputnik pkg lock backend/main.s` pins the package graph;
+local source edits stay live.
 
 `import my.orm as orm` replaces the module path throughout the graph: `import orm`, `from orm import Model`, and dependency imports all use `my.orm`. Qualified aliases such as `import my.orm as vendor.orm` and submodule suffixes work too. Repeated imports of the same binding are allowed; the module initializes once. Scripts and notebook cells need no additional manifest.
 

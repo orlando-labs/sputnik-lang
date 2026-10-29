@@ -4,19 +4,19 @@ export main, command, empty, quotes
 macro def source_of(value):
   return Ast.lift(value.source)
 
-@template("./args.cmd.sv")
+template "./args.cmd.sv"
 def command(values, prefix: "--item=")
 
-@template("./empty.cmd.sv")
+template("./empty.cmd.sv")
 def empty()
 
-@template("./quotes.cmd.sv")
+template("./quotes.cmd.sv")
 def quotes()
 
-@template("./page.text.sv")
+template("./page.text.sv")
 def page(title as Str, values)
 
-@template("./raw.source.sv")
+template("./raw.source.sv")
 def source()
 
 def check(value, message):

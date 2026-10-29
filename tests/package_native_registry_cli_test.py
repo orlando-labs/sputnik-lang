@@ -35,16 +35,16 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
     flags=['-dynamiclib','-Wl,-undefined,dynamic_lookup'] if mac else ['-shared','-fPIC']
     subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-O2',*flags,'-I'+str(source_root),str(cpp),'-o',str(stage/library)],check=True)
     (stage/'main.s').write_text('package test.native_test\nexport answer\nnative def answer() -> Int from "native_answer"\n')
-    common='schema="sputnik.package-manifest.v1"\n[package]\nname="test/native"\nversion="1.0.0"\nroot="test.native_test"\n'
-    module='\n[[modules]]\nname="test.native_test"\nsource="main.s"\n[[native]]\nname="answer"\nkind="prebuilt"\nlibrary="'+library+'"\nsputnik_ext_abi=1\n'
+    common=dict(name='test/native',version='1.0.0',files=['main.s',library],module_names={'main.s':'test.native_test'},profiles=dict(required=['core.v1','ffi.v1']))
+    module=dict(name='answer',kind='prebuilt',library=library,sputnik_ext_abi=1)
     artifacts={}
     for variant in ['cpu-a','cpu-b','foreign']:
         actual=dict(target)
         if variant=='foreign': actual['arch']='x86_64' if arch=='aarch64' else 'aarch64'
         # Foreign binary architecture is validated by the packer, so use a
         # valid archive and advertise a different target only for pre-download selection.
-        text=common+'[artifact]\nvariant='+json.dumps(variant)+'\n[target]\n'+''.join(k+'='+json.dumps(v)+'\n' for k,v in target.items())+module
-        (stage/'sputnik.toml').write_text(text)
+        text=dict(common,artifact=dict(variant=variant),target=target,native_extensions=[module])
+        (stage/'sputnik.build.yaml').write_text(json.dumps(text))
         file=root/(variant+'.sputnikpkg')
         cli('pkg','build',stage,'--out',file)
         body=file.read_bytes()
@@ -152,12 +152,13 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         if not mac: shutil.copyfile(stage/runtime_library,stage/'lib/libfixture.so')
         cpp.write_text('#include "runtime/sputnik_ext.h"\nextern "C" int fixture_value();\n'
                        'extern "C" SputnikStatus native_answer(SputnikCtx*c,const SputnikValue*,size_t,SputnikValue*out){*out=sputnik_make_int(c,fixture_value());return SPUTNIK_OK;}\n')
-        native_source='\n[[modules]]\nname="test.native_test"\nsource="main.s"\n[[native]]\nname="answer"\nkind="source"\nlanguage="c++"\nsources=["answer.cpp"]\nrequirements=["fixture"]\n'
-        identity='kind="runtime"\nversion="1.0.0"\nabi="fixture-1"\nbuild_id="sha256:'+'a'*64+'"\n'
-        providers='\n[[native_requirements]]\nid="fixture"\n'+identity+'provider="bundled"\n\n[[native_providers]]\nid="fixture"\n'+identity+'library_dirs=["lib"]\nlink_libraries=["'+('fixture.1' if mac else 'fixture')+'"]\n'
-        for name in [runtime_library]+([] if mac else ['lib/libfixture.so']):
-            providers+='\n[[native_providers.libraries]]\npath='+json.dumps(name)+'\nrole="dependency"\nabi="fixture-1"\n'
-        (stage/'sputnik.toml').write_text(common.replace('test/native','test/source')+'[artifact]\nvariant="source-runtime"\nbundle="runtime"\n[target]\n'+''.join(k+'='+json.dumps(v)+'\n' for k,v in target.items())+native_source+providers)
+        native_source=dict(name='answer',kind='source',language='c++',sources=['answer.cpp'],requirements=['fixture'])
+        identity=dict(kind='runtime',version='1.0.0',abi='fixture-1',build_id='sha256:'+'a'*64)
+        requirement=dict(identity,id='fixture',provider='bundled')
+        libraries=[dict(path=name,role='dependency',abi='fixture-1') for name in [runtime_library]+([] if mac else ['lib/libfixture.so'])]
+        provider=dict(identity,id='fixture',library_dirs=['lib'],link_libraries=['fixture.1' if mac else 'fixture'],libraries=libraries)
+        manifest=dict(common,name='test/source',files=['main.s','answer.cpp']+[l['path'] for l in libraries],artifact=dict(variant='source-runtime',bundle='runtime'),target=target,native_extensions=[native_source],native_requirements=[requirement],native_providers=[provider])
+        (stage/'sputnik.build.yaml').write_text(json.dumps(manifest))
         source_artifact=root/'source.sputnikpkg'
         cli('pkg','build',stage,'--out',source_artifact)
         cli('pkg','install',source_artifact,'--allow-native','--bundle','runtime','--build-from-source')

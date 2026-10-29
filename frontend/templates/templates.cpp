@@ -26,12 +26,37 @@ std::string str(const ast::Expr &expr, const std::string &name) {
       return field.value;
   return {};
 }
+bool shadows_template(const ast::Expr &item) {
+  if (item.kind == "AstDefStmt")
+    return str(item, "name") == "template";
+  if (item.kind == "AstExprStmt") {
+    const auto *expr = node(item, "expr");
+    const auto *left = expr && expr->kind == "AstAssign"
+                           ? node(*expr, "left") : nullptr;
+    return left && left->kind == "AstName" && str(*left, "name") == "template";
+  }
+  if (item.kind == "AstImportStmt") {
+    if (str(item, "import_kind") == "module") {
+      auto name = str(item, "alias");
+      if (name.empty()) name = str(item, "module_path");
+      const auto dot = name.rfind('.');
+      return name.substr(dot == std::string::npos ? 0 : dot + 1) == "template";
+    }
+    if (const auto *names = list(item, "names"))
+      for (const auto &name : names->values)
+        if (str(*name, "local_name") == "template") return true;
+  }
+  return false;
+}
 const ast::Expr *annotation(const ast::Expr &stmt) {
   const auto *expr = stmt.kind == "AstExprStmt" ? node(stmt, "expr") : &stmt;
   if (!expr || expr->kind != "AstPostfixChain")
     return nullptr;
   const auto *base = node(*expr, "base");
-  return base && base->kind == "AstIvar" && str(*base, "name") == "template"
+  const auto *tails = list(*expr, "tails");
+  return base && base->kind == "AstName" && str(*base, "name") == "template" &&
+                 tails && tails->values.size() == 1 &&
+                 tails->values.front()->kind == "AstTailCall"
              ? expr
              : nullptr;
 }
@@ -89,10 +114,14 @@ std::vector<std::unique_ptr<ast::Expr>> imports(const std::string &module,
   return std::move(parsed.items);
 }
 void reject_unattached(const ast::Expr &expr, PrepareResult &result) {
+  // Function locals (including macro parameters named `template`) are ordinary
+  // bindings. An external-body annotation belongs to a declaration context.
+  if (expr.kind == "AstDefStmt")
+    return;
   if (annotation(expr)) {
     result.diagnostics.push_back(
         {"TEMPLATE_DECLARATION", "error", "templates",
-         "@template must directly precede a declaration-only module function",
+         "template must directly precede a declaration-only module function",
          expr.span});
     return;
   }
@@ -130,6 +159,11 @@ PrepareResult prepare(std::vector<std::unique_ptr<ast::Expr>> &items,
   }
   if (!result.ok())
     return result;
+  // Explicit module bindings take precedence over the compiler-provided
+  // annotation. Imported/user-defined macros retain normal F1.5 resolution.
+  for (const auto &item : items)
+    if (shadows_template(*item))
+      return result;
   std::vector<std::unique_ptr<ast::Expr>> added_imports;
   std::size_t serial = 0;
   for (std::size_t i = 0; i < items.size(); ++i) {
@@ -142,14 +176,14 @@ PrepareResult prepare(std::vector<std::unique_ptr<ast::Expr>> &items,
     };
     const auto path = literal_path(*call);
     if (path.empty() || path.find('\0') != std::string::npos) {
-      fail("TEMPLATE_PATH", "@template requires one nonempty literal path");
+      fail("TEMPLATE_PATH", "template requires one nonempty literal path");
       continue;
     }
     if (i + 1 >= items.size() || items[i + 1]->kind != "AstDefStmt" ||
         items[i + 1]->span.start.line != items[i]->span.end.line + 1) {
       fail(
           "TEMPLATE_DECLARATION",
-          "@template must directly precede a declaration-only module function");
+          "template must directly precede a declaration-only module function");
       continue;
     }
     auto &decl = *items[i + 1];
@@ -163,7 +197,7 @@ PrepareResult prepare(std::vector<std::unique_ptr<ast::Expr>> &items,
     if (!body || !body->values.empty() || compile_only ||
         !str(decl, "native_binding").empty()) {
       fail("TEMPLATE_DECLARATION",
-           "@template requires a function with no body");
+           "template requires a function with no body");
       continue;
     }
     const SourceFormat *format = nullptr;
@@ -225,7 +259,7 @@ PrepareResult prepare(std::vector<std::unique_ptr<ast::Expr>> &items,
       auto stmt = ast::make_expr("AstExprStmt", chain->span);
       stmt->node_field("expr", std::move(chain));
       body->values.push_back(std::move(stmt));
-      // Preserve attachment of another annotation immediately above @template.
+      // Preserve attachment of another annotation immediately above template.
       decl.span.start = items[i]->span.start;
       items.erase(items.begin() + i);
       --i;

@@ -989,15 +989,14 @@ std::unique_ptr<ast::Expr> Parser::parse_statement(BodyContext context) {
     return def;
   }
 
-  // Paren-less block-suffix statement `name:` + INDENT — the block-macro DSL
-  // entry (DESIGN-macro-system §8.2, e.g. `routes:`). Statement position only
-  // and newline-gated (same gate as `quote:`), so control headers (`if x:`),
-  // map keys, and inline `name:` labels are unaffected. `quote` keeps its
-  // dedicated quasiquote node. F1.5 expands the chain when the name resolves
-  // to a macro; a leftover reaching the binder is rejected there.
+  // A statement-leading adjacent `name:` starts an inline or indented block.
+  // Spaced `method :symbol` does not start a block.
+  // The existing multiline spelling also permits whitespace before ':'.
+  // Control headers, map keys and the dedicated `quote:` node are unaffected.
   if (current().kind == lexer::TokenKind::Identifier &&
       current().lexeme != "quote" && peek(1).kind == lexer::TokenKind::Colon &&
-      peek(2).kind == lexer::TokenKind::Newline) {
+      (peek(2).kind == lexer::TokenKind::Newline ||
+       current().span.end.offset == peek(1).span.start.offset)) {
     const lexer::Token name = advance();
     auto base = ast::make_expr("AstName", name.span);
     base->string_field("name", name.lexeme);
@@ -1204,9 +1203,45 @@ std::unique_ptr<ast::Expr> Parser::parse_package_decl() {
   return node;
 }
 
+std::string Parser::parse_import_path(bool &relative) {
+  relative = check(lexer::TokenKind::String);
+  if (!relative) return parse_module_path();
+  const auto token = advance();
+  const auto literal = parse_string_literal_expr(token);
+  std::string path;
+  if (literal->kind == "AstLiteral") {
+    for (std::size_t offset = 1; offset + 1 < token.lexeme.size();) {
+      if (token.lexeme[offset] == '\\') {
+        const auto escape = parse_string_escape_part(token.lexeme, offset, token.lexeme.size() - 1);
+        path += escape.value;
+        offset = escape.end_offset;
+      } else {
+        path += token.lexeme[offset++];
+      }
+    }
+  } else {
+    for (const auto &list : literal->list_fields) {
+      if (list.name != "parts") continue;
+      for (const auto &part : list.values) {
+        if (part->kind != "AstStringText" && part->kind != "AstStringEscape") {
+          error_code(token, "IMPORT_PATH", "import path must be a static string without interpolation");
+          return {};
+        }
+        for (const auto &field : part->string_fields)
+          if (field.name == "value") path += field.value;
+      }
+    }
+  }
+  if ((path.rfind("./", 0) != 0 && path.rfind("../", 0) != 0) ||
+      path.find_first_of("\r\n") != std::string::npos || path.find('\0') != std::string::npos)
+    error_code(token, "IMPORT_PATH", "import path must start with ./ or ../ and contain no line breaks or NUL");
+  return path;
+}
+
 std::unique_ptr<ast::Expr> Parser::parse_import_decl() {
   const lexer::Token start = advance();
-  const std::string module_path = parse_module_path();
+  bool relative = false;
+  const std::string module_path = parse_import_path(relative);
   std::string alias;
   if (match_contextual("as")) {
     alias = parse_module_path();
@@ -1216,6 +1251,7 @@ std::unique_ptr<ast::Expr> Parser::parse_import_decl() {
                              ast::join_spans(start.span, previous().span));
   node->string_field("import_kind", "module");
   node->string_field("module_path", module_path);
+  if (relative) node->string_field("relative_path", module_path);
   node->string_field("alias", alias);
   node->list_field("names", {});
   return node;
@@ -1223,7 +1259,8 @@ std::unique_ptr<ast::Expr> Parser::parse_import_decl() {
 
 std::unique_ptr<ast::Expr> Parser::parse_from_import_decl() {
   const lexer::Token start = advance();
-  const std::string module_path = parse_module_path();
+  bool relative = false;
+  const std::string module_path = parse_import_path(relative);
   consume(lexer::TokenKind::KeywordImport, "expected 'import' in from-import");
 
   std::vector<std::unique_ptr<ast::Expr>> names;
@@ -1254,6 +1291,7 @@ std::unique_ptr<ast::Expr> Parser::parse_from_import_decl() {
                              ast::join_spans(start.span, previous().span));
   node->string_field("import_kind", "from");
   node->string_field("module_path", module_path);
+  if (relative) node->string_field("relative_path", module_path);
   node->string_field("alias", "");
   node->list_field("names", std::move(names));
   return node;
@@ -3293,6 +3331,7 @@ std::string Parser::consume_method_name_text(const std::string &message) {
     return "[]";
   }
   if (is_identifier_like_token(current().kind) ||
+      current().kind == lexer::TokenKind::KeywordFor ||
       is_operator_method_name(current().kind)) {
     return advance().lexeme;
   }
@@ -3314,7 +3353,8 @@ const lexer::Token &Parser::consume_member_name(const std::string &message) {
   // method names (Result#or, etc.). They are unambiguous here: a binary
   // `or`/`and`/`not` never legally follows a member-access dot.
   const lexer::TokenKind kind = current().kind;
-  if (kind == lexer::TokenKind::KeywordOr ||
+  if (kind == lexer::TokenKind::KeywordFor ||
+      kind == lexer::TokenKind::KeywordOr ||
       kind == lexer::TokenKind::KeywordAnd ||
       kind == lexer::TokenKind::KeywordNot) {
     return advance();
@@ -3450,21 +3490,18 @@ std::unique_ptr<ast::Expr> Parser::parse_expression(int min_precedence,
       break;
     }
 
-    // A suite consumes its final newline. Do not attach the next tuple
-    // assignment as call arguments to the preceding multiline expression.
-    if (check(lexer::TokenKind::LParen) &&
-        current().span.start.line > left->span.end.line) {
-      int depth = 0;
-      bool next_assignment = false;
-      for (std::size_t i = current_; i < tokens_.size(); ++i) {
-        if (tokens_[i].kind == lexer::TokenKind::LParen) ++depth;
-        if (tokens_[i].kind == lexer::TokenKind::RParen && --depth == 0) {
-          next_assignment = i + 1 < tokens_.size() &&
-                            tokens_[i + 1].kind == lexer::TokenKind::Equal;
-          break;
-        }
-      }
-      if (next_assignment) break;
+    // A suite consumes its final newline. A following expression still
+    // starts a new statement; explicit dot/with suffixes can continue the call.
+    // Check physical lines as well: delimiters can suppress NEWLINE tokens,
+    // but do not permit a bare argument or call opener on another line.
+    if (current().span.start.line > left->span.end.line &&
+        !check(lexer::TokenKind::Dot) &&
+        !check(lexer::TokenKind::ChainDot) &&
+        !check(lexer::TokenKind::SafeDot) &&
+        !starts_multiblock_suffix() &&
+        (previous().kind == lexer::TokenKind::Dedent ||
+         check(lexer::TokenKind::LParen) || starts_bare_arg())) {
+      break;
     }
 
     if (has_segment && !sequence_operand_ && left->kind == "AstPostfixChain" &&
@@ -5222,6 +5259,11 @@ Parser::parse_bare_args(StopMode stop_mode) {
         peek().kind == lexer::TokenKind::Colon) {
       const lexer::Token name = advance();
       advance();
+      if (current().span.start.line > previous().span.end.line &&
+          !is_same_name_bare_arg_value_boundary(current().kind)) {
+        error(current(), "bare keyword argument values must start on the same "
+                         "line; use a parenthesized call for multiline arguments");
+      }
       std::unique_ptr<ast::Expr> value =
           is_same_name_bare_arg_value_boundary(current().kind)
               ? make_same_name_value(name)
@@ -5234,9 +5276,11 @@ Parser::parse_bare_args(StopMode stop_mode) {
     } else {
       args.push_back(parse_expression(1, stop_mode));
     }
-    if (!match(lexer::TokenKind::Comma)) {
+    if (!check(lexer::TokenKind::Comma) ||
+        peek().span.start.line > current().span.end.line) {
       break;
     }
+    advance();
   }
   return args;
 }
@@ -5541,6 +5585,10 @@ bool Parser::can_accept_bare_call(const ast::Expr &expr) const {
 }
 
 bool Parser::can_accept_direct_block_suffix(const ast::Expr &expr) const {
+  if (expr.kind == "AstName" && check(lexer::TokenKind::Colon)) {
+    return expr.span.end.offset == current().span.start.offset ||
+           peek().kind == lexer::TokenKind::Newline;
+  }
   const ast::Expr *tail = last_postfix_tail(expr);
   if (tail == nullptr) {
     return false;

@@ -78,14 +78,14 @@ For example, SputnikTorch `0.1.2` requires exactly LibTorch `2.14.0`; LibTorch
 The runtime/SDK requirements are typed and checked before C++ compilation or
 library loading:
 
-```toml
-[[native_requirements]]
-id = "libtorch"
-kind = "runtime"
-version = "2.14.0"
-abi = "libtorch-2.14.0-cxx11-linux-x86_64-gnu-cu130"
-build_id = "sha256:<exact-producer-identity>"
-provider = "bundled"
+```yaml
+native_requirements:
+  - id: libtorch
+    kind: runtime
+    version: "2.14.0"
+    abi: libtorch-2.14.0-cxx11-linux-x86_64-gnu-cu130
+    build_id: "sha256:<exact-producer-identity>"
+    provider: bundled
 ```
 
 `version` is an exact provider version. `abi` distinguishes C++/runtime ABI
@@ -96,7 +96,7 @@ Accepting another LibTorch version requires separate compatibility work and
 verification; selection never relaxes the declared requirement.
 
 Providers can be bundled, explicit external bindings, or exact registry package
-dependencies (`provider = "package"`, `package = "publisher/provider"` plus an
+dependencies (`provider: package`, `package: publisher/provider` plus an
 exact package dependency). Registry compatibility metadata exposes native
 requirements/providers before download. Multiple runtime provider libraries are
 prepared in one verified directory; conflicting library bytes or singleton ABI

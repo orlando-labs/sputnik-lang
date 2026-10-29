@@ -34,4 +34,4 @@ def inspect(file, required_profile: ""):
   build[:native].each |item|:
     native_abis.push!(item[:sputnik_ext_abi]) unless native_abis.contains?(item[:sputnik_ext_abi])
   compatibility = {bytecode_versions: versions, profiles: profiles, bytecode_abi_hashes: bytecode_abis, sputnik_ext_abi: if native_abis.empty? then null else native_abis[0], sputnik_ext_abis: native_abis, native_requirements: manifest[:native_requirements], native_providers: manifest[:native_providers]}
-  {distribution: distribution, manifest: manifest, manifest_toml: facts[2], compatibility: compatibility}
+  {distribution: distribution, manifest: manifest, manifest_json: facts[2], compatibility: compatibility}

@@ -6813,16 +6813,6 @@ private:
                 "LOOKUP_CONST expects path constant in current runtime");
       return Value::null();
     }
-    if (const_id < state_->resolved_class_refs.size()) {
-      const std::uint32_t resolved = state_->resolved_class_refs[const_id];
-      if (resolved == RuntimeState::kClassRefAmbiguous) {
-        set_fault(frame, "VMError", "class path ref is ambiguous");
-        return Value::null();
-      }
-      if (resolved != RuntimeState::kClassRefUnknown) {
-        return Value::class_object(resolved);
-      }
-    }
     // These caches belong to this Vm, not the shared RuntimeState: scheduler
     // strands can warm the same constant independently without a cache lock.
     // A registry mutation can change even a previously missing name's category.
@@ -6869,7 +6859,7 @@ private:
     }
     ConstantLookupCache &entry = *slot;
     if (entry.kind == ConstantLookupKind::Unresolved) {
-      resolve_constant_lookup(frame, constant, entry);
+      resolve_constant_lookup(frame, const_id, constant, entry);
       if (fault_.has_value()) {
         return Value::null();
       }
@@ -6912,8 +6902,28 @@ private:
     return Value::null();
   }
 
-  void resolve_constant_lookup(const Frame &frame, const Constant &constant,
+  void resolve_constant_lookup(const Frame &frame, std::uint32_t const_id,
+                               const Constant &constant,
                                ConstantLookupCache &entry) {
+    if (const_id < state_->resolved_class_refs.size()) {
+      const std::uint32_t resolved = state_->resolved_class_refs[const_id];
+      if (resolved != RuntimeState::kClassRefUnknown) {
+        const bool exact_class = resolved < module_.classes.size() &&
+            runtime_symbols_[module_.classes[resolved].class_name_sym_id] == entry.path;
+        // Legacy class images can resolve a class by its leaf. That fallback
+        // must not replace an exact qualified native binding. Cache the result
+        // with the registry/world generations, just like other constant kinds.
+        const bool exact_native = !exact_class && entry.path.find('.') != std::string::npos &&
+            (module_registry().binding_for_path(entry.path).has_value() ||
+             error_registry().error_id(entry.path).has_value());
+        if (!exact_native) {
+          entry.kind = resolved == RuntimeState::kClassRefAmbiguous
+              ? ConstantLookupKind::Ambiguous : ConstantLookupKind::Class;
+          entry.target = resolved;
+          return;
+        }
+      }
+    }
     for (const auto &attr : module_.attrs) {
       if (string_or_empty(attr.key_str_id) ==
           "sputnik.merged.module:" + entry.path) {
@@ -6921,7 +6931,7 @@ private:
         return;
       }
     }
-    // Preserve the existing precedence: Sputnik classes (above), exact native
+    // Preserve precedence: exact Sputnik classes (above), exact native
     // error, exact builtin, error namespace, live module binding, class fallback.
     // In particular ArgParser is both a callable builtin and an error prefix.
     if (const auto error_id = error_registry().error_id(entry.path)) {

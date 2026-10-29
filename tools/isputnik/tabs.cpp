@@ -500,6 +500,15 @@ void ProjectTabs::delete_input(const std::string &id) {
   }
 }
 
+void ProjectTabs::set_resource_policy(const std::string &json) {
+  require_idle();
+  auto next = project_.document;
+  next.extra["resource_policy"] = json;
+  next = sputnik::notebook::parse_project_document(sputnik::notebook::serialize_project_document(next));
+  sputnik::notebook::validate_project_document(next);
+  sputnik::notebook::save_project(&project_, next);
+}
+
 void ProjectTabs::set_retain_cell_results(bool enabled) {
   require_idle();
   auto next = project_.document;

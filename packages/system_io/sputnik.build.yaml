@@ -1,0 +1,9 @@
+schema: "sputnik.build.v1"
+name: "system_io"
+version: "0.1.0"
+source_root: "src"
+files: ["README.md", "native/system_io.cpp", "src/digest.s", "src/fs.s", "src/pkg.s", "src/process.s"]
+profiles: {"required": ["core.v1", "ffi.v1"]}
+native_extensions: [{"name": "system_io", "language": "c++", "sources": ["native/system_io.cpp"], "requirements": ["system-io-runtime", "sputnik-sdk"], "include_dirs": [], "library_dirs": [], "link_libraries": [], "defines": ["SPUTNIK_VALUE_REPR_TAGGED"]}]
+native_requirements: [{"id": "system-io-runtime", "kind": "runtime", "version": "0.1.0", "abi": "sputnik-sdk-dd985ddf1a8db3abb821a633c10436b62cb706437bbe93e6f43ae23ea9c445f3", "build_id": "sha256:92d750b4a1446cc10cd98bb02f7ed928424b2a2dde6df02c3abc9410cf648ba7", "provider": "external", "libraries": ["libarchive.13.dylib", "libb2.1.dylib", "libcrypto.3.dylib", "libgmp.10.dylib", "libhogweed.7.0.dylib", "liblz4.1.10.0.dylib", "liblzma.5.dylib", "libnettle.9.0.dylib", "libssl.3.dylib", "libyaml-0.2.dylib", "libzstd.1.5.7.dylib"]}, {"id": "sputnik-sdk", "kind": "sdk", "version": "0.1.0", "abi": "sputnik-sdk-dd985ddf1a8db3abb821a633c10436b62cb706437bbe93e6f43ae23ea9c445f3", "build_id": "sha256:fa29d2e1a33967b037adb60dd895fb60e4a5bfafc053a451034f70c8ec5d14d9", "provider": "external", "runtime": "system-io-runtime"}]
+module_names: {"src/digest.s": "sdk.digest", "src/pkg.s": "sdk.pkg", "src/process.s": "sdk.process", "src/fs.s": "sdk.fs"}

@@ -60,8 +60,24 @@ BundledEnvironmentPreparation prepare_bundled_environment(
     }
   }
   if (!result.diagnostics.empty()) return result;
+  std::optional<sputnik::pkg::PackageResolver> packages;
+  std::optional<bool> installed_notebook_ui;
   const auto native_only = [&](const std::string &id) {
-    return native_modules.has_namespace(id) && !(id == "notebook.ui" && by_id.count(id));
+    if (!native_modules.has_namespace(id)) return false;
+    if (id != "notebook.ui") return true;
+    if (by_id.count(id)) return false;
+    // This hybrid namespace also has installed source/bytecode helpers. Use
+    // the normal verified package resolver before treating it as native-only;
+    // native Stopwatch still works when no helper package is installed.
+    if (!installed_notebook_ui) {
+      if (!packages) packages.emplace(package_search_directory);
+      try { installed_notebook_ui = packages->resolve(id).has_value(); }
+      catch (const std::exception &) {
+        // Report metadata errors through the normal compile diagnostic path.
+        installed_notebook_ui = true;
+      }
+    }
+    return !*installed_notebook_ui;
   };
   for (const auto &requested : explicit_imports) {
     const auto canonical = aliases.resolve(requested);
@@ -74,7 +90,6 @@ BundledEnvironmentPreparation prepare_bundled_environment(
   // Only compile modules reachable from the selected roots. An unfinished
   // unrelated source buffer is allowed to coexist in the same project.
   std::map<std::string, unsigned> visited;
-  std::optional<sputnik::pkg::PackageResolver> packages;
   std::vector<sputnik::bytecode::GraphModule> graph_modules;
   std::function<bool(const std::string &)> compile = [&](const std::string &requested) {
     const auto id = aliases.resolve(requested);

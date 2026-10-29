@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Import-as selects a fork throughout a manifest-free application graph."""
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -28,14 +29,14 @@ def main():
         def package(name, modules):
             directory = root / name
             directory.mkdir()
-            manifest = f'[package]\nname = "{name}"\nversion = "1.0.0"\nroot = "{next(iter(modules))}"\n'
+            manifest = dict(name=name, version='1.0.0', files=[], module_names={})
             for index, (module, source) in enumerate(modules.items()):
                 path = f"module{index}.s"
                 (directory / path).write_text(f"package {module}\n{source}")
-                manifest += f'\n[[modules]]\nname = "{module}"\npath = "{path}"\n'
-            (directory / "sputnik.toml").write_text(manifest)
+                manifest['files'].append(path); manifest['module_names'][path] = module
+            (directory / "sputnik.build.yaml").write_text(json.dumps(manifest))
             artifact = root / f"{name}.sputnikpkg"
-            cli("package-build", directory / "sputnik.toml", artifact)
+            cli("package-build", directory / "sputnik.build.yaml", artifact)
             cli("pkg", "install", artifact)
 
         package("fork", {
@@ -70,7 +71,7 @@ def main():
             )
             assert cli("run", script) == expected
             assert cli("run", script) == expected, "cached graph must retain replacements"
-            assert not (app / "sputnik.toml").exists()
+            assert not (app / "sputnik.build.yaml").exists()
             assert not (app / "sputnik.build.json").exists()
             assert not (app / "sputnik.lock").exists()
 
@@ -91,9 +92,8 @@ def main():
         # distinct and must not be rewritten by a root alias.
         source = app / "packages" / "client-source"
         source.mkdir(parents=True)
-        (source / "sputnik.toml").write_text(
-            '[package]\nname = "source-client"\nversion = "1.0.0"\nroot = "source_client"\n'
-            '[[modules]]\nname = "source_client"\npath = "main.s"\n')
+        (source / "sputnik.build.yaml").write_text(
+            'schema: "sputnik.build.v1"\nname: "source-client"\nversion: "1.0.0"\nsource_root: "."\nfiles:\n  - "main.s"\nmodule_names:\n  main.s: "source_client"\n')
         (source / "main.s").write_text(
             "package source_client\nfrom orm import answer\nexport calculate\ndef calculate(): answer()\n")
         script.write_text("import my.orm as orm\nfrom source_client import calculate\ncalculate()\n")
@@ -104,11 +104,8 @@ def main():
         # and only a transitive dependency observes the replacement.
         macros = app / "packages" / "macros"
         macros.mkdir()
-        (macros / "sputnik.toml").write_text(
-            '[package]\nname = "macro-fork"\nversion = "1.0.0"\nroot = "my.macros"\n'
-            '[[modules]]\nname = "my.macros"\npath = "main.s"\n'
-            '[[modules]]\nname = "macro_client0"\npath = "client0.s"\n'
-            '[[modules]]\nname = "macro_client1"\npath = "client1.s"\n')
+        (macros / "sputnik.build.yaml").write_text(
+            'schema: "sputnik.build.v1"\nname: "macro-fork"\nversion: "1.0.0"\nsource_root: "."\nfiles:\n  - "main.s"\n  - "client0.s"\n  - "client1.s"\nmodule_names:\n  main.s: "my.macros"\n  client0.s: "macro_client0"\n  client1.s: "macro_client1"\n')
         (macros / "main.s").write_text(
             'package my.macros\nexport macro identity\nexport answer\n'
             'macro def identity(value):\n  return value\ndef answer(): 42\n')

@@ -57,8 +57,13 @@ try
   call s:Group(5, '%%', 'sputnikTemplatePercent')
   call s:Group(8, '%for', 'sputnikTextBlock')
 
-  call s:Source(['@template("./page.html.sv")', 'def page(title)'])
-  call s:Group(1, '@template', 'sputnikTemplateAnnotation')
+  call s:Source(['template("./page.html.sv")', 'def page(title)'])
+  call s:Group(1, 'template', 'sputnikTemplateAnnotation')
+
+  call s:Source(['import "../backend/models" as models', 'from "./helpers.s" import Item'])
+  call s:Group(1, 'import', 'sputnikDeclaration')
+  call s:Group(1, '../backend/models', 'sputnikDoubleString')
+  call s:Group(2, './helpers.s', 'sputnikDoubleString')
 
   call s:Source(['a?=false', 'xs[0] or= 1', 'obj.value?=2', 'def []?(key): null'])
   call s:Group(1, '?=', 'sputnikOperator')

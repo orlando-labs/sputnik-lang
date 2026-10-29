@@ -36,7 +36,7 @@
   "repository": {
     "external-template-annotation": {
       "name": "storage.modifier.template.sputnik",
-      "match": "^[ \\t]*(@template)(?=[ \\t]*\\()"
+      "match": "^[ \\t]*(template)(?=[ \\t]*\\(|[ \\t]+[\"'])"
     },
     "native-binding": {
       "match": "(?<![\\p{L}\\p{N}_])(from)(?![\\p{L}\\p{N}_?!])[ \\t]+((?:\"(?:\\\\.|[^\"\\\\])*\"|'(?:\\\\.|[^'\\\\])*'))[ \\t]+(blocking)(?![\\p{L}\\p{N}_?!])(?=[ \\t]*(?::|#|$))",

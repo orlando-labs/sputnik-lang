@@ -39,6 +39,7 @@ def main():
     try:
       check(artifact.read(max_bytes: 2).hex() == "1f8b", "gzip framing")
       facts = pkg.inspect(artifact)
+      check(Json.parse(facts[:manifest_json])[:schema] == "sputnik.build.v1", "shared build manifest JSON")
       check(facts[:distribution][:name] == "tests/file", "verified package identity")
       check(facts[:manifest][:module_representations][0][1] == "source", "verified module representation")
       check(facts[:manifest][:target][:cpu_features] == [] and facts[:manifest][:target][:compute_backends] == [], "complete target requirements")
@@ -54,6 +55,7 @@ def main():
     try:
       artifact.read(max_bytes: 2)
       facts = pkg.inspect(artifact)
+      check(Json.parse(facts[:manifest_json])[:schema] == "sputnik.build.v1", "shared build manifest JSON")
       check(facts[:manifest][:module_representations][0][1] == "bytecode", "verified bytecode representation")
       check(facts[:compatibility][:bytecode_versions].count == 1 and facts[:compatibility][:profiles].count == 1 and facts[:compatibility][:bytecode_abi_hashes].count == 1, "verified bytecode compatibility facts")
       check(artifact.read(max_bytes: 1).hex() == "08", "build metadata inspection preserves file offset")

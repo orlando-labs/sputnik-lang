@@ -76,11 +76,11 @@ continue to load unchanged. A v3 document additionally requires `inputs`,
 ]
 ```
 
-`path` points to a directory containing `sputnik.toml`, or exactly one
-`sputnik.build.yaml`, `sputnik.build.yml`, or `sputnik.build.json`. `sputnik.toml` takes
-precedence when present. The manifest's explicit module map defines names and
-source files; there is no recursive `.s` scan. Module names must be unique
-across bundled code and all linked packages and cannot shadow native stdlib.
+`path` points to a directory containing one `sputnik.build.yaml`,
+`sputnik.build.yml`, or `sputnik.build.json`. Its `files` and `source_root` define
+modules, with optional `module_names` overrides; no recursive source scan runs.
+The explicit module map remains available for bootstrap/custom build mappings.
+Module names must be unique across links and cannot shadow native stdlib.
 Transitive source imports use that same combined map.
 
 `auto_import` defaults to `false`. Setting it to `true` explicitly opts the
@@ -99,7 +99,7 @@ are portable only when the corresponding directory layout travels with them.
 ## Current scope
 
 - Local source directories only: no registry download, installation, lockfile,
-  version resolution or automatic native build. `sputnik.toml` manifests with
+  version resolution or automatic native build. build manifests with
   versioned package dependencies are rejected explicitly, not silently resolved
   against arbitrary directories. Independent directory links can supply
   transitive source-module imports.

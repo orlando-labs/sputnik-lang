@@ -5,6 +5,8 @@
 #include "buildsys/build.h"
 #include "bytecode/format.h"
 #include "frontend/lexer/token.h"
+#include "frontend/lexer/lexer.h"
+#include "frontend/parser/parser.h"
 
 #include <algorithm>
 #include <cctype>
@@ -105,50 +107,23 @@ std::vector<fs::path> children(const fs::path &directory) {
 std::optional<LocatedPackage> directory_package(const fs::path &directory) {
   LocatedPackage result;
   result.directory = fs::canonical(directory);
-  fs::path manifest = directory / "sputnik.toml";
-  if (fs::is_regular_file(manifest)) {
-    const auto parsed = parse_manifest_toml(read(manifest), manifest.string());
-    if (!parsed.ok())
-      throw std::runtime_error(diagnostics(parsed.diagnostics));
-    result.manifest = parsed.manifest;
-  } else {
-    manifest.clear();
-    for (const auto *name :
-         {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"}) {
-      if (!fs::is_regular_file(directory / name))
-        continue;
-      if (!manifest.empty())
-        throw std::runtime_error("ambiguous package manifests: " +
-                                 directory.string());
-      manifest = directory / name;
-    }
-    if (manifest.empty())
-      return std::nullopt;
-    const auto parsed =
-        build::parse_build_manifest(read(manifest), manifest.string());
-    if (!parsed.ok())
-      throw std::runtime_error(
-          build::diagnostics_to_string(parsed.diagnostics));
-    if (!parsed.manifest.stdlib_modules.empty() ||
-        !parsed.manifest.profiles.numeric_int.empty() ||
-        !parsed.manifest.profiles.numeric_overflow.empty() ||
-        !parsed.manifest.profiles.forbidden_features.empty())
-      throw std::runtime_error(
-          "source package requires unsupported build-only profiles: " +
-          manifest.string());
-    for (const auto &feature : parsed.manifest.profiles.required_features)
-      if (feature != "ffi.v1" && !build::runtime_supports_feature(feature))
-        throw std::runtime_error("unsupported package profile: " + feature);
-    result.manifest.name = parsed.manifest.name;
-    result.manifest.version = "local";
-    result.manifest.root_module = parsed.manifest.root_module;
-    for (const auto &module : parsed.manifest.modules)
-      result.manifest.modules.push_back({module.name, module.path});
-    result.manifest.native_extensions = parsed.manifest.native_extensions;
-    result.manifest.dependencies = parsed.manifest.dependencies;
+  fs::path manifest;
+  for (const auto *name : {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"}) {
+    if (!fs::is_regular_file(directory / name)) continue;
+    if (!manifest.empty()) throw std::runtime_error("ambiguous package manifests: " + directory.string());
+    manifest = directory / name;
   }
+  if (manifest.empty()) return std::nullopt;
+  const auto parsed = build::parse_build_configuration(read(manifest), manifest.string());
+  if (!parsed.ok()) throw std::runtime_error(build::diagnostics_to_string(parsed.diagnostics));
+  if (!parsed.manifest.stdlib_modules.empty())
+    throw std::runtime_error("source package cannot replace the stdlib: " + manifest.string());
+  result.manifest = build::package_manifest(parsed.manifest);
+  if (result.manifest.version.empty()) result.manifest.version = "local";
   // The full source fingerprint is computed only if this package is activated.
   result.digest = "sha256:" + lexer::sha256_hex(read(manifest));
+  result.source_kind = "path";
+  result.source = result.directory.generic_string();
   return result;
 }
 
@@ -610,18 +585,19 @@ PackageResolver::PackageResolver(fs::path directory, fs::path home,
                                  bool use_lock)
     : entry_directory_(directory.empty()
                            ? fs::path{}
-                           : fs::absolute(directory).lexically_normal()),
+                           : fs::weakly_canonical(fs::absolute(directory))),
       home_(std::move(home)) {
   host_ = probe_package_host();
+  source_directory_ = entry_directory_;
   if (use_lock)
     read_lockfile();
-  if (!entry_directory_.empty() &&
-      fs::is_regular_file(entry_directory_ / "sputnik.toml")) {
-    const auto path = entry_directory_ / "sputnik.toml";
-    const auto parsed = parse_manifest_toml(read(path), path.string());
-    if (!parsed.ok())
-      throw std::runtime_error(diagnostics(parsed.diagnostics));
-    require(parsed.manifest.dependencies);
+  for (const auto *name : {"sputnik.build.yaml", "sputnik.build.yml", "sputnik.build.json"}) {
+    const auto path = entry_directory_ / name;
+    if (!fs::is_regular_file(path)) continue;
+    const auto parsed = build::parse_build_configuration(read(path), path.string());
+    if (!parsed.ok()) throw std::runtime_error(build::diagnostics_to_string(parsed.diagnostics));
+    entry_dependencies_ = parsed.manifest.dependencies;
+    break;
   }
 }
 
@@ -703,6 +679,10 @@ void PackageResolver::read_lockfile() {
   }
   pins_ = read_package_lock(entry_directory_ / "sputnik.lock");
   locked_ = true;
+  std::vector<PackageDependency> local;
+  for (const auto &[name, pin] : pins_)
+    if (pin.source_kind == "path") local.push_back({name, pin.version, "path", {}, pin.source});
+  bind_paths(local, entry_directory_);
 }
 
 void PackageResolver::discover() {
@@ -720,7 +700,7 @@ void PackageResolver::discover() {
         auto name = relative.parent_path().generic_string();
         auto v = path.filename().string();
         auto artifact = path / artifact_filename(name, v);
-        if (fs::is_regular_file(path / "modules.index") && fs::is_regular_file(path / "sputnik.toml")) {
+        if (fs::is_regular_file(path / "modules.index") && fs::is_regular_file(path / "sputnik.build.json")) {
           // Distribution manifests are small verified metadata; bytecode/native
           // payloads remain unopened until the package is actually activated.
           auto metadata = directory_package(path);
@@ -732,7 +712,7 @@ void PackageResolver::discover() {
           package.directory = fs::canonical(path);
           package.artifact_path = fs::canonical(artifact);
           const auto index_path = path / "modules.index";
-          if (fs::is_regular_file(path / "sputnik.toml")) {
+          if (fs::is_regular_file(path / "sputnik.build.json")) {
             package = *directory_package(path);
             package.artifact_path = fs::canonical(artifact);
             const auto provenance = path / ".registry-source";
@@ -786,15 +766,56 @@ bool PackageResolver::shadowed(const Candidate &candidate) const {
       });
 }
 
+void PackageResolver::bind_paths(
+    const std::vector<PackageDependency> &dependencies,
+    const fs::path &declaring_directory) {
+  for (const auto &dependency : dependencies) {
+    if (dependency.source != "path") continue;
+    if (!(component(dependency.name) || registry_reference(dependency.name)) || dependency.path.empty())
+      throw std::runtime_error("invalid path dependency: " + dependency.name);
+    const auto directory = fs::canonical(declaring_directory / dependency.path);
+    auto package = read_source_package(directory);
+    if (package.manifest.name != dependency.name)
+      throw std::runtime_error("path dependency name mismatch: expected " + dependency.name +
+                               ", found " + package.manifest.name + " in " + directory.string());
+    if (!dependency.version.empty() && dependency.version != package.manifest.version)
+      throw std::runtime_error("path dependency version mismatch: " + dependency.name);
+    const auto inserted = paths_.emplace(dependency.name, directory);
+    if (!inserted.second) {
+      if (inserted.first->second != directory)
+        throw std::runtime_error("conflicting path dependencies for " + dependency.name);
+      continue;
+    }
+    const auto active = active_.find(dependency.name);
+    if (active != active_.end() && selected_[active->second].directory != directory)
+      throw std::runtime_error("cannot replace an active package with a different path: " + dependency.name);
+    candidates_.push_back({package, -1});
+    bind_paths(package.manifest.dependencies, package.directory);
+  }
+}
+
 void PackageResolver::require(
-    const std::vector<PackageDependency> &dependencies) {
+    const std::vector<PackageDependency> &dependencies,
+    const fs::path &declaring_directory) {
+  if (entry_dependencies_pending_) {
+    entry_dependencies_pending_ = false;
+    auto combined = std::move(entry_dependencies_);
+    combined.insert(combined.end(), dependencies.begin(), dependencies.end());
+    require(combined, entry_directory_);
+    return;
+  }
+  const auto base = declaring_directory.empty() ? entry_directory_ : declaring_directory;
+  // Bind every local override before activating any dependency in this batch.
+  bind_paths(dependencies, base);
   // Record every exact requirement before choosing a version, so declaration
   // order cannot accidentally activate latest ahead of another explicit pin.
   for (const auto &dependency : dependencies) {
-    if (!(component(dependency.name) || registry_reference(dependency.name)) || !component(dependency.version))
+    if (!(component(dependency.name) || registry_reference(dependency.name)) ||
+        (dependency.source != "path" && !component(dependency.version)))
       throw std::runtime_error(
           "package dependencies currently require exact versions: " +
           dependency.name + " " + dependency.version);
+    if (dependency.version.empty()) continue;
     const auto inserted =
         requirements_.emplace(dependency.name, dependency.version);
     if (!inserted.second && inserted.first->second != dependency.version)
@@ -809,7 +830,7 @@ void PackageResolver::require_one(const PackageDependency &dependency) {
   discover();
   const auto active = active_.find(dependency.name);
   if (active != active_.end()) {
-    if (selected_[active->second].manifest.version != dependency.version)
+    if (!dependency.version.empty() && selected_[active->second].manifest.version != dependency.version)
       throw std::runtime_error("conflicting package versions for " +
                                dependency.name);
     return;
@@ -818,7 +839,7 @@ void PackageResolver::require_one(const PackageDependency &dependency) {
   for (std::size_t i = 0; i < candidates_.size(); ++i) {
     const auto &candidate = candidates_[i];
     if (candidate.package.manifest.name != dependency.name ||
-        candidate.package.manifest.version != dependency.version ||
+        (!dependency.version.empty() && candidate.package.manifest.version != dependency.version) ||
         shadowed(candidate))
       continue;
     const auto pin = pins_.find(dependency.name);
@@ -872,6 +893,9 @@ void PackageResolver::activate(std::size_t index) {
           package.artifact_path.string());
     package = std::move(verified);
     if (!package.artifact) verify_distribution_members(package);
+    for (const auto &dependency : package.manifest.dependencies)
+      if (dependency.source == "path")
+        throw std::runtime_error("installed packages cannot contain local path dependencies: " + name);
   } else {
     std::string material = package.digest;
     for (const auto &module : package.manifest.modules)
@@ -883,13 +907,21 @@ void PackageResolver::activate(std::size_t index) {
           material +=
               "\n" + path + "\n" + read(member(package.directory, path));
     package.digest = "sha256:" + lexer::sha256_hex(material);
+    std::string graph = package.manifest.name + "\n" + package.manifest.version + "\n" + package.manifest.variant;
+    for (const auto &dependency : package.manifest.dependencies)
+      graph += "\n" + dependency.name + "\n" + dependency.version + "\n" + dependency.source + "\n" +
+               fs::path(dependency.path).lexically_normal().generic_string();
+    package.lock_digest = "sha256:" + lexer::sha256_hex(graph);
+    package.source_kind = "path";
+    package.source = package.directory.lexically_relative(entry_directory_).generic_string();
+    if (package.source.empty()) package.source = package.directory.generic_string();
   }
   const auto pin = pins_.find(name);
   if (locked_ && pin == pins_.end())
     throw std::runtime_error("package is missing from sputnik.lock: " + name +
                              "; run sputnik pkg lock to update it");
   if (pin != pins_.end() && (pin->second.version != package.manifest.version ||
-                             pin->second.digest != package.digest ||
+                             pin->second.digest != (package.lock_digest.empty() ? package.digest : package.lock_digest) ||
                              (!pin->second.variant.empty() && pin->second.variant != package.manifest.variant) ||
                              (!pin->second.source_kind.empty() && pin->second.source_kind != package.source_kind) ||
                              (!pin->second.source.empty() && pin->second.source != package.source)))
@@ -926,12 +958,43 @@ void PackageResolver::activate(std::size_t index) {
   }
   active_[name] = selected_.size();
   selected_.push_back(package);
-  require(package.manifest.dependencies);
-  require(package.manifest.artifact_dependencies);
+  require(package.manifest.dependencies, package.directory);
+  require(package.manifest.artifact_dependencies, package.directory);
 }
 
 std::optional<ResolvedPackageModule>
 PackageResolver::resolve(const std::string &module) {
+  if (entry_dependencies_pending_) require({});
+  const auto local = source_modules_.find(module);
+  if (local != source_modules_.end()) {
+    ResolvedPackageModule result;
+    result.name = module;
+    result.path = local->second.string();
+    result.source = read(local->second);
+    return result;
+  }
+  if (!source_directory_.empty() && !module.empty() &&
+      module.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.") == std::string::npos) {
+    std::vector<std::string> names{module};
+    if (!source_prefix_.empty() && module.rfind(source_prefix_, 0) == 0)
+      names.push_back(module.substr(source_prefix_.size()));
+    std::set<fs::path> matches;
+    for (auto name : names) {
+      std::replace(name.begin(), name.end(), '.', '/');
+      for (const auto *extension : {".s", ".spu", ".sputnik"}) {
+        const auto file = source_directory_ / (name + extension);
+        if (fs::is_regular_file(file)) matches.insert(fs::canonical(file));
+      }
+    }
+    if (matches.size() > 1) throw std::runtime_error("ambiguous local module: " + module);
+    if (!matches.empty()) {
+      ResolvedPackageModule result;
+      result.name = module;
+      result.path = matches.begin()->string();
+      result.source = read(*matches.begin());
+      return result;
+    }
+  }
   discover();
   std::optional<std::size_t> best;
   for (std::size_t i = 0; i < candidates_.size(); ++i) {
@@ -1028,6 +1091,115 @@ PackageResolver::resolve(const std::string &module) {
   throw std::runtime_error("package module is missing: " + module);
 }
 
+void PackageResolver::register_source(const std::string &module, const fs::path &file) {
+  if (module.empty()) return;
+  const auto canonical = fs::canonical(file);
+  const auto found = source_modules_.find(module);
+  if (found != source_modules_.end() && found->second != canonical)
+    throw std::runtime_error("conflicting local module providers for " + module + ": " +
+                             found->second.string() + " and " + canonical.string());
+  for (const auto &entry : source_modules_)
+    if (entry.second == canonical && entry.first != module)
+      throw std::runtime_error("local source has conflicting module identities: " + canonical.string());
+  source_modules_[module] = canonical;
+}
+
+std::string PackageResolver::prepare_imports(
+    std::vector<std::unique_ptr<ast::Expr>> &items, const fs::path &file,
+    const std::string &module) {
+  auto declaring_module = module;
+  if (declaring_module.empty())
+    for (const auto &item : items)
+      if (item && item->kind == "AstPackageDecl")
+        for (const auto &field : item->string_fields)
+          if (field.name == "module_path") declaring_module = field.value;
+  register_source(declaring_module, file);
+  const auto directory = fs::canonical(file).parent_path();
+  const auto locate = [](const fs::path &base, bool exact) -> fs::path {
+    std::set<fs::path> matches;
+    if (exact) {
+      if (fs::is_regular_file(base)) matches.insert(fs::canonical(base));
+    } else {
+      for (const auto *extension : {".s", ".spu", ".sputnik"}) {
+        const auto candidate = fs::path(base.string() + extension);
+        if (fs::is_regular_file(candidate)) matches.insert(fs::canonical(candidate));
+      }
+    }
+    if (matches.size() > 1) throw std::runtime_error("ambiguous local module: " + base.string());
+    return matches.empty() ? fs::path{} : *matches.begin();
+  };
+  std::string material;
+  for (auto &item : items) {
+    if (!item || item->kind != "AstImportStmt") continue;
+    const auto field = [&](const std::string &name) -> std::string {
+      for (const auto &entry : item->string_fields) if (entry.name == name) return entry.value;
+      return {};
+    };
+    const auto relative = field("relative_path");
+    auto name = field("module_path");
+    if (!relative.empty()) {
+      const fs::path requested(relative);
+      const auto extension = requested.extension().string();
+      const bool exact = extension == ".s" || extension == ".spu" || extension == ".sputnik";
+      const auto target = locate(directory / requested, exact);
+      if (target.empty()) throw std::runtime_error("ImportError: relative module '" + relative + "' from " + file.string() + " was not found");
+      auto lexed = lexer::Lexer(read(target), target.string()).lex();
+      if (!lexed.ok()) throw std::runtime_error(lexer::diagnostics_to_json(lexed.diagnostics));
+      parser::Parser parser(lexed.tokens);
+      auto parsed = parser.parse_module_unit();
+      if (!parsed.ok()) throw std::runtime_error(lexer::diagnostics_to_json(parsed.diagnostics));
+      name = parsed.module_name;
+      if (name.empty()) {
+        for (const auto &entry : source_modules_)
+          if (entry.second == target) name = entry.first;
+        if (name.empty()) name = "sputnik.local.m" + lexer::sha256_hex(target.lexically_relative(entry_directory_).generic_string());
+      }
+      register_source(name, target);
+      for (auto &entry : item->string_fields) {
+        if (entry.name == "module_path") entry.value = name;
+        if (entry.name == "alias" && entry.value.empty() && field("import_kind") == "module") {
+          entry.value = exact ? requested.stem().string() : requested.filename().string();
+          auto alias = lexer::Lexer(entry.value, file.string()).lex();
+          if (!alias.ok() || alias.tokens.size() < 2 || alias.tokens[0].kind != lexer::TokenKind::Identifier ||
+              alias.tokens[0].lexeme != entry.value)
+            throw std::runtime_error("ImportError: relative import requires an explicit identifier alias: " + relative);
+        }
+      }
+      material += "relative-import\n" + relative + "\n" + target.string() + "\n" + name + "\n";
+    } else {
+      // Local imports inside a loaded module retain that file's own context.
+      auto path = name;
+      std::replace(path.begin(), path.end(), '.', '/');
+      auto target = locate(directory / path, false);
+      const auto separator = declaring_module.rfind('.');
+      if (target.empty() && separator != std::string::npos && name.rfind(declaring_module.substr(0, separator + 1), 0) == 0) {
+        path = name.substr(separator + 1);
+        std::replace(path.begin(), path.end(), '.', '/');
+        target = locate(directory / path, false);
+      }
+      if (!target.empty()) {
+        // A sibling filename can also name a different package (for example
+        // orm/sqlite3.s versus the sqlite3 package). Its declaration must match.
+        auto tokens = lexer::Lexer(read(target), target.string()).lex();
+        if (tokens.ok()) {
+          parser::Parser parser(tokens.tokens);
+          auto parsed = parser.parse_module_unit();
+          if (parsed.module_name == name) register_source(name, target);
+        }
+      }
+    }
+  }
+  return material;
+}
+
+void PackageResolver::source_entry(const fs::path &file, const std::string &module) {
+  source_directory_ = fs::weakly_canonical(fs::absolute(file).parent_path());
+  if (fs::is_regular_file(file) && module.rfind("sputnik.entry.", 0) == 0)
+    register_source(module, file);
+  const auto separator = module.rfind('.');
+  source_prefix_ = separator == std::string::npos ? "" : module.substr(0, separator + 1);
+}
+
 std::string PackageResolver::lockfile() const {
   auto packages = selected_;
   std::sort(packages.begin(), packages.end(), [](const auto &a, const auto &b) {
@@ -1039,7 +1211,7 @@ std::string PackageResolver::lockfile() const {
     out << "\n[[packages]]\nname = " << std::quoted(package.manifest.name)
         << "\nversion = " << std::quoted(package.manifest.version)
         << "\nvariant = " << std::quoted(package.manifest.variant)
-        << "\ndigest = " << std::quoted(package.digest)
+        << "\ndigest = " << std::quoted(package.lock_digest.empty() ? package.digest : package.lock_digest)
         << "\nsource_kind = " << std::quoted(package.source_kind)
         << "\nsource = " << std::quoted(package.source) << "\n";
   return out.str();

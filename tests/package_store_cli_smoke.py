@@ -33,26 +33,23 @@ def main():
             directory = root / "sources" / (name + "-" + version)
             directory.mkdir(parents=True)
             entries = []
-            manifest = f'[package]\nname = "{name}"\nversion = "{version}"\nroot = "{next(iter(modules))}"\n'
+            manifest = dict(name=name, version=version, files=[], module_names={}, dependencies=dependencies or {})
             for index, (module, source) in enumerate(modules.items()):
                 path = f"src/module{index}.s"
                 (directory / "src").mkdir(exist_ok=True)
                 (directory / path).write_text(f"package {module}\n{source}")
-                manifest += f'\n[[modules]]\nname = "{module}"\npath = "{path}"\n'
+                manifest['files'].append(path)
+                manifest['module_names'][path] = module
                 entries.append({"name": module, "path": path})
-            if dependencies:
-                manifest += "\n[dependencies]\n"
-                for key, value in dependencies.items():
-                    manifest += f'{key} = "{value}"\n'
             if native:
                 (directory / "native").mkdir()
                 (directory / "native/answer.c").write_text(native)
-                manifest += ('\n[[native]]\nname = "native_answer"\nlanguage = "c"\n'
-                             'sources = ["native/answer.c"]\n'
-                             '[native.symbols]\n"native.answer" = "sputnik_package_answer"\n')
-            (directory / "sputnik.toml").write_text(manifest)
+                manifest['files'].append('native/answer.c')
+                manifest['profiles'] = dict(required=['core.v1', 'ffi.v1'])
+                manifest['native_extensions'] = [dict(name='native_answer',language='c',sources=['native/answer.c'],symbols={'native.answer':'sputnik_package_answer'})]
+            (directory / "sputnik.build.yaml").write_text(json.dumps(manifest))
             artifact = root / (name + "-" + version + ".sputnikpkg")
-            cli("package-build", directory / "sputnik.toml", artifact)
+            cli("package-build", directory / "sputnik.build.yaml", artifact)
             cli("package-publish", artifact, registry)
             return directory, artifact
 
@@ -107,9 +104,10 @@ def main():
         assert cli("run", script).strip() == "42"
         unpinned, _ = package("extra-library", "1.0.0", {"extra": "export number\ndef number(): 5\n"})
         cli("pkg", "install", unpinned)
-        additional = app / "extra.s"
+        additional = app / "extra_consumer.s"
         additional.write_text("from extra import number\nnumber()\n")
-        assert "missing from sputnik.lock" in cli("run", additional, ok=False)
+        output = cli("run", additional, ok=False)
+        assert "missing from sputnik.lock" in output, output
         cli("pkg", "lock", script)
         assert cli("run", script).strip() == "43"
         (app / "sputnik.lock").unlink()
@@ -130,7 +128,7 @@ def main():
         assert "was not found" in cli("run", hidden, ok=False), "local package hides the entire global build"
         cli("pkg", "lock", script)
         (local / "src/calc.s").write_text("package calc\nexport answer\ndef answer(): 8\n")
-        assert "differs from sputnik.lock" in cli("run", script, ok=False)
+        assert cli("run", script).strip() == "8", "local edits stay live under the same dependency graph lock"
         (app / "sputnik.lock").unlink()
         shutil.rmtree(app / "packages")
 

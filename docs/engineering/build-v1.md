@@ -16,9 +16,90 @@ Implemented surface:
 - unsupported-profile loader rejection in [runtime/module_loader.cpp](../../runtime/module_loader.cpp:1)
 - CLI smoke fixture in [tests/fixtures/w14_build/sputnik.build.json](../../tests/fixtures/w14_build/sputnik.build.json:1)
 
+## Packages use the same manifest
+
+`sputnik.build.yaml`, `.yml` or `.json` is the only authored configuration for
+builds, source dependencies, package installation and packing. Multiple formats
+in one directory are an error. A package needs `name`, `version`, `source_root`
+and an explicit `files` inventory; libraries need no `root` or `entry`.
+
+```yaml
+name: example
+version: "1.0.0"
+source_root: src
+files:
+  - src/example.s
+  - src/example/http.s
+  - resources/defaults.json
+  - LICENSE
+dependencies:
+  sqlite3: "0.1.0"
+capabilities:
+  fs.read: ["./data"]
+```
+
+`src/example/http.s` provides `example.http`. `source_root` controls naming,
+without implicitly including files. An optional `module_names` mapping overrides
+individual files, for example `src/legacy.s: example.compat`. Source package
+declarations must agree with the resulting names. Duplicate files/module names,
+escaping paths and overrides for unlisted files are errors. Files are regular
+files, not recursive directory inventories. Native source/header/library and
+provider assets must also appear in `files`. Dependencies and capabilities use
+the same syntax for applications and packages; capability requests do not grant
+host permissions. Build profiles and native metadata remain in this file.
+
+`sputnik pkg build . --out example.sputnikpkg` uses this configuration. The
+archive contains a generated canonical `sputnik.build.json` with the same
+schema, followed by `checksums.sha256` and the sorted payload. Authors maintain
+one inventory. Bytecode delivery replaces selected sources with compiled files
+and generated name overrides. Local path dependencies are validated and pinned
+to their declared versions in the distribution. Installing a source directory
+also installs its path dependencies recursively before installing the parent.
+
 ## Manifest Shape
 
-Minimal manifest:
+A plain application needs no manifest:
+
+```sh
+sputnik run backend/main.s
+sputnik build backend/main.s -o build/notebook
+sputnik pkg lock backend/main.s
+```
+
+The entry file determines the root. Local imports map dotted module names to
+paths below the importing file's directory, with the entry directory as a
+fallback; the entry package prefix can be omitted from
+the filesystem path (`package demo.main` importing `demo.views` finds
+`views.s`). Only reachable files are compiled. Duplicate local providers fail
+with an ambiguity diagnostic; unrelated files are not scanned.
+
+The nearest optional `sputnik.build.json`, `.yaml` or `.yml` above the entry
+supplies settings such as `dependencies`, `source_formats` and profiles. It
+needs no `name`, `root`, `modules`, `sources` or `entry`. Relative settings and
+`sputnik.lock` are anchored to that configuration directory. Without settings,
+the package/lock anchor is the entry directory. Multiple configuration formats
+in the same directory are an error. This lookup never downloads packages.
+
+Filesystem imports use static relative string paths:
+
+```sputnik
+import "../backend/models" as models
+from "../backend/models.s" import Account, Project
+```
+
+`./` and `../` are resolved against the importing file, independently of cwd.
+An omitted extension searches `.s`, `.spu`, `.sputnik`; distinct matches are an
+error. The default namespace alias is the filename stem. Interpolation, absolute
+paths, NUL and line breaks are rejected. A source need not declare `package`;
+its canonical path still provides one identity. Multiple paths/symlinks to the
+same file initialize it once; distinct files declaring the same module fail.
+Relative imports are resolved before macro staging and binding, tracked as build
+inputs and serialized as ordinary module dependencies. Package settings and lock
+remain anchored to the entry's configuration. No extra source inventory is needed.
+
+For explicitly invoking a configuration as a build target, `entry: backend/main.s`
+is enough to infer its name and root. The legacy explicit module shape remains
+available for bootstrap builds and custom mappings:
 
 ```json
 {
@@ -61,7 +142,39 @@ gets a host native executable at `<out-dir>/<root-module>`. Use
 `sputnik run <manifest>` always executes the Sputnik graph in the bytecode VM.
 Missing source-module dependencies are resolved from the adjacent `packages/`
 directory and `SPUTNIK_PKG_HOME`; explicit manifest modules take priority.
-An optional `dependencies` object pins package names to exact versions. See
+An optional `dependencies` object constrains package selection with exact
+versions or live source directories. No source inventory is needed:
+
+```yaml
+dependencies:
+  orbit: {path: ../orbit}
+  orbit-session: {path: ../orbit/packages/orbit-session}
+  another-package: "1.2.3"
+```
+
+The JSON form is `"orbit": {"path": "../orbit"}`. An optional `version`
+inside a path object checks the directory's declared version; it does not
+override it. Relative paths are resolved against the declaring manifest,
+independently of the process working directory. The directory's `sputnik.build.*` owns its file inventory, module naming and native build facts.
+No recursive source glob is used. Imported modules are discovered before
+macro expansion, so ordinary code, macro providers and external `.sv` views
+use one build-scoped package resolver. The application still declares its
+`source_formats` registry when using external templates.
+
+Omit `dependencies` when imports can be resolved from installed packages,
+adjacent `packages/`, or a graph lock. Declarations express selection policy;
+`sputnik pkg lock <source-or-manifest>` records the resolved graph. Local source edits
+invalidate compilation caches without changing the graph lock. Changing local
+package identity, source directory or dependency edges requires an explicit
+lock update. Immutable installed artifacts retain checksum verification.
+
+Build summaries expose absolute `inputs`: project/package source files,
+external template inputs, package manifests and native source/header inputs.
+Configured source entries and manifest VM runs also write that summary to `<SPUTNIK_VM_CACHE>/inputs.json`
+(default `<manifest-directory>/.sputnik/vm/inputs.json`) for development tools.
+Watchers need not infer the dependency graph from the consumer's `modules`.
+
+See
 [the package store](package-store-v1.md) for installation and lockfiles.
 Native definitions use their Sputnik fallback bodies unless the consumer passes
 `--grant ffi`. That alias grants both `ffi.load` and `ffi.call`: `sputnik`

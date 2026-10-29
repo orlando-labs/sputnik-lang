@@ -1,0 +1,1 @@
+{"schema":"torch.package-verification.v1","matrix_sha256":"d183868a2ff2a7bee33c1e5c4cd9479af132b0dfc78e2947fb5e56856b6ae822","variants":15,"vm":"passed","full_native_combinations":5,"full_native":"passed","backends":["cpu","mps"],"mps_fallback":false,"slim_sdk_free_reproducible":true,"missing_provider":"passed"}

@@ -275,6 +275,47 @@ static NativeValue native_host_io_send(const NativeValue &receiver, const std::s
     native_host_io_error("NoMethodError", "unknown metadata selector");
   }
   auto resource = std::dynamic_pointer_cast<RuntimeIoResource>(io);
+  if (selector == "each_chunk") {
+    if (auto file = std::dynamic_pointer_cast<RuntimeFile>(io)) {
+      native_host_io_keywords(kwargs, {"size", "timeout"});
+      if (!args.empty())
+        native_host_io_error("TypeError", "each_chunk takes no positional arguments");
+      if (block.tag != NativeValue::Tag::Closure)
+        native_host_io_error("TypeError", "each_chunk requires a block");
+      std::size_t size = 8192;
+      if (const auto value = native_host_io_kw(kwargs, "size")) {
+        if (value->tag != NativeValue::Tag::Integer)
+          native_host_io_error("TypeError", "size must be Int");
+        if (value->scalar_value <= 0)
+          native_host_io_error("ArgumentError", "size must be positive");
+        size = static_cast<std::size_t>(value->scalar_value);
+      }
+      const auto timeout = native_host_io_timeout(kwargs);
+      const auto deadline = timeout == std::chrono::milliseconds::max()
+          ? std::chrono::steady_clock::time_point::max()
+          : std::chrono::steady_clock::now() + timeout;
+      native_host_io_authorize("fs.read", file->path().string());
+      native_commit_effect();
+      native_require_suspendable("reader.each_chunk");
+      for (;;) {
+        const auto remaining = deadline == std::chrono::steady_clock::time_point::max()
+            ? std::chrono::milliseconds::max()
+            : std::max(std::chrono::milliseconds(0),
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    deadline - std::chrono::steady_clock::now()));
+        RuntimeByteBuffer buffer(size);
+        RuntimeIoStatus status;
+        {
+          NativeCycleSuspension suspension;
+          status = file->read(buffer, remaining);
+        }
+        native_host_io_check(status);
+        if (status.eof) return NativeValue::nullv();
+        (void)sputnik_native_call_scoped_closure(
+            block, {NativeValue::bytes(buffer.bytes())});
+      }
+    }
+  }
   if (block.tag != NativeValue::Tag::Null) native_host_io_error("ArgumentError", "resource does not accept a block");
   if (selector == "close!" || selector == "closed?") {
     native_host_io_keywords(kwargs, {});

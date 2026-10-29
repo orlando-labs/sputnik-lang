@@ -247,9 +247,8 @@ def directory_dependency_commands(binary, root):
     document_file = make_project(binary, project)
     package = root / "Local package"
     package.mkdir()
-    (package / "sputnik.toml").write_text(
-        '[package]\nname = "sample"\nversion = "1.0.0"\nroot = "sample"\n'
-        '[[modules]]\nname = "sample"\npath = "sample.s"\n')
+    (package / "sputnik.build.yaml").write_text(
+        'schema: "sputnik.build.v1"\nname: "sample"\nversion: "1.0.0"\nsource_root: "."\nfiles:\n  - "sample.s"\n')
     source = "package sample\nexport answer\ndef answer(): 42\n"
     (package / "sample.s").write_text(source)
     document = read_document(document_file)

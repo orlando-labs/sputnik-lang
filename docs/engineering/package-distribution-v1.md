@@ -1,7 +1,7 @@
 # Building package distributions v1
 
 Implemented on 2026-10-19. Public `.sputnikpkg` files are deterministic tar.gz
-archives. The manifest schema remains `sputnik.package-manifest.v1`.
+archives. The generated manifest uses the shared `sputnik.build.v1` schema.
 
 ```sh
 build/sputnik pkg build packages/example --version 0.1.0 --out example.sputnikpkg
@@ -13,12 +13,13 @@ build/sputnik pkg extract example.sputnikpkg /path/to/new-directory
 tar -tzf example.sputnikpkg
 ```
 
-`pkg build` accepts a directory with `sputnik.toml` or a build manifest, or an
-explicit TOML/JSON/YAML manifest. Build manifests without package versions need
-`--version`. Paths must stay within the input manifest directory. Third-party
+`pkg build` accepts a directory with one `sputnik.build.yaml`, `.yml` or `.json`,
+or an explicit YAML/JSON build manifest. `version` can be supplied with
+`--version` when absent. See [the shared manifest](build-v1.md#packages-use-the-same-manifest).
+Paths must stay within the input manifest directory. Third-party
 native dependencies are declared separately from source/prebuilt adapter facts.
-`[artifact].bundle` selects `none` (default), `runtime` or `sdk`; SDK bundles need
-at least one native source adapter. `sputniktorch/tools/package --matrix` prepares
+`artifact.bundle` selects `none` (default), `runtime` or `sdk`; SDK bundles need
+at least one native source adapter. `torch/tools/package --matrix` prepares
 all 15 current-platform combinations and separate runtime/SDK provider artifacts.
 See the [provider/bundle design](../../../sputnik-registry/docs/NATIVE_BUNDLES.md).
 
@@ -29,19 +30,22 @@ Macro-provider modules must retain source because the current compiler needs
 their expansion metadata. A module has one source or bytecode member, never
 both. Existing bytecode inputs are verified and preserved.
 
-Archives contain `sputnik.toml` first, `checksums.sha256` second, followed by
-sorted payload paths. Source modules and declared native sources/headers/libraries
-are included automatically. Other files require an explicit packlist:
+Archives contain `sputnik.build.json` first, `checksums.sha256` second, followed by
+sorted payload paths. The authored `files` list is the exact package inventory,
+including native source/header/library inputs:
 
-```toml
-[files]
-include = ["README.md", "LICENSE", "resources"]
+```yaml
+files:
+  - src/example.s
+  - README.md
+  - LICENSE
+  - resources/defaults.json
 ```
 
-Directory entries in the packlist are traversed explicitly. Build caches and
-checkout contents are not included by default. Closed module sources cannot be
-reintroduced through a directory packlist. Generated archive metadata cannot be
-overridden by the packlist.
+Directories are not recursively packed. Every listed file must be regular and
+inside the package root. Native inputs and provider assets must be listed too.
+The packer generates metadata and replaces selected source files with bytecode;
+source inventory cannot reintroduce the replaced source.
 
 Bytecode/native packages receive a canonical `meta/build.json` with schema
 `sputnik.package-build.v1`. It records the producing compiler executable's SHA-256,
@@ -50,13 +54,13 @@ kind/ext ABI/target and input/library digests. The inspector regenerates the
 payload assertions and checks them against the archive. Publisher-specific build
 notes belong at another path, such as `meta/libtorch.json`.
 
-`[artifact]` selects `variant` and `limit_profile`; `[target]` declares OS,
-architecture, minimum OS, libc and compute compatibility. `[[native]]` supports
-`kind = "source"` or `kind = "prebuilt"` with `library` and
-`sputnik_ext_abi = 1`. `[[native.libraries]]` enumerates bundled dependencies.
-New distributions use typed `[[native_requirements]]`, per-extension
-`requirements`, and `[[native_providers]]` with provider-owned libraries/assets.
-Native-only `[package].kind = "native"` allows providers without modules/root.
+`artifact` selects `variant` and `limit_profile`; `target` declares OS,
+architecture, minimum OS, libc and compute compatibility. `native_extensions`
+supports `kind: source` or `kind: prebuilt` with `library` and
+`sputnik_ext_abi: 1`. Each extension's `libraries` list enumerates bundled dependencies.
+New distributions use typed `native_requirements`, per-extension
+`requirements`, and `native_providers` with provider-owned libraries/assets.
+Top-level `kind: native` allows providers without modules/root.
 An explicit `SPUTNIK_NATIVE_PROVIDERS` binding lists extracted native-only
 provider directories separated by `:`. Runtime/SDK version/ABI/build constraints,
 SDK/runtime pairing and inventories are checked before preparation; no ambient

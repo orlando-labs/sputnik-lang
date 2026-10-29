@@ -1,0 +1,4 @@
+Installed torch@0.1.0-dev in /private/tmp/sputnik-yaml-check/torch-matrix/verification/installed/home/torch/0.1.0-dev/macos-aarch64-prebuilt-bytecode-runtime
+PASS package cpu forward=14 gradient=[2,4,6]
+PASS package mps forward=14 gradient=[2,4,6]
+0

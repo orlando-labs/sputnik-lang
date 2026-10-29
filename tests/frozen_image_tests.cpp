@@ -106,39 +106,46 @@ ModuleArtifacts compile_module(const std::string &module_name,
 }
 
 sputnik::pkg::PackageManifest fixture_manifest() {
-  const std::string manifest_source = "[package]\n"
-                                      "name = \"frozen.demo\"\n"
-                                      "version = \"1.0.0\"\n"
-                                      "root = \"frozen.core\"\n"
-                                      "\n"
-                                      "[[modules]]\n"
-                                      "name = \"frozen.extra\"\n"
-                                      "path = \"src/extra.s\"\n"
-                                      "\n"
-                                      "[[modules]]\n"
-                                      "name = \"frozen.core\"\n"
-                                      "path = \"src/core.s\"\n"
-                                      "\n"
-                                      "[[native]]\n"
-                                      "name = \"frozen_ext\"\n"
-                                      "language = \"c\"\n"
-                                      "sources = [\"native/ext.c\"]\n"
-                                      "headers = [\"native/ext.h\"]\n"
-                                      "\n"
-                                      "[native.symbols]\n"
-                                      "\"frozen.native\" = \"sputnik_frozen_native\"\n"
-                                      "\n"
-                                      "[[native.types]]\n"
-                                      "sputnik = \"frozen.NativeBox\"\n"
-                                      "tag = \"frozen.NativeBox\"\n"
-                                      "ownership = \"borrowed\"\n"
-                                      "\n"
-                                      "[[native.errors]]\n"
-                                      "name = \"frozen.NativeError\"\n"
-                                      "parent = \"NativeError\"\n"
-                                      "default_message = \"native failed\"\n";
+  const std::string manifest_source = R"yaml(schema: "sputnik.build.v1"
+name: "frozen.demo"
+root: "frozen.core"
+version: "1.0.0"
+source_root: "."
+profiles:
+  required:
+    - "core.v1"
+    - "ffi.v1"
+files:
+  - "src/extra.s"
+  - "src/core.s"
+  - "native/ext.c"
+  - "native/ext.h"
+module_names:
+  "src/extra.s": "frozen.extra"
+  "src/core.s": "frozen.core"
+native_extensions:
+  -
+      name: "frozen_ext"
+      language: "c"
+      sources:
+        - "native/ext.c"
+      headers:
+        - "native/ext.h"
+      symbols:
+        frozen.native: "sputnik_frozen_native"
+      types:
+        -
+            sputnik: "frozen.NativeBox"
+            tag: "frozen.NativeBox"
+            ownership: "borrowed"
+      errors:
+        -
+            name: "frozen.NativeError"
+            parent: "NativeError"
+            default_message: "native failed"
+)yaml";
   sputnik::pkg::PackageManifestResult parsed =
-      sputnik::pkg::parse_manifest_toml(manifest_source, "sputnik.toml");
+      sputnik::pkg::parse_manifest(manifest_source, "sputnik.build.yaml");
   expect(parsed.ok(), "fixture manifest should parse");
   return parsed.manifest;
 }

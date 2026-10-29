@@ -14,7 +14,7 @@ Current baseline:
   locates them, or set `PCRE2_INCLUDE_DIR` and `PCRE2_LIB_DIR`;
 - LibYAML development headers/libraries are required for notebook YAML config
   codecs (`brew install libyaml` or `apt install libyaml-dev`); `YAML_PREFIX`
-  overrides discovery. TOML parsing uses the vendored MIT-licensed toml++ header;
+  overrides discovery. Notebook TOML config codecs use the vendored MIT-licensed toml++ header;
 - LibArchive and zlib development headers/libraries are required for package
   distribution (`brew install libarchive` or `apt install libarchive-dev zlib1g-dev`);
   `ARCHIVE_PREFIX` overrides LibArchive discovery;
@@ -30,8 +30,7 @@ and their runtime/session libraries. Both executables belong to the language
 distribution; the build needs no notebook application checkout or Swift/AppKit.
 Tests are opt-in: `make build-tests`, `make test` or `make conformance`.
 Source files use `.s`, `.spu` (Sputnik Program Unit), or `.sputnik`; all three
-extensions have identical semantics. Manifests are `sputnik.toml` and
-`sputnik.build.yaml` / `sputnik.build.json`.
+extensions have identical semantics. Builds and packages share `sputnik.build.yaml` / `sputnik.build.json`.
 
 Sputnik is a **technical preview**: language, APIs and artifact formats may change.
 
@@ -139,7 +138,7 @@ Current matrix status:
 | `W9.1` | done | optional Sputnik/Typed checker lane with `TypeTerm` parsing/canonicalization, exported callable annotation boundaries, parameter/default/return diagnostics, basic truthiness flow for `and`/`or`, strict `case!` exhaustiveness checks, runtime type-hook metadata, `sputnik typed`, and M6 typed corpus |
 | `W9.2` | done | open-world runtime transactions for class/mixin reopen, instance/class method replacement, direct `include` / class-side `extend`, pre-commit kind/superclass/include-cycle validation, `open -> frozen` world state with `WorldFrozenError`, atomic rollback, and dispatch invalidation via `world_epoch` / owner versions |
 | `W9.3` | done | read-only runtime reflection mirrors for package/world/class/mixin/method state, deterministic method/export/dependency ordering, source-location exposure from bytecode debug spans, and stable snapshot semantics without mutation backdoors |
-| `W9.4` | done | package manifest/lock/artifact tooling with restricted `sputnik.toml`, deterministic `sputnik.lock`, reproducible `.sputnikpkg` bundles over verified `.sputnikbc` bytes, SHA-256 dev signatures, and filesystem registry install/publish smoke |
+| `W9.4` | done | package manifest/lock/artifact tooling with YAML/JSON `sputnik.build.*`, deterministic `sputnik.lock`, reproducible `.sputnikpkg` bundles over verified `.sputnikbc` bytes, SHA-256 dev signatures, and filesystem registry install/publish smoke |
 | `W9.5` | done | open-world dev-profile hot reload as atomic package artifact swap, with package/module bytecode predecode, manifest identity checks, ABI/profile/export surface and selector/arity compatibility guards, frozen-world rejection, rollback on failed swap, and `world_epoch` dispatch invalidation |
 | `W10.1` | done | advanced concurrency runtime with explicit `RuntimeMoveSlot` ownership transfer for channel/select boundaries, moved-from `MovedValueError` guards, fair-ish `runtime_select` recv/send arms with timeout/else behavior, and structured-task supervisor policies `cancel_scope`, `one_for_one`, `one_for_all`, and `rest_for_one` |
 | `W10.2` | done | `sputnik.io` awaitable/readiness runtime bridge with `RuntimeAwaitable`, awaitable-compatible `runtime_select` arms, timeout/failure/cancellation states, and native wait integration through active W6.4 pin tokens |
@@ -199,12 +198,12 @@ artifact/container baseline for `W4.1`-`W4.4` from the implementation matrix:
   metadata over verified bytecode and MIR, including call stubs, patchpoints,
   conservative root maps, exception maps, safepoint maps, and frozen-world
   assumptions;
-- `sputnik image-build <sputnik.toml> <out.sputnikimg>`,
+- `sputnik image-build <sputnik.build.yaml> <out.sputnikimg>`,
   `sputnik image-inspect <file.sputnikimg>`, and
   `sputnik image-verify <file.sputnikimg>` for `sputnik.image.v1` W10.5 frozen
   images that embed reproducible package bytes, native metadata summaries,
   freeze-analysis records, and package signature verification hooks;
-- `sputnik capabilities-check <sputnik.toml> [--grant <cap[=target]>...]` for
+- `sputnik capabilities-check <sputnik.build.yaml> [--grant <cap[=target]>...]` for
   `sputnik.capabilities.v1` W11.1 manifest preflight, host grant intersection,
   denied-capability JSON diagnostics, and path-scoped capability checks;
 - `sputnik effects-check <file>` for `sputnik.effects.v1` W11.2 callable effect
@@ -318,7 +317,7 @@ artifact/container baseline for `W4.1`-`W4.4` from the implementation matrix:
 - `runtime/module_loader` W14 profile gate for `PROF` required/optional/forbidden
   features, rejecting unsupported required host profiles before module init with
   `UnsupportedProfileError`;
-- `package/package` W9.4 package tooling with restricted `sputnik.toml` parsing,
+- `package/package` W9.4 package tooling with YAML/JSON `sputnik.build.*` parsing,
   deterministic `sputnik.lock` rendering, reproducible signed `.sputnikpkg`
   artifacts, artifact verify/inspect JSON, and filesystem registry
   install/publish smoke helpers exposed through `sputnik package-*`;

@@ -2,6 +2,7 @@
 
 #include "package/package.h"
 #include "package/selection.h"
+#include "frontend/ast/expr.h"
 
 #include <filesystem>
 #include <functional>
@@ -34,6 +35,8 @@ struct LocatedPackage {
   std::filesystem::path directory;
   std::filesystem::path artifact_path;
   std::string digest;
+  // Local content changes invalidate build caches, but not the graph lock.
+  std::string lock_digest;
   std::shared_ptr<const PackageArtifact> artifact;
   std::shared_ptr<const DistributionInfo> distribution;
   std::string source_kind = "artifact", source = "local";
@@ -54,7 +57,12 @@ public:
                            std::filesystem::path home = {},
                            bool use_lock = true);
   std::optional<ResolvedPackageModule> resolve(const std::string &module);
-  void require(const std::vector<PackageDependency> &dependencies);
+  void require(const std::vector<PackageDependency> &dependencies,
+               const std::filesystem::path &declaring_directory = {});
+  void source_entry(const std::filesystem::path &file, const std::string &module);
+  std::string prepare_imports(std::vector<std::unique_ptr<ast::Expr>> &items,
+                              const std::filesystem::path &file,
+                              const std::string &module);
   const std::vector<LocatedPackage> &selected() const { return selected_; }
   std::string lockfile() const;
   std::string search_description() const;
@@ -67,6 +75,10 @@ private:
     int priority = 0;
   };
   std::filesystem::path entry_directory_, home_;
+  std::filesystem::path source_directory_;
+  std::string source_prefix_;
+  std::map<std::string, std::filesystem::path> source_modules_;
+  void register_source(const std::string &module, const std::filesystem::path &file);
   bool discovered_ = false;
   bool locked_ = false;
   std::vector<Candidate> candidates_;
@@ -80,6 +92,11 @@ private:
   std::map<std::string, PackageNativeRequirement> native_requirements_;
   std::map<std::string, PackageNativeProvider> native_providers_;
   std::map<std::string, std::string> requirements_;
+  std::map<std::string, std::filesystem::path> paths_;
+  std::vector<PackageDependency> entry_dependencies_;
+  bool entry_dependencies_pending_ = true;
+  void bind_paths(const std::vector<PackageDependency> &dependencies,
+                  const std::filesystem::path &declaring_directory);
   void discover();
   void read_lockfile();
   bool shadowed(const Candidate &candidate) const;

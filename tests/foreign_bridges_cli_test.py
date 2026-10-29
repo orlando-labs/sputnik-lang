@@ -11,11 +11,12 @@ compiler = str(Path(sys.argv[1] if len(sys.argv) > 1 else 'build/sputnik').resol
 language = Path(__file__).resolve().parents[1]
 workspace = language.parent
 for name in ['pycall', 'rbcall']:
-    assert (workspace / name / 'sputnik.toml').is_file(), 'configure ' + name + ' first'
+    assert (workspace / name / 'sputnik.build.yaml').is_file(), 'configure ' + name + ' first'
 with tempfile.TemporaryDirectory(prefix='sputnik-foreign-bridges-') as directory:
     root = Path(directory)
     env = dict(os.environ, SPUTNIK_PKG_HOME=str(root / 'packages'),
                SPUTNIK_NATIVE_EXT_CACHE=str(root / 'native'))
+    env['SPUTNIK_NATIVE_PROVIDERS'] = ':'.join(str(workspace / name / 'build/native-providers' / kind) for name in ['pycall','rbcall'] for kind in ['runtime','sdk'])
     env.setdefault('SPUTNIK_NATIVE_RT_CACHE', str(language / 'build/interop-runtime-cache'))
 
     def cli(*args):
@@ -25,7 +26,8 @@ with tempfile.TemporaryDirectory(prefix='sputnik-foreign-bridges-') as directory
         return result.stdout
 
     for name in ['pycall', 'rbcall']:
-        cli('pkg', 'install', workspace / name)
+        cli('pkg', 'install', workspace / name, '--allow-native', '--build-from-source')
+    env.pop('SPUTNIK_NATIVE_PROVIDERS', None)
     source = root / 'main.s'
     source.write_text((language / 'tests/fixtures/foreign_bridges/main.s').read_text())
     assert 'PASS both foreign runtimes' in cli('run', source, '--grant', 'ffi')

@@ -148,7 +148,7 @@ syntax region sputnikInterpolation matchgroup=sputnikInterpolationDelimiter star
 syntax region sputnikMacroSplice matchgroup=sputnikInterpolationDelimiter start=/#{/ end=/}/ contained contains=@sputnikExpression,sputnikInterpolationBrace
 syntax region sputnikMacroDefinition transparent start=/^\z([ \t]*\)\%(string_tag\s\+\)\?macro\s\+def\s\+/ end=/^\%(\z1[ \t]\)\@!\%(\s*#\)\@!\ze\s*\S/ contains=@sputnikExpression,sputnikMacroSplice
 
-syntax match sputnikTemplateAnnotation /^\s*\zs@template\ze\s*(/
+syntax match sputnikTemplateAnnotation /^\s*\zstemplate\ze\%(\s*(\|\s\+["']\)/
 highlight default link sputnikTemplateAnnotation PreProc
 
 " Parse from the start so long text blocks and macro bodies stay accurate.

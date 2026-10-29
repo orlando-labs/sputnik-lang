@@ -5,6 +5,15 @@ each state directory, and local IPC whose lifetime is independent of HTTP.
 The public API additions below were approved on 2026-10-14; `fs.sync` was
 approved on 2026-10-15.
 
+`fs.File#each_chunk(size: 8192, timeout: null)` is available in the VM and
+direct-native lane. It yields bounded `Bytes` until EOF and returns `null`;
+empty files do not invoke the block. Direct-native iteration uses the existing
+file resource, read capability, deadline and cancellation checks. Callback
+exceptions propagate; scoped `fs.File.open` closes the handle while unwinding.
+It does not read the complete file or enter the VM. The
+`tests/fixtures/native_http_reader/main.s` fixture verifies bounded chunks,
+empty files, callback failure cleanup and HTTP reader uploads in both lanes.
+
 `fs.atomic_write_text(path, text, durable: true)` and
 `fs.atomic_write_bytes(path, bytes, durable: true)` create a temporary regular
 file in the destination directory with permissions 0600. They write the whole

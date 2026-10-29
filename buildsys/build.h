@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include <utility>
+#include <filesystem>
 
 namespace sputnik::build {
 
@@ -23,23 +24,18 @@ struct BuildModule {
   std::string bootstrap_layer;
 };
 
-struct BuildProfileSet {
-  std::vector<std::string> required_features;
-  std::vector<std::string> optional_features;
-  std::vector<std::string> forbidden_features;
-  // sputnik.numeric-profile.v1 manifest mirror (profiles.numeric). Empty means
-  // unspecified: source preambles (or the Int64/checked defaults) apply.
-  std::string numeric_int;
-  std::string numeric_overflow;
-};
+using BuildProfileSet = pkg::PackageProfileSet;
 
 struct BuildManifest {
   std::string schema = "sputnik.build.v1";
+  // Package/distribution facts authored in the same build configuration.
+  pkg::PackageManifest package;
   std::string name;
   std::string root_module;
   BuildProfileSet profiles;
   std::vector<BuildModule> stdlib_modules;
   std::vector<BuildModule> modules;
+  std::string entry;
   std::vector<templates::SourceFormat> source_formats;
   // Package identities and exact versions, independent of module names.
   std::vector<pkg::PackageDependency> dependencies;
@@ -104,15 +100,23 @@ struct BuildSummary {
   std::vector<sputnik::pkg::PackageNativeExtensionMetadata> native_extensions;
   BuildProfileSet profiles;
   std::vector<BuildArtifactRecord> artifacts;
+  std::vector<std::string> inputs;
   std::vector<BuildDiagnostic> diagnostics;
 };
 
 BuildManifestResult parse_build_manifest_json(const std::string &source,
                                               const std::string &path = {});
+BuildManifestResult resolve_entry_module(const BuildManifest &manifest,
+                                        const std::filesystem::path &directory);
 BuildManifestResult parse_build_manifest_yaml(const std::string &source,
                                               const std::string &path = {});
 BuildManifestResult parse_build_manifest(const std::string &source,
                                          const std::string &path = {});
+// Optional source-entry settings do not need a name, root or module inventory.
+BuildManifestResult parse_build_configuration(const std::string &source,
+                                             const std::string &path = {});
+
+pkg::PackageManifest package_manifest(const BuildManifest &manifest);
 
 BuildProfileSet normalize_profiles(BuildProfileSet profiles);
 std::uint32_t profile_flags_for(const BuildProfileSet &profiles);

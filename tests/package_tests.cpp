@@ -17,25 +17,23 @@ void expect(bool condition, const std::string &message) {
 }
 
 sputnik::pkg::PackageManifest sample_manifest() {
-  const std::string manifest_source = "[package]\n"
-                                      "name = \"demo.pkg\"\n"
-                                      "version = \"0.1.0\"\n"
-                                      "root = \"demo.core\"\n"
-                                      "\n"
-                                      "[[modules]]\n"
-                                      "name = \"demo.extra\"\n"
-                                      "path = \"src/extra.s\"\n"
-                                      "\n"
-                                      "[[modules]]\n"
-                                      "name = \"demo.core\"\n"
-                                      "path = \"src/core.s\"\n"
-                                      "\n"
-                                      "[dependencies]\n"
-                                      "zeta.lib = \"2.0.0\"\n"
-                                      "alpha.lib = \"1.0.0\"\n";
+  const std::string manifest_source = R"yaml(schema: "sputnik.build.v1"
+name: "demo.pkg"
+version: "0.1.0"
+source_root: "."
+files:
+  - "src/extra.s"
+  - "src/core.s"
+module_names:
+  "src/extra.s": "demo.extra"
+  "src/core.s": "demo.core"
+dependencies:
+  zeta.lib: "2.0.0"
+  alpha.lib: "1.0.0"
+)yaml";
 
   sputnik::pkg::PackageManifestResult parsed =
-      sputnik::pkg::parse_manifest_toml(manifest_source, "sputnik.toml");
+      sputnik::pkg::parse_manifest(manifest_source, "sputnik.build.yaml");
   expect(parsed.ok(), "sample manifest should parse");
   return parsed.manifest;
 }
@@ -81,22 +79,24 @@ void test_manifest_and_lock_are_deterministic() {
 }
 
 void test_capability_manifest_and_policy_resolution() {
-  const std::string manifest_source = "[package]\n"
-                                      "name = \"caps.pkg\"\n"
-                                      "version = \"0.1.0\"\n"
-                                      "root = \"caps.core\"\n"
-                                      "\n"
-                                      "[[modules]]\n"
-                                      "name = \"caps.core\"\n"
-                                      "path = \"src/core.s\"\n"
-                                      "\n"
-                                      "[capabilities]\n"
-                                      "fs.read = [\"./data\"]\n"
-                                      "net.connect = [\"api.example:443\"]\n"
-                                      "time = true\n"
-                                      "ffi = false\n";
+  const std::string manifest_source = R"yaml(schema: "sputnik.build.v1"
+name: "caps.pkg"
+version: "0.1.0"
+source_root: "."
+files:
+  - "src/core.s"
+module_names:
+  "src/core.s": "caps.core"
+capabilities:
+  fs.read:
+    - "./data"
+  net.connect:
+    - "api.example:443"
+  time: true
+  ffi: false
+)yaml";
   const sputnik::pkg::PackageManifestResult parsed =
-      sputnik::pkg::parse_manifest_toml(manifest_source, "sputnik.toml");
+      sputnik::pkg::parse_manifest(manifest_source, "sputnik.build.yaml");
   expect(parsed.ok(), "capability manifest should parse");
   expect(parsed.manifest.capabilities.size() == 4,
          "capability manifest should canonicalize aliases");
@@ -198,42 +198,55 @@ void test_registry_publish_and_install_smoke() {
 
 void test_native_extension_manifest() {
   const std::string source =
-      "[package]\n"
-      "name = \"crypto.blake3\"\n"
-      "version = \"0.1.0\"\n"
-      "root = \"crypto.blake3\"\n"
-      "\n"
-      "[[modules]]\n"
-      "name = \"crypto.blake3\"\n"
-      "path = \"src/blake3.s\"\n"
-      "\n"
-      "[[native]]\n"
-      "name = \"blake3\"\n"
-      "language = \"c\"\n"
-      "sources = [\"native/blake3.c\", \"native/sputnik_blake3.c\"]\n"
-      "include_dirs = [\"native/include\"]\n"
-      "cxxflags = [\"-O3\"]\n"
-      "library_dirs = [\"vendor/lib\"]\n"
-      "runtime_library_dirs = [\"@loader_path/lib\"]\n"
-      "blocking_symbols = [\"blake3.wait\"]\n"
-      "\n"
-      "[native.symbols]\n"
-      "\"blake3.hash\" = \"sputnik_blake3_hash\"\n"
-      "\"blake3.hasher_free\" = \"sputnik_blake3_hasher_free\"\n"
-      "\n"
-      "[[native.types]]\n"
-      "sputnik = \"crypto.blake3.Hasher\"\n"
-      "tag = \"blake3.Hasher\"\n"
-      "ownership = \"owned\"\n"
-      "destructor = \"blake3.hasher_free\"\n"
-      "\n"
-      "[[native.errors]]\n"
-      "name = \"crypto.blake3.HashError\"\n"
-      "parent = \"NativeError\"\n"
-      "default_message = \"hash failed\"\n";
+      R"yaml(schema: "sputnik.build.v1"
+name: "crypto.blake3"
+version: "0.1.0"
+source_root: "."
+profiles:
+  required:
+    - "core.v1"
+    - "ffi.v1"
+files:
+  - "src/blake3.s"
+  - "native/blake3.c"
+  - "native/sputnik_blake3.c"
+module_names:
+  "src/blake3.s": "crypto.blake3"
+native_extensions:
+  -
+      name: "blake3"
+      language: "c"
+      sources:
+        - "native/blake3.c"
+        - "native/sputnik_blake3.c"
+      include_dirs:
+        - "native/include"
+      cxxflags:
+        - "-O3"
+      library_dirs:
+        - "vendor/lib"
+      runtime_library_dirs:
+        - "@loader_path/lib"
+      blocking_symbols:
+        - "blake3.wait"
+      symbols:
+        blake3.hash: "sputnik_blake3_hash"
+        blake3.hasher_free: "sputnik_blake3_hasher_free"
+      types:
+        -
+            sputnik: "crypto.blake3.Hasher"
+            tag: "blake3.Hasher"
+            ownership: "owned"
+            destructor: "blake3.hasher_free"
+      errors:
+        -
+            name: "crypto.blake3.HashError"
+            parent: "NativeError"
+            default_message: "hash failed"
+)yaml";
 
   sputnik::pkg::PackageManifestResult parsed =
-      sputnik::pkg::parse_manifest_toml(source, "sputnik.toml");
+      sputnik::pkg::parse_manifest(source, "sputnik.build.yaml");
   expect(parsed.ok(), "native manifest should parse");
   expect(parsed.manifest.native_extensions.size() == 1,
          "one native extension parsed");
@@ -331,25 +344,33 @@ void test_native_extension_manifest() {
          "native blob digest mismatch should be rejected");
 
   const std::string base =
-      "[package]\nname = \"p\"\nversion = \"0.1.0\"\nroot = \"p\"\n"
-      "[[modules]]\nname = \"p\"\npath = \"p.s\"\n";
-  sputnik::pkg::PackageManifestResult bad_owner = sputnik::pkg::parse_manifest_toml(
-      base + "[[native]]\nname = \"x\"\n[[native.types]]\nsputnik = \"P.T\"\n"
-             "tag = \"x.T\"\nownership = \"weird\"\n",
-      "sputnik.toml");
-  expect(!bad_owner.ok(), "invalid native ownership is rejected");
-  sputnik::pkg::PackageManifestResult no_dtor = sputnik::pkg::parse_manifest_toml(
-      base + "[[native]]\nname = \"x\"\n[[native.types]]\nsputnik = \"P.T\"\n"
-             "tag = \"x.T\"\nownership = \"owned\"\n",
-      "sputnik.toml");
-  expect(!no_dtor.ok(), "owned native type without destructor is rejected");
-  sputnik::pkg::PackageManifestResult orphan = sputnik::pkg::parse_manifest_toml(
-      base + "[native.symbols]\n\"a\" = \"b\"\n", "sputnik.toml");
-  expect(!orphan.ok(), "native.symbols before [[native]] is rejected");
+      R"yaml(schema: "sputnik.build.v1"
+name: "p"
+version: "0.1.0"
+profiles: {required: [core.v1, ffi.v1]}
+source_root: "."
+files:
+  - "p.s"
+)yaml";
+  sputnik::pkg::PackageManifestResult bad_owner = sputnik::pkg::parse_manifest(
+      base + "native_extensions:\n  - name: x\n"
+             "    types: [{sputnik: P.T, tag: x.T, ownership: weird}]\n",
+      "sputnik.build.yaml");
+  expect(!bad_owner.ok() && bad_owner.diagnostics.front().message.find("ownership") != std::string::npos,
+         "invalid native ownership is rejected");
+  sputnik::pkg::PackageManifestResult no_dtor = sputnik::pkg::parse_manifest(
+      base + "native_extensions:\n  - name: x\n"
+             "    types: [{sputnik: P.T, tag: x.T, ownership: owned}]\n",
+      "sputnik.build.yaml");
+  expect(!no_dtor.ok() && no_dtor.diagnostics.front().message.find("destructor") != std::string::npos,
+         "owned native type without destructor is rejected");
+  sputnik::pkg::PackageManifestResult orphan = sputnik::pkg::parse_manifest(
+      base + "native_extensions: {symbols: {a: b}}\n", "sputnik.build.yaml");
+  expect(!orphan.ok(), "native symbols require an extension array entry");
   sputnik::pkg::PackageManifestResult native_caps =
-      sputnik::pkg::parse_manifest_toml(
-          base + "[[native]]\nname = \"x\"\ncapabilities = [\"ffi\"]\n",
-          "sputnik.toml");
+      sputnik::pkg::parse_manifest(
+          base + "native_extensions:\n  - name: x\n    capabilities: [ffi]\n",
+          "sputnik.build.yaml");
   expect(!native_caps.ok(), "native extension capabilities are rejected");
 }
 

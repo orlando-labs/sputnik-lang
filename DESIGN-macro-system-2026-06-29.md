@@ -329,6 +329,13 @@ syntax Sputnik already has:
    a macro; otherwise it remains an ordinary runtime call with a block. This
    also applies to dotted module members such as `sqlite3.memory |db|:` when
    that member is not a macro export.
+
+   A bare adjacent `name: expression` also supports an inline block, including
+   Map-valued bodies such as `json: {ok: true}`. The same suffix is available in
+   expression position (`result = collect: value`). A spaced `name :symbol`
+   does not introduce an inline block. Indented `name:` retains its existing
+   parsing, including whitespace before the colon. No format-specific parser
+   rules or additional keywords are involved.
 3. **Annotation** — a declaration is annotated by one or more *bare* macro calls
    on their own lines immediately above it, with **no sigil**:
 
@@ -444,7 +451,7 @@ syntax Sputnik already has:
    expansion time. See [runtime template loops](docs/engineering/string-template-loops-v1.md).
    Only `%for`, `%#` and `%%` are shipped; conditional directives remain future.
 
-   External `.sv` bodies use `@template` on a declaration-only function and a
+   External `.sv` bodies use `template` on a declaration-only function and a
    build-manifest source-format registration. The compiler loads source before
    expansion, preserves external spans / `Ast.source`, and supplies normal
    provider imports. `AstQualifiedRef {module, name}` is the explicit runtime

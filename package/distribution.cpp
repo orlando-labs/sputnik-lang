@@ -65,12 +65,7 @@ std::string quote(const std::string &value) {
   out << '"';
   return out.str();
 }
-std::string trim(std::string value) {
-  const auto start = value.find_first_not_of(" \t\r\n");
-  if (start == std::string::npos)
-    return {};
-  return value.substr(start, value.find_last_not_of(" \t\r\n") - start + 1);
-}
+
 void path_check(const std::string &path) {
   if (path.empty() || path.size() > 1024 || path.front() == '/')
     fail("invalid member path: " + path);
@@ -268,9 +263,9 @@ void source_module(const PackageModule &module, const std::string &source) {
     fail("invalid source encoding/tokens: " + module.path);
   parser::Parser parser(tokens.tokens);
   const auto parsed = parser.parse_module_unit();
-  if (!parsed.ok() || parsed.module_name != module.name)
+  if (!parsed.ok() || (!parsed.module_name.empty() && parsed.module_name != module.name))
     fail("source package declaration/syntax does not match manifest: " +
-         module.path);
+         module.path + "\n" + lexer::diagnostics_to_json(parsed.diagnostics));
 }
 using Facts = std::map<std::string, std::string>;
 std::string build_metadata(const PackageManifest &m,
@@ -318,7 +313,9 @@ std::string build_metadata(const PackageManifest &m,
       out << quote(file) << ':' << quote(digests.at(file));
     }
     std::string symbols;
-    for (const auto &symbol : n.symbols)
+    auto sorted_symbols = n.symbols;
+    std::sort(sorted_symbols.begin(), sorted_symbols.end(), [](const auto &a, const auto &b) { return a.logical < b.logical; });
+    for (const auto &symbol : sorted_symbols)
       symbols += symbol.logical + "=" + symbol.symbol + "\n";
     out << "},\"declared_symbols_sha256\":" << quote(lexer::sha256_hex(symbols))
         << '}';
@@ -326,24 +323,7 @@ std::string build_metadata(const PackageManifest &m,
   out << "]\n}\n";
   return out.str();
 }
-void array(std::ostream &out, const char *key,
-           const std::vector<std::string> &values) {
-  if (values.empty())
-    return;
-  out << key << " = [";
-  bool first = true;
-  for (const auto &value : values) {
-    if (!first)
-      out << ", ";
-    first = false;
-    out << quote(value);
-  }
-  out << "]\n";
-}
-void field(std::ostream &out, const char *name, const std::string &value) {
-  if (!value.empty())
-    out << name << " = " << quote(value) << '\n';
-}
+
 struct Input {
   fs::path file;
   std::string bytes;
@@ -377,7 +357,7 @@ fs::path contained(const fs::path &root, const std::string &path) {
 }
 void add_file(Inputs &inputs, const fs::path &root, const std::string &name,
               const Limits &lim) {
-  if (name == "sputnik.toml" || name == "checksums.sha256")
+  if (name == "sputnik.build.json" || name == "sputnik.build.yaml" || name == "sputnik.build.yml" || name == "checksums.sha256")
     fail("packlist replaces package metadata");
   auto file = contained(root, name);
   if (fs::is_directory(file)) {
@@ -422,48 +402,16 @@ struct ArchiveDeleter {
   }
 };
 using Archive = std::unique_ptr<struct archive, ArchiveDeleter>;
-void validate_manifest_text(const std::string &text) {
-  if (text.size() > MiB)
-    fail("manifest exceeds 1 MiB");
-  std::istringstream lines(text);
-  std::string line, section;
-  std::set<std::string> keys;
-  unsigned record = 0, native = 0;
-  std::set<std::string> tables;
-  while (std::getline(lines, line)) {
-    line = trim(line);
-    if (line.empty() || line.front() == '#')
-      continue;
-    if (line.front() == '[') {
-      if (line.rfind("[[", 0) == 0) {
-        ++record;
-        if (line == "[[native]]")
-          ++native;
-      } else {
-        const auto table =
-            line == "[native.symbols]" ? line + std::to_string(native) : line;
-        if (!tables.insert(table).second)
-          fail("duplicate manifest table: " + line);
-      }
-      section = line + ":" + std::to_string(record);
-      continue;
-    }
-    auto equals = line.find('=');
-    if (equals == std::string::npos ||
-        !keys.insert(section + ":" + trim(line.substr(0, equals))).second)
-      fail("duplicate or malformed manifest field");
-  }
-}
 PackageManifest manifest(const std::string &text) {
-  validate_manifest_text(text);
-  auto parsed = parse_manifest_toml(text, "sputnik.toml");
+  if (text.size() > MiB) fail("manifest exceeds 1 MiB");
+  auto parsed = parse_manifest(text, "sputnik.build.json");
   if (!parsed.ok()) {
     std::string message;
     for (const auto &d : parsed.diagnostics)
       message += d.message + "\n";
     fail(message);
   }
-  if (parsed.manifest.schema != "sputnik.package-manifest.v1")
+  if (parsed.manifest.schema != "sputnik.build.v1")
     fail("unsupported distribution manifest schema");
   identity(parsed.manifest);
   return parsed.manifest;
@@ -697,11 +645,11 @@ ReadResult read_archive(const fs::path &file,
     const auto signed_size = archive_entry_size(entry);
     if (signed_size < 0 || std::uint64_t(signed_size) > lim.member)
       fail("member exceeds size budget");
-    if (result.info.members.empty() && path != "sputnik.toml")
+    if (result.info.members.empty() && path != "sputnik.build.json")
       fail("manifest must be the first archive member");
     if (result.info.members.size() == 1 && path != "checksums.sha256")
       fail("inventory must be the second archive member");
-    const bool metadata = path == "sputnik.toml" ||
+    const bool metadata = path == "sputnik.build.json" ||
                           path == "checksums.sha256" ||
                           path == "meta/build.json";
     if (metadata && signed_size > static_cast<std::int64_t>(MiB))
@@ -772,7 +720,7 @@ ReadResult read_archive(const fs::path &file,
     member_digests[path] = result.info.members.back().sha256;
     if (metadata)
       result.metadata[path] = captured;
-    if (path == "sputnik.toml") {
+    if (path == "sputnik.build.json") {
       result.info.manifest = manifest(captured);
       if (!required_profile.empty() && result.info.manifest.limit_profile != required_profile)
         fail("archive profile differs from admitted profile");
@@ -821,6 +769,11 @@ ReadResult read_archive(const fs::path &file,
       if (!inventory.count(m.path) || inventory.at(m.path) != m.sha256)
         fail("member digest mismatch: " + m.path);
     }
+  if (result.info.manifest.explicit_files) {
+    std::set<std::string> expected(result.info.manifest.files.begin(), result.info.manifest.files.end());
+    expected.insert("sputnik.build.json"); expected.insert("checksums.sha256");
+    if (expected != paths) fail("archive files differ from manifest inventory");
+  }
   for (const auto &m : result.info.manifest.modules) {
     if (!paths.count(m.path))
       fail("missing module member: " + m.path);
@@ -902,145 +855,8 @@ std::string file_sha256(const fs::path &file) {
   return hash.finish();
 }
 
-std::string render_distribution_manifest(const PackageManifest &m) {
-  std::ostringstream out;
-  out << "schema = \"sputnik.package-manifest.v1\"\n\n[package]\n";
-  field(out, "kind", m.kind);
-  field(out, "name", m.name);
-  field(out, "version", m.version);
-  field(out, "root", m.root_module);
-  out << "\n[artifact]\n";
-  field(out, "variant", m.variant);
-  field(out, "limit_profile", m.limit_profile);
-  field(out, "bundle", m.bundle);
-  if (!m.artifact_dependencies.empty()) {
-    out << "\n[artifact.dependencies]\n";
-    for (const auto &d : m.artifact_dependencies)
-      out << quote(d.name) << " = " << quote(d.version) << '\n';
-  }
-  if (!m.artifact_build_dependencies.empty()) {
-    out << "\n[artifact.build-dependencies]\n";
-    for (const auto &d : m.artifact_build_dependencies)
-      out << quote(d.name) << " = " << quote(d.version) << '\n';
-  }
-  for (const auto &r : m.native_requirements) {
-    out << "\n[[native_requirements]]\n";
-    field(out, "id", r.id);
-    field(out, "kind", r.kind);
-    field(out, "version", r.version);
-    field(out, "abi", r.abi);
-    field(out, "build_id", r.build_id);
-    field(out, "provider", r.provider);
-    field(out, "runtime", r.runtime);
-    field(out, "package", r.package);
-    array(out, "libraries", r.libraries);
-  }
-  for (const auto &p : m.native_providers) {
-    out << "\n[[native_providers]]\n";
-    field(out, "id", p.id);
-    field(out, "kind", p.kind);
-    field(out, "version", p.version);
-    field(out, "abi", p.abi);
-    field(out, "build_id", p.build_id);
-    field(out, "runtime_build_id", p.runtime_build_id);
-    array(out, "include_dirs", p.include_dirs);
-    array(out, "library_dirs", p.library_dirs);
-    array(out, "link_libraries", p.link_libraries);
-    array(out, "files", p.files);
-    for (const auto &l : p.libraries) {
-      out << "\n[[native_providers.libraries]]\n";
-      field(out, "path", l.path);
-      field(out, "role", l.role);
-      field(out, "abi", l.abi);
-    }
-  }
-  out << "\n[target]\n";
-
-  field(out, "os", m.target.os);
-  field(out, "arch", m.target.arch);
-  field(out, "min_os", m.target.min_os);
-  field(out, "libc", m.target.libc);
-  field(out, "min_libc", m.target.min_libc);
-  field(out, "compute_backend", m.target.compute_backend);
-  array(out, "cpu_features", m.target.cpu_features);
-  array(out, "compute_backends", m.target.compute_backends);
-  field(out, "cuda_version", m.target.cuda_version);
-  field(out, "min_cuda_driver", m.target.min_cuda_driver);
-  array(out, "cuda_architectures", m.target.cuda_architectures);
-  auto modules = m.modules;
-  std::sort(modules.begin(), modules.end(),
-            [](const auto &a, const auto &b) { return a.name < b.name; });
-  for (const auto &module : modules) {
-    out << "\n[[modules]]\n";
-    field(out, "name", module.name);
-    field(out, module.representation.c_str(), module.path);
-  }
-  if (!m.dependencies.empty()) {
-    out << "\n[dependencies]\n";
-    auto deps = m.dependencies;
-    std::sort(deps.begin(), deps.end(),
-              [](const auto &a, const auto &b) { return a.name < b.name; });
-    for (const auto &d : deps)
-      out << quote(d.name) << " = " << quote(d.version) << '\n';
-  }
-  if (!m.capabilities.empty()) {
-    out << "\n[capabilities]\n";
-    std::map<std::string, std::vector<std::string>> caps;
-    for (const auto &cap : m.capabilities)
-      caps[cap.name].push_back(cap.target);
-    for (const auto &cap : caps)
-      array(out, quote(cap.first).c_str(), cap.second);
-  }
-  for (const auto &n : m.native_extensions) {
-    out << "\n[[native]]\n";
-    field(out, "name", n.name);
-    field(out, "kind", n.kind);
-    if (n.kind == "prebuilt") {
-      field(out, "library", n.library);
-      out << "sputnik_ext_abi = " << n.sputnik_ext_abi_version << '\n';
-    } else
-      field(out, "language", n.language);
-    const std::pair<const char *, const std::vector<std::string> *> arrays[] = {
-        {"requirements", &n.requirements},
-        {"sources", &n.sources},
-        {"headers", &n.headers},
-        {"include_dirs", &n.include_dirs},
-        {"defines", &n.defines},
-        {"cxxflags", &n.cxxflags},
-        {"link_libraries", &n.link_libraries},
-        {"library_dirs", &n.library_dirs},
-        {"runtime_library_dirs", &n.runtime_library_dirs},
-        {"blocking_symbols", &n.blocking_symbols},
-        {"required_runtime_features", &n.required_runtime_features}};
-    for (const auto &item : arrays)
-      array(out, item.first, *item.second);
-    if (!n.symbols.empty()) {
-      out << "\n[native.symbols]\n";
-      for (const auto &sym : n.symbols)
-        out << quote(sym.logical) << " = " << quote(sym.symbol) << '\n';
-    }
-    for (const auto &t : n.types) {
-      out << "\n[[native.types]]\n";
-      field(out, "sputnik", t.sputnik);
-      field(out, "tag", t.tag);
-      field(out, "ownership", t.ownership);
-      field(out, "destructor", t.destructor);
-    }
-    for (const auto &e : n.errors) {
-      out << "\n[[native.errors]]\n";
-      field(out, "name", e.name);
-      field(out, "parent", e.parent);
-      field(out, "default_message", e.default_message);
-      field(out, "default_exit_code", e.default_exit_code);
-    }
-    for (const auto &lib : n.libraries) {
-      out << "\n[[native.libraries]]\n";
-      field(out, "path", lib.path);
-      field(out, "role", lib.role);
-      field(out, "abi", lib.abi);
-    }
-  }
-  return out.str();
+std::string render_distribution_manifest(const PackageManifest &manifest) {
+  return render_manifest(manifest);
 }
 
 DistributionInfo build_distribution(const PackageManifest &input,
@@ -1049,7 +865,27 @@ DistributionInfo build_distribution(const PackageManifest &input,
                                     const DistributionBuildOptions &options) {
   const auto root = fs::canonical(directory);
   PackageManifest m = input;
-  m.schema = "sputnik.package-manifest.v1";
+  if (m.explicit_files) {
+    const std::set<std::string> files(m.files.begin(), m.files.end());
+    for (const auto &file : files)
+      if (!fs::is_regular_file(contained(root, file))) fail("files must list regular files: " + file);
+    const auto declared = [&](const std::string &file) {
+      if (!files.count(file)) fail("native input is absent from files: " + file);
+    };
+    for (const auto &n : m.native_extensions) {
+      for (const auto *items : {&n.sources, &n.headers}) for (const auto &file : *items) declared(file);
+      if (n.kind == "prebuilt") declared(n.library);
+      for (const auto &lib : n.libraries) declared(lib.path);
+    }
+    for (const auto &provider : m.native_providers) {
+      for (const auto &file : provider.files) declared(file);
+      for (const auto &lib : provider.libraries) declared(lib.path);
+    }
+  }
+  for (const auto &dependency : m.dependencies)
+    if (dependency.source == "path")
+      fail("local path dependencies cannot be distributed; replace them with versioned dependencies: " + dependency.name);
+  m.schema = "sputnik.build.v1";
   if (!options.variant.empty())
     m.variant = options.variant;
   else if (m.variant == "source")
@@ -1090,8 +926,15 @@ DistributionInfo build_distribution(const PackageManifest &input,
   }
   if (chosen != options.bytecode_modules)
     fail("unknown --bytecode-module selection");
-  for (const auto &file : m.files)
+  for (const auto &file : m.files) {
+    // Explicit source files selected for bytecode delivery are replaced by their compiled payload.
+    const auto original = std::find_if(input.modules.begin(), input.modules.end(), [&](const auto &v) { return v.path == file; });
+    if (original != input.modules.end()) {
+      const auto selected = std::find_if(m.modules.begin(), m.modules.end(), [&](const auto &v) { return v.name == original->name; });
+      if (selected->path != original->path) continue;
+    }
     add_file(inputs, root, file, lim);
+  }
   for (const auto &n : m.native_extensions) {
     for (const auto *names : {&n.sources, &n.headers})
       for (const auto &file : *names)
@@ -1142,9 +985,10 @@ DistributionInfo build_distribution(const PackageManifest &input,
                              member_digests));
   }
   m.files.clear();
+  for (const auto &entry : inputs) m.files.push_back(entry.first);
   const auto manifest_text = render_distribution_manifest(m);
   manifest(manifest_text);
-  add_bytes(inputs, "sputnik.toml", manifest_text);
+  add_bytes(inputs, "sputnik.build.json", manifest_text);
   std::ostringstream inventory;
   std::uint64_t total = 0;
   std::vector<DistributionMember> members;
@@ -1187,9 +1031,9 @@ DistributionInfo build_distribution(const PackageManifest &input,
              a.get());
   archive_ok(archive_write_set_bytes_per_block(a.get(), 512), a.get());
   archive_ok(archive_write_open_filename(a.get(), temporary.c_str()), a.get());
-  std::vector<std::string> order{"sputnik.toml", "checksums.sha256"};
+  std::vector<std::string> order{"sputnik.build.json", "checksums.sha256"};
   for (const auto &item : inputs)
-    if (item.first != "sputnik.toml" && item.first != "checksums.sha256")
+    if (item.first != "sputnik.build.json" && item.first != "checksums.sha256")
       order.push_back(item.first);
   std::array<char, 65536> buffer{};
   for (const auto &path : order) {
@@ -1292,9 +1136,9 @@ Facts provider_inventory(const fs::path &root) {
     if (!inventory.emplace(path, line.substr(0, 64)).second)
       fail("duplicate provider inventory member");
   }
-  if (!inventory.count("sputnik.toml") ||
-      file_sha256(provider_file(root, "sputnik.toml")) !=
-          inventory.at("sputnik.toml"))
+  if (!inventory.count("sputnik.build.json") ||
+      file_sha256(provider_file(root, "sputnik.build.json")) !=
+          inventory.at("sputnik.build.json"))
     fail("provider manifest/inventory mismatch");
   return inventory;
 }
@@ -1394,7 +1238,7 @@ prepare_native_providers(const PackageManifest &m, const fs::path &root,
       if (path.empty())
         fail("empty native provider binding");
       const auto base = fs::canonical(path);
-      const auto descriptor = manifest(provider_read(base / "sputnik.toml"));
+      const auto descriptor = manifest(provider_read(base / "sputnik.build.json"));
       if (descriptor.kind != "native")
         fail("external binding needs a native provider descriptor");
       // Reuse the static archive target contract on the selected host.
@@ -1437,7 +1281,7 @@ prepare_native_providers(const PackageManifest &m, const fs::path &root,
         policy.backend = m.target.compute_backend == "none" ? "cpu" : m.target.compute_backend;
         const auto artifact = find_registry_package(package_home(),d.name,d.version,policy);
         const auto base = artifact.parent_path();
-        const auto descriptor = manifest(provider_read(base / "sputnik.toml"));
+        const auto descriptor = manifest(provider_read(base / "sputnik.build.json"));
         for (const auto &p : descriptor.native_providers) select(p,base);
       }
     } else {

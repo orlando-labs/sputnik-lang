@@ -62,6 +62,7 @@ public:
   void delete_input(const std::string &id);
   void save_board(const sputnik::notebook::ProjectBoard &board);
   void set_retain_cell_results(bool enabled);
+  void set_resource_policy(const std::string &json);
   bool restore_inputs(const std::map<std::string, std::string> &values);
   void edit_component_data(const sputnik::notebook::ProjectComponentDataEdit &);
   void edit_audio(const sputnik::notebook::ProjectAudioEdit &edit);

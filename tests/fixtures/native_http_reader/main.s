@@ -13,6 +13,23 @@ def main():
     16384.times:
       file.write_all!("part\n".bytes)
     file.sync!()
+  fs.File.open(path, :read) |file|:
+    total = 0
+    chunks = 0
+    result = file.each_chunk(size: 1024, timeout: 5.0) |chunk|:
+      check(Bytes === chunk and chunk.count > 0 and chunk.count <= 1024, "file chunks are bounded Bytes")
+      total += chunk.count
+      chunks += 1
+    check(result == null and total == 81920 and chunks > 1, "file each_chunk reads through EOF")
+  opened = null
+  interrupted = false
+  try:
+    fs.File.open(path, :read) |file|:
+      opened = file
+      file.each_chunk(size: 1024) |chunk|: raise ValueError("interrupted reader")
+  rescue ValueError:
+    interrupted = true
+  check(interrupted and opened.closed?, "file each_chunk propagates callback errors through scoped cleanup")
   server = Server(host: "127.0.0.1", port: 0, workers: 1)
   runner = task.spawn:
     server.serve(max_requests: 3) |request|:
@@ -33,6 +50,10 @@ def main():
     fs.File.open(empty, :write, create: true, exclusive: true, permissions: 384) |file|:
       file.write_all!("".bytes)
     fs.File.open(empty, :read) |file|:
+      count = 0
+      file.each_chunk |chunk|:
+        count += 1
+      check(count == 0, "empty file each_chunk does not invoke the callback")
       response = client.put(url, headers: {connection: "close"}, body: RequestBody.from_reader(file, length: 0))
       check(response.body_text == "0", "empty reader must send length zero")
     fs.remove(empty)

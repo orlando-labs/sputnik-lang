@@ -1,5 +1,6 @@
 #include "frontend/lexer/lexer.h"
 #include "frontend/parser/parser.h"
+#include "frontend/templates/templates.h"
 
 #include <cstdlib>
 #include <iostream>
@@ -544,6 +545,54 @@ void test_indented_postfix_continuation() {
   expect(string_field(*tails.values[0], "name") == "each",
          "continued member name");
   expect(tails.values[1]->kind == "AstTailCall", "continued bare call");
+}
+
+void test_call_arguments_do_not_cross_statement_lines() {
+  for (const std::string &result : {"(2, 3)", "finish 2", "[2, 3]",
+                                   "{value: 2}", "(a, b) = pair"}) {
+    auto parsed = parse_module_raw("def example():\n"
+                                   "  values.each:\n"
+                                   "    1\n"
+                                   "  " + result + "\n");
+    expect(parsed.ok(), "expression after block parses: " + result);
+    const auto &body = list_field(*parsed.items[0], "body");
+    expect(body.values.size() == 2,
+           "expression after block is a separate statement: " + result);
+    const auto &tails = list_field(node_field(*body.values[0], "expr"), "tails");
+    expect(tails.values.size() == 2 &&
+               tails.values.back()->kind == "AstTailBlockSuffix",
+           "following expression is not attached as call arguments");
+  }
+
+  auto plain = parse_module_raw("def example():\n"
+                                "  database.bind!(1, 2).or_raise\n"
+                                "  (database, 42)\n");
+  expect(plain.ok(), "tuple after nullary method parses");
+  const auto &plain_body = list_field(*plain.items[0], "body");
+  expect(plain_body.values.size() == 2 &&
+             node_field(*plain_body.values[1], "expr").kind == "AstTupleLiteral",
+         "tuple after nullary method remains an implicit return");
+
+  expect(!parse_raw("(invoke\n  argument)\n").ok(),
+         "delimiters do not allow a bare argument on a new physical line");
+  expect(!parse_raw("(invoke\n  (argument))\n").ok(),
+         "delimiters do not allow a call opener on a new physical line");
+  expect(!parse_raw("(invoke key:\n  value)\n").ok(),
+         "bare keyword values cannot start on another line");
+  auto tuple = parse_ok("(invoke first,\n second)\n");
+  expect(tuple->kind == "AstTupleLiteral" &&
+             list_field(*tuple, "elements").values.size() == 2,
+         "newline comma belongs to the outer tuple, not bare call arguments");
+  expect(parse_raw("invoke(\n  argument,\n  other\n)\n").ok(),
+         "parenthesized argument lists remain multiline");
+
+  auto continued = parse_module_raw("def example():\n"
+                                    "  values.map:\n"
+                                    "    1\n"
+                                    "  .first\n");
+  expect(continued.ok() &&
+             list_field(*continued.items[0], "body").values.size() == 1,
+         "explicit dot continues a call after a block");
 }
 
 void test_indented_boolean_continuation() {
@@ -1099,6 +1148,23 @@ void test_pattern_assignment_and_block_param_patterns() {
          "pattern assignment text preserved");
   expect(node_field(assign_expr, "right").kind == "AstName",
          "pattern assignment rhs preserved");
+}
+
+void test_relative_import_forms() {
+  const auto parsed = parse_module_raw(
+      "import \"../backend/models\" as models\n"
+      "from '../backend/models.s' import Account, Project as NotebookProject\n"
+      "import \"./unicode/модель\"\n");
+  expect(parsed.ok() && parsed.items.size() == 3, "relative import forms parse");
+  expect(string_field(*parsed.items[0], "relative_path") == "../backend/models",
+         "relative import retains its literal source path");
+  expect(string_field(*parsed.items[0], "alias") == "models", "relative namespace alias");
+  const auto &names = list_field(*parsed.items[1], "names");
+  expect(names.values.size() == 2 && string_field(*names.values[1], "local_name") == "NotebookProject",
+         "relative from-import aliases use the ordinary grammar");
+  for (const auto &source : {"import \"../#{name}\" as m\n", "import \"/absolute/module\" as m\n",
+                            "from \"plain/module\" import Item\n", "import \"../bad\\npath\" as m\n"})
+    expect(!parse_module_raw(source).ok(), "non-static or non-relative import paths are rejected");
 }
 
 void test_module_forms() {
@@ -2086,6 +2152,19 @@ void test_export_macro_marker() {
 }
 
 void test_bare_block_suffix_statement() {
+  {
+    auto module = parse_module_raw("respond:\n  json: {ok: true}\n  text: value\n");
+    expect(module.ok(), "adjacent bare inline blocks accept maps and names");
+    const auto &respond = node_field(*module.items[0], "expr");
+    const auto &block = node_field(*list_field(respond, "tails").values[0], "block");
+    expect(list_field(block, "body").values.size() == 2, "inline branches remain separate");
+    for (const auto &item : list_field(block, "body").values)
+      expect(list_field(node_field(*item, "expr"), "tails").values[0]->kind == "AstTailBlockSuffix", "inline branch is a block suffix");
+    auto symbol = parse_module_raw("method :symbol\n");
+    expect(symbol.ok(), "spaced symbol arguments remain valid");
+    auto expression = parse_module_raw("result = respond:\n  json: {ok: true}\n");
+    expect(expression.ok(), "bare block suffix is also an expression");
+  }
   // M5 trigger surface: `name:` + INDENT at statement position parses to a
   // postfix chain whose only tail is a block suffix (the macro DSL entry).
   {
@@ -2108,8 +2187,7 @@ void test_bare_block_suffix_statement() {
            "block carries the indented body");
   }
 
-  // The newline gate keeps every existing `name:` reading intact: control
-  // headers, map keys, and `quote:` are unaffected.
+  // Control headers, map keys and quote keep their existing readings.
   {
     sputnik::parser::ParseModuleResult control = parse_module_raw(
         "if ready:\n"
@@ -2234,9 +2312,44 @@ void test_v20_9_named_multiblock_parser_diagnostics() {
          "multiblock conflicts with anonymous block suffix");
 }
 
+void test_external_template_annotation_surface() {
+  const std::vector<sputnik::templates::SourceFormat> formats{
+      {".text.sv", "views", "text"}};
+  int loads = 0;
+  const auto loader = [&loads](const std::string &, const std::string &) {
+    ++loads;
+    return sputnik::templates::SourceInput{"page.text.sv", "#{title}"};
+  };
+  const std::string source = "template \"./page.text.sv\"\ndef page(title)\n";
+  auto parsed = parse_module_raw(source);
+  expect(parsed.ok(), "sigil-less template annotation parses as an ordinary call");
+  auto result = sputnik::templates::prepare(parsed.items, "views.s", source,
+                                           formats, loader);
+  expect(result.ok() && loads == 1 && result.sources.size() == 1,
+         "sigil-less annotation loads one external body");
+
+  for (const std::string ordinary : {
+           "class View:\n  def init(@template)\n"
+           "  def body(): @template(\"value\")\n",
+           "def invoke(template): template(\"value\")\n",
+           "def template(value): value\ntemplate(\"value\")\n",
+           "template = 42\ntemplate(\"value\")\n",
+           "from views import body as template\ntemplate(\"value\")\n",
+           "import views as template\ntemplate(\"value\")\n"}) {
+    auto scope = parse_module_raw(ordinary);
+    expect(scope.ok(), "ordinary template-named binding parses");
+    loads = 0;
+    auto prepared = sputnik::templates::prepare(scope.items, "ordinary.s",
+                                               ordinary, formats, loader);
+    expect(prepared.ok() && loads == 0 && prepared.sources.empty(),
+           "ivar, local call and module function are not external annotations");
+  }
+}
+
 } // namespace
 
 int main() {
+  test_external_template_annotation_surface();
   test_precedence();
   test_compound_assignment();
   test_new_binary_operators();
@@ -2251,6 +2364,7 @@ int main() {
   test_it_placeholder_aliases();
   test_indented_block_suffix_body();
   test_indented_postfix_continuation();
+  test_call_arguments_do_not_cross_statement_lines();
   test_indented_boolean_continuation();
   test_module_stray_indent_progresses();
   test_unicode_names();
@@ -2267,6 +2381,7 @@ int main() {
   test_effect_row_signature();
   test_pattern_assignment_and_block_param_patterns();
   test_module_forms();
+  test_relative_import_forms();
   test_property_forms();
   test_attribute_forms();
   test_attribute_diagnostics();

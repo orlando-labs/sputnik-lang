@@ -1,5 +1,11 @@
 # Native Packages: Best-Effort Native Sputnik + Mixed Sputnik/C/C++ Extensions
 
+Implementation update (2026-10-29): package and build configuration now share
+`sputnik.build.yaml` / `.json`, with `files`, `source_root`, optional name
+overrides, dependencies and capabilities. See [the current contract](docs/engineering/build-v1.md#packages-use-the-same-manifest).
+The TOML discussion below records the original design.
+
+
 Status: design, 2026-06-20.
 Supersedes: `DESIGN-native-extension-packages-2026-06-17.md` (which framed the work
 as staged v1/v2 layers; this revision drops the layering in favour of a single

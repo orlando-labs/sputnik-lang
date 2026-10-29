@@ -1,0 +1,8 @@
+-- PASS losses VM
+-- PASS losses full native
+-- PASS losses_mps VM
+-- PASS losses_mps full native
+-- PASS normalization VM
+-- PASS normalization full native
+-- PASS normalization_mps VM
+-- PASS normalization_mps full native

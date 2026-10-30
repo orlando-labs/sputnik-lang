@@ -4,6 +4,7 @@
 #include <iomanip>
 #include <iterator>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <utility>
 
@@ -489,10 +490,35 @@ struct NsDesugarState {
   std::map<std::string, std::pair<std::string, std::string>> injects;
 };
 
+void hide_namespace_parameter(const Expr &param, NsDesugarState &state) {
+  if (const auto *name = find_string_field(param, "local_name")) state.aliases.erase(*name);
+  if (param.kind.rfind("AstPattern", 0) == 0) {
+    if (const auto *name = find_string_field(param, "name")) state.aliases.erase(*name);
+  }
+  for (const auto &field : param.node_fields) {
+    if (field.name == "pattern" && field.value) hide_namespace_parameter(*field.value, state);
+  }
+  for (const auto &field : param.list_fields) {
+    if (field.name == "elements" || field.name == "items")
+      for (const auto &item : field.values) if (item) hide_namespace_parameter(*item, state);
+  }
+}
+
 void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
                                 NsDesugarState &state) {
   if (!slot) {
     return;
+  }
+  // Parameters belong to the lexical receiver scope, even when their names
+  // match an outer import alias. Keep namespace linkage out of those sends.
+  std::optional<std::map<std::string, std::string>> outer_aliases;
+  Expr *signature = find_node_field(*slot, "signature");
+  ListField *parameters = signature ? find_list_field(*signature, "params") : nullptr;
+  if (slot->kind == "AstBlock" || slot->kind == "AstLambda")
+    parameters = find_list_field(*slot, "params");
+  if (parameters != nullptr) {
+    outer_aliases = state.aliases;
+    for (const auto &param : parameters->values) if (param) hide_namespace_parameter(*param, state);
   }
   if (slot->kind == "AstPostfixChain" && !state.aliases.empty()) {
     Expr *base = find_node_field(*slot, "base");
@@ -507,15 +533,16 @@ void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
       if (alias_it != state.aliases.end()) {
         const Expr &member_tail = *tails->values.front();
         const std::string *member = find_string_field(member_tail, "name");
-        // Preserve bare member reads: unlike an imported identifier, M.f
-        // invokes an exported nullary function. Explicit calls (including the
-        // generated call inside &M.f) can reuse named-import linkage.
+        // Preserve direct namespace reads for dynamic receiver dispatch. Explicit calls (including the
+        // generated call inside &M.f) and chained receivers reuse named-import
+        // linkage. Function-valued imported bases perform their own bare call.
         const std::string next_kind = tails->values.size() > 1U
             ? tails->values[1]->kind : std::string{};
         const bool explicit_call = next_kind == "AstTailCall" ||
             next_kind == "AstTailBlockSuffix" ||
             next_kind == "AstTailMultiblockSuffix";
-        if (member != nullptr && !member->empty() && explicit_call) {
+        const bool chained_member = next_kind == "AstTailDotMember";
+        if (member != nullptr && !member->empty() && (explicit_call || chained_member)) {
           const std::string synthetic = "__sputnik_ns__" +
                                         sanitize_ns_ident(alias_it->first) +
                                         "__" + sanitize_ns_ident(*member);
@@ -534,6 +561,7 @@ void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
       rewrite_namespace_calls_in(child, state);
     }
   }
+  if (outer_aliases) state.aliases = std::move(*outer_aliases);
 }
 
 std::unique_ptr<Expr> make_from_import(const std::string &module_path,

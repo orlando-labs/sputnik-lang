@@ -16,5 +16,6 @@ def factory(): &answer
 def invoke(&block): block()
 
 class Box:
+  class_method def build(): Box()
   def answer(): 9
   def through_self(): answer

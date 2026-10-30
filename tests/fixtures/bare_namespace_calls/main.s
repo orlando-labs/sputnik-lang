@@ -4,6 +4,8 @@ import "./provider" as provider
 from "./provider" import answer
 
 def through_parameter(provider): provider.answer
+def through_parameter_chain(provider): provider.answer.to_str
+def through_parameter_call(provider): provider.answer()
 
 raise ValueError("namespace bare call") unless provider.answer == 42
 reference = &provider.answer
@@ -26,8 +28,11 @@ raise ValueError("namespace block call") unless with_block == 42
 box_class = provider.Box
 box = box_class()
 raise ValueError("class export read") unless box.answer == 9
+raise ValueError("chained namespace class") unless provider.Box.build.answer == 9
 raise ValueError("implicit self bare call") unless box.through_self == 9
 raise ValueError("lexical namespace shadow") unless through_parameter(box) == 9
+raise ValueError("chained namespace shadow") unless through_parameter_chain(box) == "9"
+raise ValueError("explicit namespace shadow") unless through_parameter_call(box) == 9
 rejected = false
 try:
   provider.required

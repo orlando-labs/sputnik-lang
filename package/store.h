@@ -98,6 +98,8 @@ private:
   void bind_paths(const std::vector<PackageDependency> &dependencies,
                   const std::filesystem::path &declaring_directory);
   void discover();
+  void probe_accelerators_for(const PackageManifest &manifest,
+                              const VariantPolicy &policy);
   void read_lockfile();
   bool shadowed(const Candidate &candidate) const;
   void activate(std::size_t candidate);

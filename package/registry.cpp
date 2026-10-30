@@ -674,7 +674,7 @@ RegistryDownload download_registry_package(const std::string &origin,
   API api(origin, credentials);
   const auto canonical = canonical_package(api, name);
   auto location = base(canonical);
-  const auto host = probe_package_host(package_gpu_backend(policy.backend) || !policy.variant.empty());
+  const auto host = probe_package_host(policy.backend == "auto" || package_gpu_backend(policy.backend) || !policy.variant.empty());
   const auto select = [&](const Value &release) {
     if (release.at("artifacts").kind != Value::Array) fail("invalid artifact list");
     std::vector<PackageManifest> variants;

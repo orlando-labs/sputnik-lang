@@ -129,6 +129,8 @@ void rocm_devices(PackageHost &host) {
 }
 bool narrower(const PackageManifest &a, const PackageManifest &b) {
   const auto &x = a.target; const auto &y = b.target;
+  if (x.compute_backend != y.compute_backend && y.compute_backend != "none" &&
+      y.compute_backend != "cpu") return false;
   if (y.os != "any" && x.os != y.os) return false;
   if (y.arch != "any" && x.arch != y.arch) return false;
   if (!y.libc.empty() && x.libc != y.libc) return false;
@@ -222,9 +224,9 @@ std::string package_incompatibility(const PackageManifest &m, const PackageHost 
     if (source_native(m) && !p.build_from_source) return "native compilation requires --build-from-source";
     if (p.build_from_source && package_has_native(m) && !source_native(m)) return "source build requested";
   }
-  if (p.variant.empty() && t.compute_backend != "none" && !backend(t,p.backend)) return "different compute backend";
+  if (p.backend != "auto" && p.variant.empty() && t.compute_backend != "none" && !backend(t,p.backend)) return "different compute backend";
   const auto b = execution ? t.compute_backend : p.backend;
-  if (b == "mps" && !h.mps) return "MPS is unavailable";
+  if ((b == "mps" || t.compute_backend == "mps") && !h.mps) return "MPS is unavailable";
   if (((b == "rocm" && backend(t, "rocm")) || t.compute_backend == "rocm") && !h.rocm)
     return "ROCm GPU/runtime is unavailable";
   if ((b == "cuda" && backend(t,"cuda")) || t.compute_backend == "cuda") {
@@ -247,6 +249,32 @@ int select_package_variant(const std::vector<PackageManifest> &c, const PackageH
   std::vector<int> candidates;
   for (size_t i = 0; i < c.size(); ++i) if (package_incompatibility(c[i],h,p,execution).empty()) candidates.push_back(static_cast<int>(i));
   if (candidates.empty()) return -1;
+  // Automatic selection uses compatible accelerators first. Explicit CPU and
+  // backend policies still constrain eligibility, and equally suitable GPU
+  // families remain ambiguous rather than depending on discovery order.
+  const auto accelerated = [&](const PackageManifest &m) {
+    return p.backend == "auto" &&
+        ((backend(m.target, "cuda") && !h.cuda_architectures.empty() &&
+          minimum(h.cuda_driver, m.target.min_cuda_driver) &&
+          minimum(h.cuda_api_version, m.target.cuda_version) &&
+          std::all_of(h.cuda_architectures.begin(), h.cuda_architectures.end(),
+              [&](const auto &arch) { return std::find(m.target.cuda_architectures.begin(),
+                  m.target.cuda_architectures.end(), arch) != m.target.cuda_architectures.end(); })) ||
+         (backend(m.target, "rocm") && h.rocm) ||
+         (backend(m.target, "mps") && h.mps));
+  };
+  const bool has_accelerated = std::any_of(candidates.begin(), candidates.end(),
+      [&](int i) { return accelerated(c[i]); });
+  if (has_accelerated)
+    candidates.erase(std::remove_if(candidates.begin(), candidates.end(),
+        [&](int i) { return !accelerated(c[i]); }), candidates.end());
+  const auto delivery_rank = [&](const PackageManifest &m) {
+    // No compilation is implicit: source adapters already require consent at
+    // install time. Prepared execution and auto bundle selection prefer a
+    // prebuilt runtime over rebuilding the same target from thin sources.
+    return (source_native(m) ? 0 : 100) + (p.bundle != "auto" ? 0 :
+        m.bundle == "runtime" ? 20 : m.bundle == "none" ? 10 : 0);
+  };
   // With equal target/native selectors, prefer all-source module delivery.
   // Bytecode/mixed alternatives remain available through an explicit variant.
   // Distinct native builds with equivalent selectors are still ambiguous.
@@ -265,6 +293,7 @@ int select_package_variant(const std::vector<PackageManifest> &c, const PackageH
     bool dominated = false;
     for (int j : candidates) if (i != j &&
         ((narrower(c[j],c[i]) && !narrower(c[i],c[j])) ||
+         (narrower(c[j],c[i]) && narrower(c[i],c[j]) && delivery_rank(c[j]) > delivery_rank(c[i])) ||
          (narrower(c[j],c[i]) && narrower(c[i],c[j]) && same_native(c[j],c[i]) && !binary(c[j]) && binary(c[i])))) { dominated = true; break; }
     if (!dominated) best.push_back(i);
   }

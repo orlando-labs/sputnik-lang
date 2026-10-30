@@ -27,13 +27,25 @@ int main(int argc, char **argv) {
   VariantPolicy p;
   expect(select_package_variant({cpu,cuda},h,p)==-1,"native trust required");
   p.allow_native=true;
-  expect(select_package_variant({cpu,cuda},h,p)==0,"CPU remains default");
+  expect(select_package_variant({cpu,cuda},h,p)==1,"automatic selection prefers compatible CUDA");
+  p.backend="cpu";
+  expect(select_package_variant({cpu,cuda},h,p)==0,"explicit CPU selection retained");
   auto rocm=cpu; rocm.variant="linux-rocm643"; rocm.target.compute_backend="rocm";
   expect(select_package_variant({rocm},h,p)==-1,"ROCm never substitutes for a CPU install");
   p.backend="rocm";
   expect(select_package_variant({rocm},h,p)==-1,"unavailable HIP runtime/GPU rejected");
   auto amd=h; amd.cuda_architectures.clear(); amd.rocm=true;
   expect(select_package_variant({cpu,cuda,rocm},amd,p)==2,"ROCm backend selects AMD variant");
+  p.backend="auto";
+  expect(select_package_variant({cpu,cuda,rocm},amd,p)==2,"automatic selection prefers compatible ROCm");
+  auto without_gpu=amd; without_gpu.rocm=false;
+  expect(select_package_variant({cpu,cuda,rocm},without_gpu,p)==0,"automatic selection falls back to CPU without GPUs");
+  auto dual=h; dual.rocm=true;
+  bool dual_ambiguous=false;
+  try { select_package_variant({cuda,rocm},dual,p); }
+  catch(const std::runtime_error &e) { dual_ambiguous=std::string(e.what()).find("AMBIGUOUS")!=std::string::npos; }
+  expect(dual_ambiguous,"equally suitable CUDA and ROCm variants need an explicit choice");
+  p.backend="rocm";
   p.variant=rocm.variant;
   expect(select_package_variant({rocm},h,p)==-1,"explicit ROCm variant retains GPU checks");
   expect(select_package_variant({rocm},amd,p)==0,"explicit ROCm variant on AMD host");
@@ -94,5 +106,17 @@ int main(int argc, char **argv) {
   expect(select_package_variant({mixed,bc,text},h,p)==2,"source wins over mixed and bytecode module delivery");
   p.variant="mixed";
   expect(select_package_variant({mixed,bc,text},h,p)==0,"explicit mixed selection retained");
+  auto mac=h; mac.os="macos"; mac.arch="aarch64"; mac.os_version="26.0"; mac.mps=true;
+  auto mps=cpu; mps.variant="macos-runtime"; mps.target.os="macos"; mps.target.arch="aarch64";
+  mps.target.libc.clear(); mps.target.min_libc.clear(); mps.target.compute_backend="none";
+  mps.target.compute_backends={"cpu","mps"}; mps.bundle="runtime";
+  auto thin=mps; thin.variant="macos-source"; thin.bundle="none"; thin.native_extensions[0].kind="source";
+  p=VariantPolicy{}; p.allow_native=true;
+  expect(select_package_variant({thin,mps},mac,p)==1,"automatic bundle selection uses a prebuilt MPS runtime");
+  expect(select_package_variant({thin,mps},mac,p,true)==1,"installed prebuilt runtime preferred without a lock");
+  p.build_from_source=true;
+  expect(select_package_variant({thin,mps},mac,p)==0,"explicit source build retained under automatic selection");
+  auto required_mps=mps; required_mps.target.compute_backend="mps"; mac.mps=false;
+  expect(select_package_variant({required_mps},mac,p,true)==-1,"unavailable required MPS rejected in automatic mode");
   std::cout<<"package_selection_tests: PASS\n";
 }

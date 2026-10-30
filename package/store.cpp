@@ -324,7 +324,7 @@ fs::path find_registry_package(const fs::path &registry,
                              (requested.empty() ? "" : "@" + requested));
   std::sort(versions.begin(), versions.end(), version_less);
   // An unqualified install prefers a stable release over a prerelease.
-  const auto host = probe_package_host(package_gpu_backend(policy.backend) || !policy.variant.empty());
+  const auto host = probe_package_host(policy.backend == "auto" || package_gpu_backend(policy.backend) || !policy.variant.empty());
   for (bool stable : {true,false}) for (auto it = versions.rbegin(); it != versions.rend(); ++it) {
     if (requested.empty() && version(*it).prerelease.empty() != stable) continue;
     if (!requested.empty() && !stable) continue;
@@ -826,6 +826,19 @@ void PackageResolver::require(
     require_one(dependency);
 }
 
+void PackageResolver::probe_accelerators_for(const PackageManifest &manifest,
+                                            const VariantPolicy &policy) {
+  const auto &target = manifest.target;
+  const bool gpu = package_gpu_backend(target.compute_backend) ||
+      std::any_of(target.compute_backends.begin(), target.compute_backends.end(),
+                  [](const auto &backend) { return package_gpu_backend(backend); });
+  if (!accelerators_probed_ && gpu && (policy.backend == "auto" ||
+      package_gpu_backend(policy.backend) || !policy.variant.empty())) {
+    host_ = probe_package_host(true);
+    accelerators_probed_ = true;
+  }
+}
+
 void PackageResolver::require_one(const PackageDependency &dependency) {
   discover();
   const auto active = active_.find(dependency.name);
@@ -848,9 +861,7 @@ void PackageResolver::require_one(const PackageDependency &dependency) {
     auto policy = selection_;
     if (pin != pins_.end()) policy.variant = pin->second.variant;
     else if (variants_.count(dependency.name)) policy.variant = variants_.at(dependency.name);
-    if (!accelerators_probed_ && (package_gpu_backend(policy.backend) || (!policy.variant.empty() && package_gpu_backend(candidate.package.manifest.target.compute_backend)))) {
-      host_ = probe_package_host(true); accelerators_probed_ = true;
-    }
+    probe_accelerators_for(candidate.package.manifest, policy);
     const auto problem = package_incompatibility(candidate.package.manifest, host_, policy, true);
     if (!problem.empty()) {
       if (pin != pins_.end() && candidate.package.manifest.variant == pin->second.variant)
@@ -928,7 +939,7 @@ void PackageResolver::activate(std::size_t index) {
     throw std::runtime_error("package differs from sputnik.lock: " + name);
   auto execution = selection_;
   execution.variant = package.manifest.variant;
-  if (!accelerators_probed_ && package_gpu_backend(package.manifest.target.compute_backend)) { host_ = probe_package_host(true); accelerators_probed_ = true; }
+  probe_accelerators_for(package.manifest, execution);
   const auto incompatible = package_incompatibility(package.manifest, host_, execution, true);
   if (!incompatible.empty()) throw std::runtime_error("LOCK_TARGET_MISMATCH: " + name + ": " + incompatible);
   const auto matches = [](const PackageNativeRequirement &r, const PackageNativeProvider &p) {
@@ -1016,9 +1027,7 @@ PackageResolver::resolve(const std::string &module) {
     auto execution = selection_;
     if (pin != pins_.end()) execution.variant = pin->second.variant;
     else if (variants_.count(manifest.name)) execution.variant = variants_.at(manifest.name);
-    if (!accelerators_probed_ && (package_gpu_backend(execution.backend) || (!execution.variant.empty() && package_gpu_backend(manifest.target.compute_backend)))) {
-      host_ = probe_package_host(true); accelerators_probed_ = true;
-    }
+    probe_accelerators_for(manifest, execution);
     const auto problem = package_incompatibility(manifest, host_, execution, true);
     if (!problem.empty()) {
       if (pin != pins_.end() && manifest.variant == pin->second.variant) throw std::runtime_error("LOCK_TARGET_MISMATCH: " + manifest.name + ": " + problem);

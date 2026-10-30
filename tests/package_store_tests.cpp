@@ -1,4 +1,5 @@
 #include "package/store.h"
+#include "package/distribution.h"
 #include "tools/isputnik/dependencies.h"
 #include "tools/isputnik/project_session.h"
 #include "tools/isputnik/tabs.h"
@@ -96,6 +97,48 @@ void path_dependencies(const fs::path &root) {
   } catch (const std::exception &) { rejected = true; }
   expect(rejected, "changing local dependency edges requires a lock update");
 }
+void automatic_installed_backend(const fs::path &root) {
+  const auto host = sputnik::pkg::probe_package_host(true);
+  const std::string backend = host.rocm ? "rocm" : !host.cuda_architectures.empty() ? "cuda" : host.mps ? "mps" : "";
+  if (backend.empty()) return;
+  const auto app = root / "auto-consumer", home = root / "auto-home", source = root / "auto-source";
+  fs::create_directories(app);
+  write(source / "probe.s", "package auto_selection.probe\nexport answer\ndef answer(): 42\n");
+  sputnik::pkg::PackageManifest manifest;
+  manifest.name = "auto_selection"; manifest.version = "1.0.0";
+  manifest.root_module = "auto_selection.probe";
+  manifest.modules.push_back({manifest.root_module, "probe.s"});
+  manifest.target.os = host.os; manifest.target.arch = host.arch; manifest.target.libc = host.libc;
+  for (const auto &variant : {std::string("cpu"), backend}) {
+    manifest.variant = variant; manifest.target.compute_backend = variant;
+    if (variant == "cuda") {
+      manifest.target.cuda_version = host.cuda_api_version;
+      manifest.target.min_cuda_driver = host.cuda_driver;
+      manifest.target.cuda_architectures.assign(host.cuda_architectures.begin(), host.cuda_architectures.end());
+    }
+    const auto archive = root / ("auto-" + variant + ".sputnikpkg");
+    sputnik::pkg::build_distribution(manifest, source, archive);
+    sputnik::pkg::install_in_home(archive, home);
+  }
+  sputnik::pkg::PackageResolver automatic(app, home);
+  expect(automatic.resolve(manifest.root_module).has_value(), "installed GPU package imports without a lock");
+  expect(automatic.selected().front().manifest.variant == backend, "unlocked import selects the host's accelerator");
+  sputnik::pkg::PackageResolver explicit_cpu(app, home);
+  explicit_cpu.prefer_backend("cpu");
+  expect(explicit_cpu.resolve(manifest.root_module).has_value() && explicit_cpu.selected().front().manifest.variant == "cpu", "CPU override remains effective for installed variants");
+  sputnik::pkg::PackageResolver dependency(app, home);
+  dependency.require({{manifest.name, manifest.version, "registry", {}, {}}});
+  expect(dependency.selected().front().manifest.variant == backend, "declared dependency selects an installed accelerator without a lock");
+  const auto previous = std::getenv("SPUTNIK_NOTEBOOK_PACKAGE_HOME");
+  const bool had_previous = previous != nullptr;
+  const std::string saved = previous ? previous : "";
+  ::setenv("SPUTNIK_NOTEBOOK_PACKAGE_HOME", home.c_str(), 1);
+  sputnik::pkg::PackageResolver notebook(app, root / "empty-shared-home");
+  expect(notebook.resolve(manifest.root_module).has_value() && notebook.selected().front().manifest.variant == backend,
+         "notebook overlay selects its GPU package with no lock or shared installation");
+  if (had_previous) ::setenv("SPUTNIK_NOTEBOOK_PACKAGE_HOME", saved.c_str(), 1);
+  else ::unsetenv("SPUTNIK_NOTEBOOK_PACKAGE_HOME");
+}
 } // namespace
 
 int main(int argc, char **argv) {
@@ -187,6 +230,7 @@ int main(int argc, char **argv) {
   expect(created != nullptr, "temporary directory");
   const fs::path root(created), home = root / "home";
   path_dependencies(root);
+  automatic_installed_backend(root);
   const auto *previous = std::getenv("SPUTNIK_PKG_HOME");
   const std::string saved = previous ? previous : "";
   const bool had_previous = previous != nullptr;

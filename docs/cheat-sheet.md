@@ -423,6 +423,11 @@ settings can hold path overrides and template formats without listing sources
 or repeating the entry. `sputnik pkg lock backend/main.s` pins the package graph;
 local source edits stay live.
 
+Package installation and imports select a compatible host variant automatically,
+including GPU runtimes. `--backend cpu` forces CPU; `--backend` and `--bundle`
+default to `auto`. An optional lock pins exact variants and hashes; an installed
+GPU package does not require a lock to import.
+
 `import my.orm as orm` replaces the module path throughout the graph: `import orm`, `from orm import Model`, and dependency imports all use `my.orm`. Qualified aliases such as `import my.orm as vendor.orm` and submodule suffixes work too. Repeated imports of the same binding are allowed; the module initializes once. Scripts and notebook cells need no additional manifest.
 
 ## 12. Optional profiles and reference additions

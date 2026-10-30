@@ -49,9 +49,12 @@ sputnik pkg install slowpilot/sputniktorch --locked sputnik.lock \
   --allow-native --allow-native-large
 ```
 
-The default backend is CPU and the default bundle policy is `none`. CUDA/MPS/ROCm
-are explicit backend choices; the client then selects a compatible build within
-that backend. An explicit variant retains architecture, libc, CPU instruction,
+The default backend and bundle policy are `auto`. Installation and unlocked
+imports select the most suitable compatible variant for the current host,
+including CUDA, ROCm or MPS when available, with a CPU fallback. Among equivalent
+targets automatic selection prefers prebuilt runtime bundles over native source
+adapters and SDK bundles. `--backend cpu` explicitly retains CPU selection;
+other explicit backend/bundle policies constrain the automatic choice. An explicit variant retains architecture, libc, CPU instruction,
 driver, GPU capability and extension ABI checks. Native source builds additionally
 require `--build-from-source`; a missing or corrupt binary never causes an
 implicit compilation fallback. Equal or incomparable selectors fail with
@@ -105,7 +108,10 @@ requirements are errors. Public package dependencies currently use exact version
 ## Store and lock
 
 Tar distributions live at `<home>/<ref>/<version>/<variant>/`, including scoped
-references. Different variants coexist; one graph activates one variant per ref.
+references. Different variants coexist; one graph activates one variant per ref. Installed
+packages resolve without a lock using the current host and automatic policy.
+A lock is optional and pins exact variants for reproducibility; it is not required
+to import an installed GPU package.
 `pkg remove ref --version V` removes all variants; adding `--variant ID` removes
 one. Legacy local text-artifact layouts remain readable.
 
@@ -124,7 +130,8 @@ package, with its declared dependent libraries. Source module representation and
 native adapter representation remain independent.
 
 ROCm variants declare `compute_backend: rocm` and a Linux target. Explicit
-`--backend rocm` selects them; a CPU install does not select a ROCm-only runtime.
+`--backend rocm` selects them explicitly; automatic selection also chooses
+them on a compatible AMD host. Explicit CPU selection excludes ROCm-only runtimes.
 Host checks query `hipInit`/`hipGetDeviceCount` from the installed HIP C library,
 respecting HIP device visibility. A missing runtime or visible GPU rejects both
 automatic and exact-variant selection. LibTorch/ROCm versions and ABI identities

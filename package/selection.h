@@ -13,8 +13,8 @@ struct PackageHost {
 };
 struct VariantPolicy {
   std::string variant;
-  std::string backend = "cpu";
-  std::string bundle = "none";
+  std::string backend = "auto";
+  std::string bundle = "auto";
   bool allow_native = false;
   bool build_from_source = false;
   std::vector<PackageNativeRequirement> native_requirements;

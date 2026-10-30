@@ -4,6 +4,11 @@
 using namespace sputnik::pkg;
 void expect(bool ok, const char *message) { if (!ok) throw std::runtime_error(message); }
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--rocm-host") {
+    const auto host = probe_package_host(true);
+    std::cout << "rocm=" << host.rocm << '\n';
+    return host.rocm ? 0 : 1;
+  }
   if (argc == 2 && std::string(argv[1]) == "--cuda-host") {
     const auto host = probe_package_host(true);
     std::cout << "driver=" << host.cuda_driver << " api=" << host.cuda_api_version << " visible=";
@@ -23,6 +28,20 @@ int main(int argc, char **argv) {
   expect(select_package_variant({cpu,cuda},h,p)==-1,"native trust required");
   p.allow_native=true;
   expect(select_package_variant({cpu,cuda},h,p)==0,"CPU remains default");
+  auto rocm=cpu; rocm.variant="linux-rocm643"; rocm.target.compute_backend="rocm";
+  expect(select_package_variant({rocm},h,p)==-1,"ROCm never substitutes for a CPU install");
+  p.backend="rocm";
+  expect(select_package_variant({rocm},h,p)==-1,"unavailable HIP runtime/GPU rejected");
+  auto amd=h; amd.cuda_architectures.clear(); amd.rocm=true;
+  expect(select_package_variant({cpu,cuda,rocm},amd,p)==2,"ROCm backend selects AMD variant");
+  p.variant=rocm.variant;
+  expect(select_package_variant({rocm},h,p)==-1,"explicit ROCm variant retains GPU checks");
+  expect(select_package_variant({rocm},amd,p)==0,"explicit ROCm variant on AMD host");
+  auto wrong_os=rocm; wrong_os.target.os="macos";
+  bool invalid_rocm=false;
+  try { validate_package_target(wrong_os.target); } catch(const std::runtime_error &) { invalid_rocm=true; }
+  expect(invalid_rocm,"ROCm metadata requires Linux");
+  p.variant.clear();
   p.backend="cuda";
   expect(select_package_variant({cpu,cuda_old,cuda},h,p)==2,"newest compatible CUDA runtime");
   auto old=h; old.cuda_driver="565.0";

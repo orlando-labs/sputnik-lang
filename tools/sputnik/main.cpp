@@ -89,7 +89,7 @@ void usage(std::ostream &out) {
   out << "  sputnik lint <file.s>\n";
   out << "  sputnik run <source|manifest|file.sputnikbc> "
          "[--grant <cap[=target]>...] [-- <program-args>...]\n";
-  out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend cpu|cuda|mps] [--bundle none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE]\n";
+  out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend cpu|cuda|mps|rocm] [--bundle none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE]\n";
   out << "  sputnik pkg login [--namespace <name>] [--registry <url>] [--credentials <file>]\n";
   out << "  sputnik pkg versions <name> [--registry URL] [--credentials FILE] [--json]\n";
   out << "  sputnik pkg variants <name>@<version> [--registry URL] "
@@ -103,7 +103,7 @@ void usage(std::ostream &out) {
   out << "  sputnik pkg inspect|verify <file.sputnikpkg>\n";
   out << "  sputnik pkg extract <file.sputnikpkg> <new-directory>\n";
   out << "  sputnik pkg env\n";
-  out << "  sputnik pkg lock <source|manifest> [--backend cpu|cuda|mps] [--variant ref=ID]...\n";
+  out << "  sputnik pkg lock <source|manifest> [--backend cpu|cuda|mps|rocm] [--variant ref=ID]...\n";
   out << "  sputnik build <file.s> [-o <path>] [--out-dir <dir>] "
          "[--target native|native-debug|bytecode-wrapper] "
          "[--entry auto|init|main|main-only] [--grant <cap[=target]>...] "
@@ -29687,7 +29687,7 @@ int run_pkg_command(int argc, char **argv) {
       const std::string flag = argv[i];
       if (i+1 >= argc) throw std::runtime_error("missing pkg lock option value");
       const std::string value = argv[++i];
-      if (flag == "--backend" && (value == "cpu" || value == "cuda" || value == "mps")) resolver.prefer_backend(value);
+      if (flag == "--backend" && (value == "cpu" || value == "cuda" || value == "mps" || value == "rocm")) resolver.prefer_backend(value);
       else if (flag == "--variant") {
         const auto equals = value.find('=');
         if (equals == std::string::npos) throw std::runtime_error("pkg lock --variant requires ref=variant");
@@ -29765,7 +29765,7 @@ int run_pkg_command(int argc, char **argv) {
     else
       throw std::runtime_error("unknown pkg install option: " + arg);
   }
-  if (policy.backend != "cpu" && policy.backend != "cuda" && policy.backend != "mps") throw std::runtime_error("invalid --backend");
+  if (policy.backend != "cpu" && policy.backend != "cuda" && policy.backend != "mps" && policy.backend != "rocm") throw std::runtime_error("invalid --backend");
   if (policy.bundle != "none" && policy.bundle != "runtime" && policy.bundle != "sdk") throw std::runtime_error("invalid --bundle");
   std::map<std::string, sputnik::pkg::PackagePin> pins;
   std::map<std::string, sputnik::pkg::PackageNativeRequirement> native_constraints;
@@ -29836,7 +29836,7 @@ int run_pkg_command(int argc, char **argv) {
           if (found == native_constraints.end()) native_constraints.emplace(key,r);
         }
         const auto selected_policy = install_policy(name, expected_name == argv[3] || (installed.empty() && installing.empty()));
-        const auto incompatible = sputnik::pkg::package_incompatibility(package.manifest, sputnik::pkg::probe_package_host(selected_policy.backend == "cuda" || package.manifest.target.compute_backend == "cuda"), selected_policy);
+        const auto incompatible = sputnik::pkg::package_incompatibility(package.manifest, sputnik::pkg::probe_package_host(sputnik::pkg::package_gpu_backend(selected_policy.backend) || sputnik::pkg::package_gpu_backend(package.manifest.target.compute_backend)), selected_policy);
         if (!package.artifact && !incompatible.empty()) throw std::runtime_error("NO_COMPATIBLE_ARTIFACT: " + incompatible);
         const auto pin = pins.find(name);
         if (pin != pins.end() && (pin->second.version != package.manifest.version || pin->second.variant != package.manifest.variant || pin->second.digest != package.digest))

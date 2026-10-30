@@ -446,7 +446,7 @@ int registry_query_command(int argc, char **argv) {
       };
       policy.backend = manifest.target.compute_backend == "none" ? "cpu" : manifest.target.compute_backend;
       auto reason = package_incompatibility(manifest, host, policy);
-      for (const auto *backend : {"cuda", "mps", "cpu"}) {
+      for (const auto *backend : {"cuda", "rocm", "mps", "cpu"}) {
         if (!supports(backend)) continue;
         auto candidate = policy; candidate.backend = backend;
         const auto problem = package_incompatibility(manifest, host, candidate);
@@ -460,7 +460,7 @@ int registry_query_command(int argc, char **argv) {
       artifact.object["host_selection"] = selection;
       if (!reason.empty() || result.at("yanked").truth()) continue;
       const int rank = (policy.build_from_source ? -1000 : 0) +
-          (policy.backend == "cuda" || policy.backend == "mps" ? 100 : 0) +
+          (package_gpu_backend(policy.backend) || policy.backend == "mps" ? 100 : 0) +
           (policy.bundle == "none" ? 20 : policy.bundle == "runtime" ? 10 : 0);
       if (rank > best_rank) { best.clear(); best_rank = rank; }
       if (rank == best_rank) best.push_back(manifest);
@@ -674,7 +674,7 @@ RegistryDownload download_registry_package(const std::string &origin,
   API api(origin, credentials);
   const auto canonical = canonical_package(api, name);
   auto location = base(canonical);
-  const auto host = probe_package_host(policy.backend == "cuda" || !policy.variant.empty());
+  const auto host = probe_package_host(package_gpu_backend(policy.backend) || !policy.variant.empty());
   const auto select = [&](const Value &release) {
     if (release.at("artifacts").kind != Value::Array) fail("invalid artifact list");
     std::vector<PackageManifest> variants;

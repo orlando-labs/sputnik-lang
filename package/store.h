@@ -86,7 +86,7 @@ private:
   std::map<std::string, std::size_t> active_;
   std::map<std::string, PackagePin> pins_;
   PackageHost host_;
-  bool cuda_probed_ = false;
+  bool accelerators_probed_ = false;
   VariantPolicy selection_;
   std::map<std::string, std::string> variants_;
   std::map<std::string, PackageNativeRequirement> native_requirements_;

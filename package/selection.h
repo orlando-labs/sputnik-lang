@@ -9,6 +9,7 @@ struct PackageHost {
   std::string os, arch, os_version, libc, libc_version, cuda_driver, cuda_api_version;
   std::set<std::string> cpu_features, cuda_architectures;
   bool mps = false;
+  bool rocm = false;
 };
 struct VariantPolicy {
   std::string variant;
@@ -18,7 +19,8 @@ struct VariantPolicy {
   bool build_from_source = false;
   std::vector<PackageNativeRequirement> native_requirements;
 };
-PackageHost probe_package_host(bool include_cuda = false);
+PackageHost probe_package_host(bool include_accelerators = false);
+bool package_gpu_backend(const std::string &backend);
 void validate_package_target(const PackageTarget &target);
 bool package_has_native(const PackageManifest &manifest);
 // Empty means compatible. Does not load package libraries or compile code.

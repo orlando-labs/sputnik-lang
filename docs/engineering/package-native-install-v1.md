@@ -49,7 +49,7 @@ sputnik pkg install slowpilot/sputniktorch --locked sputnik.lock \
   --allow-native --allow-native-large
 ```
 
-The default backend is CPU and the default bundle policy is `none`. CUDA/MPS
+The default backend is CPU and the default bundle policy is `none`. CUDA/MPS/ROCm
 are explicit backend choices; the client then selects a compatible build within
 that backend. An explicit variant retains architecture, libc, CPU instruction,
 driver, GPU capability and extension ABI checks. Native source builds additionally
@@ -122,3 +122,10 @@ Detached publisher signatures, universal/fat binaries and Windows native loading
 remain separate work. Current execution supports one prebuilt entry library per
 package, with its declared dependent libraries. Source module representation and
 native adapter representation remain independent.
+
+ROCm variants declare `compute_backend: rocm` and a Linux target. Explicit
+`--backend rocm` selects them; a CPU install does not select a ROCm-only runtime.
+Host checks query `hipInit`/`hipGetDeviceCount` from the installed HIP C library,
+respecting HIP device visibility. A missing runtime or visible GPU rejects both
+automatic and exact-variant selection. LibTorch/ROCm versions and ABI identities
+remain native-provider requirements; no Python or HIP compiler is used to probe.

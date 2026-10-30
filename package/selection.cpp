@@ -107,6 +107,26 @@ void cuda_devices(PackageHost &h) {
   (void)h;
 #endif
 }
+// Query the installed HIP userspace through its stable C API. No SDK headers,
+// Python process or library from a package archive is involved.
+void rocm_devices(PackageHost &host) {
+#if defined(__linux__)
+  void *runtime = nullptr;
+  for (const char *path : {"/opt/rocm/lib/libamdhip64.so.6", "/usr/lib64/libamdhip64.so.6",
+                          "/usr/lib/x86_64-linux-gnu/libamdhip64.so.6"}) {
+    runtime = ::dlopen(path, RTLD_LAZY | RTLD_LOCAL);
+    if (runtime) break;
+  }
+  if (!runtime) return;
+  struct Close { void *handle; ~Close() { ::dlclose(handle); } } close{runtime};
+  const auto init = reinterpret_cast<int (*)(unsigned)>(::dlsym(runtime, "hipInit"));
+  const auto count = reinterpret_cast<int (*)(int *)>(::dlsym(runtime, "hipGetDeviceCount"));
+  int devices = 0;
+  host.rocm = init && count && init(0) == 0 && count(&devices) == 0 && devices > 0 && devices <= 64;
+#else
+  (void)host;
+#endif
+}
 bool narrower(const PackageManifest &a, const PackageManifest &b) {
   const auto &x = a.target; const auto &y = b.target;
   if (y.os != "any" && x.os != y.os) return false;
@@ -120,19 +140,23 @@ bool narrower(const PackageManifest &a, const PackageManifest &b) {
 }
 }
 
+bool package_gpu_backend(const std::string &name) { return name == "cuda" || name == "rocm"; }
+
 void validate_package_target(const PackageTarget &t) {
   const auto one_of = [](const std::string &v, std::initializer_list<const char *> allowed) {
     return std::any_of(allowed.begin(), allowed.end(), [&](const char *s) { return v == s; });
   };
   if (!one_of(t.os, {"any", "linux", "macos", "windows"}) || !one_of(t.arch, {"any", "x86_64", "aarch64"}) ||
-      !one_of(t.libc, {"", "gnu", "musl"}) || !one_of(t.compute_backend, {"none", "cpu", "mps", "cuda"}))
+      !one_of(t.libc, {"", "gnu", "musl"}) || !one_of(t.compute_backend, {"none", "cpu", "mps", "cuda", "rocm"}))
     throw std::runtime_error("invalid package target");
   for (const auto *v : {&t.min_os, &t.min_libc, &t.cuda_version, &t.min_cuda_driver})
     if (!v->empty()) { if (!numeric(*v)) throw std::runtime_error("invalid target version"); (void)numbers(*v); }
   for (const auto &b : t.compute_backends)
-    if (!one_of(b, {"cpu", "mps", "cuda"})) throw std::runtime_error("invalid compute backend");
+    if (!one_of(b, {"cpu", "mps", "cuda", "rocm"})) throw std::runtime_error("invalid compute backend");
   for (const auto &a : t.cuda_architectures)
     if (!numeric(a)) throw std::runtime_error("invalid CUDA compute capability");
+  if (backend(t, "rocm") && t.os != "linux")
+    throw std::runtime_error("ROCm target requires Linux");
   const bool cuda = backend(t, "cuda");
   if (cuda && (t.os != "linux" || t.cuda_version.empty() || t.min_cuda_driver.empty() || t.cuda_architectures.empty()))
     throw std::runtime_error("CUDA target requires Linux, cuda_version, min_cuda_driver and cuda_architectures");
@@ -140,7 +164,7 @@ void validate_package_target(const PackageTarget &t) {
     throw std::runtime_error("CUDA requirements on a non-CUDA target");
 }
 
-PackageHost probe_package_host(bool include_cuda) {
+PackageHost probe_package_host(bool include_accelerators) {
   PackageHost h;
 #if defined(__APPLE__)
   h.os = "macos"; char version[128]{}; size_t size = sizeof(version);
@@ -165,7 +189,7 @@ PackageHost probe_package_host(bool include_cuda) {
   SPUTNIK_CPU_FEATURE("avx2"); SPUTNIK_CPU_FEATURE("fma"); SPUTNIK_CPU_FEATURE("avx512f");
 #undef SPUTNIK_CPU_FEATURE
 #endif
-  if (!include_cuda) return h;
+  if (!include_accelerators) return h;
   std::istringstream rows(nvidia_facts()); std::string row;
   while (std::getline(rows, row)) {
     std::istringstream fields(row); std::array<std::string,4> values;
@@ -176,6 +200,7 @@ PackageHost probe_package_host(bool include_cuda) {
   // Driver ordinals follow the process's CUDA_VISIBLE_DEVICES/DEVICE_ORDER.
   // NVML/nvidia-smi indices alone cannot identify those visible devices.
   cuda_devices(h);
+  rocm_devices(h);
   return h;
 }
 bool package_has_native(const PackageManifest &m) {
@@ -200,6 +225,8 @@ std::string package_incompatibility(const PackageManifest &m, const PackageHost 
   if (p.variant.empty() && t.compute_backend != "none" && !backend(t,p.backend)) return "different compute backend";
   const auto b = execution ? t.compute_backend : p.backend;
   if (b == "mps" && !h.mps) return "MPS is unavailable";
+  if (((b == "rocm" && backend(t, "rocm")) || t.compute_backend == "rocm") && !h.rocm)
+    return "ROCm GPU/runtime is unavailable";
   if ((b == "cuda" && backend(t,"cuda")) || t.compute_backend == "cuda") {
     if (h.cuda_architectures.empty() || !minimum(h.cuda_driver, t.min_cuda_driver)) return "CUDA GPU/driver is unavailable or too old";
     if (!minimum(h.cuda_api_version,t.cuda_version)) return "CUDA driver API is too old for the bundled runtime";

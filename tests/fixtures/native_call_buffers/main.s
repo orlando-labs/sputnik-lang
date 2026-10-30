@@ -28,7 +28,7 @@ def mixed_value(receiver, value): receiver.typed_value(value)
 
 def keep(&block): &block
 
-def churn(items, text, &block): _churn(items, text, block)
+def churn(items, text, &block): _churn(items, text, (&block))
 
 def release_counter():
   value = new_counter(99)
@@ -47,7 +47,7 @@ def mutable_default(items: []):
   items.push!(42)
   items
 
-def escaped_default(holder, callback: (|offset|: holder[0] + offset)): callback
+def escaped_default(holder, callback: (|offset|: holder[0] + offset)): &callback
 
 def forwarded(first, *middle, last, enabled: true, **extras, &callback):
   check(enabled and extras[:offset] == 1)

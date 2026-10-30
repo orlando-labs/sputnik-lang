@@ -7,7 +7,7 @@ export main
 def check(value, message: "blocking declaration regression"):
   raise ValueError(message) unless value
 
-def with_batch(&block): batch(block)
+def with_batch(&block): batch((&block))
 
 def return_from_batch():
   with_batch(): return 7
@@ -16,7 +16,7 @@ def return_from_batch():
 def exercise():
   check(not inline_worker())
   check(worker())
-  callback = worker
+  callback = &worker
   check(callback())
   check(callback(*[]))
   probe = Probe()

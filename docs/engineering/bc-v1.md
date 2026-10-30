@@ -67,6 +67,12 @@ Current `CODE` encoding stores:
 - call-site / ivar-site tables
 - safepoint table
 
+Call-site flag `0x8` marks callable-reference `SEND`. It takes one positional
+argument containing the bound-send fallback closure, with no keywords or block.
+For a module namespace the result is the original public export; for other
+receivers it is the fallback closure. Reference construction does not invoke
+the target and bypasses method-send quickening. The verifier checks this shape.
+
 `BcCode::flags` bit `0x2` marks a call-site block whose lexical subtree needs
 the concrete activation return target. Such a body emits (or contains a nested
 block which emits)

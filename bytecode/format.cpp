@@ -4486,6 +4486,18 @@ InstructionFlow verify_instruction_flow(
           add_verify_error(errors, "BC1312", "call-site id is out of range",
                            SectionKind::Code, 0);
         } else if ((code.call_site_table[site_id].flags &
+                    kCallSiteFlagCallableReference) != 0U &&
+                   (instruction.opcode != Opcode::Send || pos_count != 1U ||
+                    kw_count != 0U ||
+                    (code.call_site_table[site_id].flags &
+                     (kCallSiteFlagPropertyAccess |
+                      kCallSiteFlagPropertyAssignment)) != 0U ||
+                    (block_reg >= 0 && block_reg != static_cast<std::int64_t>(
+                        std::numeric_limits<std::uint32_t>::max())))) {
+          add_verify_error(errors, "BC1310",
+              "callable reference must be SEND with one fallback closure and no keywords or block",
+              SectionKind::Code, 0);
+        } else if ((code.call_site_table[site_id].flags &
                     kCallSiteFlagBareIdentifier) != 0U &&
                    (!is_call || pos_count != 0U || kw_count != 0U ||
                     (block_reg >= 0 && block_reg != static_cast<std::int64_t>(
@@ -4598,10 +4610,16 @@ InstructionFlow verify_instruction_flow(
     if (instruction.operands.size() == operand_index + 1U) {
       std::uint32_t site_id = 0;
       if (read_u32_operand(instruction, operand_index,
-                           "call-site id must be unsigned", errors, &site_id) &&
-          site_id >= code.call_site_table.size()) {
-        add_verify_error(errors, "BC1312", "call-site id is out of range",
-                         SectionKind::Code, 0);
+                           "call-site id must be unsigned", errors, &site_id)) {
+        if (site_id >= code.call_site_table.size()) {
+          add_verify_error(errors, "BC1312", "call-site id is out of range",
+                           SectionKind::Code, 0);
+        } else if ((code.call_site_table[site_id].flags &
+                    kCallSiteFlagCallableReference) != 0U) {
+          add_verify_error(errors, "BC1310",
+                           "callable reference cannot use a spread call",
+                           SectionKind::Code, 0);
+        }
       }
     }
     break;

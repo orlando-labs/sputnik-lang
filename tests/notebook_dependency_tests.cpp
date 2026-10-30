@@ -26,8 +26,9 @@ static const std::string manifest =
     "  - name: calc\n    path: src/calc.s\n"
     "  - name: helper\n    path: src/helper.s\n";
 static std::string body(int answer) {
-  return "package calc\nfrom helper import increment\nexport answer as value, Box\n"
+  return "package calc\nfrom helper import increment\nexport answer as value, sum, Box\n"
          "def answer(): increment(" + std::to_string(answer - 1) + ")\n"
+         "def sum(n, extra: 1): n + extra\n"
          "class Box:\n  def init(@value)\n  def value(): @value\n"
          "  def increment!(): @value = @value + 1\n";
 }
@@ -80,7 +81,12 @@ int main() {
               session.environment_error);
   result(session, "import calc\n[1].map |n|: calc.value() + n\n", "[43]");
   result(session, "from calc import value\n[1].map |n|: value() + n\n", "[43]");
-  result(session, "import calc\nf = calc.value\nf()\n", "42");
+  result(session, "import calc\ncalc.value\n", "42");
+  result(session, "import calc\ncalc.value.to_str\n", "\"42\"");
+  result(session, "import calc\nfrom calc import sum\nf = &calc.sum\n"
+                  "raise ValueError(\"export identity\") unless (&f) == (&sum)\n"
+                  "f(40, extra: 2)\n", "42");
+  result(session, "import calc\nf = &calc.value\nf()\n", "42");
   require(session.cells[0].locals.size() == 1 && session.cells[0].locals[0].name == "f",
           "imports and synthetic namespace aliases are not uninitialized user locals");
 

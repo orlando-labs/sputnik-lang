@@ -74,7 +74,7 @@ def main():
   callback = | |:
     holders[0] = null
     42
-  holders[0] = Forwarder(CallbackSource(callback))
+  holders[0] = Forwarder(CallbackSource((&callback)))
   check(holders[0].value == 42 and holders[0] == null)
   check(ConstructorHook(20, 22).seen == 42)
   check(ConstructorHookChild(21, 22).seen == 43)

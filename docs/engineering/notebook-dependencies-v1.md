@@ -36,7 +36,7 @@ notebook.show(p, caption: "Linked plot")
 `import plot as p` and `from plot import figure as make_figure` work too. The
 same explicit imports can select bundled modules, without enabling auto-import.
 Imports remain **cell-local**. To use an import in another cell, import it
-there too, or publish a normal variable such as `make_figure = plot.figure`.
+there too, or publish a normal variable such as `make_figure = &plot.figure`.
 Such variables follow normal notebook slot dependencies. A module namespace
 itself is not a first-class runtime value; only its public exports are usable.
 

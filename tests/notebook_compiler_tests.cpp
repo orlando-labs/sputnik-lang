@@ -443,6 +443,18 @@ void test_unresolved_imports_have_actionable_diagnostics() {
          "known modules should retain precise public-export diagnostics");
 }
 
+void test_standalone_lambdas_remain_rejected() {
+  const CellSource source = cell(56, "callback = ||: 42\n", "lambda.s");
+  const DependencyGraph graph({source});
+  NotebookImage image;
+  const auto result = sputnik::notebook::compile_cell(source, graph, image);
+  expect(!result.ok && result.diagnostics.size() == 1U &&
+             result.diagnostics.front().code == "NB1002",
+         "callable export references must not enable standalone notebook lambdas");
+  expect(image.descriptors().empty() && image.module().code_objects.empty(),
+         "rejected lambdas must not mutate the notebook image");
+}
+
 void test_foreign_imports_are_initialized_in_cells() {
   const CellSource source = cell(55,
       "import pycall.numpy as np\n"
@@ -671,6 +683,7 @@ int main() {
   test_malformed_ambient_path_is_diagnostic();
   test_duplicate_code_ids_and_diagnostics();
   test_definitions_are_rejected_deterministically();
+  test_standalone_lambdas_remain_rejected();
   test_unresolved_imports_have_actionable_diagnostics();
   test_imported_classes_can_be_instantiated_in_cells();
   test_foreign_imports_are_initialized_in_cells();

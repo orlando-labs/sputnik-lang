@@ -11,7 +11,7 @@ def scope(&blk):
 
 def forward(&blk): scope(&blk)
 
-def saved(&blk): blk
+def saved(&blk): &blk
 
 def identity(x): x
 
@@ -21,7 +21,7 @@ def scope_arg(value, &blk):
   -1
 
 def retain_and_fail(holder, &blk):
-  holder.push!(blk)
+  holder.push!((&blk))
   raise ValueError("intentional failure")
 
 def named_scope(&action:):

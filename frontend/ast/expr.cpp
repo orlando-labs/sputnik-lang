@@ -520,6 +520,29 @@ void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
     outer_aliases = state.aliases;
     for (const auto &param : parameters->values) if (param) hide_namespace_parameter(*param, state);
   }
+  if (slot->kind == "AstCallableRef") {
+    const auto *kind = find_string_field(*slot, "ref_kind");
+    const auto *receiver = find_node_field(*slot, "receiver");
+    const auto *selector = find_string_field(*slot, "selector");
+    const auto *name = receiver ? find_string_field(*receiver, "name") : nullptr;
+    if (kind && *kind == "class_side" && receiver &&
+        receiver->kind == "AstName" && name && selector) {
+      const auto alias = state.aliases.find(*name);
+      if (alias != state.aliases.end()) {
+        // A module export reference is the original binding, including its
+        // keyword/block signature and identity, rather than a send wrapper.
+        const auto synthetic = "__sputnik_ns__" + sanitize_ns_ident(*name) +
+                               "__" + sanitize_ns_ident(*selector);
+        state.injects[synthetic] = {alias->second, *selector};
+        auto target = clone_expr(*receiver);
+        set_string_field(*target, "name", synthetic);
+        auto reference = make_expr("AstCallableRef", slot->span);
+        reference->string_field("ref_kind", "binding");
+        reference->node_field("target", std::move(target));
+        slot = std::move(reference);
+      }
+    }
+  }
   if (slot->kind == "AstPostfixChain" && !state.aliases.empty()) {
     Expr *base = find_node_field(*slot, "base");
     ListField *tails = find_list_field(*slot, "tails");
@@ -533,16 +556,18 @@ void rewrite_namespace_calls_in(std::unique_ptr<Expr> &slot,
       if (alias_it != state.aliases.end()) {
         const Expr &member_tail = *tails->values.front();
         const std::string *member = find_string_field(member_tail, "name");
-        // Preserve direct namespace reads for dynamic receiver dispatch. Explicit calls (including the
-        // generated call inside &M.f) and chained receivers reuse named-import
-        // linkage. Function-valued imported bases perform their own bare call.
+        // Imported functions perform their own bare call; class/value exports
+        // remain values. A following .() must still call the member's result.
         const std::string next_kind = tails->values.size() > 1U
             ? tails->values[1]->kind : std::string{};
         const bool explicit_call = next_kind == "AstTailCall" ||
             next_kind == "AstTailBlockSuffix" ||
             next_kind == "AstTailMultiblockSuffix";
         const bool chained_member = next_kind == "AstTailDotMember";
-        if (member != nullptr && !member->empty() && (explicit_call || chained_member)) {
+        const bool bare_read = tails->values.size() == 1U &&
+            find_node_field(*tails->values.front(), "condition") == nullptr;
+        if (member != nullptr && !member->empty() &&
+            (explicit_call || chained_member || bare_read)) {
           const std::string synthetic = "__sputnik_ns__" +
                                         sanitize_ns_ident(alias_it->first) +
                                         "__" + sanitize_ns_ident(*member);

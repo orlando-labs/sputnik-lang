@@ -6,6 +6,9 @@ from "./provider" import answer
 def through_parameter(provider): provider.answer
 def through_parameter_chain(provider): provider.answer.to_str
 def through_parameter_call(provider): provider.answer()
+def through_parameter_reference(provider):
+  shadow_reference = &provider.answer
+  shadow_reference()
 
 raise ValueError("namespace bare call") unless provider.answer == 42
 reference = &provider.answer
@@ -13,6 +16,11 @@ imported = &answer
 raise ValueError("reference construction invoked") unless provider.call_count == 1
 raise ValueError("namespace reference") unless reference() == 42
 raise ValueError("import remains a value") unless imported() == 42
+raise ValueError("reference export identity") unless (&reference) == (&imported)
+defaults_reference = &provider.defaults
+raise ValueError("reference keyword forwarding") unless defaults_reference(40, offset: 2) == 42
+block_reference = &provider.invoke
+raise ValueError("reference block forwarding") unless (block_reference: 42) == 42
 returned = provider.factory
 raise ValueError("callable result invoked twice") unless provider.call_count == 3
 raise ValueError("callable result") unless returned() == 42
@@ -33,6 +41,7 @@ raise ValueError("implicit self bare call") unless box.through_self == 9
 raise ValueError("lexical namespace shadow") unless through_parameter(box) == 9
 raise ValueError("chained namespace shadow") unless through_parameter_chain(box) == "9"
 raise ValueError("explicit namespace shadow") unless through_parameter_call(box) == 9
+raise ValueError("namespace reference shadow") unless through_parameter_reference(box) == 9
 rejected = false
 try:
   provider.required

@@ -4566,9 +4566,10 @@ private:
       // Property-style calls (`value.count`, `value.to_str`) are the normal
       // spelling for zero-argument methods. Native-value quick paths are safe
       // here because they check the receiver kind and fall back to the full
-      // SEND for instances/attributes. Assignment is the only form that must
-      // bypass method quickening entirely.
-      if ((site_flags & bytecode::kCallSiteFlagPropertyAssignment) != 0U) {
+      // SEND for instances/attributes. Assignments and references bypass
+      // method quickening; references do not invoke a method.
+      if ((site_flags & (bytecode::kCallSiteFlagPropertyAssignment |
+                         bytecode::kCallSiteFlagCallableReference)) != 0U) {
         break;
       }
 
@@ -31687,6 +31688,12 @@ private:
       return false;
     }
 
+    std::uint32_t reference_site = 0;
+    const bool reference_send = insn.opcode == Opcode::Send &&
+        insn.operands.size() == 8U &&
+        quick_operand_u32(insn, 7U, &reference_site) &&
+        (call_site_flags(frame, reference_site) &
+         bytecode::kCallSiteFlagCallableReference) != 0U;
     std::size_t operand_index = 2;
     std::optional<std::string> selector;
     std::optional<Value> selector_value;
@@ -31721,7 +31728,7 @@ private:
         return false;
       }
       const std::string &static_selector = runtime_symbols_[selector_id];
-      if (!expanded) {
+      if (!expanded && !reference_send) {
         const FastSendStatus fast_status =
             step_fast_static_send(frame, insn, dst, recv_reg, static_selector);
         if (fast_status == FastSendStatus::Faulted) {
@@ -31833,6 +31840,17 @@ private:
     if (fault_.has_value()) {
       return false;
     }
+    if (reference_send && (args.size() != 1U || !kw_args.empty() ||
+                           !block.is_null() || property_access ||
+                           property_assignment)) {
+      set_fault(frame, "VMError", "invalid callable reference send");
+      return false;
+    }
+    if (reference_send && !receiver.is_module_namespace()) {
+      if (!write_reg(frame, dst, args.front())) return false;
+      ++frame.pc;
+      return true;
+    }
     if (*selector == "__super_dispatch__") {
       if (args.size() < 2 || !args[0].is_class_object() || !args[1].is_string()) {
         raise_runtime_error(frame, "TypeError", "invalid super call"); return false;
@@ -31868,8 +31886,9 @@ private:
                 "send cannot be both property access and assignment");
       return false;
     }
-    if (receiver.is_module_namespace() && *selector != "==" &&
-        *selector != "!=" && *selector != "in?" && *selector != "one_of?") {
+    if (receiver.is_module_namespace() &&
+        (reference_send || (*selector != "==" && *selector != "!=" &&
+                            *selector != "in?" && *selector != "one_of?"))) {
       if (property_assignment) {
         raise_runtime_error(frame, "ReadOnlyPropertyError", "module exports are read-only");
         return false;
@@ -31914,7 +31933,7 @@ private:
         raise_runtime_error(frame, "NoMethodError", "module export is unknown: " + path);
         return false;
       }
-      if (property_access && !member.is_closure()) {
+      if (reference_send || (property_access && !member.is_closure())) {
         if (!write_reg(frame, dst, member)) return false;
         ++frame.pc;
         return true;

@@ -1111,9 +1111,35 @@ void test_invalid_workflow_metadata_rejected() {
          "expected BC1413 for invalid workflow metadata");
 }
 
+void test_callable_reference_send_shape() {
+  using namespace sputnik::bytecode;
+  auto module = sample_module();
+  auto &code = module.code_objects.front();
+  code.instructions = {
+      {Opcode::LoadK, {{0, false}, {0, false}}},
+      {Opcode::LoadK, {{1, false}, {0, false}}},
+      {Opcode::Send, {{1, false}, {0, false}, {0, false}, {1, false},
+                      {1, false}, {0, false}, {-1, true}, {0, false}}},
+      {Opcode::Return, {{1, false}}}};
+  code.safepoint_table.clear();
+  code.call_site_table = {{2, 0, 0, kCallSiteFlagCallableReference}};
+  auto decode = [&] {
+    return deserialize_module(serialize_module(module));
+  };
+  expect(decode().ok(), "a callable-reference SEND shape must round-trip");
+  code.call_site_table.front().flags |= kCallSiteFlagPropertyAccess;
+  expect(has_error_code(decode(), "BC1310"),
+         "reference construction cannot also invoke a property");
+  code.call_site_table.front().flags = kCallSiteFlagCallableReference;
+  code.instructions[2].operands[6] = {1, false};
+  expect(has_error_code(decode(), "BC1310"),
+         "reference construction cannot supply a call-site block");
+}
+
 } // namespace
 
 int main() {
+  test_callable_reference_send_shape();
   test_round_trip_and_dump();
   test_notebook_format_minor_version_boundary();
   test_notebook_cell_round_trip();

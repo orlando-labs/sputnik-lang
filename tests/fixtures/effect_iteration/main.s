@@ -10,7 +10,7 @@ class TripleContainer:
 
 class DeferredContainer:
   def init(): @blocks = []
-  def each(&blk): @blocks.push!(blk)
+  def each(&blk): @blocks.push!((&blk))
   def fire():
     @blocks.each |blk|: blk(10)
 

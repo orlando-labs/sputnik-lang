@@ -284,6 +284,9 @@ inline constexpr std::uint32_t kCallSiteFlagPropertyAssignment = 0x2U;
 // CALL produced by an ordinary identifier read: invoke function values with
 // zero arguments, otherwise preserve the value (including class objects).
 inline constexpr std::uint32_t kCallSiteFlagBareIdentifier = 0x4U;
+// SEND for &receiver.member: return a module export without invoking it;
+// otherwise return the single positional argument (the bound send closure).
+inline constexpr std::uint32_t kCallSiteFlagCallableReference = 0x8U;
 inline constexpr std::uint32_t kSpreadOperandValue = 0x0U;
 inline constexpr std::uint32_t kSpreadOperandExpand = 0x1U;
 inline constexpr std::uint32_t kMapSpreadEntrySymbol = 0x0U;

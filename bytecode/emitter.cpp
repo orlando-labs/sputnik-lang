@@ -3887,6 +3887,8 @@ std::uint32_t CodeEmitter::compile_send_like(const ast::Expr &expr,
   if (opcode == Opcode::Send && bool_field(expr, "property_assignment")) {
     site_flags |= kCallSiteFlagPropertyAssignment;
   }
+  if (opcode == Opcode::Send && bool_field(expr, "callable_reference"))
+    site_flags |= kCallSiteFlagCallableReference;
   if (opcode == Opcode::Call && bool_field(expr, "bare_identifier"))
     site_flags |= kCallSiteFlagBareIdentifier;
   const std::uint32_t site_id = emit_call_site(pc, site_symbol, site_flags);

@@ -2471,6 +2471,19 @@ private:
       if (value != nullptr) {
         if (ref_kind == "binding" && value->kind == "AstName")
           return lower_name(*value, "name");
+        const auto *receiver = node_field(expr, "receiver");
+        if (ref_kind == "class_side" && receiver &&
+            receiver->kind == "AstName" && !notebook_options_) {
+          auto node = make_node("HSend", expr.span);
+          node->bool_field("callable_reference", true);
+          node->node_field("receiver", lower_expr(*receiver));
+          node->string_field("selector", string_value(expr, "selector"));
+          std::vector<std::unique_ptr<Node>> fallback;
+          fallback.push_back(lower_expr(*value));
+          node->list_field("pos_args", std::move(fallback));
+          node->list_field("kw_args", {});
+          return node;
+        }
         return lower_expr(*value);
       }
       auto node = make_node("HUnsupported", expr.span);

@@ -43,8 +43,10 @@ preparation preserves the previous environment. No project dependency links
 or additional notebook metadata are required. The existing notebook cell
 profile still requires module member access or `from` for source namespaces.
 
-Member access returns the original exported function closure or class object.
-Calling a function through a namespace preserves captures, defaults, keyword
+Bare function member access invokes the exported function with no arguments;
+`&module.function` obtains the original function closure without invoking it.
+Class member access returns the exported class object. Calling a function
+through a namespace preserves captures, defaults, keyword
 arguments, and blocks. Re-exports and renamed exports retain the provider's
 identity. Private or missing members raise `NoMethodError`; assigning a member
 raises `ReadOnlyPropertyError`.

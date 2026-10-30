@@ -2708,6 +2708,12 @@ bool native_cpp_code_supported(const sputnik::bytecode::BcModule &module,
       const std::size_t block_index = kw_index + 1U + kw_count * 2U;
       const bool no_block = operand_is_no_block(instruction, block_index);
       std::uint32_t send_site_id = 0;
+      if (operand_u32_value(instruction, block_index + 1U, &send_site_id) &&
+          send_site_id < code.call_site_table.size() &&
+          (code.call_site_table[send_site_id].flags &
+           sputnik::bytecode::kCallSiteFlagCallableReference) != 0U) {
+        break;
+      }
       const bool conversion_property =
           pos_count == 0U &&
           native_cpp_conversion_property_selector(selector) &&
@@ -6354,6 +6360,22 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
       const std::string selector = module.symbols[symbol_id];
       const std::string selector_expr =
           "native_symbol_text(" + std::to_string(symbol_id) + "U)";
+      if ((send_site_flags &
+           sputnik::bytecode::kCallSiteFlagCallableReference) != 0U) {
+        out << "  if (" << read_reg_expr(recv)
+            << ".tag == NativeValue::Tag::PackageModule) {\n";
+        out << "    const auto member = native_package_member("
+            << read_reg_expr(recv) << ", " << selector_expr << ");\n";
+        out << "    if (!member) throw NativeRaised{native_named_error("
+               "\"NoMethodError\", \"module export is unknown: \" + "
+            << selector_expr << ")};\n";
+        write_reg_stmt(dst, "*member");
+        out << "  } else {\n";
+        write_reg_stmt(dst, read_reg_expr(arg));
+        out << "  }\n";
+        emit_next(pc, next_scalar_state);
+        break;
+      }
       const std::optional<std::uint32_t> direct_chars_each_block_code_id =
           native_cpp_direct_chars_each_block_at_pc(
               module, code, pc, direct_chars_each_block_code_ids);
@@ -6817,14 +6839,14 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
                                   "? native_bytes_new(" +
                                   read_reg_expr(arg) + ") : " + regexp_send +
                                   ")");
-        } else if (selector == "inspect") {
-          // `inspect` is shared by Regexp and Uuid. Eligibility is deliberately
-          // receiver-agnostic, so preserve the runtime tag dispatch here rather
+        } else if (selector == "inspect" || selector == "version") {
+          // `inspect` and `version` are shared by Regexp and Uuid. Eligibility
+          // is receiver-agnostic, so preserve the runtime tag dispatch here rather
           // than routing every non-user receiver through Regexp.
           write_reg_stmt(dst, "(" + read_reg_expr(recv) +
                                   ".tag == NativeValue::Tag::Uuid "
                                   "? native_uuid_nullary(" +
-                                  read_reg_expr(recv) + ", \"inspect\") : " +
+                                  read_reg_expr(recv) + ", " + selector_expr + ") : " +
                                   regexp_send + ")");
         } else {
           write_reg_stmt(dst, regexp_send);
@@ -28189,8 +28211,8 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // provider) into the cache key: expansion output — not just linkage —
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
-      // v13 restores static linkage of chained namespace class/function receivers.
-      "sputnik.build.cache.v13\n" + module.name + "\n" + module.path + "\n" +
+      // v14 preserves original module exports in callable references.
+      "sputnik.build.cache.v14\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
       stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material + prepared.import_material);
   const std::filesystem::path output_path =

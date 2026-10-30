@@ -25,10 +25,19 @@ def main():
   stored = [kernels][0]
   assert(stored.choose(0) == 42 and stored.choose(41) == 41)
   assert(stored.add(3) == 13)
-  callable = stored.add
+  callable = &stored.add
   assert(callable(4, extra: 1) == 12)
-  assert(callable == imported_add)
-  assert(facade.add == callable)
+  assert((&callable) == (&imported_add))
+  assert((&facade.add) == (&callable))
+  block_callable = &stored.apply
+  assert((block_callable(2) |n|: n * 3) == 27)
+  class_callable = &stored.Box
+  assert(class_callable(42).value == 42)
+  try:
+    private_callable = &stored._helper
+    assert(false)
+  rescue NoMethodError:
+    null
   assert(facade.Box == kernels.Box)
   assert(kernels.Box.new(42).value == 42)
   result = kernels.apply(2) |n|: n * 3

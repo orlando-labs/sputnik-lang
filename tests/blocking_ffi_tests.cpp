@@ -279,8 +279,8 @@ def probe(workers, gate):
       channel.recv(timeout: 1.0)
     outer = | |:
       raise ValueError("callback identity") unless gate.worker? and gate.identity == identity
-      gate.batch(nested)
-    gate.batch(outer)
+      gate.batch((&nested))
+    gate.batch((&outer))
   until gate.counts[2] == 2 or callback.done?: workers.sleep(1)
   producer = workers.async: channel.send(43)
   raise ValueError("callback producer") unless callback.wait == 43 and producer.wait

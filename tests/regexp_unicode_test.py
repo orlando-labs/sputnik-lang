@@ -2,6 +2,7 @@
 """Regexp compiler diagnostics and VM / direct-native equivalence."""
 from pathlib import Path
 import json
+import re
 import subprocess
 import sys
 
@@ -51,7 +52,13 @@ for newline in ("\n", "\r\n"):
     result = subprocess.run([str(compiler), "run", str(path)], cwd=root,
                             text=True, capture_output=True, timeout=30)
     assert result.returncode != 0, result.stdout
-    assert f"{path}:3:7" in result.stderr, result.stderr
+    # PCRE2 10.42 points at the invalid escape letter; 10.47 points just
+    # after it. Both must map through UTF-8, dedent and line continuation
+    # to the corresponding source column, for LF and CRLF alike.
+    location = re.search(r"RegexpCompileError:.* at byte (\d+) \(at " +
+                         re.escape(str(path)) + r":3:(\d+)\)", result.stderr)
+    assert location, result.stderr
+    assert tuple(map(int, location.groups())) in {(3, 6), (4, 7)}, result.stderr
 
 for op in ("=~", "!~"):
     path = work / ("removed_" + ("match" if op == "=~" else "nonmatch") + ".s")

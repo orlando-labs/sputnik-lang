@@ -1,19 +1,19 @@
-; sputnik.bc.v1 sha256=9d2203d9bed5587ca37163cea93954fa621b8e01de0e54afcc0edba44e7469e5
-.header format=1.0 language=1.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
+; sputnik.bc.v1 sha256=30691b700662bfd62ffe934a58414813f946501ff99356158b1f965b5316dbb6
+.header format=1.2 language=1.0.0 profile_flags=0 file_flags=0 abi=0000000000000000000000000000000000000000000000000000000000000000
 .sections
-  STRS offset=368 size=95 align=1 flags=0
-  SYMS offset=463 size=119 align=1 flags=0
-  KONS offset=582 size=53 align=1 flags=0
-  CODE offset=635 size=832 align=1 flags=0
-  METH offset=1467 size=68 align=1 flags=0
-  CLAS offset=1535 size=4 align=1 flags=0
-  DEPS offset=1539 size=4 align=1 flags=0
-  EXPT offset=1543 size=4 align=1 flags=0
-  INIT offset=1547 size=9 align=1 flags=0
-  PATS offset=1556 size=28 align=1 flags=0
-  SPAN offset=1584 size=3284 align=1 flags=0
-  LINE offset=4868 size=484 align=1 flags=0
-  LOCS offset=5352 size=84 align=1 flags=0
+  STRS offset=372 size=95 align=1 flags=0
+  SYMS offset=467 size=119 align=1 flags=0
+  KONS offset=586 size=53 align=1 flags=0
+  CODE offset=639 size=832 align=1 flags=0
+  METH offset=1471 size=68 align=1 flags=0
+  CLAS offset=1539 size=4 align=1 flags=0
+  DEPS offset=1543 size=4 align=1 flags=0
+  EXPT offset=1547 size=4 align=1 flags=0
+  INIT offset=1551 size=9 align=1 flags=0
+  PATS offset=1560 size=28 align=1 flags=0
+  SPAN offset=1588 size=3284 align=1 flags=0
+  LINE offset=4872 size=484 align=1 flags=0
+  LOCS offset=5356 size=84 align=1 flags=0
 .strs
   s0 "classify"
   s1 "function"

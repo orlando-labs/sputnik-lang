@@ -447,7 +447,7 @@ int sputnik_task_cancelled(SputnikCtx *cx) {
   return sputnik::runtime::current_runtime_task_cancel_requested() ? 1 : 0;
 }
 
-uint32_t sputnik_ext_abi_version(void) { return SPUTNIK_EXT_ABI_VERSION; }
+const char *sputnik_language_version(void) { return SPUTNIK_VERSION; }
 
 } // extern "C"
 

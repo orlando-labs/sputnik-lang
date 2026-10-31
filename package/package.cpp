@@ -319,6 +319,7 @@ std::string canonical_manifest_text(const PackageManifest &manifest) {
   out << "name=" << line_escape(manifest.name) << "\n";
   out << "version=" << line_escape(manifest.version) << "\n";
   out << "root=" << line_escape(manifest.root_module) << "\n";
+  out << "requires.sputnik=" << line_escape(manifest.sputnik_requirement) << "\n";
   const std::vector<PackageModule> modules = sorted_modules(manifest.modules);
   out << "module.count=" << modules.size() << "\n";
   for (std::size_t i = 0; i < modules.size(); ++i) {
@@ -354,6 +355,7 @@ std::string canonical_manifest_text(const PackageManifest &manifest) {
     const std::string prefix = "native." + std::to_string(i);
     out << prefix << ".name=" << line_escape(native.name) << "\n";
     out << prefix << ".language=" << line_escape(native.language) << "\n";
+    out << prefix << ".sputnik_version=" << line_escape(native.sputnik_version) << "\n";
     const auto emit_array = [&](const char *field,
                                 const std::vector<std::string> &values) {
       out << prefix << "." << field << ".count=" << values.size() << "\n";
@@ -425,6 +427,7 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
   out << "package.name=" << line_escape(artifact.manifest.name) << "\n";
   out << "package.version=" << line_escape(artifact.manifest.version) << "\n";
   out << "package.root=" << line_escape(artifact.manifest.root_module) << "\n";
+  out << "requires.sputnik=" << line_escape(artifact.manifest.sputnik_requirement) << "\n";
   out << "manifest.sha256=" << artifact.manifest_digest << "\n";
   out << "lock.sha256=" << artifact.lock_digest << "\n";
   out << "lock.bytes=";
@@ -469,6 +472,7 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
     const std::string prefix = "native." + std::to_string(i);
     out << prefix << ".name=" << line_escape(native.name) << "\n";
     out << prefix << ".language=" << line_escape(native.language) << "\n";
+    out << prefix << ".sputnik_version=" << line_escape(native.sputnik_version) << "\n";
     const auto emit_array = [&](const char *field,
                                 const std::vector<std::string> &values) {
       out << prefix << "." << field << ".count=" << values.size() << "\n";
@@ -559,8 +563,8 @@ std::string serialize_unsigned_package(const PackageArtifact &artifact) {
     const PackageNativeExtensionMetadata &metadata = native_metadata[i];
     const std::string prefix = "native_metadata." + std::to_string(i) + ".";
     out << prefix << "name=" << line_escape(metadata.name) << "\n";
-    out << prefix << "sputnik_ext_abi_version="
-        << metadata.sputnik_ext_abi_version << "\n";
+    out << prefix << "sputnik_version="
+        << metadata.sputnik_version << "\n";
     out << prefix << "target_triple=" << line_escape(metadata.target_triple)
         << "\n";
     out << prefix << "native_source_sha256="
@@ -677,6 +681,10 @@ PackageRegistryResult registry_write(const std::string &serialized,
   const PackageArtifact &artifact = parsed.artifact;
   result.package_name = artifact.manifest.name;
   result.version = artifact.manifest.version;
+  if (!publish_mode && !language::satisfies(SPUTNIK_VERSION, artifact.manifest.sputnik_requirement)) {
+    result.diagnostics.push_back(diagnostic("PackageRegistryError", "LANGUAGE_VERSION_MISMATCH: package requires Sputnik " + artifact.manifest.sputnik_requirement));
+    return result;
+  }
 
   if (!safe_registry_component(artifact.manifest.name) ||
       !safe_registry_component(artifact.manifest.version)) {
@@ -899,7 +907,8 @@ std::string render_manifest(const PackageManifest &m) {
   std::vector<std::string> native;
   for (const auto &n : m.native_extensions) {
     Fields f{{"name", quote(n.name)}, {"kind", quote(n.kind)}, {"language", quote(n.language)}};
-    if (n.kind == "prebuilt") { f.push_back({"library", quote(n.library)}); f.push_back({"sputnik_ext_abi", std::to_string(n.sputnik_ext_abi_version)}); }
+    if (n.kind == "prebuilt") { f.push_back({"library", quote(n.library)}); }
+    f.push_back({"sputnik_version", quote(n.sputnik_version)});
     f.push_back({"requirements", list(n.requirements)});
     f.push_back({"sources", list(n.sources)});
     f.push_back({"headers", list(n.headers)});
@@ -956,7 +965,7 @@ std::string render_manifest(const PackageManifest &m) {
   }
   for (const auto &name : wildcard) caps.push_back({name, "true"});
   for (const auto &[name, values] : targets) if (!wildcard.count(name)) caps.push_back({name, list(values)});
-  Fields root{{"schema", quote("sputnik.build.v1")}, {"name", quote(m.name)}, {"version", quote(m.version)},
+  Fields root{{"requires", object({{"sputnik", quote(m.sputnik_requirement)}})}, {"schema", quote("sputnik.build.v1")}, {"name", quote(m.name)}, {"version", quote(m.version)},
     {"kind", quote(m.kind)}, {"source_root", quote(m.source_root)}, {"files", list({files.begin(), files.end()})},
     {"module_names", object(names)}, {"dependencies", deps(m.dependencies)}, {"capabilities", object(caps)},
     {"artifact", object({{"variant", quote(m.variant)}, {"limit_profile", quote(m.limit_profile)}, {"bundle", quote(m.bundle)},
@@ -983,6 +992,7 @@ std::string manifest_to_json(const PackageManifest &manifest) {
   std::ostringstream out;
   out << "{\n";
   out << "  \"schema\": \"sputnik.package-manifest.v1\",\n";
+  out << "  \"requires\": {\"sputnik\": \"" << json_escape(manifest.sputnik_requirement) << "\"},\n";
   out << "  \"name\": \"" << json_escape(manifest.name) << "\",\n";
   out << "  \"version\": \"" << json_escape(manifest.version) << "\",\n";
   out << "  \"root_module\": \"" << json_escape(manifest.root_module)
@@ -1102,7 +1112,7 @@ std::string manifest_to_json(const PackageManifest &manifest) {
 std::string render_lockfile(const PackageManifest &manifest) {
   std::ostringstream out;
   out << "# sputnik.lock v1\n";
-  out << "schema = \"sputnik.lock.v1\"\n\n";
+  out << "schema = \"sputnik.lock.v1\"\nsputnik_version = \"" SPUTNIK_VERSION "\"\n\n";
   out << "[package]\n";
   out << "name = \"" << json_escape(manifest.name) << "\"\n";
   out << "version = \"" << json_escape(manifest.version) << "\"\n";
@@ -1144,7 +1154,7 @@ native_extension_metadata(const std::vector<PackageNativeExtension> &extensions,
     }
     PackageNativeExtensionMetadata metadata;
     metadata.name = extension.name;
-    metadata.sputnik_ext_abi_version = 1;
+    metadata.sputnik_version = extension.sputnik_version;
     metadata.target_triple = target_triple.empty() ? "source" : target_triple;
     metadata.native_source_digest =
         sha256_prefixed(native_source_digest_text(extension, extension_blobs));
@@ -1350,6 +1360,14 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
     return result;
   }
   result.artifact.manifest_digest = values["manifest.sha256"];
+  result.artifact.manifest.explicit_sputnik_requirement =
+      get_escaped_value(values, "requires.sputnik", &result.artifact.manifest.sputnik_requirement);
+  if (!result.artifact.manifest.explicit_sputnik_requirement ||
+      !language::valid_requirement(result.artifact.manifest.sputnik_requirement)) {
+    result.diagnostics.push_back(diagnostic("PackageParseError",
+        "LANGUAGE_REQUIREMENT_MISSING: rebuild the package with a bounded requires.sputnik range", path));
+    return result;
+  }
   result.artifact.lock_digest = values["lock.sha256"];
 
   const auto lock_it = values.find("lock.bytes");
@@ -1460,6 +1478,7 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
     const std::string prefix = "native." + std::to_string(i) + ".";
     if (!get_escaped_value(values, prefix + "name", &extension.name) ||
         !get_escaped_value(values, prefix + "language", &extension.language) ||
+        !get_escaped_value(values, prefix + "sputnik_version", &extension.sputnik_version) ||
         !read_string_array(prefix, "sources", &extension.sources) ||
         !read_string_array(prefix, "headers", &extension.headers) ||
         !read_string_array(prefix, "include_dirs", &extension.include_dirs) ||
@@ -1619,8 +1638,8 @@ PackageParseResult parse_package_artifact(const std::string &serialized,
       return result;
     }
     bool abi_ok = true;
-    metadata.sputnik_ext_abi_version = static_cast<std::uint32_t>(
-        parse_count(values, prefix + "sputnik_ext_abi_version", &abi_ok));
+    language::Version language_version;
+    abi_ok = get_escaped_value(values, prefix + "sputnik_version", &metadata.sputnik_version) && language::parse(metadata.sputnik_version, language_version);
     bool type_count_ok = true;
     const std::uint64_t type_count =
         parse_count(values, prefix + "type.count", &type_count_ok);
@@ -1698,6 +1717,10 @@ PackageVerifyResult verify_package_artifact(const std::string &serialized,
   }
   const PackageArtifact &artifact = parsed.artifact;
   result.structurally_valid = true;
+  if (!artifact.manifest.explicit_sputnik_requirement) {
+    result.diagnostics.push_back(diagnostic("PackageVerifyError",
+        "LANGUAGE_REQUIREMENT_MISSING: rebuild the package with requires.sputnik", path));
+  }
   result.package_name = artifact.manifest.name;
   result.version = artifact.manifest.version;
   result.root_module = artifact.manifest.root_module;
@@ -1819,7 +1842,7 @@ PackageVerifyResult verify_package_artifact(const std::string &serialized,
           path));
       continue;
     }
-    if (metadata.sputnik_ext_abi_version != 1U) {
+    if (!language::compatible_producer(metadata.sputnik_version)) {
       result.diagnostics.push_back(diagnostic(
           "PackageVerifyError",
           "native extension ABI version does not match sputnik_ext: " +
@@ -2017,8 +2040,8 @@ std::string artifact_to_json(const PackageArtifact &artifact) {
     }
     const PackageNativeExtensionMetadata &metadata = native_metadata[i];
     out << "\n    {\"name\":\"" << json_escape(metadata.name)
-        << "\",\"sputnik_ext_abi_version\":"
-        << metadata.sputnik_ext_abi_version << ",\"target_triple\":\""
+        << "\",\"sputnik_version\":\""
+        << metadata.sputnik_version << "\",\"target_triple\":\""
         << json_escape(metadata.target_triple)
         << "\",\"native_source_sha256\":\""
         << json_escape(metadata.native_source_digest)

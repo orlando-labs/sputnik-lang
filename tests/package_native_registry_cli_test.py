@@ -29,14 +29,14 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
     else: target.update(libc='gnu',min_libc='2.28')
     stage = root/'stage'; (stage/'lib').mkdir(parents=True)
     cpp=stage/'answer.cpp'
-    cpp.write_text('#include "runtime/sputnik_ext.h"\nextern "C" uint32_t sputnik_ext_abi_version(){return SPUTNIK_EXT_ABI_VERSION;}\n'
+    cpp.write_text('#include "runtime/sputnik_ext.h"\nextern "C" const char *sputnik_language_version(){return SPUTNIK_VERSION;}\n'
                    'extern "C" SputnikStatus native_answer(SputnikCtx*c,const SputnikValue*,size_t,SputnikValue*out){*out=sputnik_make_int(c,42);return SPUTNIK_OK;}\n')
     library='lib/answer.'+('dylib' if mac else 'so')
     flags=['-dynamiclib','-Wl,-undefined,dynamic_lookup'] if mac else ['-shared','-fPIC']
     subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-O2',*flags,'-I'+str(source_root),str(cpp),'-o',str(stage/library)],check=True)
     (stage/'main.s').write_text('package test.native_test\nexport answer\nnative def answer() -> Int from "native_answer"\n')
     common=dict(name='test/native',version='1.0.0',files=['main.s',library],module_names={'main.s':'test.native_test'},profiles=dict(required=['core.v1','ffi.v1']))
-    module=dict(name='answer',kind='prebuilt',library=library,sputnik_ext_abi=1)
+    module=dict(name='answer',kind='prebuilt',library=library,sputnik_version="1.0.0")
     artifacts={}
     for variant in ['cpu-a','cpu-b','foreign']:
         actual=dict(target)
@@ -57,13 +57,13 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
             def metadata(v):
                 a=artifacts.get(v, artifacts['cpu-a'])
                 item = dict(package_ref='test/native',version='1.0.0',variant=v,kind='library',bundle='none',native_mode='prebuilt',native_payload=True,
-                    target=a['target'],compatibility=dict(sputnik_ext_abi=1),quarantined=False,size=len(a['body']),sha256='sha256:'+'0'*64 if state['bad_digest'] else a['sha256'],
+                    target=a['target'],compatibility=dict(sputnik_requirement=">=1.0.0 <2.0.0",sputnik_versions=["1.0.0"]),quarantined=False,size=len(a['body']),sha256='sha256:'+'0'*64 if state['bad_digest'] else a['sha256'],
                     url=origin+base+'/versions/1.0.0/artifacts/'+v+'/download')
                 if v == 'native-source': item['native_mode'] = 'source'
                 if v == 'source':
                     item.update(native_mode='none', native_payload=False, target=dict(os='any', arch='any', compute_backend='none'))
                 if v == 'cpu-mps': item['target'] = dict(a['target'], compute_backends=['cpu', 'mps'])
-                if v == 'wrong-abi': item['compatibility']['sputnik_ext_abi'] = 999
+                if v == 'wrong-abi': item['compatibility']['sputnik_versions'] = ['999.0.0']
                 return item
             if '/artifacts/' in self.path:
                 v=self.path.split('/artifacts/')[1].split('/')[0]
@@ -98,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         selections = {a['variant']: a['host_selection'] for a in inspected['artifacts']}
         assert selections['native-source']['compatible'] and selections['native-source']['build_from_source']
         assert not selections['foreign']['compatible'] and 'architecture' in selections['foreign']['reason']
-        assert not selections['wrong-abi']['compatible'] and 'ABI' in selections['wrong-abi']['reason']
+        assert not selections['wrong-abi']['compatible'] and 'LANGUAGE_VERSION_MISMATCH' in selections['wrong-abi']['reason']
         assert state['downloads'] == 0 and not (root/'home').exists()
         state['variants'] = ['foreign']
         assert inspect()['recommended_variant'] is None
@@ -166,6 +166,26 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         app.write_text('from test.native_test import answer\nio.stdout.write_line(answer().to_str)\n')
         env['SPUTNIK_NATIVE_CXX']='/no/compiler'
         assert cli('run',app,'--grant','ffi').strip()=='42'
+        # The manifest is only an assertion: the loaded library must report
+        # its own language version. Legacy binaries must not inherit the host's
+        # version entry point through dynamic symbol lookup.
+        for label, handshake, expected in [
+            ('future-language', 'extern "C" const char *sputnik_language_version(){return "999.0.0";}\n', '999.0.0'),
+            ('legacy-language', 'extern "C" uint32_t sputnik_ext_abi_version(){return 1;}\n', 'sputnik_language_version'),
+        ]:
+            env['SPUTNIK_PKG_HOME'] = str(root/label)
+            cpp.write_text('#include "runtime/sputnik_ext.h"\n' + handshake +
+                'extern "C" SputnikStatus native_answer(SputnikCtx*c,const SputnikValue*,size_t,SputnikValue*out){*out=sputnik_make_int(c,42);return SPUTNIK_OK;}\n')
+            bad_library = 'lib/'+label+('.dylib' if mac else '.so')
+            subprocess.run([os.environ.get('CXX','c++'),'-std=c++17','-O2',*flags,'-I'+str(source_root),str(cpp),'-o',str(stage/bad_library)],check=True)
+            bad_manifest = dict(common, name='test/'+label, files=['main.s',bad_library], target=target,
+                native_extensions=[dict(name='answer',kind='prebuilt',library=bad_library,sputnik_version='1.0.0')])
+            (stage/'sputnik.build.yaml').write_text(json.dumps(bad_manifest))
+            bad_artifact = root/(label+'.sputnikpkg')
+            cli('pkg','build',stage,'--out',bad_artifact)
+            cli('pkg','install',bad_artifact,'--allow-native')
+            failure = cli('run',app,'--grant','ffi',ok=False)
+            assert expected in failure, (label,failure)
     finally:
         server.shutdown(); server.server_close(); thread.join()
 print('package_native_registry_cli_test: PASS')

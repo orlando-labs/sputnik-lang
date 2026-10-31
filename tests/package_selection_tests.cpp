@@ -16,6 +16,16 @@ int main(int argc, char **argv) {
     std::cout << '\n';
     return host.cuda_architectures.empty() ? 1 : 0;
   }
+  PackageManifest release;
+  PackageHost language_host;
+  VariantPolicy language_policy;
+  language_host.sputnik_version = "1.2.3";
+  expect(select_package_variant({release}, language_host, language_policy) == 0, "compatible newer VM retains old packages");
+  language_host.sputnik_version = "2.0.0";
+  expect(select_package_variant({release}, language_host, language_policy) == -1, "next major invalidates old packages");
+  language_host.sputnik_version = "1.0.0";
+  release.sputnik_requirement = ">=1.0.1 <2.0.0";
+  expect(select_package_variant({release}, language_host, language_policy) == -1, "package minimum patch is enforced");
   PackageHost h; h.os="linux"; h.arch="x86_64"; h.libc="gnu"; h.libc_version="2.28";
   h.cpu_features={"avx2"}; h.cuda_driver="580.105.08"; h.cuda_api_version="13.0"; h.cuda_architectures={"8.6"};
   PackageManifest cpu; cpu.variant="linux-cpu"; cpu.target.os="linux"; cpu.target.arch="x86_64";
@@ -79,7 +89,7 @@ int main(int argc, char **argv) {
   PackageManifest pure; pure.variant="source";
   expect(select_package_variant({pure},h,p)==0,"source builds retain pure package dependencies");
   p.build_from_source=false;
-  auto abi=cuda; abi.native_extensions[0].sputnik_ext_abi_version=999;
+  auto abi=cuda; abi.native_extensions[0].sputnik_version="999.0.0";
   expect(select_package_variant({abi},h,p)==-1,"extension ABI checked");
   auto modern=cuda; modern.target.min_libc="2.35";
   expect(select_package_variant({modern},h,p)==-1,"minimum glibc checked");

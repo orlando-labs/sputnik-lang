@@ -25,7 +25,7 @@ Header layout is fixed-size and little-endian:
 
 - magic: `ABM1`
 - `format_version.major/minor`
-- `language_version.major/minor`
+- `language_version.major/minor/patch`
 - `profile_flags`
 - `section_count`
 - `file_flags`
@@ -187,3 +187,5 @@ Not implemented yet in this layer:
 - loader-time ancestor linearization and world-mutation invalidation
 - VM/runtime execution
 - bytecode-level type or isolation proofs
+
+Format 1.2 adds language SemVer patch fields to the header (60 bytes instead of 56) and DEPS. Formats 1.0/1.1 map omitted patches to zero. Physical format and shared language/VM SemVer are separate contracts; see [language version policy](language-version.md).

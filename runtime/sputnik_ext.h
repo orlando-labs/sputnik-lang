@@ -24,14 +24,13 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "runtime/version.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* ABI version. The runtime rejects an extension whose
- * sputnik_ext_abi_version() does not match what the runtime was built with. */
-#define SPUTNIK_EXT_ABI_VERSION 1u
+/* Extension ABI evolves with the language/VM SemVer release. */
 
 /* Opaque runtime call context (the active frame + host facade). */
 typedef struct SputnikCtx SputnikCtx;
@@ -196,8 +195,8 @@ typedef void (*SputnikCollectedReclaim)(void *handle);
 
 /* ---- load-time handshake ---------------------------------------------- */
 /* Every extension translation unit must export this, returning
- * SPUTNIK_EXT_ABI_VERSION, so the runtime can reject an ABI mismatch at load. */
-uint32_t sputnik_ext_abi_version(void);
+ * SPUTNIK_VERSION, so the runtime can reject an ABI mismatch at load. */
+const char *sputnik_language_version(void);
 
 #ifdef __cplusplus
 } /* extern "C" */

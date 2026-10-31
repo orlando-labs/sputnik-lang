@@ -249,7 +249,7 @@ std::string bytecode_facts(const std::string &bytes) {
   std::ostringstream out;
   out << "{\"format\":[" << m.format_version.major << ','
       << m.format_version.minor << "],\"language\":["
-      << m.language_version.major << ',' << m.language_version.minor
+      << m.language_version.major << ',' << m.language_version.minor << ',' << m.language_version.patch
       << "],\"profile_flags\":" << m.profile_flags
       << ",\"abi_hash\":" << quote(abi.str())
       << ",\"sha256\":" << quote(lexer::sha256_hex(bytes)) << '}';
@@ -294,7 +294,7 @@ std::string build_metadata(const PackageManifest &m,
       out << ',';
     first = false;
     out << "{\"name\":" << quote(n.name) << ",\"kind\":" << quote(n.kind)
-        << ",\"sputnik_ext_abi\":" << n.sputnik_ext_abi_version
+        << ",\"sputnik_version\":" << quote(n.sputnik_version)
         << ",\"os\":" << quote(m.target.os)
         << ",\"arch\":" << quote(m.target.arch) << ",\"files\":{";
     std::set<std::string> files(n.sources.begin(), n.sources.end());
@@ -413,6 +413,8 @@ PackageManifest manifest(const std::string &text) {
   }
   if (parsed.manifest.schema != "sputnik.build.v1")
     fail("unsupported distribution manifest schema");
+  if (!parsed.manifest.explicit_sputnik_requirement)
+    fail("LANGUAGE_REQUIREMENT_MISSING: rebuild the package with requires.sputnik");
   identity(parsed.manifest);
   return parsed.manifest;
 }
@@ -865,6 +867,9 @@ DistributionInfo build_distribution(const PackageManifest &input,
                                     const DistributionBuildOptions &options) {
   const auto root = fs::canonical(directory);
   PackageManifest m = input;
+  if (!language::satisfies(SPUTNIK_VERSION, m.sputnik_requirement))
+    fail("LANGUAGE_VERSION_MISMATCH: package requires Sputnik " + m.sputnik_requirement + ", host is " SPUTNIK_VERSION);
+  if (!m.explicit_sputnik_requirement) m.sputnik_requirement = language::current_requirement();
   if (m.explicit_files) {
     const std::set<std::string> files(m.files.begin(), m.files.end());
     for (const auto &file : files)

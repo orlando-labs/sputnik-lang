@@ -99,22 +99,36 @@ private:
 // Process-wide executor for foreign calls that may block an OS thread. VM
 // strands park before submitting work here, so scheduler workers remain
 // available. Native stack-preserving task drivers also wait outside scheduler
-// workers. Synchronous callbacks can retain a carrier, so the executor grows
-// when all carriers are occupied; surplus idle carriers retire after a timeout.
+// workers. Carriers start on demand up to a hard limit; saturation raises a
+// ResourceBusyError instead of queuing a potentially dependent foreign call.
+struct RuntimeBlockingFfiStats {
+  std::size_t worker_count = 0;
+  std::size_t live_worker_count = 0;
+  std::size_t busy_worker_count = 0;
+  std::size_t queued_job_count = 0;
+};
+
 class RuntimeBlockingFfiExecutor {
 public:
   static RuntimeBlockingFfiExecutor &instance();
+  // Zero reads SPUTNIK_FFI_MAX_THREADS, defaulting to 4..32 workers according
+  // to hardware concurrency. No workers are created by construction.
+  explicit RuntimeBlockingFfiExecutor(
+      std::size_t worker_count = 0,
+      std::chrono::milliseconds idle_timeout = std::chrono::seconds(30));
+  ~RuntimeBlockingFfiExecutor();
 
   RuntimeBlockingFfiExecutor(const RuntimeBlockingFfiExecutor &) = delete;
   RuntimeBlockingFfiExecutor &
   operator=(const RuntimeBlockingFfiExecutor &) = delete;
 
-  void submit(std::function<void()> function);
+  // completion runs after the foreign call releases its pool capacity, so a
+  // resumed caller can immediately submit its next call even at limit one.
+  void submit(std::function<void()> function,
+              std::function<void()> completion = {});
+  RuntimeBlockingFfiStats stats() const;
 
 private:
-  RuntimeBlockingFfiExecutor();
-  ~RuntimeBlockingFfiExecutor();
-
   class Impl;
   std::unique_ptr<Impl> impl_;
 };
@@ -132,12 +146,16 @@ enum class RuntimeStrandState {
 };
 
 struct RuntimeSchedulerConfig {
+  // Maximum OS workers. Workers are started only when work needs them; zero
+  // reads SPUTNIK_TASK_MAX_THREADS, defaulting to hardware concurrency.
   std::size_t worker_count = 0;
   std::uint64_t first_worker_id = 1;
 };
 
 struct RuntimeSchedulerStats {
+  // Configured limit and actual number of started OS workers, respectively.
   std::uint64_t worker_count = 0;
+  std::uint64_t live_worker_count = 0;
   std::uint64_t strands_created = 0;
   std::uint64_t strands_completed = 0;
   std::uint64_t strands_failed = 0;

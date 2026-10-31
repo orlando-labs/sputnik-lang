@@ -1321,11 +1321,18 @@ ExecutionResult RuntimeWorld::invoke_native_extension(
     } else {
       auto completion = std::make_shared<std::promise<ExecutionResult>>();
       std::future<ExecutionResult> result_future = completion->get_future();
-      RuntimeBlockingFfiExecutor::instance().submit(
-          [completion, invoke = std::move(invoke)]() mutable {
-            completion->set_value(invoke());
-          });
-      result = result_future.get();
+      auto pending_result = std::make_shared<ExecutionResult>();
+      try {
+        RuntimeBlockingFfiExecutor::instance().submit(
+            [pending_result, invoke = std::move(invoke)]() mutable {
+              *pending_result = invoke();
+            }, [completion, pending_result] {
+              completion->set_value(std::move(*pending_result));
+            });
+        result = result_future.get();
+      } catch (const RuntimeTaskFailure &failure) {
+        result = {Value::null(), Fault{failure.error_name(), failure.message(), 0, 0}};
+      }
     }
     {
       std::lock_guard<std::recursive_mutex> execution_guard(
@@ -2141,7 +2148,7 @@ RuntimePackageMirror package_mirror_for(const bytecode::BcModule &module) {
 }
 
 std::string version_signature(const bytecode::Version &version) {
-  return std::to_string(version.major) + "." + std::to_string(version.minor);
+  return std::to_string(version.major) + "." + std::to_string(version.minor) + "." + std::to_string(version.patch);
 }
 
 std::string bytes_hex_signature(const std::array<std::uint8_t, 32> &bytes) {

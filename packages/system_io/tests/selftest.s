@@ -43,7 +43,7 @@ def main():
       check(facts[:distribution][:name] == "tests/file", "verified package identity")
       check(facts[:manifest][:module_representations][0][1] == "source", "verified module representation")
       check(facts[:manifest][:target][:cpu_features] == [] and facts[:manifest][:target][:compute_backends] == [], "complete target requirements")
-      check(facts[:compatibility][:bytecode_versions] == [] and facts[:compatibility][:sputnik_ext_abi] == null, "source compatibility facts")
+      check(facts[:compatibility][:bytecode_versions] == [] and facts[:compatibility][:sputnik_version] == null, "source compatibility facts")
       check(not facts[:manifest][:native_payload], "source is not native payload")
       check(pkg.inspect(artifact, required_profile: "standard")[:distribution][:name] == "tests/file", "admitted profile inspection")
       check_rejected("archive cannot select another profile"): pkg.inspect(artifact, required_profile: "native-large")

@@ -298,12 +298,34 @@ void test_notebook_format_minor_version_boundary() {
   expect(supported_decoded.ok(), "bytecode format 1.1 should be supported");
 
   BcModule future = sample_module();
-  future.format_version = {1, 2};
+  future.format_version = {1, 3};
   const DecodeResult future_decoded =
       deserialize_module(serialize_module(future));
   expect(!future_decoded.ok(), "future bytecode minor unexpectedly accepted");
   expect(has_error_code(future_decoded, "BC1003"),
          "expected BC1003 for unsupported future bytecode minor");
+}
+
+void test_language_semver_patch_boundary() {
+  using namespace sputnik::bytecode;
+  auto module = sample_module();
+  module.format_version = {1, 2};
+  module.dependencies[0].min_language_version = {1, 0, 5};
+  module.dependencies[0].has_max_language_version = true;
+  module.dependencies[0].max_language_version = {1, 1, 8};
+  auto decoded = deserialize_module(serialize_module(module));
+  expect(decoded.ok(), "SemVer bytecode did not roundtrip");
+  expect(decoded.module.dependencies[0].min_language_version.patch == 5 &&
+         decoded.module.dependencies[0].max_language_version.patch == 8,
+         "dependency language patch bounds were lost");
+  module.language_version.patch = SPUTNIK_VERSION_PATCH + 1;
+  decoded = deserialize_module(serialize_module(module));
+  expect(!decoded.ok() && has_error_code(decoded, "BC1004"),
+         "future producer patch version was accepted");
+  module.language_version = {SPUTNIK_VERSION_MAJOR + 1, 0, 0};
+  decoded = deserialize_module(serialize_module(module));
+  expect(!decoded.ok() && has_error_code(decoded, "BC1004"),
+         "incompatible producer major version was accepted");
 }
 
 void test_notebook_cell_round_trip() {
@@ -1142,6 +1164,7 @@ int main() {
   test_callable_reference_send_shape();
   test_round_trip_and_dump();
   test_notebook_format_minor_version_boundary();
+  test_language_semver_patch_boundary();
   test_notebook_cell_round_trip();
   test_unknown_code_kind_rejected();
   test_notebook_cell_cannot_be_an_ordinary_entry();

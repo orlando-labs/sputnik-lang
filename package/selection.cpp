@@ -206,9 +206,12 @@ PackageHost probe_package_host(bool include_accelerators) {
   return h;
 }
 bool package_has_native(const PackageManifest &m) {
-  return !m.native_extensions.empty() || !m.native_providers.empty() || m.kind != "library" || m.bundle != "none";
+  return m.has_native_payload || !m.native_extensions.empty() || !m.native_providers.empty() || m.kind != "library" || m.bundle != "none";
 }
 std::string package_incompatibility(const PackageManifest &m, const PackageHost &h, const VariantPolicy &p, bool execution) {
+  if (!m.compatibility_error.empty()) return m.compatibility_error;
+  if (!language::satisfies(h.sputnik_version, m.sputnik_requirement))
+    return "LANGUAGE_VERSION_MISMATCH: requires Sputnik " + m.sputnik_requirement + ", host is " + h.sputnik_version;
   validate_package_target(m.target);
   const auto &t = m.target;
   if (!p.variant.empty() && p.variant != m.variant) return "different variant";
@@ -236,7 +239,7 @@ std::string package_incompatibility(const PackageManifest &m, const PackageHost 
       if (std::find(t.cuda_architectures.begin(), t.cuda_architectures.end(), a) == t.cuda_architectures.end()) return "CUDA compute capability is unsupported: " + a;
   }
   for (const auto &n : m.native_extensions)
-    if (n.sputnik_ext_abi_version != SPUTNIK_EXT_ABI_VERSION) return "Sputnik extension ABI mismatch";
+    if (!language::compatible_producer(n.sputnik_version, h.sputnik_version)) return "Sputnik extension language version mismatch";
   for (const auto &r : p.native_requirements) {
     const auto provider = std::find_if(m.native_providers.begin(),m.native_providers.end(),[&](const auto &n) { return n.id == r.id && n.kind == r.kind; });
     if (provider == m.native_providers.end() || provider->version != r.version ||

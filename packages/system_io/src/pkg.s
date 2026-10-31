@@ -25,13 +25,17 @@ def inspect(file, required_profile: ""):
   build = Json.parse(facts[11], duplicate_keys: :reject)
   versions = []
   profiles = []
+  languages = []
   bytecode_abis = []
   build[:bytecode].each |path, item|:
     versions.push!(item[:format]) unless versions.contains?(item[:format])
+    language = item[:language].map |part|: part.to_str
+    language = language.join(".")
+    languages.push!(language) unless languages.contains?(language)
     profiles.push!(item[:profile_flags]) unless profiles.contains?(item[:profile_flags])
     bytecode_abis.push!(item[:abi_hash]) unless bytecode_abis.contains?(item[:abi_hash])
-  native_abis = []
+  native_versions = []
   build[:native].each |item|:
-    native_abis.push!(item[:sputnik_ext_abi]) unless native_abis.contains?(item[:sputnik_ext_abi])
-  compatibility = {bytecode_versions: versions, profiles: profiles, bytecode_abi_hashes: bytecode_abis, sputnik_ext_abi: if native_abis.empty? then null else native_abis[0], sputnik_ext_abis: native_abis, native_requirements: manifest[:native_requirements], native_providers: manifest[:native_providers]}
+    native_versions.push!(item[:sputnik_version]) unless native_versions.contains?(item[:sputnik_version])
+  compatibility = {sputnik_requirement: manifest[:requires][:sputnik], bytecode_languages: languages, bytecode_versions: versions, profiles: profiles, bytecode_abi_hashes: bytecode_abis, sputnik_version: if native_versions.empty? then null else native_versions[0], sputnik_versions: native_versions, native_requirements: manifest[:native_requirements], native_providers: manifest[:native_providers]}
   {distribution: distribution, manifest: manifest, manifest_json: facts[2], compatibility: compatibility}

@@ -358,8 +358,8 @@ void test_frozen_image_verify_rejects_native_extension_mismatches() {
   };
 
   rejects(replace_first(fixture.image.serialized,
-                        "native_extension.0.sputnik_ext_abi_version=1",
-                        "native_extension.0.sputnik_ext_abi_version=2"),
+                        "native_extension.0.sputnik_version=1.0.0",
+                        "native_extension.0.sputnik_version=2.0.0"),
           "frozen image verify should reject changed sputnik_ext ABI version");
   rejects(replace_first(fixture.image.serialized,
                         "native_extension.0.native_source_sha256=sha256:",

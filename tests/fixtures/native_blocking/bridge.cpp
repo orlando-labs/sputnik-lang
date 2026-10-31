@@ -38,10 +38,12 @@ SputnikStatus blocking_pressure_reset(SputnikCtx *cx, const SputnikValue *args, 
   pressure_waits = 0;
   pressure_callbacks = 0;
   pressure_released = false;
-  const auto hardware = std::thread::hardware_concurrency();
-  const auto width = mode == 2
-      ? std::max(4U, std::min(32U, std::max(1U, hardware) * 2U))
-      : (hardware == 0 ? 2U : hardware);
+  const auto ffi_limit = sputnik::runtime::RuntimeBlockingFfiExecutor::instance()
+                             .stats().worker_count;
+  const auto task_limit = static_cast<std::size_t>(
+      sputnik::runtime::RuntimeScheduler().stats().worker_count);
+  const auto width = mode == 3 ? ffi_limit : mode == 2 ? ffi_limit - 1
+                                                   : std::min(ffi_limit, task_limit);
   *out = sputnik_make_int(cx, width);
   return SPUTNIK_OK;
 }

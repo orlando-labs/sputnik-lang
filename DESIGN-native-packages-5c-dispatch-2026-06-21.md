@@ -21,7 +21,7 @@ decisions and the integration points.
 - ABI contract: `runtime/sputnik_ext.h` (opaque `SputnikCtx`/`SputnikValue`,
   predicates/readers incl. `sputnik_bytes_view`, builders incl.
   `sputnik_make_handle`, `sputnik_handle_ptr`, `sputnik_fault`, `sputnik_call_block`,
-  thunk/destructor/reclaim typedefs, `sputnik_ext_abi_version`). Compiles C99+C++17.
+  thunk/destructor/reclaim typedefs, `sputnik_language_version`). Compiles C99+C++17.
 - Lifetime: `RuntimeForeignHandle` (`runtime/vm.h`) — `owned`/`borrowed`/
   `collected`, deterministic `destroy()`, GC reclaim only for `collected`, never
   `owned`. Wired as a `Value` tail kind on both reps (variant + tagged).

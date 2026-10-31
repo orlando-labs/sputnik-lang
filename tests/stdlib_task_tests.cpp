@@ -8,6 +8,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <functional>
 #include <iostream>
@@ -139,6 +140,109 @@ void expect_state(sputnik::runtime::RuntimeTaskHandleState actual,
                   sputnik::runtime::RuntimeTaskHandleState expected,
                   const std::string &message) {
   expect(actual == expected, message);
+}
+
+void test_scheduler_lazy_bounded_workers() {
+  using namespace sputnik::runtime;
+  RuntimeTaskModule task(3);
+  task.scheduler().start();
+  expect(task.scheduler().stats().worker_count == 3 &&
+             task.scheduler().stats().live_worker_count == 0,
+         "an empty scheduler must not start OS workers");
+  for (int i = 0; i < 8; ++i) {
+    expect(task.spawn([] { return Value::integer(42); })
+               .wait(std::chrono::seconds(2)).ok,
+           "a lazy worker must execute sequential tasks");
+    expect(task.scheduler().stats().live_worker_count == 1,
+           "sequential work must reuse one worker");
+  }
+
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool release = false;
+  unsigned entered = 0, completed = 0;
+  std::vector<RuntimeTaskHandle> handles;
+  for (int i = 0; i < 16; ++i) {
+    handles.push_back(task.spawn([&] {
+      std::unique_lock<std::mutex> lock(mutex);
+      ++entered;
+      changed.notify_all();
+      expect(changed.wait_for(lock, std::chrono::seconds(5),
+                              [&] { return release; }),
+             "bounded scheduler test must release its workers");
+      ++completed;
+      return Value::null();
+    }));
+  }
+  {
+    std::unique_lock<std::mutex> lock(mutex);
+    expect(changed.wait_for(lock, std::chrono::seconds(2),
+                            [&] { return entered == 3; }),
+           "queued demand must grow the scheduler to its worker limit");
+    expect(task.scheduler().stats().live_worker_count == 3 && entered == 3,
+           "excess work must queue without creating extra OS workers");
+    release = true;
+    changed.notify_all();
+  }
+  for (auto &handle : handles) {
+    expect(handle.wait(std::chrono::seconds(2)).ok,
+           "all queued work must drain after capacity becomes available");
+  }
+  expect(completed == 16, "bounded workers must execute every task once");
+  task.scheduler().shutdown();
+  expect(task.scheduler().stats().live_worker_count == 0,
+         "shutdown must join all lazily created workers");
+  bool rejected = false;
+  try { task.spawn([] { return Value::null(); }); }
+  catch (const RuntimeTaskFailure &) { rejected = true; }
+  expect(rejected && task.scheduler().stats().live_worker_count == 0,
+         "submissions after shutdown must not restart workers");
+}
+
+void test_scheduler_lazy_timer_and_join() {
+  using namespace sputnik::runtime;
+  RuntimeScheduler timer(8);
+  std::atomic<bool> fired{false};
+  timer.spawn_sleeping_strand(std::chrono::milliseconds(20), [&] { fired = true; });
+  expect(timer.wait_until_idle(std::chrono::seconds(2)) && fired,
+         "a sleeping first task must start a worker to observe its deadline");
+  expect(timer.stats().live_worker_count == 1,
+         "a single timer must not populate the entire worker pool");
+
+  RuntimeScheduler occupied(2);
+  std::atomic<bool> entered{false};
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool released = false;
+  occupied.spawn_strand([&] {
+    std::unique_lock<std::mutex> lock(mutex);
+    entered = true;
+    expect(changed.wait_for(lock, std::chrono::seconds(2), [&] { return released; }),
+           "a timer must run while another worker blocks synchronously");
+  });
+  expect(wait_for_condition([&] { return entered.load(); }, std::chrono::seconds(2)),
+         "timer regression occupies the first lazy worker");
+  occupied.spawn_sleeping_strand(std::chrono::milliseconds(10), [&] {
+    std::lock_guard<std::mutex> lock(mutex);
+    released = true;
+    changed.notify_all();
+  });
+  expect(occupied.wait_until_idle(std::chrono::seconds(3)),
+         "a sleeping submission must grow the pool to service its deadline");
+
+  RuntimeTaskModule task(3);
+  auto parent = task.spawn([&] {
+    auto child = task.spawn([&] {
+      return task.spawn([] { return Value::integer(42); })
+          .wait(std::chrono::seconds(2)).value;
+    });
+    return child.wait(std::chrono::seconds(2)).value;
+  });
+  auto result = parent.wait(std::chrono::seconds(3));
+  expect(result.ok && result.value.is_integer() && result.value.as_integer() == 42,
+         "synchronous join stacks must count as occupied workers during growth");
+  expect(task.scheduler().stats().live_worker_count == 3,
+         "nested joins must obtain available workers up to the limit");
 }
 
 void test_std010_task_async_spawn_and_wait_return_values() {
@@ -2383,6 +2487,8 @@ void test_layerb_io_park_via_reactor() {
 }
 
 int main() {
+  test_scheduler_lazy_bounded_workers();
+  test_scheduler_lazy_timer_and_join();
   test_layerb_scheduler_park_resume_frees_worker();
   test_layerb_io_park_via_reactor();
   test_layerb_cooperative_sleep_parks_in_task();

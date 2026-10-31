@@ -90,7 +90,7 @@ bool version_less(const bytecode::Version &left,
   if (left.major != right.major) {
     return left.major < right.major;
   }
-  return left.minor < right.minor;
+  return left.minor != right.minor ? left.minor < right.minor : left.patch < right.patch;
 }
 
 bool version_greater(const bytecode::Version &left,
@@ -98,7 +98,7 @@ bool version_greater(const bytecode::Version &left,
   if (left.major != right.major) {
     return left.major > right.major;
   }
-  return left.minor > right.minor;
+  return left.minor != right.minor ? left.minor > right.minor : left.patch > right.patch;
 }
 
 bool abi_hash_is_zero(const std::array<std::uint8_t, 32> &value) {
@@ -486,9 +486,9 @@ struct RuntimeModuleLoader::Impl {
       std::ostringstream message;
       message << "module '" << record.name << "' requires module '" << dep_name
               << "' language >= " << dependency.min_language_version.major
-              << "." << dependency.min_language_version.minor << ", got "
+              << "." << dependency.min_language_version.minor << "." << dependency.min_language_version.patch << ", got "
               << dep_record.module.language_version.major << "."
-              << dep_record.module.language_version.minor;
+              << dep_record.module.language_version.minor << "." << dep_record.module.language_version.patch;
       return make_diagnostic("ImportError", message.str(), record.name,
                              dep_name);
     }
@@ -498,9 +498,9 @@ struct RuntimeModuleLoader::Impl {
       std::ostringstream message;
       message << "module '" << record.name << "' requires module '" << dep_name
               << "' language <= " << dependency.max_language_version.major
-              << "." << dependency.max_language_version.minor << ", got "
+              << "." << dependency.max_language_version.minor << "." << dependency.max_language_version.patch << ", got "
               << dep_record.module.language_version.major << "."
-              << dep_record.module.language_version.minor;
+              << dep_record.module.language_version.minor << "." << dep_record.module.language_version.patch;
       return make_diagnostic("ImportError", message.str(), record.name,
                              dep_name);
     }

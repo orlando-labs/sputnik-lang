@@ -72,6 +72,8 @@
 
 namespace {
 
+std::string running_toolchain_revision;
+
 std::string read_file(const std::string &path) {
   std::ifstream input(path, std::ios::binary);
   if (!input) {
@@ -26207,29 +26209,41 @@ static NativeValue sputnik_native_extension_invoke(
       sputnik::runtime::current_runtime_stderr();
   auto completion = std::make_shared<std::promise<NativeValue>>();
   std::future<NativeValue> result = completion->get_future();
-  sputnik::runtime::RuntimeBlockingFfiExecutor::instance().submit(
-      [completion, fn = thunk.fn, method,
-       copied_args = std::move(copied_args),
-       copied_self = std::move(copied_self), strand_id, task_id, sync_owner_id,
-       cancel_flag, cancel_owner, run_cancellation, cleanup, annotation,
-       task_context, scheduler_identity, stdout_writer,
-       stderr_writer]() mutable {
-        sputnik::runtime::RuntimeStrandScope strand_scope(strand_id);
-        sputnik::runtime::RuntimeRunCancellationScope run_scope(run_cancellation);
-        sputnik::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
-        sputnik::runtime::RuntimeTaskAnnotationScope annotation_scope(annotation);
-        sputnik::runtime::RuntimeTaskScope task_scope(
-            task_id, cancel_flag, sync_owner_id, task_context,
-            scheduler_identity, cancel_owner);
-        sputnik::runtime::RuntimeOutputScope output_scope(stdout_writer,
-                                                        stderr_writer);
-        try {
-          completion->set_value(sputnik_native_extension_invoke_inline(
-              fn, method, copied_args, copied_self));
-        } catch (...) {
-          completion->set_exception(std::current_exception());
-        }
-      });
+  struct PendingForeignResult {
+    NativeValue value;
+    std::exception_ptr failure;
+  };
+  auto pending = std::make_shared<PendingForeignResult>();
+  try {
+    sputnik::runtime::RuntimeBlockingFfiExecutor::instance().submit(
+        [pending, fn = thunk.fn, method,
+         copied_args = std::move(copied_args),
+         copied_self = std::move(copied_self), strand_id, task_id, sync_owner_id,
+         cancel_flag, cancel_owner, run_cancellation, cleanup, annotation,
+         task_context, scheduler_identity, stdout_writer,
+         stderr_writer]() mutable {
+          sputnik::runtime::RuntimeStrandScope strand_scope(strand_id);
+          sputnik::runtime::RuntimeRunCancellationScope run_scope(run_cancellation);
+          sputnik::runtime::RuntimeRunCancellationMask cleanup_mask(cleanup);
+          sputnik::runtime::RuntimeTaskAnnotationScope annotation_scope(annotation);
+          sputnik::runtime::RuntimeTaskScope task_scope(
+              task_id, cancel_flag, sync_owner_id, task_context,
+              scheduler_identity, cancel_owner);
+          sputnik::runtime::RuntimeOutputScope output_scope(stdout_writer,
+                                                          stderr_writer);
+          try {
+            pending->value = sputnik_native_extension_invoke_inline(
+                fn, method, copied_args, copied_self);
+          } catch (...) {
+            pending->failure = std::current_exception();
+          }
+        }, [completion, pending]() mutable {
+          if (pending->failure) completion->set_exception(pending->failure);
+          else completion->set_value(std::move(pending->value));
+        });
+  } catch (const sputnik::runtime::RuntimeTaskFailure &failure) {
+    throw NativeRaised{native_named_error(failure.error_name(), failure.message())};
+  }
   NativeCycleSuspension suspension;
   return result.get();
 }
@@ -28079,7 +28093,7 @@ void add_stdlib_dependencies(sputnik::bytecode::BcModule *module,
     sputnik::bytecode::DepEntry dependency;
     dependency.module_name_str_id = ensure_string_id(module, stdlib_abi.name);
     dependency.required_format = {1, 0};
-    dependency.min_language_version = {1, 0};
+    dependency.min_language_version = {SPUTNIK_VERSION_MAJOR, 0, 0};
     dependency.has_abi_requirement = true;
     dependency.abi_requirement = stdlib_abi.abi_hash;
     module->dependencies.push_back(dependency);
@@ -28099,7 +28113,7 @@ std::array<std::uint8_t, 32>
 module_abi_hash(const sputnik::build::BuildModule &module,
                 const sputnik::build::BuildProfileSet &profiles,
                 const std::string &source_hash) {
-  return sha256_array("sputnik.abi.v1\n" + module.name + "\n" + module.path +
+  return sha256_array("sputnik.abi.v2\n" + std::string(SPUTNIK_VERSION) + "\n" + module.name + "\n" + module.path +
                       "\n" + source_hash + "\n" + profile_material(profiles));
 }
 
@@ -28212,7 +28226,7 @@ sputnik::build::BuildArtifactRecord build_one_module(
   // depends on provider macro sources (DESIGN-macro-system §11).
   const std::string cache_key = sputnik::lexer::sha256_hex(
       // v14 preserves original module exports in callable references.
-      "sputnik.build.cache.v14\n" + module.name + "\n" + module.path + "\n" +
+      "sputnik.build.cache.v15\n" + std::string(SPUTNIK_VERSION) + "\n" + running_toolchain_revision + "\n" + module.name + "\n" + module.path + "\n" +
       source_hash + "\n" + profile_material(profiles) +
       stdlib_abi_material(stdlib_abis) + macro_material + installed_material + prepared.templates.cache_material + prepared.import_material);
   const std::filesystem::path output_path =
@@ -28540,6 +28554,8 @@ void build_manifest_modules(
     const std::filesystem::path &cache_dir, bool cache_enabled,
     sputnik::build::BuildSummary *summary,
     sputnik::pkg::PackageResolver *resolver) {
+  if (!sputnik::language::satisfies(SPUTNIK_VERSION, manifest.package.sputnik_requirement))
+    throw std::runtime_error("LANGUAGE_VERSION_MISMATCH: project requires Sputnik " + manifest.package.sputnik_requirement + ", host is " SPUTNIK_VERSION);
   for (const auto &module : manifest.modules)
     if (module.name == manifest.root_module) resolver->source_entry(manifest_dir / module.path, module.name);
   std::vector<BuiltStdlibAbi> stdlib_abis;
@@ -28632,7 +28648,7 @@ std::string vm_graph_cache_key(
     const sputnik::build::BuildSummary &summary, const std::string &root_module,
     const std::vector<sputnik::capability::CapabilityRequest> &grants) {
   std::ostringstream material;
-  material << "sputnik.vm.graph.v4\n";
+  material << "sputnik.vm.graph.v5\n" << SPUTNIK_VERSION << '\n' << running_toolchain_revision << '\n';
   material << sputnik::bytecode::kGraphLinkerAbiVersion << '\n';
   material << summary.name << '\n' << root_module << '\n';
   for (const sputnik::capability::CapabilityRequest &grant : grants) {
@@ -28986,13 +29002,14 @@ std::string native_extension_cache_key(
     const sputnik::bytecode::BcModule &module,
     const std::filesystem::path &manifest_dir) {
   std::ostringstream material;
-  append_native_cache_atom(&material, "sputnik.native-extensions.v1");
+  append_native_cache_atom(&material, "sputnik.native-extensions.v2");
+  append_native_cache_atom(&material, running_toolchain_revision);
   append_native_cache_atom(&material, cxx);
   append_native_cache_atom(
       &material, capture_command_output(shell_single_quote(cxx) + " --version"));
   append_native_cache_atom(&material, native_shared_library_suffix());
   append_native_cache_atom(&material,
-                           std::to_string(SPUTNIK_EXT_ABI_VERSION));
+                           std::string(SPUTNIK_VERSION));
   append_native_cache_file(&material, runtime_root, "runtime-abi",
                            runtime_root / "runtime" / "sputnik_ext.h");
 
@@ -29237,13 +29254,13 @@ std::filesystem::path prepare_native_extension_library(
     // Existing static packages inherit the runtime's ABI marker. A shared
     // package needs to own one so the loader can reject an incompatible image;
     // weak linkage lets an out-of-tree package override it deliberately.
-    const std::filesystem::path abi_source = artifact_dir / "sputnik_ext_abi.c";
-    const std::filesystem::path abi_object = artifact_dir / "sputnik_ext_abi.o";
+    const std::filesystem::path abi_source = artifact_dir / "sputnik_version.c";
+    const std::filesystem::path abi_object = artifact_dir / "sputnik_version.o";
     write_file(abi_source.string(),
                "#include \"runtime/sputnik_ext.h\"\n"
                "#if defined(__GNUC__)\n__attribute__((weak))\n#endif\n"
-               "uint32_t sputnik_ext_abi_version(void) {\n"
-               "  return SPUTNIK_EXT_ABI_VERSION;\n}\n");
+               "const char *sputnik_language_version(void) {\n"
+               "  return SPUTNIK_VERSION;\n}\n");
     const std::vector<std::string> abi_compile = {cxx,   "-x",
                                                   "c",   "-std=c11",
                                                   "-O2", "-fPIC",
@@ -29317,15 +29334,16 @@ std::filesystem::path compile_and_load_native_extensions(
   }
   loaded_libraries->retain(handle);
 
-  using AbiVersionFunction = std::uint32_t (*)();
+  using AbiVersionFunction = const char *(*)();
   const AbiVersionFunction abi_version =
-      dynamic_function<AbiVersionFunction>(handle, "sputnik_ext_abi_version",
+      dynamic_function<AbiVersionFunction>(handle, "sputnik_language_version",
                                            library_path);
-  if (abi_version() != SPUTNIK_EXT_ABI_VERSION) {
+  const char *producer_version = abi_version();
+  if (!producer_version || !sputnik::language::compatible_producer(producer_version)) {
     throw std::runtime_error(
         "native extension ABI mismatch in " + library_path.string() +
-        ": expected " + std::to_string(SPUTNIK_EXT_ABI_VERSION) + ", got " +
-        std::to_string(abi_version()));
+        ": expected " + std::string(SPUTNIK_VERSION) + ", got " +
+        std::string(producer_version ? producer_version : "<null>"));
   }
 
   sputnik::runtime::RuntimeNativePackageDescriptor package;
@@ -29720,11 +29738,13 @@ int run_pkg_command(int argc, char **argv) {
     std::string root;
     std::vector<sputnik::templates::SourceFormat> formats;
     if (is_sputnik_source_path(path) && !configuration) {
-      const auto artifact =
-          compile_source_to_runnable_module(path, std::nullopt, {}, false);
-      root = artifact.module_name;
+      const auto source = read_file(path);
+      auto prepared = prepare_source_text(source, path, {}, &resolver);
+      root = prepared.parsed.module_name.empty() ? synthetic_module_name_for_path(path) : prepared.parsed.module_name;
       resolver.source_entry(path, root);
-      modules.push_back({root, path, artifact.module, false});
+      auto providers = installed_macro_providers(prepared.parsed.items, path, {}, &resolver);
+      auto module = compile_prepared_source_to_module(prepared, source, path, root, {}, &providers);
+      modules.push_back({root, path, std::move(module), false});
     } else {
       const auto parsed = configuration
           ? sputnik::build::BuildManifestResult{configuration->manifest, {}}
@@ -30468,9 +30488,10 @@ int run_bytecode_artifact_command(const std::string &command,
 int main(int argc, char **argv) {
   try {
     if (argc == 2 && std::string(argv[1]) == "--version") {
-      std::cout << "sputnik 0.1.0-dev\n";
+      std::cout << "sputnik " SPUTNIK_VERSION "\n";
       return 0;
     }
+    running_toolchain_revision = package_toolchain_revision(argv[0]);
     if (argc >= 2 && std::string(argv[1]) == "run-embedded") {
       return run_embedded_command(argc, argv);
     }

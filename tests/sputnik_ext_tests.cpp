@@ -684,7 +684,7 @@ void test_sputnik_ext_fault_and_version() {
              host.fault_message == "bad input",
          "sputnik_fault records the named error class and message");
 
-  expect(sputnik_ext_abi_version() == SPUTNIK_EXT_ABI_VERSION,
+  expect(std::string(sputnik_language_version()) == SPUTNIK_VERSION,
          "ABI version handshake matches");
 
   sputnik::runtime::sputnik_ext_ctx_close(cx);

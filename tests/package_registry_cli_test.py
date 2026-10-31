@@ -46,15 +46,22 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-cli-') as temporary:
                 if state['mode'] == 'partial-status': status = 206
             else:
                 release = dict(package_ref=ref, version='1.0.0', yanked=False,
-                    artifacts=[dict(variant='source', quarantined=False)])
+                    artifacts=[dict(variant='source', quarantined=False, compatibility=dict(sputnik_requirement='>=1.0.0 <2.0.0'))])
+                if state['mode'] in ['language-major','language-patch','legacy-language']:
+                    item = release['artifacts'][0]
+                    if state['mode'] == 'legacy-language': item.pop('compatibility')
+                    else: item['compatibility']['sputnik_requirement'] = '>=2.0.0 <3.0.0' if state['mode'] == 'language-major' else '>=1.0.1 <2.0.0'
                 if self.path.endswith('/index'):
-                    versions = [dict(release, version='9.0.0', yanked=True), dict(release, version='2.0.0-beta.1'), release]
+                    future = dict(release, version='2.0.0', artifacts=[dict(variant='source', quarantined=False, compatibility=dict(sputnik_requirement='>=2.0.0 <3.0.0'))])
+                    versions = [future, dict(release, version='9.0.0', yanked=True), dict(release, version='2.0.0-beta.1'), release]
                     data = dict(package_ref=ref, versions=versions, next_cursor=None)
                 elif self.path.endswith('/artifacts/source'):
-                    data = dict(package_ref=ref, version='1.0.0', variant='source', size=len(body), sha256=digest, url=origin+artifact+'/download')
+                    data = dict(package_ref=ref, version='1.0.0', variant='source', compatibility=dict(sputnik_requirement='>=1.0.0 <2.0.0'), size=len(body), sha256=digest, url=origin+artifact+'/download')
                     if state['mode'] == 'foreign-url': data['url'] = 'https://other.invalid/download'
                     if state['mode'] == 'identity': data['package_ref'] = 'other/lib'
                     if state['mode'] == 'size': data['size'] = 67108865
+                elif '/versions/2.0.0' in self.path:
+                    data = dict(release, version='2.0.0', artifacts=[dict(variant='source', quarantined=False, compatibility=dict(sputnik_requirement='>=2.0.0 <3.0.0'))])
                 elif '/versions/' in self.path: data = release
                 else: data = dict(package_ref=ref, requested_ref=name)
                 body = json.dumps(data).encode()
@@ -72,6 +79,8 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-cli-') as temporary:
         output = cli('pkg', 'install', 'lib', '--registry', origin)
         assert 'test/lib@1.0.0' in output and 'test/base@1.0.0' in output, output
         assert '2.0.0-beta.1' not in ''.join(state['requests'])
+        assert any('/versions/2.0.0' in path for path in state['requests'])
+        assert not any('/versions/2.0.0/artifacts/' in path for path in state['requests']), state['requests']
         app = root/'app.s'; app.write_text('package app\nfrom test.lib import answer\nio.stdout.write_line(answer().to_str)\n')
         assert cli('run', str(app)).strip() == '42'
         cli('pkg', 'install', 'test/lib', '--registry', origin)
@@ -89,6 +98,11 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-cli-') as temporary:
             env['SPUTNIK_PKG_HOME'] = str(root/('bad-'+mode))
             cli('pkg', 'install', 'lib', '--registry', origin, ok=False)
             assert not (root/('bad-'+mode)/'test/lib/1.0.0').exists(), mode
+        for mode in ['language-major','language-patch','legacy-language']:
+            state['mode'] = mode
+            state['requests'].clear()
+            assert 'NO_COMPATIBLE_ARTIFACT' in cli('pkg', 'install', 'lib', '--version', '1.0.0', '--registry', origin, ok=False)
+            assert not any(path.endswith('/download') for path in state['requests']), state['requests']
         state['mode'] = 'good'
         credentials = root/'credentials.json'; credentials.write_text(json.dumps(dict(origin=origin, token='spreg_example')))
         credentials.chmod(0o644)

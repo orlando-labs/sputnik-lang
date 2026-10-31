@@ -12,7 +12,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <condition_variable>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <limits>
@@ -31,6 +33,27 @@ namespace sputnik::runtime {
 
 namespace {
 thread_local bool tls_runtime_blocking_ffi_thread = false;
+
+std::size_t thread_limit_from_environment(const char *name,
+                                        std::size_t fallback) {
+  const char *text = std::getenv(name);
+  if (!text) return fallback;
+  const std::string value(text);
+  std::size_t limit = 0;
+  const auto result = std::from_chars(value.data(), value.data() + value.size(), limit);
+  if (result.ec != std::errc{} || result.ptr != value.data() + value.size() ||
+      limit == 0) {
+    throw RuntimeTaskFailure("ArgumentError",
+                             std::string(name) + " must be a positive integer");
+  }
+  return limit;
+}
+
+std::size_t default_ffi_thread_limit() {
+  const std::size_t hardware = std::max(1U, std::thread::hardware_concurrency());
+  return thread_limit_from_environment("SPUTNIK_FFI_MAX_THREADS",
+      std::max<std::size_t>(4, std::min<std::size_t>(32, hardware * 2)));
+}
 }
 
 bool current_runtime_is_blocking_ffi_thread() {
@@ -39,19 +62,11 @@ bool current_runtime_is_blocking_ffi_thread() {
 
 class RuntimeBlockingFfiExecutor::Impl {
 public:
-  Impl() {
-    const std::size_t hardware =
-        std::max<std::size_t>(1U, std::thread::hardware_concurrency());
-    const std::size_t worker_count =
-        std::max<std::size_t>(4U, std::min<std::size_t>(32U, hardware * 2U));
-    workers_.reserve(worker_count);
-    try {
-      std::lock_guard<std::mutex> lock(mutex_);
-      for (std::size_t index = 0; index < worker_count; ++index)
-        start_worker_locked(true);
-    } catch (...) {
-      stop_and_join();
-      throw;
+  Impl(std::size_t worker_count, std::chrono::milliseconds idle_timeout)
+      : worker_count_(worker_count ? worker_count : default_ffi_thread_limit()),
+        idle_timeout_(idle_timeout) {
+    if (idle_timeout_ <= std::chrono::milliseconds::zero()) {
+      throw RuntimeTaskFailure("ArgumentError", "FFI idle timeout must be positive");
     }
   }
 
@@ -70,7 +85,7 @@ public:
     }
   }
 
-  void submit(std::function<void()> function) {
+  void submit(std::function<void()> function, std::function<void()> completion) {
     if (!function) {
       return;
     }
@@ -81,17 +96,36 @@ public:
                                  "blocking FFI executor is shutting down");
       }
       reap_workers_locked();
-      // Every job may wait for a producer that itself needs FFI. A fixed
-      // concurrency cap would prevent that producer from ever entering.
-      // Keep the idle pool bounded, but give queued work a carrier even when
-      // all existing carriers are occupied by synchronous foreign stacks.
-      if (queue_.size() >= available_workers_) start_worker_locked(false);
-      queue_.push_back(std::move(function));
+      // An enqueued job reserves an available carrier even before that
+      // carrier takes it. Do not reject a burst while capacity can still grow.
+      if (queue_.size() >= available_workers_) {
+        if (workers_.size() >= worker_count_) {
+          // A queued producer may be needed by every occupied foreign stack.
+          // Fail explicitly instead of exceeding the limit or deadlocking it.
+          throw RuntimeTaskFailure("ResourceBusyError",
+              "blocking FFI thread pool is full (limit " +
+              std::to_string(worker_count_) +
+              "); retry later or increase SPUTNIK_FFI_MAX_THREADS");
+        }
+        start_worker_locked();
+      }
+      queue_.push_back(Job{std::move(function), std::move(completion)});
     }
     ready_.notify_one();
   }
 
+  RuntimeBlockingFfiStats stats() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return {worker_count_, live_workers_, live_workers_ - available_workers_,
+            queue_.size()};
+  }
+
 private:
+  struct Job {
+    std::function<void()> function;
+    std::function<void()> completion;
+  };
+
   struct Worker {
     std::thread thread;
     std::shared_ptr<std::atomic<bool>> exited;
@@ -105,7 +139,7 @@ private:
     }
   }
 
-  void start_worker_locked(bool core) {
+  void start_worker_locked() {
     // Grow metadata before creating a joinable thread so allocation failure
     // cannot destroy an unjoined std::thread during vector reallocation.
     workers_.reserve(workers_.size() + 1U);
@@ -114,53 +148,63 @@ private:
     workers_.back().exited = exited;
     try {
       workers_.back().thread = std::thread(
-          [this, core, exited] { worker_loop(core, exited); });
+          [this, exited] { worker_loop(exited); });
     } catch (...) {
       workers_.pop_back();
       throw;
     }
     ++available_workers_;
+    ++live_workers_;
   }
 
-  void worker_loop(bool core, const std::shared_ptr<std::atomic<bool>> &exited) {
+  void worker_loop(const std::shared_ptr<std::atomic<bool>> &exited) {
     while (true) {
-      std::function<void()> function;
+      Job job;
       {
         std::unique_lock<std::mutex> lock(mutex_);
         const auto ready = [this] { return stopping_ || !queue_.empty(); };
-        bool awakened = true;
-        if (core) ready_.wait(lock, ready);
-        else awakened = ready_.wait_for(lock, std::chrono::seconds(30), ready);
+        const bool awakened = ready_.wait_for(lock, idle_timeout_, ready);
         if ((!awakened || stopping_) && queue_.empty()) {
           --available_workers_;
-          lock.unlock();
+          --live_workers_;
           exited->store(true, std::memory_order_release);
           return;
         }
-        function = std::move(queue_.front());
+        job = std::move(queue_.front());
         queue_.pop_front();
         --available_workers_;
       }
       try {
         tls_runtime_blocking_ffi_thread = true;
-        function();
+        job.function();
       } catch (...) {
         // Submitted jobs own their completion/error channel. An exception must
         // never terminate an executor worker or the process.
       }
+      // Captures may own foreign finalizers. Retire them while this carrier
+      // still owns its capacity and retains the nested-FFI inline context.
+      job.function = {};
       tls_runtime_blocking_ffi_thread = false;
       {
         std::lock_guard<std::mutex> lock(mutex_);
         ++available_workers_;
       }
+      try {
+        if (job.completion) job.completion();
+      } catch (...) {
+        // Completion observers must not terminate an executor worker either.
+      }
     }
   }
 
-  std::mutex mutex_;
+  mutable std::mutex mutex_;
   std::condition_variable ready_;
-  std::deque<std::function<void()>> queue_;
+  std::deque<Job> queue_;
   std::vector<Worker> workers_;
   std::size_t available_workers_ = 0;
+  std::size_t live_workers_ = 0;
+  const std::size_t worker_count_;
+  const std::chrono::milliseconds idle_timeout_;
   bool stopping_ = false;
 };
 
@@ -171,13 +215,19 @@ RuntimeBlockingFfiExecutor &RuntimeBlockingFfiExecutor::instance() {
   return *executor;
 }
 
-RuntimeBlockingFfiExecutor::RuntimeBlockingFfiExecutor()
-    : impl_(std::make_unique<Impl>()) {}
+RuntimeBlockingFfiExecutor::RuntimeBlockingFfiExecutor(
+    std::size_t worker_count, std::chrono::milliseconds idle_timeout)
+    : impl_(std::make_unique<Impl>(worker_count, idle_timeout)) {}
 
 RuntimeBlockingFfiExecutor::~RuntimeBlockingFfiExecutor() = default;
 
-void RuntimeBlockingFfiExecutor::submit(std::function<void()> function) {
-  impl_->submit(std::move(function));
+void RuntimeBlockingFfiExecutor::submit(std::function<void()> function,
+                                        std::function<void()> completion) {
+  impl_->submit(std::move(function), std::move(completion));
+}
+
+RuntimeBlockingFfiStats RuntimeBlockingFfiExecutor::stats() const {
+  return impl_->stats();
 }
 
 struct RuntimeTaskContext::State {
@@ -2676,11 +2726,6 @@ public:
       return;
     }
     started_ = true;
-    workers_.reserve(worker_count_);
-    const std::shared_ptr<Impl> self = shared_from_this();
-    for (std::size_t index = 0; index < worker_count_; ++index) {
-      workers_.emplace_back([self, index]() { self->worker_loop(index); });
-    }
   }
 
   void shutdown() {
@@ -2716,6 +2761,8 @@ public:
       }
     }
     workers_.clear();
+    std::lock_guard<std::mutex> lock(mutex_);
+    stats_.live_worker_count = 0;
   }
 
   std::uint64_t spawn_strand(StrandFunction function) {
@@ -3125,7 +3172,26 @@ private:
       return worker_count;
     }
     const unsigned int hardware = std::thread::hardware_concurrency();
-    return hardware == 0 ? 2 : static_cast<std::size_t>(hardware);
+    return thread_limit_from_environment("SPUTNIK_TASK_MAX_THREADS",
+        hardware == 0 ? 2 : static_cast<std::size_t>(hardware));
+  }
+
+  void grow_workers_locked(std::size_t desired, bool required = false) {
+    desired = std::min(desired, worker_count_);
+    while (!shutdown_requested_ && workers_.size() < desired) {
+      const auto self = shared_from_this();
+      const std::size_t index = workers_.size();
+      try {
+        workers_.reserve(index + 1);
+        workers_.emplace_back([self, index]() { self->worker_loop(index); });
+      } catch (...) {
+        // Existing workers can drain ordinary queued work if the OS refuses
+        // extra threads. A first worker or a targeted worker is indispensable.
+        if (workers_.empty() || required) throw;
+        break;
+      }
+      stats_.live_worker_count = workers_.size();
+    }
   }
 
   static bool is_terminal_state(RuntimeStrandState state) {
@@ -3168,6 +3234,13 @@ private:
         parent_context == nullptr ? RuntimeTaskContext::create()
                                   : parent_context->inherited_snapshot();
     std::unique_lock<std::mutex> lock(mutex_);
+    if (shutdown_requested_) {
+      throw RuntimeTaskFailure("RuntimeError", "scheduler is shutting down");
+    }
+    // Sleeping tasks still need one worker to observe their deadlines. Start
+    // it before publishing the task so thread creation failure leaves no
+    // accepted task without an executor.
+    grow_workers_locked(1);
     const std::uint64_t strand_id = next_strand_id_++;
     std::uint64_t parent_task_id = current_runtime_scheduler_identity() == this
                                        ? current_runtime_task_id()
@@ -3212,6 +3285,9 @@ private:
       ++stored.wake_generation;
       timers_.push(TimerEntry{std::chrono::steady_clock::now() + delay,
                               strand_id, stored.wake_generation});
+      // A synchronous call may occupy every existing worker. Leave capacity
+      // to observe this deadline rather than waiting for that call to finish.
+      grow_workers_locked(busy_worker_count_ + 1);
     } else {
       enqueue_runnable_locked(strand_id, std::nullopt);
     }
@@ -3236,6 +3312,12 @@ private:
     if (strand.queued || (strand.state != RuntimeStrandState::Runnable &&
                           strand.state != RuntimeStrandState::Sleeping)) {
       return;
+    }
+    if (worker_index.has_value()) {
+      grow_workers_locked(*worker_index + 1, true);
+    } else {
+      grow_workers_locked(busy_worker_count_ +
+                          runnable_queue_depth_locked() + 1);
     }
     strand.state = RuntimeStrandState::Runnable;
     strand.queued = true;
@@ -3622,6 +3704,8 @@ private:
         while (!shutdown_requested_) {
           strand_id = next_runnable_locked(worker_index);
           if (strand_id != 0) {
+            ++busy_worker_count_;
+            if (!timers_.empty()) grow_workers_locked(busy_worker_count_ + 1);
             function = strands_[strand_id].function;
             sync_owner_id = strands_[strand_id].sync_owner_id;
             cancellation_requested = strands_[strand_id].cancellation_requested;
@@ -3673,6 +3757,7 @@ private:
 
       {
         std::lock_guard<std::mutex> lock(mutex_);
+        --busy_worker_count_;
         auto found = strands_.find(strand_id);
         if (found != strands_.end() && found->second.park_pending) {
           // Layer B: the strand parked itself. Release the worker without
@@ -3777,6 +3862,9 @@ private:
   RuntimeSchedulerStats stats_;
   std::uint64_t next_strand_id_ = 1;
   std::uint64_t running_count_ = 0;
+  // Includes workers synchronously joining another task: their C++ stack
+  // still occupies an OS worker even while the logical task is Waiting.
+  std::size_t busy_worker_count_ = 0;
   bool started_ = false;
   bool shutdown_requested_ = false;
 };

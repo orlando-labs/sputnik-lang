@@ -1,6 +1,7 @@
 #pragma once
 
 #include "profile/capabilities.h"
+#include "runtime/semver.h"
 
 #include <cstdint>
 #include <string>
@@ -96,7 +97,7 @@ struct PackageNativeExtension {
   std::string language;
   std::string kind = "source";
   std::string library;
-  std::uint32_t sputnik_ext_abi_version = 1;
+  std::string sputnik_version = SPUTNIK_VERSION;
   std::vector<std::string> required_runtime_features;
   std::vector<std::string> requirements;
   // Derived local preparation facts; never serialized in a distribution.
@@ -133,6 +134,8 @@ struct PackageProfileSet {
 };
 
 struct PackageManifest {
+  std::string sputnik_requirement = language::baseline_requirement;
+  bool explicit_sputnik_requirement = false;
   std::string name;
   std::string version;
   std::string root_module;
@@ -157,6 +160,8 @@ struct PackageManifest {
   std::vector<PackageNativeProvider> native_providers;
   // Derived registry metadata when module payloads have not been downloaded.
   bool has_bytecode_delivery = false;
+  bool has_native_payload = false;
+  std::string compatibility_error;
 };
 
 struct PackageManifestResult {
@@ -183,7 +188,7 @@ struct PackageNativeBlob {
 
 struct PackageNativeExtensionMetadata {
   std::string name;
-  std::uint32_t sputnik_ext_abi_version = 1;
+  std::string sputnik_version = SPUTNIK_VERSION;
   std::string target_triple;
   std::string native_source_digest;
   std::string exported_symbol_digest;

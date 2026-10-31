@@ -140,9 +140,9 @@ vm_notebook_image_manifest(const bytecode::BcModule &module,
     return std::nullopt;
   }
   if (module.format_version.major != 1U ||
-      module.format_version.minor != 1U) {
+      module.format_version.minor < 1U || module.format_version.minor > 2U) {
     set_error(error,
-              "notebook metadata requires supported bytecode format 1.1");
+              "notebook metadata requires supported bytecode format 1.1 or 1.2");
     return std::nullopt;
   }
   if (module.notebook_metadata->schema_version.major !=

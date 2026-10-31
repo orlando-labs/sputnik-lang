@@ -109,14 +109,14 @@ bool version_less(const Version &left, const Version &right) {
   if (left.major != right.major) {
     return left.major < right.major;
   }
-  return left.minor < right.minor;
+  return left.minor != right.minor ? left.minor < right.minor : left.patch < right.patch;
 }
 
 bool version_greater(const Version &left, const Version &right) {
   if (left.major != right.major) {
     return left.major > right.major;
   }
-  return left.minor > right.minor;
+  return left.minor != right.minor ? left.minor > right.minor : left.patch > right.patch;
 }
 
 bool abi_hash_is_zero(const std::array<std::uint8_t, 32> &value) {
@@ -1468,9 +1468,9 @@ bool validate_reachable_dependencies(
             "module '" + module.name + "' requires module '" +
                 dependency_name + "' language >= " +
                 std::to_string(dependency.min_language_version.major) + "." +
-                std::to_string(dependency.min_language_version.minor) +
+                std::to_string(dependency.min_language_version.minor) + "." + std::to_string(dependency.min_language_version.patch) +
                 ", got " + std::to_string(dep_module.language_version.major) +
-                "." + std::to_string(dep_module.language_version.minor),
+                "." + std::to_string(dep_module.language_version.minor) + "." + std::to_string(dep_module.language_version.patch),
             module.name, dependency_name));
         valid = false;
       }
@@ -1481,9 +1481,9 @@ bool validate_reachable_dependencies(
             "module '" + module.name + "' requires module '" +
                 dependency_name + "' language <= " +
                 std::to_string(dependency.max_language_version.major) + "." +
-                std::to_string(dependency.max_language_version.minor) +
+                std::to_string(dependency.max_language_version.minor) + "." + std::to_string(dependency.max_language_version.patch) +
                 ", got " + std::to_string(dep_module.language_version.major) +
-                "." + std::to_string(dep_module.language_version.minor),
+                "." + std::to_string(dep_module.language_version.minor) + "." + std::to_string(dep_module.language_version.patch),
             module.name, dependency_name));
         valid = false;
       }

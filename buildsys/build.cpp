@@ -1047,9 +1047,14 @@ bool read_native_extensions(
     read_string_member(item, "language", &extension.language);
     read_string_member(item, "kind", &extension.kind);
     read_string_member(item, "library", &extension.library);
-    if (const auto *abi = member(item, "sputnik_ext_abi")) {
-      if ((abi->kind != JsonValue::Kind::String && abi->kind != JsonValue::Kind::Number) || abi->string_value != "1")
-        diagnostics->push_back(diagnostic("BuildManifestError", "sputnik_ext_abi must be 1", path));
+    if (extension.kind == "prebuilt" && !member(item, "sputnik_version"))
+      diagnostics->push_back(diagnostic("BuildManifestError", "prebuilt extensions require sputnik_version from their compiler's language header", path));
+    if (member(item, "sputnik_ext_abi"))
+      diagnostics->push_back(diagnostic("BuildManifestError", "sputnik_ext_abi was replaced by sputnik_version (SemVer); rebuild the extension", path));
+    if (member(item, "sputnik_version")) {
+      language::Version version;
+      if (!read_string_member(item, "sputnik_version", &extension.sputnik_version) || !language::parse(extension.sputnik_version, version))
+        diagnostics->push_back(diagnostic("BuildManifestError", "native sputnik_version must be a SemVer string", path));
     }
     read_string_array_member(item, "requirements", &extension.requirements);
     read_string_array_member(item, "required_runtime_features", &extension.required_runtime_features);
@@ -1142,6 +1147,13 @@ void read_package_fields(const JsonValue &root, const std::string &path,
     if (member(object, key) && !read_string_array_member(object, key, &dest))
       error(std::string(key) + " must be an array of strings");
   };
+  if (const auto *requires = member(root, "requires")) {
+    m.explicit_sputnik_requirement = true;
+    if (requires->kind != JsonValue::Kind::Object || requires->object_value.size() != 1 ||
+        !read_string_member(*requires, "sputnik", &m.sputnik_requirement) ||
+        !language::valid_requirement(m.sputnik_requirement))
+      error("requires must contain sputnik: a bounded SemVer range, e.g. >=1.0.0 <2.0.0");
+  }
   text(root, "version", m.version);
   text(root, "kind", m.kind);
   text(root, "source_root", m.source_root);
@@ -1685,8 +1697,8 @@ std::string summary_to_json(const BuildSummary &summary) {
     const sputnik::pkg::PackageNativeExtensionMetadata &metadata =
         summary.native_extensions[i];
     out << "\n    {\"name\":\"" << json_escape(metadata.name)
-        << "\",\"sputnik_ext_abi_version\":"
-        << metadata.sputnik_ext_abi_version << ",\"target_triple\":\""
+        << "\",\"sputnik_version\":\""
+        << metadata.sputnik_version << "\",\"target_triple\":\""
         << json_escape(metadata.target_triple)
         << "\",\"native_source_sha256\":\""
         << json_escape(metadata.native_source_digest)

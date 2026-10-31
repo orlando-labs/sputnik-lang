@@ -513,8 +513,8 @@ serialize_frozen_image_artifact(const FrozenImageArtifact &artifact) {
     const std::string prefix =
         "native_extension." + std::to_string(i) + ".";
     out << prefix << "name=" << line_escape(extension.name) << "\n";
-    out << prefix << "sputnik_ext_abi_version="
-        << extension.sputnik_ext_abi_version << "\n";
+    out << prefix << "sputnik_version="
+        << extension.sputnik_version << "\n";
     out << prefix << "target_triple="
         << line_escape(extension.target_triple) << "\n";
     out << prefix << "native_source_sha256="
@@ -697,8 +697,7 @@ parse_frozen_image_artifact(const std::string &serialized,
                              &extension.native_source_digest) ||
           !get_escaped_value(values, prefix + "exported_symbol_sha256",
                              &extension.exported_symbol_digest) ||
-          !parse_u32(values[prefix + "sputnik_ext_abi_version"],
-                     &extension.sputnik_ext_abi_version)) {
+          !get_escaped_value(values, prefix + "sputnik_version", &extension.sputnik_version)) {
         result.diagnostics.push_back(diagnostic(
             "FrozenImageParseError",
             "frozen image native extension is incomplete"));
@@ -925,9 +924,9 @@ verify_frozen_image_artifact(const std::string &serialized,
           extension.name));
       continue;
     }
-    if (extension.sputnik_ext_abi_version != 1U ||
-        extension.sputnik_ext_abi_version !=
-            package_extension->sputnik_ext_abi_version) {
+    if (!language::compatible_producer(extension.sputnik_version) ||
+        extension.sputnik_version !=
+            package_extension->sputnik_version) {
       result.diagnostics.push_back(diagnostic(
           "FrozenImageVerifyError",
           "native extension ABI version does not match",
@@ -1043,8 +1042,8 @@ std::string artifact_to_json(const FrozenImageArtifact &artifact) {
     }
     const pkg::PackageNativeExtensionMetadata &extension = extensions[i];
     out << "\n    {\"name\":\"" << json_escape(extension.name)
-        << "\",\"sputnik_ext_abi_version\":"
-        << extension.sputnik_ext_abi_version << ",\"target_triple\":\""
+        << "\",\"sputnik_version\":\""
+        << extension.sputnik_version << "\",\"target_triple\":\""
         << json_escape(extension.target_triple)
         << "\",\"native_source_sha256\":\""
         << json_escape(extension.native_source_digest)

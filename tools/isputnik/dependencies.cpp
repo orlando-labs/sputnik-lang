@@ -265,8 +265,9 @@ void load_prepared_native_dependencies(const sputnik::notebook::LoadedProject &p
       if (!fn && required) throw std::runtime_error("missing native symbol " + name + " in " + path.string());
       return fn;
     };
-    auto abi = reinterpret_cast<std::uint32_t (*)()>(symbol("sputnik_ext_abi_version"));
-    if (abi() != SPUTNIK_EXT_ABI_VERSION) throw std::runtime_error("native dependency ABI mismatch");
+    auto version = reinterpret_cast<const char *(*)()>(symbol("sputnik_language_version"));
+    const char *producer = version();
+    if (!producer || !sputnik::language::compatible_producer(producer)) throw std::runtime_error("native dependency Sputnik language version mismatch");
     sputnik::build::BuildManifest manifest;
     const auto installed = installed_manifests.find(root.string());
     if (installed != installed_manifests.end()) {

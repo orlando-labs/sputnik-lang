@@ -98,14 +98,47 @@ while waiting for the foreign completion. A cancelled native task publishes
 cancelled status only after its foreign stack has unwound. A foreign library
 that does not cooperate with cancellation must finish before task retirement.
 
-The FFI executor keeps an initial idle pool of 4..32 workers. If queued work has
-no available carrier, it creates a surplus carrier rather than imposing a cap
-on in-flight waits. This lets a producer enter FFI even when every initial
-carrier is retained by a waiting callback. Surplus workers retire after 30
-seconds idle and are joined on subsequent submissions. Native-stack retention
-therefore still consumes an OS thread per concurrent foreign invocation; total
-active threads are limited by OS resources, not a fixed pool cap. Scheduler
-parking and FFI producer progress are separate guarantees.
+Both the task scheduler and the FFI executor create OS workers on demand.
+Constructing an empty pool creates no workers. Task workers grow with runnable
+demand up to their configured limit, reuse existing threads, and queue excess
+tasks. One worker also observes deadlines when the first task is sleeping.
+Synchronous task joins still occupy an OS worker and count toward demand.
+Started task workers remain available until scheduler shutdown. Scheduler
+statistics distinguish the configured `worker_count` limit from the actual
+`live_worker_count`.
+
+Configure limits in the service environment before launching the process:
+
+```sh
+export SPUTNIK_TASK_MAX_THREADS=4
+export SPUTNIK_FFI_MAX_THREADS=8
+```
+
+`SPUTNIK_TASK_MAX_THREADS` defaults to hardware concurrency (2 if unknown).
+`SPUTNIK_FFI_MAX_THREADS` defaults to twice hardware concurrency, clamped to
+4..32. Each value must be a positive decimal integer; empty, zero, negative,
+malformed and overflowing values raise `ArgumentError` naming the variable.
+Limits are read when the corresponding pool is constructed; explicit nonzero
+C++ worker counts override ENV. FFI carriers all retire after 30 seconds idle,
+are joined on a subsequent submission, and start again when needed.
+
+The FFI limit is hard. When every carrier is occupied or already reserved by
+an accepted job, a new submission raises `ResourceBusyError` with
+`blocking FFI thread pool is full`, the limit and the ENV setting to adjust.
+Rejected jobs are never queued or executed later. In a resumable VM the fault
+wakes the parked strand and runs normal `rescue`/`ensure`; freeing a carrier
+allows subsequent calls to proceed. A synchronous nested foreign call already
+on an FFI carrier runs inline and does not acquire a second carrier.
+Completion notifications run after the foreign call releases its capacity,
+so sequential calls at a one-thread limit do not spuriously report overload.
+
+This explicit overload behavior replaces unbounded surplus threads: a queued
+foreign producer could otherwise deadlock when all bounded carriers are waiting
+for its result. Applications should leave capacity for independent producers,
+handle the error, retry after capacity is released, or raise the configured
+limit. These are pool limits, not a cap on every OS thread in the process:
+native-stack task drivers and service/reactor threads have separate lifetimes.
+Scheduler parking and FFI producer progress remain separate guarantees.
 
 Use `blocking` for waits and I/O that must yield a resumable VM worker. A CPU
 kernel also prevents cooperative switching until it returns, but relocating
@@ -129,15 +162,21 @@ counts and scheduler park/resume stats. Both cases pass in the VM.
 The same unit executable compiles the exact generated native stack driver
 against a one-worker scheduler. It checks a nested blocking callback, task-local
 context, 64 immediate-completion races, cancellation/cleanup and park/resume
-statistics. It also fills the original FFI idle pool and submits a producer
-through FFI, proving that the producer obtains a carrier.
+statistics. It also checks ENV validation and precedence, empty pool startup,
+bounded FFI growth, explicit overload rejection, idle retirement and restart.
+Task tests cover sequential reuse, excess queued work, initial sleeping tasks,
+nested synchronous joins and shutdown.
 
 `tests/fixtures/native_blocking/progress.build.json` has `--case native`,
-`--case callback` and `--case ffi-producer`. The first two start one wait per
-default scheduler worker, then an async producer. The third occupies the
-initial FFI pool with callbacks that call another blocking binding, then
-submits a producer through its own blocking binding. Timeouts bound failures.
-All three are part of `make test-native-blocking` in VM and full native.
+`--case callback`, `--case ffi-producer` and `--case ffi-overload`. The first two
+fill the scheduler's configured worker budget, then start an async producer.
+The third leaves one FFI carrier available for its blocking producer. The
+fourth fills the hard FFI limit, catches the extra producer's overload fault,
+checks `ensure`, releases the waits through an inline binding and successfully
+retries the blocking call. Timeouts bound failures. All four run with task/FFI
+limits of 2/4 in `make test-native-blocking`, in VM and full native.
+The additional `--case ffi-sequential` checks 256 successive calls with an
+FFI limit of one in both backends.
 
 Before the 2026-10-09 fix, the full-native pressure build had full coverage and
 no bytecode fallback, but **both modes failed** on the ten-worker host. The direct

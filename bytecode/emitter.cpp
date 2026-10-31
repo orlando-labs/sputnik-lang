@@ -649,8 +649,8 @@ class Emitter {
 public:
   Emitter(const hir::Program *program, std::string module_name)
       : program_(program), module_name_(std::move(module_name)) {
-    module_.format_version = {1, 0};
-    module_.language_version = {1, 0};
+    module_.format_version = {1, 2};
+    module_.language_version = {SPUTNIK_VERSION_MAJOR, SPUTNIK_VERSION_MINOR, SPUTNIK_VERSION_PATCH};
   }
 
   // Notebook emission mutates the module and every interning/sidecar index
@@ -1337,7 +1337,7 @@ private:
       DepEntry dep;
       dep.module_name_str_id = intern_string(module_id);
       dep.required_format = {1, 0};
-      dep.min_language_version = {1, 0};
+      dep.min_language_version = {SPUTNIK_VERSION_MAJOR, 0, 0};
       module_.dependencies.push_back(dep);
     }
   }

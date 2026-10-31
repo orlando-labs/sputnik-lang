@@ -1,6 +1,7 @@
 #pragma once
 
 #include "frontend/lexer/token.h"
+#include "runtime/version.h"
 #include "profile/capabilities.h"
 #include "profile/data.h"
 #include "profile/effects.h"
@@ -19,6 +20,7 @@ namespace sputnik::bytecode {
 struct Version {
   std::uint16_t major = 1;
   std::uint16_t minor = 0;
+  std::uint16_t patch = 0;
 };
 
 enum class SectionKind {

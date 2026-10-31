@@ -1,0 +1,13 @@
+#ifndef SPUTNIK_VERSION_H
+#define SPUTNIK_VERSION_H
+
+/* One release identity for the language, VM and native extension contract.
+ * Incompatible changes to any of them require a SemVer major release. */
+#define SPUTNIK_VERSION_MAJOR 1
+#define SPUTNIK_VERSION_MINOR 0
+#define SPUTNIK_VERSION_PATCH 0
+#define SPUTNIK_VERSION_STRINGIFY_(x) #x
+#define SPUTNIK_VERSION_STRINGIFY(x) SPUTNIK_VERSION_STRINGIFY_(x)
+#define SPUTNIK_VERSION SPUTNIK_VERSION_STRINGIFY(SPUTNIK_VERSION_MAJOR) "." SPUTNIK_VERSION_STRINGIFY(SPUTNIK_VERSION_MINOR) "." SPUTNIK_VERSION_STRINGIFY(SPUTNIK_VERSION_PATCH)
+
+#endif

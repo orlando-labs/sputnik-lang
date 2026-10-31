@@ -6,6 +6,7 @@
 
 namespace sputnik::pkg {
 struct PackageHost {
+  std::string sputnik_version = SPUTNIK_VERSION;
   std::string os, arch, os_version, libc, libc_version, cuda_driver, cuda_api_version;
   std::set<std::string> cpu_features, cuda_architectures;
   bool mps = false;

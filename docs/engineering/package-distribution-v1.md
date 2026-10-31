@@ -57,7 +57,7 @@ notes belong at another path, such as `meta/libtorch.json`.
 `artifact` selects `variant` and `limit_profile`; `target` declares OS,
 architecture, minimum OS, libc and compute compatibility. `native_extensions`
 supports `kind: source` or `kind: prebuilt` with `library` and
-`sputnik_ext_abi: 1`. Each extension's `libraries` list enumerates bundled dependencies.
+`sputnik_version: "1.0.0"`. Each extension's `libraries` list enumerates bundled dependencies.
 New distributions use typed `native_requirements`, per-extension
 `requirements`, and `native_providers` with provider-owned libraries/assets.
 Top-level `kind: native` allows providers without modules/root.
@@ -94,3 +94,5 @@ Validation: `make test-package-distribution`; the tests cover reproducibility,
 roundtrip extraction, source privacy, malformed payloads/metadata, traversal,
 case and parent collisions, symlinks, inventory mismatch, CRC, truncation and
 appended archives. `sputniktorch/tools/test-packages` exercises real packages.
+
+Package manifests require `requires.sputnik`, a bounded SemVer range. See [the language version contract](language-version.md) for registry selection, legacy artifacts and lock migration.

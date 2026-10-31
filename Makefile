@@ -1,6 +1,16 @@
 .DEFAULT_GOAL := all
 include mk/config.mk
 
+$(BUILD_DIR)/language_version_tests: tests/language_version_tests.cpp runtime/version.h runtime/semver.h
+	@mkdir -p "$(@D)"
+	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
+
+.PHONY: test-language-version
+test-language-version: $(BUILD_DIR)/sputnik $(BUILD_DIR)/language_version_tests
+	$(BUILD_DIR)/language_version_tests
+	python3 tests/language_version_cli_test.py $(BUILD_DIR)/sputnik
+test: test-language-version
+
 .PHONY: test-bare-namespace-calls
 test-bare-namespace-calls: $(BUILD_DIR)/sputnik
 	node tests/bare_namespace_calls_test.mjs $(BUILD_DIR)/sputnik --native
@@ -58,7 +68,7 @@ RUNTIME_SRCS += runtime/config_document.cpp
 FROZEN_RUNTIME_SRCS := runtime/frozen_image.cpp
 PACKAGE_SRCS := package/package.cpp package/store.cpp package/distribution.cpp package/registry.cpp package/selection.cpp
 
-$(BUILD_DIR)/package_selection_tests: tests/package_selection_tests.cpp package/selection.cpp package/selection.h package/package.h
+$(BUILD_DIR)/package_selection_tests: tests/package_selection_tests.cpp package/selection.cpp package/selection.h package/package.h runtime/version.h runtime/semver.h
 	@mkdir -p "$(@D)"
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) tests/package_selection_tests.cpp package/selection.cpp $(SPUTNIK_DYNAMIC_LOADER_LIBS) -pthread -o $@
 
@@ -894,18 +904,24 @@ test-native-blocking: $(BUILD_DIR)/sputnik $(BUILD_DIR)/blocking_ffi_tests check
 	$(BUILD_DIR)/native_blocking/control/test.blocking.vm_control > $(BUILD_DIR)/native_blocking/control-native.out
 	cmp $(BUILD_DIR)/native_blocking/vm-control.out $(BUILD_DIR)/native_blocking/control-native.out
 
-# Exercise waits with no spare scheduler workers, including a producer that
-# needs to enter FFI while the original idle pool is fully occupied.
+# Exercise waits with no spare scheduler workers, bounded FFI producer progress,
+# and a catchable overload fault when the FFI limit is fully occupied.
 .PHONY: check-native-blocking-progress
+check-native-blocking-progress: export SPUTNIK_TASK_MAX_THREADS = 2
+check-native-blocking-progress: export SPUTNIK_FFI_MAX_THREADS = 4
 check-native-blocking-progress: $(BUILD_DIR)/sputnik
 	mkdir -p $(BUILD_DIR)/native_blocking/progress
 	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case native > $(BUILD_DIR)/native_blocking/progress/vm-native.out
 	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case callback > $(BUILD_DIR)/native_blocking/progress/vm-callback.out
 	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case ffi-producer > $(BUILD_DIR)/native_blocking/progress/vm-ffi-producer.out
+	$(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case ffi-overload > $(BUILD_DIR)/native_blocking/progress/vm-ffi-overload.out
+	SPUTNIK_FFI_MAX_THREADS=1 $(BUILD_DIR)/sputnik run tests/fixtures/native_blocking/progress.build.json --grant ffi -- --case ffi-sequential > $(BUILD_DIR)/native_blocking/progress/vm-ffi-sequential.out
 	$(BUILD_DIR)/sputnik build tests/fixtures/native_blocking/progress.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_blocking/progress > $(BUILD_DIR)/native_blocking/progress/build.json
 	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case native
 	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case callback
 	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case ffi-producer
+	$(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case ffi-overload
+	SPUTNIK_FFI_MAX_THREADS=1 $(BUILD_DIR)/native_blocking/progress/test.blocking.progress --case ffi-sequential
 
 .PHONY: test-native-trivial-methods
 test-native-trivial-methods: $(BUILD_DIR)/sputnik

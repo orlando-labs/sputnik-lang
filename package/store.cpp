@@ -340,6 +340,8 @@ fs::path install_in_home(const fs::path &path, const fs::path &home,
                          const std::string &signing_key, const std::string &origin,
                          const std::function<void(const fs::path &)> &prepare) {
   const auto package = read_package(path, signing_key);
+  if (!language::satisfies(SPUTNIK_VERSION, package.manifest.sputnik_requirement))
+    throw std::runtime_error("LANGUAGE_VERSION_MISMATCH: " + package.manifest.name + " requires Sputnik " + package.manifest.sputnik_requirement + ", host is " SPUTNIK_VERSION);
   if (!package.artifact) {
     if (!registry_reference(package.manifest.name) || !component(package.manifest.version))
       throw std::runtime_error("invalid distribution installation identity");
@@ -596,6 +598,8 @@ PackageResolver::PackageResolver(fs::path directory, fs::path home,
     if (!fs::is_regular_file(path)) continue;
     const auto parsed = build::parse_build_configuration(read(path), path.string());
     if (!parsed.ok()) throw std::runtime_error(build::diagnostics_to_string(parsed.diagnostics));
+    if (!language::satisfies(SPUTNIK_VERSION, parsed.manifest.package.sputnik_requirement))
+      throw std::runtime_error("LANGUAGE_VERSION_MISMATCH: project requires Sputnik " + parsed.manifest.package.sputnik_requirement + ", host is " SPUTNIK_VERSION);
     entry_dependencies_ = parsed.manifest.dependencies;
     break;
   }
@@ -604,7 +608,8 @@ PackageResolver::PackageResolver(fs::path directory, fs::path home,
 std::map<std::string, PackagePin> read_package_lock(const fs::path &path) {
   std::map<std::string, PackagePin> pins;
   std::istringstream lines(read(path));
-  std::string line, schema;
+  std::string line, schema, locked_language;
+  bool package_section = false;
   PackagePin pin;
   std::set<std::string> fields;
   std::string name;
@@ -622,6 +627,7 @@ std::map<std::string, PackagePin> read_package_lock(const fs::path &path) {
   };
   while (std::getline(lines, line)) {
     if (line == "[[packages]]") {
+      package_section = true;
       finish();
       continue;
     }
@@ -645,7 +651,9 @@ std::map<std::string, PackagePin> read_package_lock(const fs::path &path) {
         return {};
       if (schema != "sputnik.packages.lock.v1")
         throw std::runtime_error("unsupported sputnik.lock schema: " + schema);
-    } else if (key == "name")
+    } else if (key == "sputnik_version" && !package_section)
+      locked_language = text;
+    else if (key == "name")
       name = text;
     else if (key == "version")
       pin.version = text;
@@ -660,6 +668,8 @@ std::map<std::string, PackagePin> read_package_lock(const fs::path &path) {
   finish();
   if (schema.empty())
     throw std::runtime_error("sputnik.lock is missing its schema");
+  if (locked_language != SPUTNIK_VERSION)
+    throw std::runtime_error("LOCK_LANGUAGE_MISMATCH: lock uses Sputnik " + (locked_language.empty() ? std::string("<unspecified>") : locked_language) + ", host is " SPUTNIK_VERSION "; run sputnik pkg lock to regenerate");
   return pins;
 }
 
@@ -849,6 +859,7 @@ void PackageResolver::require_one(const PackageDependency &dependency) {
     return;
   }
   std::optional<std::size_t> best;
+  std::string language_problem;
   for (std::size_t i = 0; i < candidates_.size(); ++i) {
     const auto &candidate = candidates_[i];
     if (candidate.package.manifest.name != dependency.name ||
@@ -864,6 +875,7 @@ void PackageResolver::require_one(const PackageDependency &dependency) {
     probe_accelerators_for(candidate.package.manifest, policy);
     const auto problem = package_incompatibility(candidate.package.manifest, host_, policy, true);
     if (!problem.empty()) {
+      if (problem.rfind("LANGUAGE_VERSION_MISMATCH", 0) == 0) language_problem = problem;
       if (pin != pins_.end() && candidate.package.manifest.variant == pin->second.variant)
         throw std::runtime_error("LOCK_TARGET_MISMATCH: " + dependency.name + ": " + problem);
       continue;
@@ -875,6 +887,7 @@ void PackageResolver::require_one(const PackageDependency &dependency) {
       if (choice == 1) best = i;
     }
   }
+  if (!best && !language_problem.empty()) throw std::runtime_error(dependency.name + ": " + language_problem);
   if (!best)
     throw std::runtime_error("missing package " + dependency.name + "@" +
                              dependency.version +
@@ -918,7 +931,7 @@ void PackageResolver::activate(std::size_t index) {
           material +=
               "\n" + path + "\n" + read(member(package.directory, path));
     package.digest = "sha256:" + lexer::sha256_hex(material);
-    std::string graph = package.manifest.name + "\n" + package.manifest.version + "\n" + package.manifest.variant;
+    std::string graph = package.manifest.name + "\n" + package.manifest.version + "\n" + package.manifest.variant + "\n" + package.manifest.sputnik_requirement;
     for (const auto &dependency : package.manifest.dependencies)
       graph += "\n" + dependency.name + "\n" + dependency.version + "\n" + dependency.source + "\n" +
                fs::path(dependency.path).lexically_normal().generic_string();
@@ -1008,6 +1021,7 @@ PackageResolver::resolve(const std::string &module) {
   }
   discover();
   std::optional<std::size_t> best;
+  std::string language_problem;
   for (std::size_t i = 0; i < candidates_.size(); ++i) {
     const auto &candidate = candidates_[i];
     const auto &manifest = candidate.package.manifest;
@@ -1030,6 +1044,7 @@ PackageResolver::resolve(const std::string &module) {
     probe_accelerators_for(manifest, execution);
     const auto problem = package_incompatibility(manifest, host_, execution, true);
     if (!problem.empty()) {
+      if (problem.rfind("LANGUAGE_VERSION_MISMATCH", 0) == 0) language_problem = problem;
       if (pin != pins_.end() && manifest.variant == pin->second.variant) throw std::runtime_error("LOCK_TARGET_MISMATCH: " + manifest.name + ": " + problem);
       continue;
     }
@@ -1061,6 +1076,7 @@ PackageResolver::resolve(const std::string &module) {
         (stable == old_stable && version_less(old_version, manifest.version)))
       best = i;
   }
+  if (!best && !language_problem.empty()) throw std::runtime_error(module + ": " + language_problem);
   if (!best)
     return std::nullopt;
   activate(*best);
@@ -1215,7 +1231,7 @@ std::string PackageResolver::lockfile() const {
     return a.manifest.name < b.manifest.name;
   });
   std::ostringstream out;
-  out << "schema = \"sputnik.packages.lock.v1\"\n";
+  out << "schema = \"sputnik.packages.lock.v1\"\nsputnik_version = \"" SPUTNIK_VERSION "\"\n";
   for (const auto &package : packages)
     out << "\n[[packages]]\nname = " << std::quoted(package.manifest.name)
         << "\nversion = " << std::quoted(package.manifest.version)

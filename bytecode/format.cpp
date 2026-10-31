@@ -755,7 +755,7 @@ serialize_classes(const std::vector<BcClass> &classes) {
 }
 
 std::vector<std::uint8_t>
-serialize_dependencies(const std::vector<DepEntry> &dependencies) {
+serialize_dependencies(const std::vector<DepEntry> &dependencies, bool semver) {
   std::vector<std::uint8_t> out;
   append_u32(out, static_cast<std::uint32_t>(dependencies.size()));
   for (const DepEntry &entry : dependencies) {
@@ -764,9 +764,11 @@ serialize_dependencies(const std::vector<DepEntry> &dependencies) {
     append_u16(out, entry.required_format.minor);
     append_u16(out, entry.min_language_version.major);
     append_u16(out, entry.min_language_version.minor);
+    if (semver) append_u16(out, entry.min_language_version.patch);
     append_u8(out, entry.has_max_language_version ? 1U : 0U);
     append_u16(out, entry.max_language_version.major);
     append_u16(out, entry.max_language_version.minor);
+    if (semver) append_u16(out, entry.max_language_version.patch);
     append_u8(out, entry.has_abi_requirement ? 1U : 0U);
     out.insert(out.end(), entry.abi_requirement.begin(),
                entry.abi_requirement.end());
@@ -1360,7 +1362,7 @@ std::vector<SectionPayload> build_sections(const BcModule &module) {
   sections.push_back(
       {SectionKind::Clas, serialize_classes(module.classes), 1, 0});
   sections.push_back(
-      {SectionKind::Deps, serialize_dependencies(module.dependencies), 1, 0});
+      {SectionKind::Deps, serialize_dependencies(module.dependencies, module.format_version.minor >= 2), 1, 0});
   sections.push_back(
       {SectionKind::Expt, serialize_exports(module.exports), 1, 0});
   sections.push_back({SectionKind::Init, serialize_init(module.init), 1, 0});
@@ -2257,7 +2259,7 @@ bool parse_classes(Reader &reader, std::vector<BcClass> &out) {
   return true;
 }
 
-bool parse_dependencies(Reader &reader, std::vector<DepEntry> &out) {
+bool parse_dependencies(Reader &reader, std::vector<DepEntry> &out, bool semver) {
   std::uint32_t count = 0;
   if (!reader.read_u32(count)) {
     return false;
@@ -2274,9 +2276,11 @@ bool parse_dependencies(Reader &reader, std::vector<DepEntry> &out) {
         !reader.read_u16(entry.required_format.minor) ||
         !reader.read_u16(entry.min_language_version.major) ||
         !reader.read_u16(entry.min_language_version.minor) ||
+        (semver && !reader.read_u16(entry.min_language_version.patch)) ||
         !reader.read_u8(has_max) ||
         !reader.read_u16(entry.max_language_version.major) ||
         !reader.read_u16(entry.max_language_version.minor) ||
+        (semver && !reader.read_u16(entry.max_language_version.patch)) ||
         !reader.read_u8(has_abi) || !reader.read_bytes(32, abi) ||
         !reader.read_u32(entry.flags)) {
       return false;
@@ -4856,10 +4860,10 @@ InstructionFlow verify_instruction_flow(
 
 void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
   const std::uint16_t kSupportedFormatMajor = 1;
-  // 1.1 adds the optional self-describing NBMD notebook-image section.
-  const std::uint16_t kSupportedFormatMinor = 1;
-  const std::uint16_t kSupportedLanguageMajor = 1;
-  const std::uint16_t kSupportedLanguageMinor = 0;
+  // 1.1 adds NBMD; 1.2 adds SemVer patch components to the header and DEPS.
+  const std::uint16_t kSupportedFormatMinor = 2;
+  const std::uint16_t kSupportedLanguageMajor = SPUTNIK_VERSION_MAJOR;
+  const std::uint16_t kSupportedLanguageMinor = SPUTNIK_VERSION_MINOR;
 
   if (module.format_version.major != kSupportedFormatMajor ||
       module.format_version.minor > kSupportedFormatMinor) {
@@ -4867,7 +4871,8 @@ void verify_module(BcModule &module, std::vector<VerifyError> &errors) {
         {"BC1003", "unsupported bytecode format version", "header", 4});
   }
   if (module.language_version.major != kSupportedLanguageMajor ||
-      module.language_version.minor > kSupportedLanguageMinor) {
+      module.language_version.minor > kSupportedLanguageMinor ||
+      (module.language_version.minor == kSupportedLanguageMinor && module.language_version.patch > SPUTNIK_VERSION_PATCH)) {
     errors.push_back({"BC1004", "unsupported language version", "header", 8});
   }
 
@@ -5510,7 +5515,7 @@ std::string operand_to_text(const InstructionOperand &operand) {
 } // namespace
 
 std::vector<std::uint8_t> serialize_module(const BcModule &module) {
-  constexpr std::size_t kHeaderSize = 56U;
+  const std::size_t kHeaderSize = module.format_version.minor >= 2 ? 60U : 56U;
   constexpr std::size_t kSectionEntrySize = 24U;
 
   const std::vector<SectionPayload> payloads = build_sections(module);
@@ -5534,6 +5539,7 @@ std::vector<std::uint8_t> serialize_module(const BcModule &module) {
   append_u16(out, module.format_version.minor);
   append_u16(out, module.language_version.major);
   append_u16(out, module.language_version.minor);
+  if (module.format_version.minor >= 2) { append_u16(out, module.language_version.patch); append_u16(out, 0); }
   append_u32(out, module.profile_flags);
   append_u32(out, static_cast<std::uint32_t>(directory.size()));
   append_u32(out, module.file_flags);
@@ -5558,7 +5564,7 @@ std::vector<std::uint8_t> serialize_module(const BcModule &module) {
 }
 
 DecodeResult deserialize_module(const std::vector<std::uint8_t> &bytes) {
-  constexpr std::size_t kHeaderSize = 56U;
+  std::size_t kHeaderSize = 56U;
   constexpr std::size_t kSectionEntrySize = 24U;
 
   DecodeResult result;
@@ -5584,15 +5590,20 @@ DecodeResult deserialize_module(const std::vector<std::uint8_t> &bytes) {
   }
 
   std::uint32_t section_count = 0;
+  std::uint16_t reserved = 0;
   if (!reader.read_u16(result.module.format_version.major) ||
       !reader.read_u16(result.module.format_version.minor) ||
       !reader.read_u16(result.module.language_version.major) ||
       !reader.read_u16(result.module.language_version.minor) ||
+      (result.module.format_version.minor >= 2 &&
+       (!reader.read_u16(result.module.language_version.patch) || !reader.read_u16(reserved))) ||
       !reader.read_u32(result.module.profile_flags) ||
       !reader.read_u32(section_count) ||
       !reader.read_u32(result.module.file_flags)) {
     return result;
   }
+  if (result.module.format_version.minor >= 2) kHeaderSize = 60U;
+  if (reserved) { result.errors.push_back({"BC1002", "nonzero reserved header word", "header", 14}); return result; }
   std::vector<std::uint8_t> abi;
   if (!reader.read_bytes(32, abi)) {
     return result;
@@ -5701,7 +5712,7 @@ DecodeResult deserialize_module(const std::vector<std::uint8_t> &bytes) {
   parse_section(SectionKind::Clas, "CLAS",
                 [&](Reader &r) { parse_classes(r, result.module.classes); });
   parse_section(SectionKind::Deps, "DEPS", [&](Reader &r) {
-    parse_dependencies(r, result.module.dependencies);
+    parse_dependencies(r, result.module.dependencies, result.module.format_version.minor >= 2);
   });
   parse_section(SectionKind::Expt, "EXPT",
                 [&](Reader &r) { parse_exports(r, result.module.exports); });
@@ -6093,7 +6104,7 @@ std::string module_to_json(const BcModule &module,
   out << "  \"format_version\": {\"major\": " << module.format_version.major
       << ", \"minor\": " << module.format_version.minor << "},\n";
   out << "  \"language_version\": {\"major\": " << module.language_version.major
-      << ", \"minor\": " << module.language_version.minor << "},\n";
+      << ", \"minor\": " << module.language_version.minor << ", \"patch\": " << module.language_version.patch << "},\n";
   out << "  \"profile_flags\": " << module.profile_flags << ",\n";
   out << "  \"file_flags\": " << module.file_flags << ",\n";
   out << "  \"abi_hash\": \"" << bytes_to_hex(module.abi_hash) << "\",\n";
@@ -6316,12 +6327,12 @@ std::string module_to_json(const BcModule &module,
         << ",\"minor\":" << entry.required_format.minor
         << "},\"min_language_version\":{\"major\":"
         << entry.min_language_version.major
-        << ",\"minor\":" << entry.min_language_version.minor
+        << ",\"minor\":" << entry.min_language_version.minor << ",\"patch\":" << entry.min_language_version.patch
         << "},\"has_max_language_version\":"
         << (entry.has_max_language_version ? "true" : "false")
         << ",\"max_language_version\":{\"major\":"
         << entry.max_language_version.major
-        << ",\"minor\":" << entry.max_language_version.minor
+        << ",\"minor\":" << entry.max_language_version.minor << ",\"patch\":" << entry.max_language_version.patch
         << "},\"has_abi_requirement\":"
         << (entry.has_abi_requirement ? "true" : "false")
         << ",\"abi_requirement\":\"" << bytes_to_hex(entry.abi_requirement)
@@ -6768,7 +6779,7 @@ std::string module_to_disasm(const BcModule &module,
   out << ".header format=" << module.format_version.major << "."
       << module.format_version.minor
       << " language=" << module.language_version.major << "."
-      << module.language_version.minor
+      << module.language_version.minor << "." << module.language_version.patch
       << " profile_flags=" << module.profile_flags
       << " file_flags=" << module.file_flags
       << " abi=" << bytes_to_hex(module.abi_hash) << "\n";
@@ -6963,10 +6974,10 @@ std::string module_to_disasm(const BcModule &module,
         << ") format=" << entry.required_format.major << "."
         << entry.required_format.minor
         << " language>=" << entry.min_language_version.major << "."
-        << entry.min_language_version.minor;
+        << entry.min_language_version.minor << "." << entry.min_language_version.patch;
     if (entry.has_max_language_version) {
       out << " language<=" << entry.max_language_version.major << "."
-          << entry.max_language_version.minor;
+          << entry.max_language_version.minor << "." << entry.max_language_version.patch;
     }
     if (entry.has_abi_requirement) {
       out << " abi=" << bytes_to_hex(entry.abi_requirement);

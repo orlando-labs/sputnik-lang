@@ -26,10 +26,10 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-query-') as temporary:
         dict(variant='linux-cu130', quarantined=False, bundle='runtime',
              target=dict(os='linux', arch='x86_64', compute_backend='cuda', cuda_version='13.0'),
              size=2147483648, sha256='sha256:'+'1'*64,
-             compatibility=dict(native_requirements=[dict(id='libtorch', version='2.14.0')],
+             compatibility=dict(sputnik_requirement='>=1.0.0 <2.0.0', native_requirements=[dict(id='libtorch', version='2.14.0')],
                                 note='пакет\n"quoted"\t\\')),
         dict(variant='quarantined', quarantined=True),
-        dict(variant='cpu', quarantined=False),
+        dict(variant='cpu', quarantined=False, compatibility=dict(sputnik_requirement='>=1.0.0 <2.0.0')),
     ]
 
     def release(version, yanked=False):

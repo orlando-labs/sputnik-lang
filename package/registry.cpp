@@ -325,6 +325,12 @@ Value complete_release_index(API &api, const std::string &reference) {
 
 PackageManifest registry_artifact_manifest(const Value &a) {
     PackageManifest m; m.variant = a.at("variant").string();
+    if (!a.object.count("compatibility") || !a.at("compatibility").object.count("sputnik_requirement")) {
+      m.compatibility_error = "LANGUAGE_REQUIREMENT_MISSING: rebuild the package with requires.sputnik";
+    } else {
+      m.sputnik_requirement = a.at("compatibility").at("sputnik_requirement").string();
+      if (!language::valid_requirement(m.sputnik_requirement)) fail("invalid registry Sputnik language requirement");
+    }
     const auto string = [](const Value &object, const std::string &key, std::string &out) { if (object.object.count(key)) out = object.at(key).string(); };
     const auto strings = [](const Value &object, const std::string &key, std::vector<std::string> &out) {
       if (!object.object.count(key)) return;
@@ -340,17 +346,33 @@ PackageManifest registry_artifact_manifest(const Value &a) {
       strings(t,"cpu_features",m.target.cpu_features); strings(t,"compute_backends",m.target.compute_backends); strings(t,"cuda_architectures",m.target.cuda_architectures);
     } else if (m.variant != "source" && m.variant != "bytecode") fail("native variant lacks target metadata");
     std::string mode = "none"; string(a,"native_mode",mode);
-    if (mode != "none" || (a.object.count("native_payload") && a.at("native_payload").truth())) {
+    m.has_native_payload = a.object.count("native_payload") && a.at("native_payload").truth();
+    if (mode != "none") {
       if (!a.object.count("target") || !a.object.count("compatibility")) fail("native variant lacks compatibility metadata");
       PackageNativeExtension n; n.kind = mode == "source" || mode == "mixed" ? "source" : "prebuilt";
       const auto &compatibility = a.at("compatibility");
-      if (compatibility.object.count("sputnik_ext_abi") && compatibility.at("sputnik_ext_abi").kind != Value::Null)
-        n.sputnik_ext_abi_version = static_cast<std::uint32_t>(size_field(compatibility.at("sputnik_ext_abi")));
-      m.native_extensions.push_back(n);
+      // Third-party runtime/SDK providers do not export Sputnik entry points.
+      const bool provider_only = compatibility.object.count("sputnik_versions") &&
+          compatibility.at("sputnik_versions").array.empty() &&
+          compatibility.object.count("native_providers") &&
+          !compatibility.at("native_providers").array.empty();
+      if (!provider_only && (!compatibility.object.count("sputnik_versions") || compatibility.at("sputnik_versions").array.empty())) m.compatibility_error = "LANGUAGE_REQUIREMENT_MISSING: native producer version is absent";
+      else for (const auto &version : compatibility.at("sputnik_versions").array) {
+        if (!language::compatible_producer(version.string())) m.compatibility_error = "LANGUAGE_VERSION_MISMATCH: native producer is Sputnik " + version.string();
+        n.sputnik_version = version.string();
+      }
+      if (!provider_only) m.native_extensions.push_back(n);
     }
     if (a.object.count("compatibility")) {
       const auto &c = a.at("compatibility");
       m.has_bytecode_delivery = c.object.count("bytecode_versions") && !c.at("bytecode_versions").array.empty();
+      if (m.has_bytecode_delivery) {
+        if (!c.object.count("bytecode_languages") || c.at("bytecode_languages").array.empty()) m.compatibility_error = "LANGUAGE_REQUIREMENT_MISSING: bytecode producer version is absent";
+        else for (const auto &v : c.at("bytecode_languages").array)
+          if (!language::compatible_producer(v.string())) m.compatibility_error = "LANGUAGE_VERSION_MISMATCH: bytecode producer is Sputnik " + v.string();
+        for (const auto &v : c.at("bytecode_versions").array)
+          if (v.array.size() != 2 || size_field(v.array[0]) != 1 || size_field(v.array[1]) > 2) m.compatibility_error = "BYTECODE_VERSION_MISMATCH: unsupported bytecode format";
+      }
       if (c.object.count("native_providers")) for (const auto &item : c.at("native_providers").array) {
         PackageNativeProvider p;
         string(item,"id",p.id); string(item,"kind",p.kind); string(item,"version",p.version);
@@ -755,6 +777,7 @@ RegistryDownload download_registry_package(const std::string &origin,
     auto archive = inspect_distribution(output);
     if (archive.manifest.name != canonical || archive.manifest.version != chosen || archive.manifest.variant != variant)
       fail("archive identity differs from registry metadata");
+    if (registry_artifact_manifest(meta).sputnik_requirement != archive.manifest.sputnik_requirement) fail("archive language requirement differs from registry metadata");
     const auto problem = package_incompatibility(archive.manifest,host,policy);
     if (!problem.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + problem);
     PackageManifest expected_target, actual_target;

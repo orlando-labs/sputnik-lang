@@ -12662,75 +12662,97 @@ private:
          task_context, scheduler_identity,
          stdout_writer, stderr_writer,
          task](std::shared_ptr<Vm> vm_owner) mutable {
-          RuntimeBlockingFfiExecutor::instance().submit(
-              [pending, caller_ptr, fn, method,
-               pos_args = std::move(pos_args), self = std::move(self),
-               strand_id, task_id, sync_owner_id, cancel_flag, cancel_owner, run_cancellation,
-               run_cancellation_masked, task_context,
-               scheduler_identity, stdout_writer, stderr_writer, task,
-               vm_owner = std::move(vm_owner)]() mutable {
-                RuntimeStrandScope strand_scope(strand_id);
-                RuntimeRunCancellationScope run_scope(run_cancellation);
-                RuntimeRunCancellationMask cleanup_mask(run_cancellation_masked);
-                RuntimeTaskScope task_scope(task_id, cancel_flag, sync_owner_id,
-                                            task_context, scheduler_identity, cancel_owner);
-                RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
-                IoParkGuard io_park_guard(false);
-                bool ok = false;
-                Value value = Value::null();
-                std::string exception_error_name;
-                std::string exception_message;
-                vm_owner->blocking_native_unwind_boundary_ =
-                    vm_owner->frames_.size() - 1U;
-                try {
-                  NativeExtCallOutcome outcome =
-                      method ? sputnik_ext_invoke_method(
-                                   *vm_owner, caller_ptr,
-                                   vm_owner->type_registry()
-                                       .native_package_tags(),
-                                   reinterpret_cast<SputnikMethodFn>(fn), self,
-                                   pos_args)
-                             : sputnik_ext_invoke_free(
-                                   *vm_owner, caller_ptr,
-                                   vm_owner->type_registry()
-                                       .native_package_tags(),
-                                   reinterpret_cast<SputnikFreeFn>(fn), pos_args);
-                  ok = outcome.ok;
-                  value = std::move(outcome.value);
-                } catch (const RuntimeTaskCancelled &) {
-                  exception_error_name = "CancelledError";
-                  exception_message = "task cancelled";
-                } catch (const RuntimeTaskFailure &failure) {
-                  exception_error_name = failure.error_name();
-                  exception_message = failure.message();
-                } catch (const std::exception &error) {
-                  exception_error_name = "RuntimeError";
-                  exception_message = error.what();
-                } catch (...) {
-                  exception_error_name = "RuntimeError";
-                  exception_message = "blocking FFI call failed";
-                }
-                vm_owner->blocking_native_unwind_boundary_.reset();
-                {
-                  std::lock_guard<std::mutex> lock(pending->mutex);
-                  pending->ok = ok;
-                  pending->value = std::move(value);
-                  pending->exception_error_name =
-                      std::move(exception_error_name);
-                  pending->exception_message = std::move(exception_message);
-                  pending->fault = std::move(vm_owner->fault_);
-                  pending->escaped_exception = std::move(vm_owner->escaped_exception_);
-                  pending->escaped_throw = std::move(vm_owner->escaped_throw_);
-                  pending->escaped_nonlocal_return =
-                      std::move(vm_owner->escaped_nonlocal_return_);
-                  vm_owner->fault_.reset();
-                  vm_owner->escaped_exception_.reset();
-                  vm_owner->escaped_throw_.reset();
-                  vm_owner->escaped_nonlocal_return_.reset();
-                  pending->ready = true;
-                }
-                task->scheduler().wake_strand(strand_id);
-              });
+          const auto reject = [&](const std::string &name,
+                                  const std::string &message) {
+            {
+              std::lock_guard<std::mutex> lock(pending->mutex);
+              pending->exception_error_name = name;
+              pending->exception_message = message;
+              pending->ready = true;
+            }
+            // Submission happens after park_current(). Publish the fault as a
+            // completion and resume the VM so rescue/ensure can handle it.
+            task->scheduler().wake_strand(strand_id);
+          };
+          try {
+            RuntimeBlockingFfiExecutor::instance().submit(
+                [pending, caller_ptr, fn, method,
+                 pos_args = std::move(pos_args), self = std::move(self),
+                 strand_id, task_id, sync_owner_id, cancel_flag, cancel_owner, run_cancellation,
+                 run_cancellation_masked, task_context,
+                 scheduler_identity, stdout_writer, stderr_writer, task,
+                 vm_owner = std::move(vm_owner)]() mutable {
+                  RuntimeStrandScope strand_scope(strand_id);
+                  RuntimeRunCancellationScope run_scope(run_cancellation);
+                  RuntimeRunCancellationMask cleanup_mask(run_cancellation_masked);
+                  RuntimeTaskScope task_scope(task_id, cancel_flag, sync_owner_id,
+                                              task_context, scheduler_identity, cancel_owner);
+                  RuntimeOutputScope output_scope(stdout_writer, stderr_writer);
+                  IoParkGuard io_park_guard(false);
+                  bool ok = false;
+                  Value value = Value::null();
+                  std::string exception_error_name;
+                  std::string exception_message;
+                  vm_owner->blocking_native_unwind_boundary_ =
+                      vm_owner->frames_.size() - 1U;
+                  try {
+                    NativeExtCallOutcome outcome =
+                        method ? sputnik_ext_invoke_method(
+                                     *vm_owner, caller_ptr,
+                                     vm_owner->type_registry()
+                                         .native_package_tags(),
+                                     reinterpret_cast<SputnikMethodFn>(fn), self,
+                                     pos_args)
+                               : sputnik_ext_invoke_free(
+                                     *vm_owner, caller_ptr,
+                                     vm_owner->type_registry()
+                                         .native_package_tags(),
+                                     reinterpret_cast<SputnikFreeFn>(fn), pos_args);
+                    ok = outcome.ok;
+                    value = std::move(outcome.value);
+                  } catch (const RuntimeTaskCancelled &) {
+                    exception_error_name = "CancelledError";
+                    exception_message = "task cancelled";
+                  } catch (const RuntimeTaskFailure &failure) {
+                    exception_error_name = failure.error_name();
+                    exception_message = failure.message();
+                  } catch (const std::exception &error) {
+                    exception_error_name = "RuntimeError";
+                    exception_message = error.what();
+                  } catch (...) {
+                    exception_error_name = "RuntimeError";
+                    exception_message = "blocking FFI call failed";
+                  }
+                  vm_owner->blocking_native_unwind_boundary_.reset();
+                  {
+                    std::lock_guard<std::mutex> lock(pending->mutex);
+                    pending->ok = ok;
+                    pending->value = std::move(value);
+                    pending->exception_error_name =
+                        std::move(exception_error_name);
+                    pending->exception_message = std::move(exception_message);
+                    pending->fault = std::move(vm_owner->fault_);
+                    pending->escaped_exception = std::move(vm_owner->escaped_exception_);
+                    pending->escaped_throw = std::move(vm_owner->escaped_throw_);
+                    pending->escaped_nonlocal_return =
+                        std::move(vm_owner->escaped_nonlocal_return_);
+                    vm_owner->fault_.reset();
+                    vm_owner->escaped_exception_.reset();
+                    vm_owner->escaped_throw_.reset();
+                    vm_owner->escaped_nonlocal_return_.reset();
+                  }
+                }, [pending, task, strand_id] {
+                  {
+                    std::lock_guard<std::mutex> lock(pending->mutex);
+                    pending->ready = true;
+                  }
+                  task->scheduler().wake_strand(strand_id);
+                });
+          } catch (const RuntimeTaskFailure &error) {
+            reject(error.error_name(), error.message());
+          } catch (const std::exception &error) {
+            reject("RuntimeError", error.what());
+          }
         };
     park_request_ = std::move(park);
     *parked = true;

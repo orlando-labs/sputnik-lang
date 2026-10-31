@@ -152,6 +152,18 @@ void test_package_artifact_is_reproducible_and_signed() {
   expect(verified.signature_present, "package signature should be present");
   expect(verified.signature_checked, "package signature should be checked");
   expect(verified.signature_valid, "package signature should be valid");
+  const auto decoded = sputnik::pkg::parse_package_artifact(first.serialized);
+  expect(decoded.ok() && decoded.artifact.manifest.explicit_sputnik_requirement &&
+             decoded.artifact.manifest.sputnik_requirement == ">=1.0.0 <2.0.0",
+         "text artifacts must preserve the language requirement");
+  auto unversioned = first.serialized;
+  const auto begin = unversioned.find("requires.sputnik=");
+  expect(begin != std::string::npos, "text artifact is missing its language requirement");
+  unversioned.erase(begin, unversioned.find('\n', begin) - begin + 1);
+  const auto legacy = sputnik::pkg::verify_package_artifact(unversioned);
+  expect(!legacy.ok && !legacy.diagnostics.empty() &&
+             legacy.diagnostics[0].message.find("LANGUAGE_REQUIREMENT_MISSING") != std::string::npos,
+         "legacy text artifacts must not bypass the language gate");
 
   const sputnik::pkg::PackageVerifyResult wrong_key =
       sputnik::pkg::verify_package_artifact(first.serialized, "wrong");

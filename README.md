@@ -1,5 +1,7 @@
 # Sputnik Reference Implementation
 
+Language/VM release: **1.0.0**, following SemVer. Package requirements, native extensions, locks and cache policy: [language version contract](docs/engineering/language-version.md).
+
 This repository is the implementation workspace for `sputnik_unified_final_spec.md`.
 
 Current baseline:

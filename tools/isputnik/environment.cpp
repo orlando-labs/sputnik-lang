@@ -6,18 +6,50 @@
 #include "package/store.h"
 
 #include <exception>
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <set>
 #include <string>
 #include <utility>
+#include <filesystem>
+#include <fstream>
+#include <cstdlib>
 
 BundledEnvironmentPreparation prepare_bundled_environment(
     const std::vector<BundledModuleSource> &sources,
     const std::vector<std::string> &explicit_imports,
     const std::string &package_search_directory,
-    const sputnik::frontend::ImportAliases &aliases) {
+    const sputnik::frontend::ImportAliases &explicit_aliases) {
   BundledEnvironmentPreparation result;
+  auto aliases = explicit_aliases;
+  // Registry short names are notebook-owned bindings to installed providers.
+  // Never resolve them over the network while compiling or running a cell.
+  std::set<std::filesystem::path> homes;
+  if (!package_search_directory.empty()) homes.insert(std::filesystem::path(package_search_directory) / "packages");
+  if (const auto *home = std::getenv("SPUTNIK_NOTEBOOK_PACKAGE_HOME")) if (*home) homes.insert(home);
+  try {
+    for (const auto &home : homes) {
+      const auto index = home / "imports.index";
+      if (!std::filesystem::exists(index)) continue;
+      if (std::filesystem::file_size(index) > 1048576) throw std::runtime_error("Notebook import bindings exceed 1 MiB.");
+      std::ifstream input(index);
+      std::string line;
+      while (std::getline(input, line)) {
+        if (line.empty()) continue;
+        const auto first = line.find('\t'), last = line.find('\t', first == std::string::npos ? 0 : first + 1);
+        if (first == std::string::npos || last == std::string::npos) throw std::runtime_error("Invalid notebook import binding. Reinstall its package in Dependencies.");
+        const auto alias = line.substr(first + 1, last - first - 1), target = line.substr(last + 1);
+        const bool local = std::any_of(sources.begin(), sources.end(), [&](const auto &source) {
+          return sputnik::frontend::ImportAliases::prefix(source.id, alias);
+        });
+        if (!local && !explicit_aliases.paths().count(alias)) aliases.add(alias, target);
+      }
+    }
+  } catch (const std::exception &error) {
+    result.diagnostics.push_back({{}, {}, error.what(), {}});
+    return result;
+  }
   result.import_aliases = aliases;
   try { aliases.validate(); }
   catch (const std::exception &error) {
@@ -112,8 +144,8 @@ BundledEnvironmentPreparation prepare_bundled_environment(
         if (!packages) packages.emplace(package_search_directory);
         const auto resolved = packages->resolve(id);
         if (!resolved) {
-          result.diagnostics.push_back({id, {}, "missing bundled module dependency: " + id +
-              " (searched " + packages->search_description() + "; install its package with sputnik pkg install <package>, or add its directory to project dependencies)", {}});
+          result.diagnostics.push_back({id, {}, "Package module '" + requested +
+              "' is unavailable in this notebook. Open Dependencies to install its package or check its short import name.", {}});
           return false;
         }
         path = resolved->path;

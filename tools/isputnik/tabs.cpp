@@ -864,6 +864,20 @@ void ProjectTabs::remove_dependency(const std::string &path) {
   active().session.status = "dependency unlinked; package files untouched; Apply to load the new environment";
 }
 
+void ProjectTabs::rename_sheet(const std::string &id, const std::string &title) {
+  require_idle();
+  const auto characters = std::count_if(title.begin(), title.end(), [](unsigned char c) { return (c & 0xc0) != 0x80; });
+  if (title.empty() || characters > 200 || title.find_first_not_of(" \t\r\n") == std::string::npos)
+    throw std::invalid_argument("Enter a sheet name (up to 200 characters).");
+  auto next = project_.document;
+  const auto found = std::find_if(next.sheets.begin(), next.sheets.end(), [&](const auto &s) { return s.id == id; });
+  if (found == next.sheets.end()) throw std::invalid_argument("unknown sheet: " + id);
+  found->title = title;
+  sputnik::notebook::save_project(&project_, next);
+  for (const auto &tab : tabs_) if (!tab->module && tab->session.project_sheet_id == id)
+    tab->session.project_label = next.title + "/" + title;
+}
+
 void ProjectTabs::create_sheet(const std::string &id, const std::string &title) {
   require_idle();
   validate_new_tab_id(id);

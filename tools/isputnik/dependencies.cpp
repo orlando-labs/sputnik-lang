@@ -233,7 +233,7 @@ void load_prepared_native_dependencies(const sputnik::notebook::LoadedProject &p
   for (const auto &dependency : dependencies) {
     const auto library_name = extra_string(dependency, "native_library");
     if (library_name.empty()) continue;
-    if (!authorized) throw std::runtime_error("Native dependencies require explicit trust before Run.");
+    if (!authorized) throw std::runtime_error("Native dependencies require explicit trust before Run. Open Dependencies and grant native execution for this sheet (ffi.call and ffi.load).");
     const auto root = fs::canonical(project.directory / dependency.path);
     const auto path = checked_member(root, library_name);
     const auto digest = extra_string(dependency, "native_sha256");

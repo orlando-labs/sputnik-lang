@@ -74,7 +74,7 @@ sd_files=[p.relative_to(sd).as_posix() for p in sorted(sd.rglob('*')) if p.is_fi
 runtime=dict(id='system-io-runtime',kind='runtime',version=version,abi=abi,build_id=runtime_id,library_dirs=['lib','lib/vendor'],link_libraries=['sputnik']+names+['z'],files=rt_files,libraries=[dict(path='lib/vendor/'+p.name,role='dependency') for p in sorted(libs.iterdir())])
 provider=dict(id='sputnik-sdk',kind='sdk',version=version,abi=abi,build_id=sdk_id,runtime_build_id=runtime_id,include_dirs=['include'],files=sd_files)
 for d,item in [(rt,runtime),(sd,provider)]:
- descriptor=dict(schema='sputnik.build.v1',kind='native',name='local-'+item['id'],version='0.1.0',
+ descriptor=dict(requires={'sputnik': '>=1.0.0 <2.0.0'},schema='sputnik.build.v1',kind='native',name='local-'+item['id'],version='0.1.0',
                  files=item['files'],target=dict(os='macos',arch='aarch64'),native_providers=[item])
  (d/'sputnik.build.json').write_text(json.dumps(descriptor,indent=2)+'\n')
  files=item['files']+['sputnik.build.json']
@@ -87,7 +87,7 @@ cfg.update(bundle='none',assets={},native_providers=[],native_requirements=requi
 print('SPUTNIK_NATIVE_PROVIDERS='+str(rt)+':'+str(sd))
 
 # The package uses the same build manifest as consumers and the packer.
-manifest=dict(schema='sputnik.build.v1',name='system_io',version=version,source_root='src',
+manifest=dict(requires={'sputnik': '>=1.0.0 <2.0.0'},schema='sputnik.build.v1',name='system_io',version=version,source_root='src',
               files=sorted([p.relative_to(repo).as_posix() for p in (repo/'src').glob('*.s')]+['native/system_io.cpp','README.md']),
               profiles=dict(required=['core.v1','ffi.v1']),native_extensions=[extension],native_requirements=requirements)
 manifest['module_names']={p.relative_to(repo).as_posix(): 'sdk.'+p.stem for p in (repo/'src').glob('*.s')}

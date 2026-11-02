@@ -41,6 +41,7 @@ public:
   // Explicit structure saves, independent of dirty editor buffers and Apply.
   // Creation selects a new stable tab; existing Sessions are never replaced.
   void create_sheet(const std::string &id, const std::string &title = {});
+  void rename_sheet(const std::string &id, const std::string &title);
   void create_module(const std::string &id);
   bool set_auto_import(const std::string &module_id, bool enabled);
   bool apply_active(bool force_all = false, bool show_running = false,

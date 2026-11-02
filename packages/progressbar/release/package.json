@@ -1,8 +1,11 @@
 {
   "name": "progressbar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "root": "progressbar",
   "sources": [
     "src/*.s"
-  ]
+  ],
+  "requires": {
+    "sputnik": ">=1.0.0 <2.0.0"
+  }
 }

@@ -333,6 +333,7 @@ SputnikValue sputnik_make_handle(SputnikCtx *cx, const char *tag, void *ptr) {
   sputnik::runtime::RuntimeForeignHandle *handle = nullptr;
   Value value = Value::new_foreign_handle(handle);
   handle->tag = std::move(tag_str);
+  handle->inspect = descriptor->inspect;
   switch (descriptor->ownership) {
   case sputnik::runtime::RuntimeForeignHandle::Ownership::Owned: {
     // The descriptor already type-erases the ctx to void* (vm.h stays free of
@@ -716,6 +717,7 @@ sputnik_ext_invoke_method(StdlibHost &host, const void *frame,
     RuntimeForeignHandle *resource = nullptr;
     Value result = Value::new_foreign_handle(resource);
     resource->tag = receiver->tag;
+    resource->inspect = type->inspect;
     resource->teardown = [reclaim](void *, void *pointer) { reclaim(pointer); };
     NativeLeafFaultRecord diagnostic;
     const auto fault = diagnostic.callback();

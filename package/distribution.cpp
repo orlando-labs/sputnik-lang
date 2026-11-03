@@ -1409,8 +1409,16 @@ std::string distribution_to_json(const DistributionInfo &info) {
       << ",\"compute_backend\":" << quote(info.manifest.target.compute_backend)
       << ",\"cuda_version\":" << quote(info.manifest.target.cuda_version)
       << ",\"min_cuda_driver\":" << quote(info.manifest.target.min_cuda_driver)
-      << "},\n  \"native_requirements\": [";
+      << "},\n  \"capabilities\": [";
   bool first = true;
+  for (const auto &request : info.manifest.capabilities) {
+    if (!first) out << ',';
+    first = false;
+    out << "{\"name\":" << quote(request.name) << ",\"target\":" << quote(request.target)
+        << ",\"reason\":" << quote(request.reason) << ",\"flags\":" << request.flags << '}';
+  }
+  out << "],\n  \"native_requirements\": [";
+  first = true;
   for (const auto &r : info.manifest.native_requirements) {
     if (!first) out << ','; first = false;
     out << "{\"id\":" << quote(r.id) << ",\"kind\":" << quote(r.kind)

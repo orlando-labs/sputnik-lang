@@ -227,7 +227,8 @@ std::string package_incompatibility(const PackageManifest &m, const PackageHost 
     if (source_native(m) && !p.build_from_source) return "native compilation requires --build-from-source";
     if (p.build_from_source && package_has_native(m) && !source_native(m)) return "source build requested";
   }
-  if (p.backend != "auto" && p.variant.empty() && t.compute_backend != "none" && !backend(t,p.backend)) return "different compute backend";
+  if (p.backend != "auto" && (t.compute_backend != "none" || !t.compute_backends.empty()) &&
+      !backend(t,p.backend)) return "different compute backend";
   const auto b = execution ? t.compute_backend : p.backend;
   if ((b == "mps" || t.compute_backend == "mps") && !h.mps) return "MPS is unavailable";
   if (((b == "rocm" && backend(t, "rocm")) || t.compute_backend == "rocm") && !h.rocm)
@@ -248,7 +249,7 @@ std::string package_incompatibility(const PackageManifest &m, const PackageHost 
   }
   return {};
 }
-int select_package_variant(const std::vector<PackageManifest> &c, const PackageHost &h, const VariantPolicy &p, bool execution) {
+int select_package_variant(const std::vector<PackageManifest> &c, const PackageHost &h, const VariantPolicy &p, bool execution, bool confirm_tie) {
   std::vector<int> candidates;
   for (size_t i = 0; i < c.size(); ++i) if (package_incompatibility(c[i],h,p,execution).empty()) candidates.push_back(static_cast<int>(i));
   if (candidates.empty()) return -1;
@@ -300,7 +301,12 @@ int select_package_variant(const std::vector<PackageManifest> &c, const PackageH
          (narrower(c[j],c[i]) && narrower(c[i],c[j]) && same_native(c[j],c[i]) && !binary(c[j]) && binary(c[i])))) { dominated = true; break; }
     if (!dominated) best.push_back(i);
   }
-  if (best.size() != 1) throw std::runtime_error("ARTIFACT_SELECTION_AMBIGUOUS: use --variant");
+  if (best.size() != 1) {
+    if (!confirm_tie) throw std::runtime_error("ARTIFACT_SELECTION_AMBIGUOUS: use --variant");
+    return *std::min_element(best.begin(), best.end(), [&](int a, int b) {
+      return c[a].variant < c[b].variant;
+    });
+  }
   return best.front();
 }
 } // namespace sputnik::pkg

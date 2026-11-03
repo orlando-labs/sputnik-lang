@@ -91,20 +91,24 @@ void usage(std::ostream &out) {
   out << "  sputnik lint <file.s>\n";
   out << "  sputnik run <source|manifest|file.sputnikbc> "
          "[--grant <cap[=target]>...] [-- <program-args>...]\n";
-  out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend auto|cpu|cuda|mps|rocm] [--bundle auto|none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE]\n";
+  out << "  sputnik pkg install <name|file.sputnikpkg|directory> [--version V] [--registry URL|DIR] [--variant ID] [--backend auto|cpu|cuda|mps|rocm] [--bundle auto|none|runtime|sdk] [--allow-native] [--build-from-source] [--allow-native-large] [--locked FILE] [--credentials FILE] [--grant CAPABILITY] [--pristine|--reinstall]\n";
+  out << "  sputnik pkg install --update <name> [install options]\n";
+  out << "  sputnik pkg update <name> [install options]\n";
   out << "  sputnik pkg login [--namespace <name>] [--registry <url>] [--credentials <file>]\n";
   out << "  sputnik pkg versions <name> [--registry URL] [--credentials FILE] [--json]\n";
   out << "  sputnik pkg variants <name>@<version> [--registry URL] "
          "[--credentials FILE] [--json [--check-host]]\n";
   out << "  sputnik pkg whoami|logout [--registry <url>] [--credentials <file>]\n";
   out << "  sputnik pkg publish <file.sputnikpkg> [--registry <url>] [--credentials <file>] [--session <file>] [--allow-native-large]\n";
-  out << "  sputnik pkg uninstall|remove <name> [--version V] [--variant ID]\n";
+  out << "  sputnik pkg uninstall|remove <name>[@V] [--version V] [--variant ID]\n";
   out << "  sputnik pkg build <directory|manifest> --out <file.sputnikpkg> "
          "[--version V] [--variant ID] [--modules source|bytecode|mixed] "
          "[--bytecode-module module]...\n";
-  out << "  sputnik pkg inspect|verify <file.sputnikpkg>\n";
+  out << "  sputnik pkg inspect <file.sputnikpkg|directory>\n";
+  out << "  sputnik pkg verify <file.sputnikpkg>\n";
   out << "  sputnik pkg extract <file.sputnikpkg> <new-directory>\n";
   out << "  sputnik pkg env\n";
+  out << "  sputnik pkg list\n";
   out << "  sputnik pkg lock <source|manifest> [--backend auto|cpu|cuda|mps|rocm] [--variant ref=ID]...\n";
   out << "  sputnik build <file.s> [-o <path>] [--out-dir <dir>] "
          "[--target native|native-debug|bytecode-wrapper] "
@@ -18326,6 +18330,8 @@ static NativeValue native_argparser_new(const NativeValue &module,
   }
   if (const NativeValue *env = native_arg_kw(kwargs, "env")) {
     parser.env = native_arg_string_map(*env);
+  } else {
+    parser.env = sputnik::runtime::current_runtime_process_environment();
   }
   parser.add_help = native_arg_bool_kw(kwargs, "add_help", parser.add_help);
   return NativeValue::arg_parser(std::move(parser));
@@ -29175,20 +29181,23 @@ std::int64_t native_error_exit_code(const std::string &text) {
   }
 }
 
+std::filesystem::path native_extension_sdk_root(const std::string &argv0) {
+  // Notebook distributions carry the extension SDK beside their compiler.
+  // Installing an extension needs ABI headers, not the full runtime sources.
+  const auto bundled_sdk = std::filesystem::absolute(argv0).parent_path()
+                               .parent_path() / "Resources/sputnik-sdk";
+  return std::filesystem::is_regular_file(bundled_sdk / "runtime/sputnik_ext.h")
+             ? bundled_sdk
+             : detect_native_runtime_root(argv0);
+}
+
 std::filesystem::path prepare_native_extension_library(
     const std::string &argv0,
     const std::vector<sputnik::pkg::PackageNativeExtension> &extensions,
     const sputnik::bytecode::BcModule &module,
     const std::filesystem::path &manifest_dir,
     const std::filesystem::path &cache_root) {
-  // Notebook distributions carry the extension SDK beside their compiler.
-  // Installing an extension needs ABI headers, not the full runtime sources.
-  const auto bundled_sdk = std::filesystem::absolute(argv0).parent_path()
-                               .parent_path() / "Resources/sputnik-sdk";
-  const std::filesystem::path runtime_root =
-      std::filesystem::is_regular_file(bundled_sdk / "runtime/sputnik_ext.h")
-          ? bundled_sdk
-          : detect_native_runtime_root(argv0);
+  const auto runtime_root = native_extension_sdk_root(argv0);
   const std::string cxx = choose_native_cxx();
   const std::string cache_key = native_extension_cache_key(
       cxx, runtime_root, extensions, module, manifest_dir);
@@ -29410,6 +29419,9 @@ std::filesystem::path compile_and_load_native_extensions(
           descriptor.collected_reclaim = dynamic_function<
               decltype(descriptor.collected_reclaim)>(
               handle, destructor_symbol, library_path);
+          auto *inspect = ::dlsym(handle, (destructor_symbol + "_inspect").c_str());
+          static_assert(sizeof(inspect) == sizeof(descriptor.inspect));
+          std::memcpy(&descriptor.inspect, &inspect, sizeof(inspect));
         }
       } else {
         descriptor.ownership =
@@ -29551,6 +29563,10 @@ int run_distribution_command(int argc, char **argv) {
       throw std::runtime_error("usage: sputnik pkg " + verb +
                                " artifact.sputnikpkg" +
                                (verb == "extract" ? " destination" : ""));
+    if (verb == "inspect" && fs::is_directory(argv[3])) {
+      std::cout << sputnik::pkg::manifest_to_json(sputnik::pkg::read_source_package(argv[3], false).manifest);
+      return 0;
+    }
     const auto info = verb == "extract"
                           ? sputnik::pkg::extract_distribution(argv[3], argv[4])
                           : sputnik::pkg::inspect_distribution(argv[3]);
@@ -29677,8 +29693,68 @@ int run_distribution_command(int argc, char **argv) {
   return 0;
 }
 
+std::filesystem::path package_configure_script(const std::filesystem::path &root) {
+  namespace fs = std::filesystem;
+  fs::path script;
+  for (const auto *name : sputnik::kPackageConfigureScripts) {
+    const auto candidate = root / name;
+    const auto status = fs::symlink_status(candidate);
+    if (!fs::exists(status))
+      continue;
+    if (!fs::is_regular_file(status))
+      throw std::runtime_error("configure script must be a regular file: " +
+                               candidate.string());
+    if (!script.empty())
+      throw std::runtime_error("multiple configure scripts in " + root.string());
+    script = candidate;
+  }
+  return script;
+}
+
+void run_package_configure(
+    const std::filesystem::path &script,
+    const std::vector<sputnik::capability::CapabilityRequest> &grants) {
+  namespace fs = std::filesystem;
+  // Compile the hook independently: the package's declared inputs may be
+  // generated by the hook itself.
+  try {
+    struct RestoreDirectory {
+      fs::path previous;
+      ~RestoreDirectory() {
+        std::error_code error;
+        fs::current_path(previous, error);
+      }
+    } restore{fs::current_path()};
+    fs::current_path(script.parent_path());
+    const auto path = script.string();
+    const auto artifact = resolve_runnable_packages(
+        compile_source_to_runnable_module(path, std::nullopt, grants, false), path);
+    if (run_decoded_module(artifact.module_name, artifact.entry_mode,
+                           artifact.module,
+                           artifact.has_entry_main_code_id
+                               ? std::optional(artifact.entry_main_code_id)
+                               : std::nullopt,
+                           grants) != 0)
+      throw std::runtime_error("script execution failed");
+  } catch (const std::exception &error) {
+    throw std::runtime_error("package configure failed (" + script.string() +
+                             "): " + error.what());
+  }
+}
+
 int run_pkg_command(int argc, char **argv) {
   namespace fs = std::filesystem;
+  if (argc >= 3 && std::string(argv[2]) == "list") {
+    if (argc != 3) throw std::runtime_error("usage: sputnik pkg list");
+    const auto packages = sputnik::pkg::list_installed_packages(sputnik::pkg::package_home());
+    if (packages.empty()) std::cout << "No packages installed.\n";
+    for (const auto &package : packages) {
+      std::cout << package.name << '@' << package.version;
+      if (!package.variant.empty()) std::cout << " (" << package.variant << ')';
+      std::cout << '\n';
+    }
+    return 0;
+  }
   if (argc >= 3 && (std::string(argv[2]) == "login" || std::string(argv[2]) == "whoami" ||
                     std::string(argv[2]) == "logout" || std::string(argv[2]) == "publish" ||
                     std::string(argv[2]) == "versions" || std::string(argv[2]) == "variants"))
@@ -29696,24 +29772,35 @@ int run_pkg_command(int argc, char **argv) {
   }
   if (argc >= 4 && (std::string(argv[2]) == "uninstall" ||
                     std::string(argv[2]) == "remove")) {
+    std::string name = argv[3];
     std::string version, variant;
+    const auto at = name.find('@');
+    if (at != std::string::npos) {
+      version = name.substr(at + 1);
+      name.resize(at);
+      if (name.empty() || version.empty())
+        throw std::runtime_error("expected a package name and version in <name>@<version>");
+    }
     for (int i = 4; i < argc; ++i) {
       const std::string arg = argv[i];
       if (arg != "--version" && arg != "--variant")
         throw std::runtime_error("unknown pkg " + std::string(argv[2]) +
                                  " option: " + arg);
       auto &value = arg == "--version" ? version : variant;
-      if (i + 1 >= argc || !value.empty())
-        throw std::runtime_error("pkg " + std::string(argv[2]) +
-                                 " accepts one --version value");
+      if (!value.empty())
+        throw std::runtime_error(arg == "--version"
+                                     ? "specify the version only once"
+                                     : "specify --variant only once");
+      if (i + 1 >= argc)
+        throw std::runtime_error(arg + " requires a value");
       value = argv[++i];
       if (value.empty())
-        throw std::runtime_error("--version requires a nonempty version");
+        throw std::runtime_error(arg + " requires a nonempty value");
     }
     const auto home = sputnik::pkg::package_home();
-    const auto removed = sputnik::pkg::uninstall_from_home(argv[3], home, version, variant);
+    const auto removed = sputnik::pkg::uninstall_from_home(name, home, version, variant);
     for (const auto &item : removed)
-      std::cout << "Removed " << argv[3] << '@' << item << " from "
+      std::cout << "Removed " << name << '@' << item << " from "
                 << home.string() << '\n';
     return 0;
   }
@@ -29771,24 +29858,36 @@ int run_pkg_command(int argc, char **argv) {
               << lock.string() << '\n';
     return 0;
   }
-  if (argc < 4 || std::string(argv[2]) != "install") {
+  using sputnik::pkg::InstallIntent;
+  const std::string action = argc >= 3 ? argv[2] : "";
+  const bool update_only = action == "update";
+  const bool leading_update = action == "install" && argc >= 4 && std::string(argv[3]) == "--update";
+  const int target_index = leading_update ? 4 : 3;
+  if (argc <= target_index || (action != "install" && !update_only)) {
     usage(std::cerr);
     return 2;
   }
+  const std::string target = argv[target_index];
+  auto intent = update_only ? InstallIntent::update_only :
+      leading_update ? InstallIntent::install_or_update : InstallIntent::install;
   std::string requested_version, registry = sputnik::pkg::default_registry, signing_key, credentials;
+  std::vector<sputnik::capability::CapabilityRequest> configure_grants;
   sputnik::pkg::VariantPolicy policy;
   bool allow_native_large = false;
+  bool reinstall = false;
   bool explicit_registry = false;
   std::string locked_file;
   if (const auto *value = std::getenv("SPUTNIK_PKG_REGISTRY"))
     if (*value) registry = value;
   if (const auto *value = std::getenv("SPUTNIK_PKG_CREDENTIALS"))
     credentials = value;
-  for (int i = 4; i < argc; ++i) {
+  for (int i = target_index + 1; i < argc; ++i) {
     const std::string arg = argv[i];
+    if (arg == "--update" && !update_only) { intent = InstallIntent::install_or_update; continue; }
     if (arg == "--allow-native") { policy.allow_native = true; continue; }
     if (arg == "--build-from-source") { policy.build_from_source = true; continue; }
     if (arg == "--allow-native-large") { allow_native_large = true; continue; }
+    if (arg == "--pristine" || arg == "--reinstall") { reinstall = true; continue; }
     if (i + 1 >= argc)
       throw std::runtime_error("missing value for " + arg);
     if (arg == "--version")
@@ -29800,20 +29899,27 @@ int run_pkg_command(int argc, char **argv) {
       signing_key = argv[++i];
     else if (arg == "--credentials")
       credentials = argv[++i];
-    else if (arg == "--variant") policy.variant = argv[++i];
+    else if (arg == "--grant") {
+      sputnik::capability::CapabilityDiagnostic diagnostic;
+      if (!append_cli_grant(argv[++i], &configure_grants, &diagnostic))
+        throw std::runtime_error(diagnostic.message);
+    } else if (arg == "--variant") policy.variant = argv[++i];
     else if (arg == "--backend") policy.backend = argv[++i];
     else if (arg == "--bundle") policy.bundle = argv[++i];
     else if (arg == "--locked") locked_file = argv[++i];
     else
-      throw std::runtime_error("unknown pkg install option: " + arg);
+      throw std::runtime_error("unknown pkg " + action + " option: " + arg);
   }
+  const bool updating = intent != InstallIntent::install;
+  if (updating && !sputnik::pkg::registry_reference(target))
+    throw std::runtime_error("pkg update requires a registry package name: " + target);
   if (policy.backend != "auto" && policy.backend != "cpu" && policy.backend != "cuda" && policy.backend != "mps" && policy.backend != "rocm") throw std::runtime_error("invalid --backend");
   if (policy.bundle != "auto" && policy.bundle != "none" && policy.bundle != "runtime" && policy.bundle != "sdk") throw std::runtime_error("invalid --bundle");
   std::map<std::string, sputnik::pkg::PackagePin> pins;
   std::map<std::string, sputnik::pkg::PackageNativeRequirement> native_constraints;
   if (!locked_file.empty()) {
     pins = sputnik::pkg::read_package_lock(locked_file);
-    auto pin = pins.find(argv[3]);
+    auto pin = pins.find(target);
     if (pin == pins.end()) throw std::runtime_error("package is missing from sputnik.lock; use its canonical reference");
     if ((!requested_version.empty() && requested_version != pin->second.version) ||
         (!policy.variant.empty() && policy.variant != pin->second.variant)) throw std::runtime_error("request differs from sputnik.lock");
@@ -29823,6 +29929,7 @@ int run_pkg_command(int argc, char **argv) {
     registry = pin->second.source;
   }
   std::set<std::string> source_admissions;
+  std::map<std::string, fs::path> configured_native_adapters;
   const auto install_policy = [&](const std::string &name, bool root) {
     auto selected = policy;
     if (source_admissions.count(name)) { selected.allow_native = true; selected.build_from_source = true; }
@@ -29832,7 +29939,6 @@ int run_pkg_command(int argc, char **argv) {
       const auto pin = pins.find(name);
       if (pin == pins.end() || pin->second.variant.empty() || pin->second.source != registry) throw std::runtime_error("dependency is missing/differs in sputnik.lock: " + name);
       selected.variant = pin->second.variant;
-      selected.bundle = "auto";
     }
     return selected;
   };
@@ -29845,6 +29951,9 @@ int run_pkg_command(int argc, char **argv) {
     fs::path root;
     ~Downloads() { if (!root.empty()) { std::error_code error; fs::remove_all(root, error); } }
   } downloads;
+  struct InstallCancelled {};
+  bool interactive_install = false;
+  std::map<std::string, sputnik::pkg::VariantPolicy> confirmed_policies;
   const auto download = [&](const std::string &name, const std::string &version, bool root) {
     if (downloads.root.empty()) {
       auto pattern = (fs::temp_directory_path() / "sputnik-pkg-XXXXXX").string();
@@ -29853,15 +29962,22 @@ int run_pkg_command(int argc, char **argv) {
       downloads.root = temporary;
     }
     const auto pin = pins.find(name);
-    return sputnik::pkg::download_registry_package(registry, name, version, downloads.root, credentials,
-        install_policy(name,root), pin == pins.end() ? "" : pin->second.digest, allow_native_large);
+    auto fetched = sputnik::pkg::download_registry_package(registry, name, version, downloads.root, credentials,
+        install_policy(name,root), pin == pins.end() ? "" : pin->second.digest,
+        allow_native_large, interactive_install, root, root && reinstall,
+        root ? intent : InstallIntent::install);
+    if (fetched.no_update) return fetched;
+    if (fetched.path.empty()) throw InstallCancelled{};
+    confirmed_policies[fetched.canonical_ref] = fetched.policy;
+    return fetched;
   };
   std::map<std::string, std::string> installed;
   std::set<std::string> installing;
-  std::function<void(fs::path, const std::string &, const std::string &)>
+  std::function<void(fs::path, const std::string &, const std::string &, const sputnik::pkg::LocatedPackage *, bool)>
       install = [&](fs::path artifact_path, const std::string &expected_name,
-                    const std::string &expected_version) {
-        auto package = sputnik::pkg::read_package(artifact_path, signing_key);
+                    const std::string &expected_version, const sputnik::pkg::LocatedPackage *existing,
+                    bool replace_existing) {
+        auto package = existing && signing_key.empty() ? *existing : sputnik::pkg::read_package(artifact_path, signing_key);
         if ((!expected_name.empty() &&
              package.manifest.name != expected_name) ||
             (!expected_version.empty() &&
@@ -29877,8 +29993,13 @@ int run_pkg_command(int argc, char **argv) {
             throw std::runtime_error("NATIVE_ABI_CONFLICT: " + r.id + " requires incompatible technical dependencies");
           if (found == native_constraints.end()) native_constraints.emplace(key,r);
         }
-        const auto selected_policy = install_policy(name, expected_name == argv[3] || (installed.empty() && installing.empty()));
-        const auto incompatible = sputnik::pkg::package_incompatibility(package.manifest, sputnik::pkg::probe_package_host(selected_policy.backend == "auto" || sputnik::pkg::package_gpu_backend(selected_policy.backend) || sputnik::pkg::package_gpu_backend(package.manifest.target.compute_backend)), selected_policy);
+        auto selected_policy = install_policy(name, expected_name == target || (installed.empty() && installing.empty()));
+        const auto confirmed = confirmed_policies.find(name);
+        if (confirmed != confirmed_policies.end()) {
+          selected_policy.allow_native = confirmed->second.allow_native;
+          selected_policy.build_from_source = confirmed->second.build_from_source;
+        }
+        const auto incompatible = sputnik::pkg::package_incompatibility(package.manifest, sputnik::pkg::probe_package_host(selected_policy.backend == "auto" || selected_policy.backend == "mps" || sputnik::pkg::package_gpu_backend(selected_policy.backend) || sputnik::pkg::package_gpu_backend(package.manifest.target.compute_backend)), selected_policy);
         if (!package.artifact && !incompatible.empty()) throw std::runtime_error("NO_COMPATIBLE_ARTIFACT: " + incompatible);
         const auto pin = pins.find(name);
         if (pin != pins.end() && (pin->second.version != package.manifest.version || pin->second.variant != package.manifest.variant || pin->second.digest != package.digest))
@@ -29897,39 +30018,81 @@ int run_pkg_command(int argc, char **argv) {
         for (const auto &dependency : dependencies) {
           fs::path dependency_path;
           std::string dependency_name = dependency.name;
+          sputnik::pkg::RegistryDownload fetched;
           try {
             dependency_path = sputnik::pkg::find_registry_package(
                 home, dependency.name, dependency.version, install_policy(dependency.name,false));
           } catch (const std::exception &) {
             if (sputnik::pkg::remote_registry(registry)) {
-              auto fetched = download(dependency.name, dependency.version,false);
+              fetched = download(dependency.name, dependency.version,false);
               dependency_path = fetched.path;
               dependency_name = fetched.canonical_ref;
             } else dependency_path = sputnik::pkg::find_registry_package(
                   registry, dependency.name, dependency.version, install_policy(dependency.name,false));
           }
           if (!dependency.checksum.empty()) {
-            const auto candidate = sputnik::pkg::read_package(dependency_path, signing_key);
+            const auto candidate = fetched.installed && signing_key.empty()
+                ? *fetched.installed : sputnik::pkg::read_package(dependency_path, signing_key);
             if (!candidate.artifact && candidate.digest != dependency.checksum)
               throw std::runtime_error("package dependency checksum differs: " + dependency.name);
           }
-          install(dependency_path, dependency_name, dependency.version);
+          install(dependency_path, dependency_name, dependency.version,
+                  fetched.installed ? &*fetched.installed : nullptr, false);
+        }
+        if (existing) {
+          installing.erase(name);
+          installed[name] = package.manifest.version;
+          std::cout << "Already installed " << name << '@' << package.manifest.version
+                    << " (" << package.manifest.variant << ") in " << package.directory.string() << '\n';
+          return;
         }
         const auto prepare = [&](const fs::path &directory) {
           auto prepared_package = package;
           prepared_package.directory = directory;
+          auto build_root = directory;
+          if (package.distribution && !source_admissions.count(name) &&
+              selected_policy.build_from_source &&
+              std::any_of(package.manifest.native_extensions.begin(),
+                          package.manifest.native_extensions.end(),
+                          [](const auto &extension) { return extension.kind == "source"; })) {
+            const auto configure = package_configure_script(directory);
+            if (!configure.empty()) {
+              build_root = directory.parent_path() / "build";
+              fs::create_directory(build_root);
+              for (const auto &member : package.distribution->members) {
+                const auto destination = build_root / member.path;
+                fs::create_directories(destination.parent_path());
+                fs::copy_file(directory / member.path, destination);
+              }
+              run_package_configure(build_root / configure.filename(), configure_grants);
+              if (fs::exists(fs::symlink_status(build_root / ".native")))
+                throw std::runtime_error("configure script created reserved .native directory");
+            }
+          }
           const auto module = package_native_metadata(prepared_package);
+          const auto cache = fs::absolute(build_root / ".native");
           const auto prepared = sputnik::pkg::prepare_native_providers(
-              prepared_package.manifest, directory, fs::absolute(directory / ".native"));
-          const auto extensions = augment_native_extensions_from_source(
-              prepared, module);
+              prepared_package.manifest, build_root, cache);
+          const auto extensions = augment_native_extensions_from_source(prepared, module);
+          fs::path configured_library;
+          if (const auto configured = configured_native_adapters.find(name);
+              configured != configured_native_adapters.end()) {
+            fs::create_directories(cache);
+            configured_library = cache / configured->second.filename();
+            fs::copy_file(configured->second, configured_library);
+          }
+          ScopedNativeExtensionLibraries configured_libraries;
           const auto library = compile_and_load_native_extensions(
-              argv[0], extensions, module, directory,
-              directory / ".native", nullptr, true);
+              argv[0], extensions, module, build_root, cache,
+              &configured_libraries, configured_library.empty(),
+              configured_library);
+          const auto relative_library = library.lexically_relative(build_root);
+          if (build_root != directory)
+            fs::rename(cache, directory / ".native");
           const auto descriptor =
               native_target_triple() + "\n" +
-              library.lexically_relative(directory).generic_string() +
-              "\n" + sputnik::lexer::sha256_hex(read_file(library.string())) +
+              relative_library.generic_string() +
+              "\n" + sputnik::pkg::file_sha256(directory / relative_library) +
               "\n";
           write_file((directory / "native-library.meta").string(),
                      descriptor);
@@ -29937,7 +30100,8 @@ int run_pkg_command(int argc, char **argv) {
         };
         artifact_path = sputnik::pkg::install_in_home(artifact_path, home, signing_key,
               !downloads.root.empty() && artifact_path.parent_path() == downloads.root ? registry : "",
-              !package.artifact && !package.manifest.native_extensions.empty() ? std::function<void(const fs::path &)>(prepare) : std::function<void(const fs::path &)>{});
+              !package.artifact && !package.manifest.native_extensions.empty() ? std::function<void(const fs::path &)>(prepare) : std::function<void(const fs::path &)>{},
+              package.digest, replace_existing);
         package = sputnik::pkg::read_package(artifact_path, signing_key);
         if (package.artifact && !package.manifest.native_extensions.empty()) prepare(package.directory);
         installing.erase(name);
@@ -29945,30 +30109,82 @@ int run_pkg_command(int argc, char **argv) {
         std::cout << "Installed " << name << '@' << package.manifest.version
                   << " in " << package.directory.string() << '\n';
       };
-  fs::path input(argv[3]);
-  if (fs::is_directory(input)) {
+  fs::path input(target);
+  const bool local_source = !updating && fs::is_directory(input);
+  if (!local_source && !policy.build_from_source && !configure_grants.empty())
+    throw std::runtime_error("pkg install --grant requires a local source directory or --build-from-source");
+  if (local_source) {
+    const auto requested_root = fs::canonical(input);
     std::set<fs::path> source_stack;
+    std::set<fs::path> completed_sources;
     std::map<std::string, fs::path> source_roots;
     std::function<void(const fs::path &, const std::string &)> install_source;
     install_source = [&](const fs::path &directory, const std::string &override_version) {
-      auto source = sputnik::pkg::read_source_package(directory);
-      source_admissions.insert(source.manifest.name);
+      const auto root = fs::canonical(directory);
+      if (completed_sources.count(root))
+        return;
+      const auto configure = package_configure_script(root);
+      auto source = sputnik::pkg::read_source_package(root, configure.empty());
+      const bool configured_native = !source.manifest.configure_native.empty();
+      if (configured_native) {
+        if (configure.empty() || source.manifest.native_extensions.empty() ||
+            std::any_of(source.manifest.native_extensions.begin(),
+                        source.manifest.native_extensions.end(),
+                        [](const auto &extension) { return extension.kind != "source"; }))
+          throw std::runtime_error("configure_native requires a configure hook and source extensions");
+        if (!policy.allow_native || !policy.build_from_source)
+          throw std::runtime_error("native configure build requires --allow-native --build-from-source");
+      }
+      if (std::any_of(source.manifest.native_extensions.begin(),
+                      source.manifest.native_extensions.end(),
+                      [](const auto &extension) { return extension.kind == "source"; }))
+        source_admissions.insert(source.manifest.name);
       const auto bound = source_roots.emplace(source.manifest.name, source.directory);
       if (!bound.second && bound.first->second != source.directory)
         throw std::runtime_error("conflicting path dependencies for " + source.manifest.name);
-      if (!source_stack.insert(source.directory).second) throw std::runtime_error("package dependency cycle: " + source.manifest.name);
       if (source.manifest.version == "local") {
         if (override_version.empty()) throw std::runtime_error("source package requires version or --version");
         source.manifest.version = override_version;
       } else if (!override_version.empty() && source.manifest.version != override_version)
         throw std::runtime_error("source manifest version does not match requested version");
+      if (!source_stack.insert(root).second)
+        throw std::runtime_error("package dependency cycle: " + source.manifest.name);
       for (auto &dependency : source.manifest.dependencies) if (dependency.source == "path") {
-        const auto local = sputnik::pkg::read_source_package(source.directory / dependency.path);
+        const auto local = sputnik::pkg::read_source_package(root / dependency.path, false);
         if (local.manifest.name != dependency.name || local.manifest.version == "local" ||
             (!dependency.version.empty() && dependency.version != local.manifest.version))
           throw std::runtime_error("path dependency identity/version mismatch: " + dependency.name);
         install_source(local.directory, dependency.version);
         dependency.version = local.manifest.version; dependency.source = "registry"; dependency.path.clear();
+      }
+      if (configured_native) {
+        const auto host = sputnik::pkg::probe_package_host(false);
+        if (source.manifest.target.os == "any") source.manifest.target.os = host.os;
+        if (source.manifest.target.arch == "any") source.manifest.target.arch = host.arch;
+        if (host.os == "linux" && source.manifest.target.libc.empty())
+          source.manifest.target.libc = host.libc;
+        const auto sdk = native_extension_sdk_root(argv[0]);
+        const char *previous = std::getenv("SPUTNIK_CONFIGURE_SDK");
+        struct RestoreSdk {
+          std::optional<std::string> previous;
+          ~RestoreSdk() {
+            if (previous) ::setenv("SPUTNIK_CONFIGURE_SDK", previous->c_str(), 1);
+            else ::unsetenv("SPUTNIK_CONFIGURE_SDK");
+          }
+        } restore{previous ? std::optional<std::string>(previous) : std::nullopt};
+        if (::setenv("SPUTNIK_CONFIGURE_SDK", sdk.c_str(), 1) != 0)
+          throw std::runtime_error("cannot set native configure SDK path");
+        auto grants = configure_grants;
+        grants.push_back(sputnik::capability::make_capability(
+            "process.spawn", {}, {}, sputnik::capability::kCapabilityFlagWildcardTarget));
+        run_package_configure(configure, grants);
+        const auto adapter = fs::canonical(root / source.manifest.configure_native);
+        const auto relative = adapter.lexically_relative(root);
+        if (relative.empty() || *relative.begin() == ".." || !fs::is_regular_file(adapter))
+          throw std::runtime_error("native configure output must be a regular file inside the checkout");
+        configured_native_adapters.emplace(source.manifest.name, adapter);
+      } else if (!configure.empty()) {
+        run_package_configure(configure, configure_grants);
       }
       fs::create_directories(home);
       const auto temporary = home / (".install-" + std::to_string(::getpid()) + "-" +
@@ -29977,23 +30193,48 @@ int run_pkg_command(int argc, char **argv) {
       sputnik::pkg::DistributionBuildOptions build_options;
       build_options.toolchain_revision = package_toolchain_revision(argv[0]);
       sputnik::pkg::build_distribution(source.manifest, source.directory, temporary, build_options);
-      install(temporary, source.manifest.name, source.manifest.version);
-      source_stack.erase(source.directory);
+      install(temporary, source.manifest.name, source.manifest.version, nullptr,
+              reinstall && root == requested_root);
+      source_stack.erase(root);
+      completed_sources.insert(root);
     };
-    install_source(input, requested_version);
-  } else if (fs::is_regular_file(input))
-    install(input, {}, requested_version);
+    install_source(requested_root, requested_version);
+  } else if (!updating && fs::is_regular_file(input))
+    install(input, {}, requested_version, nullptr, reinstall);
   else {
-    if (input.is_absolute() || (input.has_parent_path() && !sputnik::pkg::registry_reference(argv[3])) || input == "." ||
-        input == ".." || input.extension() == ".sputnikpkg" || fs::exists(input))
+    if (!updating && (input.is_absolute() || (input.has_parent_path() && !sputnik::pkg::registry_reference(target)) || input == "." ||
+        input == ".." || input.extension() == ".sputnikpkg" || fs::exists(input)))
       throw std::runtime_error(
           "local package directory or artifact does not exist or is not a regular file: " + input.string());
     if (sputnik::pkg::remote_registry(registry)) {
-      const auto fetched = download(argv[3], requested_version,true);
-      install(fetched.path, fetched.canonical_ref, fetched.version);
-    } else install(sputnik::pkg::find_registry_package(registry, argv[3],
-                                                requested_version, policy),
-            argv[3], requested_version);
+      interactive_install = locked_file.empty() && ::isatty(STDIN_FILENO);
+      try {
+        const auto fetched = download(target, requested_version,true);
+        if (fetched.no_update) {
+          std::cout << "No update available.\n";
+          return 0;
+        }
+        install(fetched.path, fetched.canonical_ref, fetched.version,
+                fetched.installed ? &*fetched.installed : nullptr, reinstall);
+        if (fetched.installed && requested_version.empty())
+          std::cout << "No update available.\n";
+      } catch (const InstallCancelled &) {
+        std::cerr << "Installation cancelled.\n";
+      }
+    } else {
+      const auto current = updating ? sputnik::pkg::newest_installed_version(home, target) : std::string{};
+      if (update_only && current.empty())
+        throw std::runtime_error("Cannot update '" + target + "': package is not installed.");
+      const auto artifact = sputnik::pkg::find_registry_package(registry, target, requested_version, policy);
+      if (!current.empty()) {
+        const auto selected = sputnik::pkg::read_package(artifact, signing_key).manifest.version;
+        if (!sputnik::pkg::version_less(current, selected) && !(reinstall && current == selected)) {
+          std::cout << "No update available.\n";
+          return 0;
+        }
+      }
+      install(artifact, target, requested_version, nullptr, reinstall);
+    }
   }
   return 0;
 }

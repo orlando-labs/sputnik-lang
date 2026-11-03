@@ -142,6 +142,7 @@ struct PackageManifest {
   PackageProfileSet profiles;
   std::string source_root = ".";
   bool explicit_files = false;
+  std::string configure_native; // local checkout adapter output
   std::map<std::string, std::string> module_names;
   std::vector<PackageModule> modules;
   std::vector<PackageDependency> dependencies;

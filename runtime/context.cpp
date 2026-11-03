@@ -7,6 +7,14 @@
 #include <limits>
 #include <utility>
 
+#if defined(__APPLE__)
+#include <crt_externs.h>
+#elif defined(_WIN32)
+#include <cstdlib>
+#else
+extern char **environ;
+#endif
+
 namespace sputnik::runtime {
 
 thread_local std::uint64_t tls_runtime_worker_id = 0;
@@ -227,6 +235,26 @@ std::vector<std::string> current_runtime_process_arguments() {
       std::atomic_load_explicit(&g_runtime_process_arguments,
                                 std::memory_order_acquire);
   return *snapshot;
+}
+
+std::vector<std::pair<std::string, std::string>>
+current_runtime_process_environment() {
+#if defined(__APPLE__)
+  char **environment = *_NSGetEnviron();
+#elif defined(_WIN32)
+  char **environment = _environ;
+#else
+  char **environment = environ;
+#endif
+  std::vector<std::pair<std::string, std::string>> snapshot;
+  for (char **entry = environment; entry && *entry; ++entry) {
+    const std::string value(*entry);
+    const auto equals = value.find('=');
+    if (equals != std::string::npos && equals > 0) {
+      snapshot.emplace_back(value.substr(0, equals), value.substr(equals + 1));
+    }
+  }
+  return snapshot;
 }
 
 RuntimeTextSourceLocationScope::RuntimeTextSourceLocationScope(

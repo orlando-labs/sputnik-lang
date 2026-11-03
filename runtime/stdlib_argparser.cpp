@@ -803,6 +803,9 @@ SendStatus construct_parser(NativeStdlibCall &call) {
   }
   auto parser = std::make_shared<Parser>();
   parser->cmdline = current_runtime_process_arguments();
+  if (!call.keyword("env").has_value()) {
+    parser->env = current_runtime_process_environment();
+  }
   if (!apply_parser_metadata(call, parser.get())) {
     return SendStatus::Faulted;
   }

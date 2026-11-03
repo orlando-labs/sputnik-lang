@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <iomanip>
+#include <map>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -106,8 +107,11 @@ class APIError : public std::runtime_error {
 public:
   int status;
   std::string code;
-  APIError(int status, std::string code, const std::string &message)
-      : std::runtime_error("registry: " + message), status(status), code(std::move(code)) {}
+  std::optional<std::vector<std::string>> suggestions;
+  APIError(int status, std::string code, const std::string &message,
+           std::optional<std::vector<std::string>> suggestions)
+      : std::runtime_error("registry: " + message), status(status), code(std::move(code)),
+        suggestions(std::move(suggestions)) {}
 };
 class API {
   std::string origin_, token_;
@@ -147,15 +151,23 @@ public:
     if (!response.ok) fail(response.error_message);
     if (response.status < 200 || response.status >= 300) {
       std::string text, code;
+      std::optional<std::vector<std::string>> suggestions;
       if (response.body->read_all(65536, &text, &kind, &error)) {
         try {
-          auto value = registry_json::Parser(text).parse().at("error").at("code").string();
+          const auto detail = registry_json::Parser(text).parse().at("error");
+          const auto value = detail.at("code").string();
           if (value.size() <= 80 && value.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == std::string::npos) code = " " + value;
+          const auto field = detail.object.find("suggestions");
+          if (field != detail.object.end() && field->second.kind == Value::Array) {
+            suggestions.emplace();
+            for (const auto &item : field->second.array)
+              if (item.kind == Value::String) suggestions->push_back(item.text);
+          }
         } catch (...) {}
       }
       throw APIError(response.status, code.empty() ? "" : code.substr(1),
           "HTTP " + std::to_string(response.status) + code + " for " + path +
-          (response.status == 401 ? "; use pkg login or --credentials" : ""));
+          (response.status == 401 ? "; use pkg login or --credentials" : ""), std::move(suggestions));
     }
     if (response.headers.contains("content-encoding")) fail("encoded registry response");
     return response;
@@ -211,8 +223,28 @@ std::string canonical_reference(const std::string &name, const Value &document) 
   return canonical;
 }
 
+bool scoped_match(const std::string &ref, const std::string &name) {
+  const auto slash = ref.find('/');
+  return slash != std::string::npos && ref.substr(slash + 1) == name && registry_reference(ref);
+}
+
 std::string canonical_package(API &api, const std::string &name) {
-  return canonical_reference(name, api.document(base(name)));
+  try {
+    return canonical_reference(name, api.document(base(name)));
+  } catch (const APIError &error) {
+    if (error.status != 404 || error.code != "NOT_FOUND") throw;
+    std::string message = "Package '" + name + "' was not found.";
+    std::set<std::string> matches;
+    if (name.find('/') == std::string::npos && error.suggestions) {
+      for (const auto &ref : *error.suggestions)
+        if (scoped_match(ref, name) && matches.size() < 20) matches.insert(ref);
+    }
+    if (!matches.empty()) {
+      message += "\nAvailable under these scoped names:";
+      for (const auto &ref : matches) message += "\n  " + ref;
+    }
+    fail(message);
+  }
 }
 
 void write_json(std::ostream &out, const Value &value) {
@@ -379,8 +411,119 @@ PackageManifest registry_artifact_manifest(const Value &a) {
         string(item,"abi",p.abi); string(item,"build_id",p.build_id); string(item,"runtime_build_id",p.runtime_build_id);
         m.native_providers.push_back(p);
       }
+      if (c.object.count("native_requirements")) for (const auto &item : c.at("native_requirements").array) {
+        PackageNativeRequirement requirement;
+        string(item,"id",requirement.id); string(item,"kind",requirement.kind); string(item,"version",requirement.version);
+        string(item,"abi",requirement.abi); string(item,"build_id",requirement.build_id); string(item,"package",requirement.package);
+        m.native_requirements.push_back(std::move(requirement));
+      }
     }
     return m;
+}
+
+const Value *choose_registry_artifact(const Value &release, const PackageHost &host,
+    VariantPolicy &policy, bool interactive, bool confirm_tie) {
+  if (release.at("artifacts").kind != Value::Array) fail("invalid artifact list");
+  std::vector<PackageManifest> variants;
+  std::vector<const Value *> artifacts;
+  for (const auto &artifact : release.at("artifacts").array) {
+    if (artifact.at("quarantined").truth()) continue;
+    variants.push_back(registry_artifact_manifest(artifact));
+    artifacts.push_back(&artifact);
+  }
+  if (interactive) policy.allow_native = true;
+  int selected = select_package_variant(variants, host, policy, false, confirm_tie);
+  if (selected < 0 && interactive && !policy.build_from_source) {
+    policy.build_from_source = true;
+    selected = select_package_variant(variants, host, policy, false, confirm_tie);
+  }
+  return selected < 0 ? nullptr : artifacts[selected];
+}
+
+void append_registry_dependencies(const Value &document, std::vector<PackageDependency> &dependencies) {
+  const auto list = document.object.find("dependencies");
+  if (list == document.object.end()) return;
+  if (list->second.kind != Value::Array) fail("invalid dependency list");
+  for (const auto &item : list->second.array) {
+    const auto name = item.at(item.object.count("package_ref") ? "package_ref" : "name").string();
+    const auto version = item.at("version").string();
+    if (!registry_reference(name) || !release_version(version) || item.at("source").string() != "registry")
+      fail("invalid registry dependency");
+    dependencies.push_back({name, version, "registry", {}, {}});
+  }
+}
+
+void show_registry_dependencies(API &api, const Value &release, const Value &artifact,
+    const PackageManifest &manifest, const PackageHost &host, VariantPolicy policy) {
+  std::vector<PackageDependency> pending;
+  append_registry_dependencies(release, pending);
+  append_registry_dependencies(artifact, pending);
+  if (pending.empty()) {
+    std::cerr << "  Dependencies: none.\n";
+    return;
+  }
+  policy.variant.clear();
+  policy.native_requirements.clear();
+  const auto home = package_home();
+  std::set<std::pair<std::string, std::string>> seen{
+      {release.at("package_ref").string(), release.at("version").string()}};
+  std::map<std::pair<std::string, std::string>, PackageNativeRequirement> native_constraints;
+  const auto remember_constraints = [&](const PackageManifest &package) {
+    for (const auto &requirement : package.native_requirements)
+      native_constraints.emplace(std::make_pair(requirement.kind, requirement.id), requirement);
+  };
+  remember_constraints(manifest);
+  std::vector<std::string> labels;
+  const auto visit = [&](auto &&visit, const PackageDependency &dependency) -> void {
+    if (!seen.emplace(dependency.name, dependency.version).second) return;
+    auto selected_policy = policy;
+    for (const auto &entry : native_constraints)
+      if (entry.second.package == dependency.name) selected_policy.native_requirements.push_back(entry.second);
+    std::optional<PackageManifest> installed;
+    try {
+      installed = read_package(find_registry_package(home, dependency.name, dependency.version, selected_policy)).manifest;
+    } catch (const std::exception &) {
+      // Use registry metadata when no usable installed copy was found.
+    }
+    if (installed) {
+      labels.push_back(dependency.name + '@' + dependency.version + " (installed)");
+      remember_constraints(*installed);
+      for (const auto &child : installed->dependencies) visit(visit, child);
+      for (const auto &child : installed->artifact_dependencies) visit(visit, child);
+      return;
+    }
+    const auto child = api.document(base(dependency.name) + "/versions/" + dependency.version);
+    const auto canonical = canonical_reference(dependency.name, child);
+    if (child.at("version").string() != dependency.version || child.at("yanked").truth())
+      fail("dependency release is yanked or has a different identity");
+    if (canonical != dependency.name && !seen.emplace(canonical, dependency.version).second) return;
+    const auto *selected = choose_registry_artifact(child, host, selected_policy, true, false);
+    if (!selected) fail("NO_COMPATIBLE_ARTIFACT: " + canonical + '@' + dependency.version);
+    labels.push_back(canonical + '@' + dependency.version);
+    remember_constraints(registry_artifact_manifest(*selected));
+    std::vector<PackageDependency> children;
+    append_registry_dependencies(child, children);
+    append_registry_dependencies(*selected, children);
+    for (const auto &entry : children) visit(visit, entry);
+  };
+  for (const auto &dependency : pending) visit(visit, dependency);
+  std::cerr << "  Dependencies:\n";
+  for (const auto &label : labels) std::cerr << "    " << label << '\n';
+}
+
+std::string download_size_label(std::uint64_t size, bool exact = false) {
+  constexpr const char *units[] = {"bytes", "KiB", "MiB", "GiB"};
+  double display_size = size;
+  std::size_t unit = 0;
+  while (display_size >= 1024 && unit < 3) {
+    display_size /= 1024;
+    ++unit;
+  }
+  if (unit == 0) return std::to_string(size) + " bytes";
+  std::ostringstream label;
+  label << std::fixed << std::setprecision(1) << display_size << ' ' << units[unit];
+  if (exact) label << " (" << size << " bytes)";
+  return label.str();
 }
 
 int registry_query_command(int argc, char **argv) {
@@ -692,17 +835,48 @@ RegistryDownload download_registry_package(const std::string &origin,
     const std::string &name, const std::string &requested,
     const fs::path &destination, const fs::path &credentials,
     const VariantPolicy &policy, const std::string &pinned_digest,
-    bool allow_native_large) {
+    bool allow_native_large, bool interactive, bool confirm_selection, bool reinstall,
+    InstallIntent intent) {
   API api(origin, credentials);
   const auto canonical = canonical_package(api, name);
+  const auto home = package_home();
+  const auto installed = ((interactive && confirm_selection) || intent != InstallIntent::install)
+      ? newest_installed_version(home, canonical) : std::string{};
+  if (intent == InstallIntent::update_only && installed.empty())
+    fail("Cannot update '" + canonical + "': package is not installed.");
+  const auto no_update = [] {
+    RegistryDownload skipped;
+    skipped.no_update = true;
+    return skipped;
+  };
   auto location = base(canonical);
-  const auto host = probe_package_host(policy.backend == "auto" || package_gpu_backend(policy.backend) || !policy.variant.empty());
+  const auto host = probe_package_host(policy.backend == "auto" || policy.backend == "mps" ||
+      package_gpu_backend(policy.backend) || !policy.variant.empty());
+  auto selected_policy = policy;
   const auto select = [&](const Value &release) {
-    if (release.at("artifacts").kind != Value::Array) fail("invalid artifact list");
-    std::vector<PackageManifest> variants;
-    for (const auto &a : release.at("artifacts").array) if (!a.at("quarantined").truth()) variants.push_back(registry_artifact_manifest(a));
-    const int i = select_package_variant(variants,host,policy);
-    return i < 0 ? std::string{} : variants[i].variant;
+    selected_policy = policy;
+    return choose_registry_artifact(release, host, selected_policy, interactive, interactive && confirm_selection);
+  };
+  const auto rejection = [&](const Value &release) {
+    std::string message = canonical + "@" + release.at("version").string();
+    std::set<std::string> reasons;
+    for (const auto &artifact : release.at("artifacts").array) {
+      if (artifact.at("quarantined").truth()) continue;
+      const auto manifest = registry_artifact_manifest(artifact);
+      if (!policy.variant.empty() && manifest.variant != policy.variant) continue;
+      auto candidate = policy;
+      if (interactive) {
+        candidate.allow_native = true;
+        candidate.build_from_source = policy.build_from_source ||
+            std::any_of(manifest.native_extensions.begin(), manifest.native_extensions.end(),
+                [](const auto &extension) { return extension.kind == "source"; });
+      }
+      const auto reason = package_incompatibility(manifest, host, candidate);
+      if (!reason.empty() && reasons.insert(reason).second) message += "\n  " + reason;
+    }
+    if (reasons.empty()) message += policy.variant.empty()
+        ? "\n  no available artifacts" : "\n  variant " + policy.variant + " is unavailable";
+    return message;
   };
   std::string chosen = requested, variant;
   if (!chosen.empty() && !release_version(chosen)) fail("an exact release version is required");
@@ -731,24 +905,33 @@ RegistryDownload download_registry_package(const std::string &origin,
       path = location + "/index?cursor=" + escaped;
     } while (true);
     std::sort(versions.begin(),versions.end(),version_less);
+    if (intent != InstallIntent::install && !installed.empty() && !reinstall &&
+        (versions.empty() || !version_less(installed, versions.back())))
+      return no_update();
+    std::string first_rejection;
     for (bool stable : {true,false}) {
       for (auto it = versions.rbegin(); it != versions.rend(); ++it) {
         if ((it->find('-') == std::string::npos) != stable) continue;
         auto release = api.document(location + "/versions/" + *it);
         if (release.at("package_ref").string() != canonical || release.at("version").string() != *it) fail("invalid release identity");
         if (release.at("yanked").truth()) continue;
-        variant = select(release);
-        if (!variant.empty()) { chosen = *it; break; }
+        if (select(release)) { chosen = *it; break; }
+        if (first_rejection.empty()) first_rejection = rejection(release);
       }
       if (!chosen.empty()) break;
     }
-    if (chosen.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + name);
+    if (chosen.empty()) fail("NO_COMPATIBLE_ARTIFACT: " +
+        (first_rejection.empty() ? name + ": no available releases" : first_rejection));
   }
   auto release = api.document(location + "/versions/" + chosen);
   if (release.at("package_ref").string() != canonical || release.at("version").string() != chosen || release.at("yanked").truth())
     fail("release is yanked or has a different identity");
-  variant = select(release);
-  if (variant.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + canonical + "@" + chosen + "; check --backend, --bundle, --allow-native and --variant");
+  const auto *selected_artifact = select(release);
+  if (!selected_artifact) fail("NO_COMPATIBLE_ARTIFACT: " + rejection(release));
+  if (intent != InstallIntent::install && !installed.empty() && !version_less(installed, chosen) &&
+      !(reinstall && installed == chosen))
+    return no_update();
+  variant = selected_artifact->at("variant").string();
   auto path = location + "/versions/" + chosen + "/artifacts/" + variant;
   auto meta = api.document(path);
   if (meta.at("package_ref").string() != canonical || meta.at("version").string() != chosen ||
@@ -756,14 +939,67 @@ RegistryDownload download_registry_package(const std::string &origin,
     fail("artifact metadata identity or download origin differs");
   auto size = size_field(meta.at("size")); auto digest = meta.at("sha256").string();
   if (!pinned_digest.empty() && digest != pinned_digest) fail("artifact differs from sputnik.lock");
-  if (!size || size > (allow_native_large ? 2147483648ULL : 67108864ULL) || digest.size() != 71 || digest.rfind("sha256:", 0) ||
+  if (!size || size > 2147483648ULL || digest.size() != 71 || digest.rfind("sha256:", 0) ||
       digest.substr(7).find_first_not_of("0123456789abcdef") != std::string::npos) fail("invalid artifact size/digest");
-  auto response = api.get(path + "/download");
-  if (response.headers.first("content-length") != std::optional<std::string>(std::to_string(size)) ||
-      response.headers.first("x-sputnik-sha256") != std::optional<std::string>(digest)) fail("download framing/digest differs");
-  fs::create_directories(destination);
+  const auto manifest = registry_artifact_manifest(meta);
+  const auto problem = package_incompatibility(manifest, host, selected_policy);
+  if (!problem.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + problem);
+  const bool needs_large = size > 67108864ULL && !allow_native_large;
+  const bool needs_native = package_has_native(manifest) && !policy.allow_native;
+  const bool needs_build = selected_policy.build_from_source && !policy.build_from_source;
+  selected_policy.allow_native = policy.allow_native || needs_native;
+  const auto verify_manifest = [&](const PackageManifest &actual) {
+    if (actual.name != canonical || actual.version != chosen || actual.variant != variant)
+      fail("archive identity differs from registry metadata");
+    if (manifest.sputnik_requirement != actual.sputnik_requirement)
+      fail("archive language requirement differs from registry metadata");
+    const auto problem = package_incompatibility(actual, host, selected_policy);
+    if (!problem.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + problem);
+    PackageManifest expected_target, actual_target;
+    expected_target.target = manifest.target;
+    actual_target.target = actual.target;
+    if (render_distribution_manifest(expected_target) != render_distribution_manifest(actual_target))
+      fail("archive target differs from registry metadata");
+  };
+  if (!reinstall) {
+    if (auto existing = find_installed_distribution(home, canonical, chosen, variant, digest, origin)) {
+      verify_manifest(existing->manifest);
+      const auto archive = existing->artifact_path;
+      return {archive, canonical, chosen, selected_policy, std::move(existing)};
+    }
+  }
+  if (needs_large && !interactive)
+    fail(canonical + "@" + chosen + " (" + variant + ") exceeds the 64 MiB download limit; retry with --allow-native-large");
+  if (interactive && (confirm_selection || needs_large || needs_native || needs_build)) {
+    if (!installed.empty()) std::cerr << "Installed: " << canonical << '@' << installed << '\n';
+    const char *action = reinstall ? "Reinstall" :
+        !installed.empty() && version_less(installed, chosen) ? "Update to" : "Install";
+    std::cerr << action << ' ' << canonical << '@' << chosen << " (" << variant
+              << ", " << download_size_label(size, true) << ")?\n";
+    if (package_has_native(manifest)) std::cerr << "  Contains native code.\n";
+    if (selected_policy.build_from_source) std::cerr << "  Builds native code from source.\n";
+    if (needs_large) std::cerr << "  Exceeds the 64 MiB download limit.\n";
+    if (confirm_selection) show_registry_dependencies(api, release, *selected_artifact, manifest, host, policy);
+    std::cerr << "Proceed? [y/N] " << std::flush;
+    std::string answer;
+    if (!std::getline(std::cin, answer) ||
+        (answer != "y" && answer != "Y" && answer != "yes" && answer != "YES"))
+      return {};
+  }
   auto output = destination / (digest.substr(7) + ".sputnikpkg");
+  bool progress_open = ::isatty(STDERR_FILENO);
+  const auto progress_size = download_size_label(size);
+  const auto report_progress = [&](std::uint64_t total) {
+    std::cerr << "\rDownloading " << canonical << '@' << chosen << "  " << std::setw(3)
+              << total * 100 / size << "% (" << progress_size << ')' << std::flush;
+  };
+  auto last_update = std::chrono::steady_clock::now();
+  if (progress_open) report_progress(0);
   try {
+    auto response = api.get(path + "/download");
+    if (response.headers.first("content-length") != std::optional<std::string>(std::to_string(size)) ||
+        response.headers.first("x-sputnik-sha256") != std::optional<std::string>(digest)) fail("download framing/digest differs");
+    fs::create_directories(destination);
     std::ofstream file(output, std::ios::binary | std::ios::trunc);
     if (!file) fail("cannot create package download");
     std::uint64_t total = 0; std::string bytes, error; http::HttpErrorKind kind;
@@ -771,19 +1007,28 @@ RegistryDownload download_registry_package(const std::string &origin,
       if (!response.body->read(65536, &bytes, &kind, &error)) fail(error);
       total += bytes.size(); if (total > size) fail("download exceeds declared size");
       file.write(bytes.data(), bytes.size());
+      if (progress_open && total < size) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - last_update >= std::chrono::milliseconds(100)) {
+          report_progress(total);
+          last_update = now;
+        }
+      }
     }
     file.close();
     if (!file || total != size || "sha256:" + file_sha256(output) != digest) fail("download checksum/size differs");
-    auto archive = inspect_distribution(output);
-    if (archive.manifest.name != canonical || archive.manifest.version != chosen || archive.manifest.variant != variant)
-      fail("archive identity differs from registry metadata");
-    if (registry_artifact_manifest(meta).sputnik_requirement != archive.manifest.sputnik_requirement) fail("archive language requirement differs from registry metadata");
-    const auto problem = package_incompatibility(archive.manifest,host,policy);
-    if (!problem.empty()) fail("NO_COMPATIBLE_ARTIFACT: " + problem);
-    PackageManifest expected_target, actual_target;
-    expected_target.target = registry_artifact_manifest(meta).target; actual_target.target = archive.manifest.target;
-    if (render_distribution_manifest(expected_target) != render_distribution_manifest(actual_target)) fail("archive target differs from registry metadata");
-  } catch (...) { fs::remove(output); throw; }
-  return {output, canonical, chosen};
+    if (progress_open) {
+      report_progress(total);
+      std::cerr << '\n';
+      progress_open = false;
+    }
+    verify_manifest(inspect_distribution(output).manifest);
+  } catch (...) {
+    if (progress_open) std::cerr << '\n';
+    std::error_code error;
+    fs::remove(output, error);
+    throw;
+  }
+  return {output, canonical, chosen, selected_policy, std::nullopt};
 }
 } // namespace sputnik::pkg

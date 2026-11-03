@@ -1,5 +1,7 @@
 #include "tools/isputnik/session.h"
+#include "runtime/value_display.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <chrono>
 #include <iostream>
@@ -13,6 +15,36 @@ void expect(bool condition, const std::string &message) {
     std::cerr << "FAIL: " << message << "\n";
     std::exit(1);
   }
+}
+
+void test_native_resource_preview_in_tuple() {
+  using namespace sputnik::runtime;
+  auto shape = std::make_shared<ShapeDescriptor>();
+  shape->ivar_slots.emplace("core", 0);
+  auto instance = make_intrusive<InstanceValue>();
+  instance->header.shape = shape;
+  RuntimeForeignHandle *handle = nullptr;
+  instance->ivar_storage.push_back(Value::new_foreign_handle(handle));
+  std::string text = "<Tensor shape=[2, 1]\n  values=[[1],\n          [2]]>";
+  handle->ptr = &text;
+  handle->inspect = [](const void *data, char *out, std::size_t capacity) {
+    const auto &preview = *static_cast<const std::string *>(data);
+    const auto size = std::min(preview.size(), capacity);
+    std::copy_n(preview.data(), size, out);
+    return size;
+  };
+  const auto tensor = Value::instance(instance);
+  const auto mode = RuntimeStringifyMode::Inspect;
+  expect(runtime_preview_value(tensor, mode).text == text,
+         "standalone resource preview preserves matrix formatting");
+  auto tuple = make_intrusive<TupleValue>();
+  tuple->items = {tensor, Value::integer(3)};
+  const auto pair = Value::tuple(tuple);
+  const std::string expected = "(<Tensor shape=[2, 1] values=[[1], [2]]>, 3)";
+  expect(runtime_preview_value(pair, mode).text == expected,
+         "resource preview stays inline inside tuples");
+  expect(runtime_stringify_value(pair, RuntimeStringifyMode::Display) == expected,
+         "print uses the same inline resource preview");
 }
 
 std::string
@@ -836,6 +868,7 @@ void test_runtime_event_pump_coalesces_reentry_and_reports_drain_cap() {
 } // namespace
 
 int main() {
+  test_native_resource_preview_in_tuple();
   test_import_as_replaces_notebook_dependencies();
   test_console_definitions_across_cells();
   test_console_definitions_errors_and_capabilities();

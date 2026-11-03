@@ -43,6 +43,7 @@ struct NativeTypeDescriptor {
   // both null for `borrowed`.
   void (*owned_destructor)(void *ctx, void *handle) = nullptr;
   void (*collected_reclaim)(void *handle) = nullptr;
+  std::size_t (*inspect)(const void *, char *, std::size_t) = nullptr;
 };
 
 // The native binary's tag -> descriptor table. Populated once at startup by

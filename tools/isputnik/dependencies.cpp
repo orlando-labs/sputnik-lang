@@ -315,13 +315,17 @@ void load_prepared_native_dependencies(const sputnik::notebook::LoadedProject &p
         if (fields[1] == "owned" || fields[1] == "collected") {
           if (fields.size() < 3 || fields[2].empty()) throw std::runtime_error("native owner missing destructor");
           const auto mapped = symbols.find(fields[2]);
-          auto fn = symbol(mapped == symbols.end() ? fields[2] : mapped->second);
+          const auto &destructor = mapped == symbols.end() ? fields[2] : mapped->second;
+          auto fn = symbol(destructor);
           if (fields[1] == "owned") {
             type.ownership = sputnik::runtime::RuntimeForeignHandle::Ownership::Owned;
             std::memcpy(&type.owned_destructor, &fn, sizeof(fn));
           } else {
             type.ownership = sputnik::runtime::RuntimeForeignHandle::Ownership::Collected;
             std::memcpy(&type.collected_reclaim, &fn, sizeof(fn));
+            // The optional sidecar shares the lifetime of the reclaim symbol.
+            auto inspect = symbol(destructor + "_inspect", false);
+            std::memcpy(&type.inspect, &inspect, sizeof(inspect));
           }
         } else type.ownership = sputnik::runtime::RuntimeForeignHandle::Ownership::Borrowed;
         package.types.push_back(std::move(type));

@@ -30,8 +30,9 @@ std::string package_incompatibility(const PackageManifest &manifest,
                                     const VariantPolicy &policy,
                                     bool execution = false);
 // Candidates must belong to the same release. Returns -1 when none is eligible;
-// incomparable/equivalent best selectors require an explicit variant.
+// Incomparable/equivalent best selectors require an explicit variant unless
+// the caller will show the selected variant for confirmation.
 int select_package_variant(const std::vector<PackageManifest> &candidates,
                            const PackageHost &host, const VariantPolicy &policy,
-                           bool execution = false);
+                           bool execution = false, bool confirm_tie = false);
 } // namespace sputnik::pkg

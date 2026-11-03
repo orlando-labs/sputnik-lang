@@ -301,4 +301,9 @@ std::uint32_t current_runtime_io_wait_depth();
 void set_runtime_process_arguments(std::vector<std::string> arguments);
 std::vector<std::string> current_runtime_process_arguments();
 
+// A fresh, owned environment snapshot for ArgParser's default `env:`. Explicit
+// maps (including {}) replace it. Parsing never consults live process globals.
+std::vector<std::pair<std::string, std::string>>
+current_runtime_process_environment();
+
 } // namespace sputnik::runtime

@@ -83,26 +83,84 @@ installed bytecode. Package names and imported module names can differ.
 
 ```sh
 sputnik pkg env
+sputnik pkg list
 sputnik pkg install progressbar --registry /path/to/registry
 sputnik pkg install progressbar --version 1.2.0
+sputnik pkg install --update progressbar
+sputnik pkg update progressbar
 sputnik pkg install ./progressbar-1.2.0.sputnikpkg
 sputnik pkg install ./my-package
 sputnik pkg install ./build-manifest-package --version 1.2.0
 ```
 
+`pkg list` reads the local package home and shows each installed version and
+variant.
+
 A source directory requires one `sputnik.build.yaml`, `sputnik.build.yml`, or
 `sputnik.build.json`. It declares its version, or the caller supplies `--version`.
 Installation builds the normalized tar source distribution and installs it in
-the shared home under `<name>/<version>/<variant>/`. It preserves the checkout.
+the shared home under `<name>/<version>/<variant>/`. An optional configure
+script can write to the checkout before packaging.
 Path dependencies are installed recursively from their declaring directories;
 registry dependencies are installed at their exact versions. An explicit local
 source directory retains its existing native build behavior. Native registry
 artifacts require `--allow-native --build-from-source`.
 
+For local source installation, place one regular file named `configure.sp`,
+`configure.spu`, `configure.s`, or `configure.sputnik` in the package root. Sputnik runs the script
+from that directory after installing local path dependencies and before building
+the source distribution. The script runs independently of the package's build
+manifest, so it can generate files declared there. Each local source package
+runs its hook once per install command, including on reinstall. Use the
+standard capability grants for operations such as writing generated files.
+
+```sh
+sputnik pkg install ./my-package --grant fs.write=generated.s
+```
+
+Multiple hook files or a script error abort installation.
+
+A local manifest can set `configure_native` to the relative path of the shared
+adapter produced by the hook. Sputnik stages that adapter with the installed
+package as its prepared native library. This flow requires
+`--allow-native --build-from-source`.
+Sputnik grants process spawning to the build hook and sets
+`SPUTNIK_CONFIGURE_SDK` to the extension SDK directory. The generated archive
+records the host OS and architecture when the source manifest leaves them
+unspecified.
+
+To publish a configure script, list it in the manifest's `files` without
+declaring it as a module. When installing a published native source variant,
+Sputnik verifies the archive, copies its verified inputs into a temporary
+build directory, and runs the hook there once before invoking the compiler.
+Generated build inputs stay in that directory. Installation retains the
+original archive, verified payload and prepared native libraries.
+
+```sh
+sputnik pkg install alice/my-package --allow-native --build-from-source \
+  --grant fs.write=generated.h
+```
+
+Configure scripts receive the capabilities passed via `--grant` for the
+install command, including when building dependencies. These options apply
+to a new source build. Reusing an installed build or installing a prebuilt
+variant skips the hook.
+
 Exact transitive dependencies are installed from the same registry, reusing
-already installed versions. Installation verifies artifact digests and bytecode;
-reinstalling different bytes at an existing name/version is rejected. Installing
-a package never evaluates its Sputnik module initializers.
+already installed versions. In a terminal, installing from a remote registry
+shows the installed version and asks before installing a newer compatible
+release. Older releases remain available for existing locks.
+
+`pkg install --update NAME` installs a missing registry package or updates an
+installed one. `pkg update NAME` requires an installed package. Both update
+commands keep the installed version when there is no newer compatible release.
+
+Use `--pristine` or `--reinstall` to rebuild the selected distribution from
+scratch. For a remote registry this fetches a fresh archive. The installer
+replaces only the selected version and variant after extraction and native
+preparation succeed. A normal install verifies the digest and rejects a
+conflicting artifact at the same version and variant. Package module
+initializers run on import.
 
 Native extension source/header blobs are extracted within the package directory
 and compiled during installation. Their shared library is cached with compiler,
@@ -117,12 +175,13 @@ its existing meaning; without that grant the CLI uses Sputnik fallback bodies.
 sputnik pkg uninstall my-package
 sputnik pkg remove my-package
 sputnik pkg uninstall my-package --version 1.2.0
+sputnik pkg remove my-package@1.2.0
 ```
 
-`remove` is an alias for `uninstall`. Without `--version`, both commands remove
-all installed versions of the named package; with `--version`, they remove only
-that version. The name is the package identity from its manifest, not an import
-name or source directory. Both commands use `SPUTNIK_PKG_HOME`, falling back to
+`remove` is an alias for `uninstall`. Both commands remove all installed
+versions of the named package by default. Use either `--version V` or
+`name@V` to remove only version `V`. Use the package identity from its
+manifest as the name. Both commands use `SPUTNIK_PKG_HOME`, falling back to
 `~/.sputnik/packages`, exactly as installation does.
 
 Removal deletes each version's artifact, module index, extracted native sources

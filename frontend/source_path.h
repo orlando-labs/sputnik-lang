@@ -2,6 +2,9 @@
 #include <string_view>
 
 namespace sputnik {
+inline constexpr const char *kPackageConfigureScripts[] = {
+    "configure.sp", "configure.spu", "configure.s", "configure.sputnik"};
+
 inline bool is_source_path(std::string_view path) {
   const auto dot = path.find_last_of('.');
   if (dot == std::string_view::npos) return false;

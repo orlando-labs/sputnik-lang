@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -415,6 +416,64 @@ void test_default_cmdline_uses_process_arguments() {
                     "ArgParser default cmdline uses process arguments");
 }
 
+class ScopedEnvironment {
+public:
+  ScopedEnvironment(std::string name, const std::string &value)
+      : name_(std::move(name)) {
+    if (const char *previous = std::getenv(name_.c_str())) previous_ = previous;
+    set(value);
+  }
+  ~ScopedEnvironment() {
+#if defined(_WIN32)
+    _putenv_s(name_.c_str(), previous_ ? previous_->c_str() : "");
+#else
+    if (previous_) setenv(name_.c_str(), previous_->c_str(), 1);
+    else unsetenv(name_.c_str());
+#endif
+  }
+  void set(const std::string &value) {
+#if defined(_WIN32)
+    expect(_putenv_s(name_.c_str(), value.c_str()) == 0, "set test environment");
+#else
+    expect(setenv(name_.c_str(), value.c_str(), 1) == 0, "set test environment");
+#endif
+  }
+private:
+  std::string name_;
+  std::optional<std::string> previous_;
+};
+
+void test_default_environment() {
+  ScopedEnvironment count("SPUTNIK_ARGPARSER_UNIT_COUNT", "42");
+  expect_ok_integer(execute_source(
+      "parser = ArgParser(cmdline: [])\n"
+      "parser.arg(\"--count\", type: Int, required: true, env: \"SPUTNIK_ARGPARSER_UNIT_COUNT\")\n"
+      "parser.parse_or_raise()[:count]\n"), 42, "default process environment");
+  expect_ok_integer(execute_source(
+      "parser = ArgParser(cmdline: [\"--count\", \"7\"])\n"
+      "parser.arg(\"--count\", type: Int, env: \"SPUTNIK_ARGPARSER_UNIT_COUNT\")\n"
+      "parser.parse_or_raise()[:count]\n"), 7, "CLI precedes process environment");
+  expect_ok_integer(execute_source(
+      "parser = ArgParser(cmdline: [], env: {})\n"
+      "parser.arg(\"--count\", type: Int, default: 99, env: \"SPUTNIK_ARGPARSER_UNIT_COUNT\")\n"
+      "parser.parse_or_raise()[:count]\n"), 99, "explicit map isolates host environment");
+  const auto snapshot = sputnik::runtime::current_runtime_process_environment();
+  count.set("21");
+  bool retained = false;
+  for (const auto &[name, value] : snapshot)
+    if (name == "SPUTNIK_ARGPARSER_UNIT_COUNT") retained = value == "42";
+  expect(retained, "environment snapshot owns its values");
+  expect_ok_integer(execute_source(
+      "parser = ArgParser(cmdline: [])\n"
+      "parser.arg(\"--count\", type: Int, env: \"SPUTNIK_ARGPARSER_UNIT_COUNT\")\n"
+      "parser.parse_or_raise()[:count]\n"), 21, "new parser captures fresh environment");
+  ScopedEnvironment invalid("SPUTNIK_ARGPARSER_UNIT_BOOL", "invalid");
+  expect_fault("parser = ArgParser(cmdline: [])\n"
+               "parser.arg(\"--enabled\", type: Bool, env: \"SPUTNIK_ARGPARSER_UNIT_BOOL\")\n"
+               "parser.parse_or_raise()\n", "ArgParser.InvalidValue",
+               "process environment is converted and validated");
+}
+
 void test_boolean_parsing_contract() {
   const std::vector<std::pair<std::string, bool>> tokens = {
       {"true", true},   {"t", true},      {"1", true},     {"yes", true},
@@ -478,6 +537,7 @@ int main() {
   test_parse_cli_behavior();
   test_declaration_validation();
   test_default_cmdline_uses_process_arguments();
+  test_default_environment();
   test_boolean_parsing_contract();
 
   std::cout << "stdlib_argparser_tests: ok\n";

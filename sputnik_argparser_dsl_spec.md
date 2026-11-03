@@ -67,6 +67,12 @@ Property-style access may be supported as convenience for non-conflicting names,
 def init(cmdline: Process.cmdline, name: null, env: Process.env): ...
 ```
 
+When `env:` is omitted, each parser captures an owned snapshot of the current
+process environment at construction, on both VM and native. An explicit map,
+including `{}`, replaces that snapshot; host values are never merged into it.
+Only declared option/flag fallbacks enter the parsed result. Empty environment
+values remain present and undergo the declared converter/validation pipeline.
+
 ### 3.1. Default command line
 
 `ArgParser()` defaults to the command line given to the current process.

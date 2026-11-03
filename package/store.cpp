@@ -10,6 +10,8 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cerrno>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -17,6 +19,12 @@
 #include <set>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
+#ifdef __linux__
+#include <fcntl.h>
+#include <linux/fs.h>
+#include <sys/syscall.h>
+#endif
 #include <unistd.h>
 
 namespace sputnik::pkg {
@@ -292,12 +300,17 @@ LocatedPackage read_package(const fs::path &path,
   return result;
 }
 
-LocatedPackage read_source_package(const fs::path &directory) {
-    auto package = directory_package(directory);
+LocatedPackage read_source_package(const fs::path &directory, bool validate_modules) {
+  auto package = directory_package(directory);
   if (!package)
-    throw std::runtime_error("no package manifest in " + directory.string());
-  for (const auto &module : package->manifest.modules)
-    (void)member(package->directory, module.path);
+    throw std::runtime_error(
+        "no package manifest in " + directory.string() +
+        "\nChoose a .sputnikpkg file or a folder containing sputnik.build.yaml, "
+        "sputnik.build.yml, or sputnik.build.json. For a source checkout without "
+        "a manifest, build the package first.");
+  if (validate_modules)
+    for (const auto &module : package->manifest.modules)
+      (void)member(package->directory, module.path);
   return std::move(*package);
 }
 
@@ -336,42 +349,138 @@ fs::path find_registry_package(const fs::path &registry,
   throw std::runtime_error("NO_COMPATIBLE_ARTIFACT: " + name + "@" + requested);
 }
 
+static void check_package_directories(const fs::path &home, const fs::path &target) {
+  for (auto parent = target; parent != home && parent != parent.parent_path(); parent = parent.parent_path())
+    if (fs::is_symlink(fs::symlink_status(parent))) throw std::runtime_error("symlinked package installation directory");
+}
+
+static fs::path checked_distribution_target(const fs::path &home, const std::string &name,
+    const std::string &version, const std::string &variant) {
+  if (!registry_reference(name) || !component(version) || !component(variant))
+    throw std::runtime_error("invalid distribution installation identity");
+  const auto target = home / name / version / variant;
+  check_package_directories(home, target);
+  return target;
+}
+
+static std::vector<std::string> installed_variants(const fs::path &directory, const std::string &filename) {
+  std::vector<std::string> variants;
+  if (fs::is_regular_file(fs::symlink_status(directory / filename))) variants.emplace_back();
+  for (const auto &variant : children(directory)) {
+    const auto name = variant.filename().string();
+    if (component(name) && fs::is_directory(fs::symlink_status(variant)) &&
+        fs::is_regular_file(fs::symlink_status(variant / filename)))
+      variants.push_back(name);
+  }
+  return variants;
+}
+
+std::vector<InstalledPackage> list_installed_packages(const fs::path &home) {
+  std::vector<InstalledPackage> packages;
+  const auto scan_package = [&](const fs::path &directory, const std::string &name) {
+    for (const auto &path : children(directory)) {
+      const auto version = path.filename().string();
+      if (!component(version) || !fs::is_directory(fs::symlink_status(path))) continue;
+      for (const auto &variant : installed_variants(path, artifact_filename(name, version)))
+        packages.push_back({name, version, variant});
+    }
+  };
+  for (const auto &directory : children(home)) {
+    const auto name = directory.filename().string();
+    if (!component(name) || !fs::is_directory(fs::symlink_status(directory))) continue;
+    scan_package(directory, name);
+    for (const auto &package : children(directory)) {
+      const auto scoped_name = name + '/' + package.filename().string();
+      if (registry_reference(scoped_name) && fs::is_directory(fs::symlink_status(package)))
+        scan_package(package, scoped_name);
+    }
+  }
+  std::sort(packages.begin(), packages.end(), [](const InstalledPackage &a, const InstalledPackage &b) {
+    if (a.name != b.name) return a.name < b.name;
+    if (a.version != b.version) return version_less(a.version, b.version);
+    return a.variant < b.variant;
+  });
+  return packages;
+}
+
+std::string newest_installed_version(const fs::path &home, const std::string &name) {
+  if (!registry_reference(name)) throw std::runtime_error("invalid package reference: " + name);
+  const auto directory = home / name;
+  check_package_directories(home, directory);
+  std::string newest;
+  for (const auto &path : children(directory)) {
+    const auto candidate = path.filename().string();
+    if (!version(candidate).valid || fs::is_symlink(path) || !fs::is_directory(path)) continue;
+    if ((newest.empty() || version_less(newest, candidate)) &&
+        !installed_variants(path, artifact_filename(name, candidate)).empty())
+      newest = candidate;
+  }
+  return newest;
+}
+
+std::optional<LocatedPackage> find_installed_distribution(
+    const fs::path &home, const std::string &name, const std::string &version,
+    const std::string &variant, const std::string &digest, const std::string &origin) {
+  const auto target = checked_distribution_target(home, name, version, variant);
+  if (!fs::exists(target)) return std::nullopt;
+  const auto path = target / artifact_filename(name, version);
+  if (fs::is_symlink(fs::symlink_status(path)))
+    throw std::runtime_error("symlinked installed package archive");
+  auto existing = read_package(path);
+  if (!existing.distribution || existing.manifest.name != name || existing.manifest.version != version ||
+      existing.manifest.variant != variant || existing.digest != digest)
+    throw std::runtime_error("installed package artifact differs from registry");
+  if (!origin.empty() && existing.source_kind == "registry" && existing.source != origin)
+    throw std::runtime_error("installed package comes from a different registry");
+  verify_distribution_members(existing);
+  if (!existing.manifest.native_extensions.empty()) verify_prepared_native(existing);
+  return existing;
+}
+
+static void exchange_installations(const fs::path &payload, const fs::path &target) {
+#if defined(__APPLE__)
+  if (::renamex_np(payload.c_str(), target.c_str(), RENAME_SWAP) == 0) return;
+  const int error = errno;
+#elif defined(__linux__) && defined(SYS_renameat2)
+  if (::syscall(SYS_renameat2, AT_FDCWD, payload.c_str(), AT_FDCWD, target.c_str(), RENAME_EXCHANGE) == 0) return;
+  const int error = errno;
+#else
+  const int error = ENOTSUP;
+#endif
+  throw std::system_error(error, std::generic_category(), "cannot replace installed package");
+}
+
 fs::path install_in_home(const fs::path &path, const fs::path &home,
                          const std::string &signing_key, const std::string &origin,
-                         const std::function<void(const fs::path &)> &prepare) {
+                         const std::function<void(const fs::path &)> &prepare,
+                         const std::string &expected_digest, bool reinstall) {
   const auto package = read_package(path, signing_key);
+  if (!expected_digest.empty() && package.digest != expected_digest)
+    throw std::runtime_error("package archive changed before installation");
   if (!language::satisfies(SPUTNIK_VERSION, package.manifest.sputnik_requirement))
     throw std::runtime_error("LANGUAGE_VERSION_MISMATCH: " + package.manifest.name + " requires Sputnik " + package.manifest.sputnik_requirement + ", host is " SPUTNIK_VERSION);
   if (!package.artifact) {
-    if (!registry_reference(package.manifest.name) || !component(package.manifest.version))
-      throw std::runtime_error("invalid distribution installation identity");
+    const auto target = checked_distribution_target(home, package.manifest.name, package.manifest.version, package.manifest.variant);
     fs::create_directories(home);
-    const auto target = home / package.manifest.name / package.manifest.version / package.manifest.variant;
     const auto filename = artifact_filename(package.manifest.name, package.manifest.version);
     const auto root = fs::canonical(home);
     const auto relative = fs::weakly_canonical(target).lexically_relative(root);
     if (relative.empty() || *relative.begin() == "..")
       throw std::runtime_error("package installation escapes package home");
-    for (auto parent = target; parent != home && parent != parent.parent_path(); parent = parent.parent_path())
-      if (fs::is_symlink(fs::symlink_status(parent))) throw std::runtime_error("symlinked package installation directory");
-    if (fs::exists(target)) {
-      const auto existing = read_package(target / filename);
-      if (existing.digest != package.digest)
-        throw std::runtime_error("installed package artifact differs from registry");
-      verify_distribution_members(existing);
-      if (!existing.manifest.native_extensions.empty()) verify_prepared_native(existing);
-      if (!origin.empty() && existing.source_kind == "registry" && existing.source != origin)
-        throw std::runtime_error("installed package comes from a different registry");
+    if (!reinstall && find_installed_distribution(home, package.manifest.name, package.manifest.version,
+                                    package.manifest.variant, package.digest, origin))
       return target / filename;
-    }
     auto pattern = (root / ".install-XXXXXX").string();
     auto temporary = ::mkdtemp(pattern.data());
     if (!temporary) throw std::runtime_error("cannot stage package installation");
     const fs::path staging(temporary);
     try {
       const auto payload = staging / "payload";
-      extract_distribution(path, payload);
-      fs::copy_file(path, payload / filename);
+      const auto archive = staging / filename;
+      fs::copy_file(path, archive);
+      if ("sha256:" + extract_distribution(archive, payload).sha256 != package.digest)
+        throw std::runtime_error("package archive changed before extraction");
+      fs::rename(archive, payload / filename);
       std::ofstream index(payload / "modules.index");
       index << "sputnik.package.index.v2\n" << package.manifest.name << '\n'
             << package.manifest.version << '\n' << package.digest << '\n'
@@ -385,11 +494,18 @@ fs::path install_in_home(const fs::path &path, const fs::path &home,
       }
       if (prepare) prepare(payload);
       fs::create_directories(target.parent_path());
-      fs::rename(payload, target);
+      if (reinstall && fs::is_directory(fs::symlink_status(target))) {
+        // Exchange complete trees so a failed rebuild or exchange leaves the
+        // previous installation usable, including for concurrent readers.
+        exchange_installations(payload, target);
+      } else {
+        fs::rename(payload, target);
+      }
     } catch (...) { fs::remove_all(staging); throw; }
     fs::remove_all(staging);
     return target / filename;
   }
+  if (reinstall) throw std::runtime_error("--reinstall requires a distribution package");
   const auto result =
       install_package_artifact(read(path), home.string(), signing_key);
   if (!result.ok)

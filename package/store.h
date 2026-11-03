@@ -111,16 +111,28 @@ private:
 // accept a direct artifact path.
 LocatedPackage read_package(const std::filesystem::path &path,
                             const std::string &signing_key = {});
-LocatedPackage read_source_package(const std::filesystem::path &directory);
+LocatedPackage read_source_package(const std::filesystem::path &directory,
+                                   bool validate_modules = true);
 std::filesystem::path
 find_registry_package(const std::filesystem::path &registry,
                       const std::string &name, const std::string &version = {},
                       const VariantPolicy &policy = {});
+std::optional<LocatedPackage> find_installed_distribution(
+    const std::filesystem::path &home, const std::string &name,
+    const std::string &version, const std::string &variant,
+    const std::string &digest, const std::string &origin);
+std::string newest_installed_version(const std::filesystem::path &home, const std::string &name);
+struct InstalledPackage {
+  std::string name, version, variant;
+};
+std::vector<InstalledPackage> list_installed_packages(const std::filesystem::path &home);
 std::filesystem::path install_in_home(const std::filesystem::path &artifact,
                                       const std::filesystem::path &home,
                                       const std::string &signing_key = {},
                                       const std::string &origin = {},
-                                      const std::function<void(const std::filesystem::path &)> &prepare = {});
+                                      const std::function<void(const std::filesystem::path &)> &prepare = {},
+                                      const std::string &expected_digest = {},
+                                      bool reinstall = false);
 // Remove installed version directories only. An omitted version selects every
 // installed version of this package; source checkouts and dependencies remain.
 std::vector<std::string> uninstall_from_home(const std::string &name,

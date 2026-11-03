@@ -363,6 +363,8 @@ struct RuntimeForeignHandle {
 
   std::string tag;     // per-(package,type) dispatch identity
   void *ptr = nullptr; // the wrapped foreign resource
+  // Optional bounded, read-only display of a live resource.
+  std::size_t (*inspect)(const void *, char *, std::size_t) = nullptr;
   Ownership ownership = Ownership::Borrowed;
   // Reclaim callback: the context-free reclaim for `collected`, a ctx-bound
   // closure supplied by the ABI layer for `owned`, and empty for `borrowed`.

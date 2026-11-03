@@ -1,4 +1,5 @@
 #include "buildsys/build.h"
+#include "frontend/source_path.h"
 
 #include <algorithm>
 #include <cctype>
@@ -1159,6 +1160,7 @@ void read_package_fields(const JsonValue &root, const std::string &path,
   text(root, "source_root", m.source_root);
   strings(root, "files", m.files);
   m.explicit_files = member(root, "files") != nullptr;
+  text(root, "configure_native", m.configure_native);
   const auto safe_path = [](const std::string &value) {
     const fs::path p(value);
     if (value.empty() || p.is_absolute() || value.find('\\') != std::string::npos || value.find('\0') != std::string::npos) return false;
@@ -1166,6 +1168,8 @@ void read_package_fields(const JsonValue &root, const std::string &path,
     return true;
   };
   if (!safe_path(m.source_root)) error("source_root must be a package-relative directory");
+  if (member(root, "configure_native") && !safe_path(m.configure_native))
+    error("configure_native must be a package-relative adapter path");
   if (const auto *names = member(root, "module_names")) {
     if (names->kind != JsonValue::Kind::Object) error("module_names must map file paths to module names");
     else for (const auto &[file, name] : names->object_value) {
@@ -1179,6 +1183,10 @@ void read_package_fields(const JsonValue &root, const std::string &path,
     if (!safe_path(file) || !files.insert(file).second) {
       error("invalid or duplicate package file: " + file); continue;
     }
+    if (std::find(std::begin(kPackageConfigureScripts),
+                  std::end(kPackageConfigureScripts), file) !=
+        std::end(kPackageConfigureScripts) && !m.module_names.count(file))
+      continue;
     const fs::path p(file);
     const auto suffix = p.extension().string();
     bool source = suffix == ".s" || suffix == ".spu" || suffix == ".sputnik";

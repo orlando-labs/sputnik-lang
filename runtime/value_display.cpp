@@ -33,6 +33,35 @@ struct RuntimeStringifyContext {
   std::unordered_set<const void *> active;
 };
 
+// A wrapper can expose a collected resource via its core slot. Only native
+// handles with a registered sidecar participate, without dispatching methods.
+std::string inspect_resource(const IntrusivePtr<InstanceValue> &instance,
+                             bool inline_value) {
+  const auto &shape = instance->header.shape;
+  if (!shape)
+    return {};
+  const auto slot = shape->ivar_slots.find("core");
+  if (slot == shape->ivar_slots.end() || slot->second >= instance->ivar_storage.size())
+    return {};
+  const auto &value = instance->ivar_storage[slot->second];
+  if (!value.is_foreign_handle())
+    return {};
+  const auto handle = value.as_foreign_handle();
+  if (!handle || !handle->live || !handle->ptr || !handle->inspect)
+    return {};
+  char buffer[4096];
+  const auto count = handle->inspect(handle->ptr, buffer, sizeof(buffer));
+  std::string result(buffer, std::min(count, sizeof(buffer)));
+  if (inline_value) {
+    for (auto line = result.find('\n'); line != std::string::npos;
+         line = result.find('\n', line + 1)) {
+      const auto next = result.find_first_not_of(' ', line + 1);
+      result.replace(line, next == std::string::npos ? next : next - line, " ");
+    }
+  }
+  return result;
+}
+
 const std::vector<std::string> *
 string_table_for(const RuntimeStringifyContext &context) {
   return context.runtime_strings != nullptr && !context.runtime_strings->empty()
@@ -471,6 +500,8 @@ std::string runtime_stringify_value_impl(RuntimeStringifyContext *context,
       out << " " << lifecycle << ">";
       return out.str();
     }
+    if (auto inspection = inspect_resource(instance, depth != 0); !inspection.empty())
+      return inspection;
     if (instance_is_native_range(instance)) {
       out << " Range";
     } else if (context->module != nullptr &&
@@ -746,6 +777,13 @@ public:
       const auto instance = v.is_instance_object() ? v.as_instance_object() : IntrusivePtr<InstanceValue>{};
       if (v.is_instance_object() && (!instance || !lifecycle_debug_label(instance->header).empty())) {
         append("<instance unavailable>"); return;
+      }
+      if (instance) {
+        const auto inspection = inspect_resource(instance, depth != 0);
+        if (!inspection.empty()) {
+          append(inspection);
+          return;
+        }
       }
       const auto index = instance ? instance->class_index : v.as_class_object().class_index;
       append(instance ? "<instance " : "<class ");

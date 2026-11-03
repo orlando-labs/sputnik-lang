@@ -851,6 +851,16 @@ test-object-lifecycle: $(BUILD_DIR)/sputnik
 	grep -q '^PASS after_init! + instance_fields$$' $(BUILD_DIR)/object-lifecycle-native.out
 
 .PHONY: test-bool-parse
+test: test-argparser-environment
+.PHONY: test-argparser-environment
+test-argparser-environment: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_argparser_tests
+	$(BUILD_DIR)/stdlib_argparser_tests
+	env SPUTNIK_ARGPARSER_TEST_COUNT=42 SPUTNIK_ARGPARSER_TEST_TEXT='ключ=значение' SPUTNIK_ARGPARSER_TEST_EMPTY= SPUTNIK_ARGPARSER_TEST_UNDECLARED=hidden SPUTNIK_ARGPARSER_TEST_ENABLED=' T ' $(BUILD_DIR)/sputnik run tests/fixtures/argparser_environment/main.s > $(BUILD_DIR)/argparser-environment-vm.out
+	grep -q '^PASS ArgParser process environment, CLI precedence and explicit isolation$$' $(BUILD_DIR)/argparser-environment-vm.out
+	$(BUILD_DIR)/sputnik build tests/fixtures/argparser_environment/main.s --entry main --target native --require-full-native -o $(BUILD_DIR)/argparser-environment-native > $(BUILD_DIR)/argparser-environment-native-build.json
+	env SPUTNIK_ARGPARSER_TEST_COUNT=42 SPUTNIK_ARGPARSER_TEST_TEXT='ключ=значение' SPUTNIK_ARGPARSER_TEST_EMPTY= SPUTNIK_ARGPARSER_TEST_UNDECLARED=hidden SPUTNIK_ARGPARSER_TEST_ENABLED=' T ' $(BUILD_DIR)/argparser-environment-native > $(BUILD_DIR)/argparser-environment-native.out
+	grep -q '^PASS ArgParser process environment, CLI precedence and explicit isolation$$' $(BUILD_DIR)/argparser-environment-native.out
+
 test: test-bool-parse
 test-bool-parse: $(BUILD_DIR)/sputnik $(BUILD_DIR)/stdlib_bool_tests $(BUILD_DIR)/stdlib_argparser_tests
 	$(BUILD_DIR)/stdlib_bool_tests

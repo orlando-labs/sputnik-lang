@@ -49,7 +49,7 @@ def main():
         program.write_text("from remove_calc import answer\nanswer()\n")
         assert cli("run", program).strip() == "42"
 
-        output = cli("pkg", "uninstall", "remove-library", "--version", "2.0.0")
+        output = cli("pkg", "remove", "remove-library@2.0.0")
         assert "Removed remove-library@2.0.0" in output
         assert not (default_home / "remove-library/2.0.0").exists()
         assert (default_home / "remove-library/1.0.0").is_dir()
@@ -61,6 +61,10 @@ def main():
         for args in (("--version",), ("--version", ""), ("--version", "../1.0.0"), ("--version", "9.0.0"),
                      ("--version", "1.0.0", "--version", "2.0.0"), ("--unknown",)):
             cli("pkg", "remove", "remove-library", *args, ok=False)
+            assert (default_home / "remove-library/1.0.0").is_dir()
+        for args in (("remove-library@",), ("remove-library@1.0.0@2.0.0",),
+                     ("remove-library@1.0.0", "--version", "1.0.0")):
+            cli("pkg", "remove", *args, ok=False)
             assert (default_home / "remove-library/1.0.0").is_dir()
         for name in (".", "..", "../peer-library", str(v1)):
             assert "invalid package name/version" in cli("pkg", "remove", name, ok=False)

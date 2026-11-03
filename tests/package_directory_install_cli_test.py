@@ -90,6 +90,74 @@ def main():
         build_artifact = default_home / "directory-build/2.0.0/source/directory-build-2.0.0.sputnikpkg"
         assert build_artifact.is_file()
 
+        # The hook runs from the source root before packaging generated inputs.
+        configured = root / "configure's source directory"
+        configured.mkdir()
+        (configured / "sputnik.build.json").write_text(json.dumps(dict(
+            name="configured", version="1.0.0", files=["generated.s"],
+            module_names={"generated.s": "generated"})))
+        hook_code = (
+            'fs.File.open("generated.s", :write, create: true) |file|:\n'
+            '  file.write_all!("package generated\\nexport answer\\ndef answer(): 42\\n".bytes)\n'
+            'print("configure ran")\n'
+        )
+        for suffix in (".sp", ".spu", ".s", ".sputnik"):
+            hook = configured / ("configure" + suffix)
+            hook.write_text(hook_code)
+            output = cli("pkg", "install", configured, "--grant", "fs.write=generated.s")
+            assert output.splitlines().count("configure ran") == 1
+            assert (configured / "generated.s").is_file()
+            hook.unlink()
+            (configured / "generated.s").unlink()
+        assert not (cwd / "generated.s").exists()
+
+        def source_with_dependencies(name, dependencies):
+            directory = root / name
+            directory.mkdir()
+            (directory / "api.s").write_text(f"package {name}\n")
+            (directory / "sputnik.build.json").write_text(json.dumps(dict(
+                name=name, version="1.0.0", files=["api.s"],
+                module_names={"api.s": name}, dependencies={
+                    dep_name: {"path": "../" + dep_directory.name}
+                    for dep_name, dep_directory in dependencies.items()
+                })))
+            return directory
+
+        hook = configured / "configure.s"
+        hook.write_text(hook_code)
+        left = source_with_dependencies("left", {"configured": configured})
+        right = source_with_dependencies("right", {"configured": configured})
+        diamond = source_with_dependencies("diamond", {"left": left, "right": right})
+        output = cli("pkg", "install", diamond, "--grant", "fs.write=generated.s")
+        assert output.splitlines().count("configure ran") == 1
+
+        failed_home = root / "failed configure home"
+        failed_env = dict(environment, SPUTNIK_PKG_HOME=str(failed_home))
+        hook.write_text('raise "configure stopped"\n')
+        failure = cli("pkg", "install", configured, env=failed_env, ok=False)
+        assert "package configure failed" in failure and "configure stopped" in failure
+        assert not failed_home.exists()
+        (configured / "configure.sp").write_text(hook_code)
+        assert "multiple configure scripts" in cli("pkg", "install", configured, ok=False)
+
+        native = root / "native configure directory"
+        native.mkdir()
+        (native / "sputnik.build.json").write_text(json.dumps(dict(
+            name="configured-native", version="1.0.0", configure_native="adapter.so",
+            files=["generated.s", "adapter.c"],
+            profiles=dict(required=["core.v1", "ffi.v1"]),
+            native_extensions=[dict(name="adapter", kind="source", language="c",
+                                    sources=["adapter.c"])])))
+        (native / "generated.s").write_text("package generated\n")
+        (native / "adapter.c").write_text("/* configure fixture */\n")
+        (native / "configure.sputnik").write_text(
+            'import system\nprint system.cmd"/usr/bin/printf configured-native-hook".output\n')
+        denied = cli("pkg", "install", native, "--allow-native", ok=False)
+        assert "requires --allow-native --build-from-source" in denied, denied
+        assert "configured-native-hook" not in denied
+        missing = cli("pkg", "install", native, "--allow-native", "--build-from-source", ok=False)
+        assert "configured-native-hook" in missing and "adapter.so" in missing, missing
+
         # Missing and invalid local paths must not become registry requests.
         assert "local package directory or artifact" in cli("pkg", "install", root / "missing", ok=False)
         assert "local package directory or artifact" in cli("pkg", "install", "./missing", ok=False)

@@ -146,6 +146,41 @@ install command, including when building dependencies. These options apply
 to a new source build. Reusing an installed build or installing a prebuilt
 variant skips the hook.
 
+Packages can declare install parameters in the build manifest. Sputnik uses
+the same definitions for validation, CLI help and the Notebook install form.
+
+```yaml
+install_options:
+  - name: library-prefix
+    type: path
+    description: Directory containing the C++ SDK.
+    env: EXAMPLE_LIBRARY_PREFIX
+    probe: include/example.h
+    search:
+      macos: ["/opt/homebrew/opt/example", "/usr/local/opt/example"]
+      linux: ["/opt/example", "/usr/local"]
+```
+
+Use `sputnik pkg install ./package --help` or
+`sputnik pkg options publisher/package@version` to list the parameters.
+Pass an explicit value as `--library-prefix /opt/custom` or
+`--option library-prefix=/opt/custom`. Explicit values take priority over
+the named environment variable, then the manifest's `default` and
+`search` candidates. Search checks the host OS entries before `any`.
+`path` parameters must resolve to directories, with the optional `probe`
+file present. Other types are `string` and `bool`. A `choices` array
+can restrict accepted values. Defaults and search paths can reference
+environment variables and earlier parameters using `${NAME}`.
+Configure hooks receive resolved values under the declared environment names.
+In Notebook, paths refer to the machine that runs the installer.
+
+An exact external native requirement can declare `discovery` as the path
+to a descriptor inside the verified archive. Its provider describes each
+system asset with its package-relative `path`, `sha256` and `sources`
+path candidates. Sputnik matches the provider build identity and verifies the
+file hashes before preparing the adapter. An explicit provider binding via
+`SPUTNIK_NATIVE_PROVIDERS` takes priority over discovery.
+
 Exact transitive dependencies are installed from the same registry, reusing
 already installed versions. In a terminal, installing from a remote registry
 shows the installed version and asks before installing a newer compatible

@@ -22,10 +22,13 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-query-') as temporary:
     base = '/api/v1/namespaces/test/packages/example'
     cursor = 'page+/=2'
     revision = 9007199254740993123
+    install_option = dict(name='library-dir', type='path', env='EXAMPLE_LIBRARY_DIR',
+                          description='Directory containing the runtime libraries.')
     artifacts = [
         dict(variant='linux-cu130', quarantined=False, bundle='runtime',
              target=dict(os='linux', arch='x86_64', compute_backend='cuda', cuda_version='13.0'),
              size=2147483648, sha256='sha256:'+'1'*64,
+             install_options=[install_option],
              compatibility=dict(sputnik_requirement='>=1.0.0 <2.0.0', native_requirements=[dict(id='libtorch', version='2.14.0')],
                                 note='пакет\n"quoted"\t\\')),
         dict(variant='quarantined', quarantined=True),
@@ -117,6 +120,11 @@ with tempfile.TemporaryDirectory(prefix='sputnik-registry-query-') as temporary:
         details = json.loads(cli('variants', canonical+'@1.10.0', '--json').stdout)
         assert details['package_ref'] == canonical and details['version'] == '1.10.0'
         assert details['artifacts'] == [artifacts[2], artifacts[0]]
+        assert json.loads(cli('options', 'example', '--json').stdout) == [install_option]
+        assert cli('options', 'example@1.10.0', '--variant', 'cpu').stdout == ''
+        assert '--library-dir <path>' in cli('install', 'example', '--version', '1.10.0',
+                                              '--variant', 'linux-cu130', '--help').stdout
+        assert all('/download' not in path for path, _ in state['requests'])
         state.update(mode='yanked')
         assert 'is yanked' in cli('variants', 'example@1.10.0').stderr
         state.update(mode='empty')

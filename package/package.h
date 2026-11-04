@@ -41,12 +41,26 @@ struct PackageNativeRequirement {
   std::string provider = "external";
   std::string runtime, package;
   std::vector<std::string> libraries;
+  std::string discovery;
+};
+
+struct PackageSystemFile {
+  std::string path, sha256;
+  std::vector<std::string> sources;
 };
 
 struct PackageNativeProvider {
   std::string id, kind, version, abi, build_id, runtime_build_id;
   std::vector<std::string> include_dirs, library_dirs, link_libraries, files;
   std::vector<PackageNativeLibrary> libraries;
+  std::vector<PackageSystemFile> system_files;
+};
+
+struct PackageInstallOption {
+  std::string name, description, env, default_value, probe;
+  std::string type = "string";
+  std::vector<std::string> choices;
+  std::map<std::string, std::vector<std::string>> search;
 };
 
 struct PackageTarget {
@@ -159,6 +173,7 @@ struct PackageManifest {
   std::vector<PackageDependency> artifact_build_dependencies;
   std::vector<PackageNativeRequirement> native_requirements;
   std::vector<PackageNativeProvider> native_providers;
+  std::vector<PackageInstallOption> install_options;
   // Derived registry metadata when module payloads have not been downloaded.
   bool has_bytecode_delivery = false;
   bool has_native_payload = false;
@@ -260,6 +275,13 @@ PackageManifestResult parse_manifest(const std::string &source,
                                      const std::string &path = {});
 
 std::string manifest_to_json(const PackageManifest &manifest);
+std::string install_options_to_json(const std::vector<PackageInstallOption> &options);
+std::map<std::string, std::string> resolve_install_options(
+    const PackageManifest &manifest,
+    const std::map<std::string, std::string> &values = {});
+std::string expand_install_path(
+    const std::string &value,
+    const std::map<std::string, std::string> &environment);
 std::string render_manifest(const PackageManifest &manifest);
 std::string render_lockfile(const PackageManifest &manifest);
 std::vector<PackageNativeExtensionMetadata>

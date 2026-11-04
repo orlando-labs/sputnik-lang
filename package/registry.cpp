@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iomanip>
@@ -528,7 +529,7 @@ std::string download_size_label(std::uint64_t size, bool exact = false) {
 
 int registry_query_command(int argc, char **argv) {
   const std::string command = argv[2];
-  std::string origin = default_registry, reference, version;
+  std::string origin = default_registry, reference, version, variant_filter;
   fs::path credentials;
   bool json = false, check_host = false;
   if (const auto *value = std::getenv("SPUTNIK_PKG_REGISTRY")) if (*value) origin = value;
@@ -536,24 +537,29 @@ int registry_query_command(int argc, char **argv) {
   std::set<std::string> options;
   for (int i = 3; i < argc; ++i) {
     const std::string option = argv[i];
-    if (option == "--json" || option == "--check-host" || option == "--registry" || option == "--credentials") {
+    if (option == "--json" || option == "--check-host" || option == "--registry" ||
+        option == "--credentials" || (command == "options" && option == "--variant")) {
       if (!options.insert(option).second) fail("duplicate option: " + option);
       if (option == "--json") { json = true; continue; }
       if (option == "--check-host") { check_host = true; continue; }
       if (++i >= argc || !*argv[i] || std::string(argv[i]).rfind("--", 0) == 0)
         fail("missing value for " + option);
       if (option == "--registry") origin = argv[i];
+      else if (option == "--variant") variant_filter = argv[i];
       else credentials = argv[i];
     } else if (option.rfind('-', 0) != 0 && reference.empty()) reference = option;
     else fail("unknown pkg " + command + " argument: " + option);
   }
   if (check_host && (command != "variants" || !json)) fail("--check-host requires pkg variants --json");
-  if (command == "variants") {
+  if (command == "variants" || command == "options") {
     const auto at = reference.find('@');
-    if (at == std::string::npos) fail("usage: sputnik pkg variants <package>@<version>");
-    version = reference.substr(at + 1);
-    reference.resize(at);
-    if (!release_version(version)) fail("variants requires an exact version: <package>@<version>");
+    if (at == std::string::npos && command == "variants")
+      fail("usage: sputnik pkg variants <package>@<version>");
+    if (at != std::string::npos) {
+      version = reference.substr(at + 1);
+      reference.resize(at);
+      if (!release_version(version)) fail("invalid package version");
+    }
   }
   if (!registry_reference(reference))
     fail(command == "versions" ? "usage: sputnik pkg versions <package>" : "invalid package reference");
@@ -564,9 +570,50 @@ int registry_query_command(int argc, char **argv) {
   API api(origin, credentials);
   // Nested read endpoints resolve root aliases and return canonical identity.
   // Avoid a separate package GET (and TLS handshake) just to resolve the name.
-  auto result = command == "versions" ? complete_release_index(api, reference) :
+  auto result = command == "versions" || (command == "options" && version.empty()) ? complete_release_index(api, reference) :
       api.document(base(reference) + "/versions/" + version);
   const auto canonical = canonical_reference(reference, result);
+  if (command == "options") {
+    if (version.empty()) {
+      auto releases = result.at("versions").array;
+      std::sort(releases.begin(), releases.end(), [](const Value &a, const Value &b) {
+        const bool stable_a = a.at("version").text.find('-') == std::string::npos;
+        const bool stable_b = b.at("version").text.find('-') == std::string::npos;
+        return stable_a != stable_b ? stable_a : version_less(b.at("version").text, a.at("version").text);
+      });
+      const auto selected = std::find_if(releases.begin(), releases.end(),
+          [](const auto &release) { return !release.at("yanked").truth(); });
+      if (selected == releases.end()) fail("package has no available release");
+      result = *selected;
+      version = result.at("version").text;
+    }
+    validate_release(result, canonical, version);
+    const auto &artifacts = result.at("artifacts");
+    if (artifacts.kind != Value::Array) fail("invalid artifact list");
+    std::map<std::string, Value> definitions;
+    bool matched = variant_filter.empty();
+    for (const auto &artifact : artifacts.array) {
+      if (boolean_field(artifact.at("quarantined")) ||
+          (!variant_filter.empty() && artifact.at("variant").string() != variant_filter))
+        continue;
+      matched = true;
+      const auto found = artifact.object.find("install_options");
+      if (found == artifact.object.end()) continue;
+      if (found->second.kind != Value::Array) fail("invalid install options metadata");
+      for (const auto &option : found->second.array)
+        definitions.emplace(option.at("name").string(), option);
+    }
+    if (!matched) fail("no available build: " + variant_filter);
+    if (json) {
+      Value options; options.kind = Value::Array;
+      for (const auto &[name, option] : definitions) options.array.push_back(option);
+      write_json(std::cout, options); std::cout << '\n';
+    } else for (const auto &[name, option] : definitions)
+      std::cout << "--" << name << " <" << option.at("type").string() << ">  "
+                << option.at("description").string() << "  ENV "
+                << option.at("env").string() << '\n';
+    return 0;
+  }
   if (command == "variants") {
     validate_release(result, canonical, version);
     auto &artifacts = result.object.at("artifacts");
@@ -679,7 +726,7 @@ fs::path registry_credentials(const std::string &origin) {
 
 int registry_command(int argc, char **argv) {
   const std::string command = argv[2];
-  if (command == "versions" || command == "variants") return registry_query_command(argc, argv);
+  if (command == "versions" || command == "variants" || command == "options") return registry_query_command(argc, argv);
   std::string origin = default_registry, name_space, artifact;
   fs::path credentials, session;
   bool large = false;

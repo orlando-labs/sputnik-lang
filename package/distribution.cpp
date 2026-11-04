@@ -145,6 +145,11 @@ void identity(const PackageManifest &m) {
   }
   for (const auto &r : m.native_requirements) {
     component(r.id);
+    if (!r.discovery.empty()) {
+      path_check(r.discovery);
+      if (r.provider != "external" || r.build_id.empty())
+        fail("system discovery requires an exact external provider: " + r.id);
+    }
     if (!requirements.insert(r.id).second || r.version.empty() ||
         (r.kind != "runtime" && r.kind != "sdk") ||
         (r.provider != "external" && r.provider != "bundled" &&
@@ -402,8 +407,8 @@ struct ArchiveDeleter {
   }
 };
 using Archive = std::unique_ptr<struct archive, ArchiveDeleter>;
-PackageManifest manifest(const std::string &text) {
-  if (text.size() > MiB) fail("manifest exceeds 1 MiB");
+PackageManifest manifest(const std::string &text, std::uint64_t cap = MiB) {
+  if (text.size() > cap) fail("manifest exceeds " + std::to_string(cap / MiB) + " MiB");
   auto parsed = parse_manifest(text, "sputnik.build.json");
   if (!parsed.ok()) {
     std::string message;
@@ -886,6 +891,8 @@ DistributionInfo build_distribution(const PackageManifest &input,
       for (const auto &file : provider.files) declared(file);
       for (const auto &lib : provider.libraries) declared(lib.path);
     }
+    for (const auto &requirement : m.native_requirements)
+      if (!requirement.discovery.empty()) declared(requirement.discovery);
   }
   for (const auto &dependency : m.dependencies)
     if (dependency.source == "path")
@@ -1227,11 +1234,77 @@ BoundProvider bind_provider(const PackageNativeProvider &p,
     }
   return {p, destination, fingerprint};
 }
+
+BoundProvider bind_system_provider(
+    const PackageNativeProvider &provider, const fs::path &cache,
+    const std::map<std::string, std::string> &environment) {
+  std::set<std::string> files(provider.files.begin(), provider.files.end());
+  for (const auto &library : provider.libraries) files.insert(library.path);
+  std::map<std::string, std::pair<fs::path, std::string>> sources;
+  std::string material = provider.id + "\n" + provider.build_id + "\n";
+  for (const auto &path : files) {
+    path_check(path);
+    const auto asset = std::find_if(provider.system_files.begin(), provider.system_files.end(),
+        [&](const auto &file) { return file.path == path; });
+    if (asset == provider.system_files.end())
+      fail("system provider has no discovery rule: " + path);
+    fs::path selected;
+    for (const auto &candidate : asset->sources) {
+      const auto expanded = expand_install_path(candidate, environment);
+      if (expanded.empty() || !fs::is_regular_file(expanded)) continue;
+      if (file_sha256(expanded) != asset->sha256)
+        fail("NATIVE_ABI_CONFLICT: " + expanded + " does not match the packaged " +
+             provider.id + " build " + provider.version);
+      selected = fs::canonical(expanded);
+      break;
+    }
+    if (selected.empty())
+      fail("missing system file: " + path + " for " + provider.id +
+           " (check package parameters with sputnik pkg install <package> --help)");
+    sources.emplace(path, std::make_pair(selected, asset->sha256));
+    material += path + "=" + selected.string() + "=" + asset->sha256 + "\n";
+  }
+  const auto root = cache / "system" / lexer::sha256_hex(material);
+  fs::create_directories(root);
+  ProviderLock lock(root / "prepare.lock");
+  std::string inventory;
+  for (const auto &[path, source] : sources) {
+    const auto destination = root / path;
+    if (!fs::exists(destination)) {
+      fs::create_directories(destination.parent_path());
+      std::error_code error;
+      const auto temporary = destination.string() + ".tmp";
+      fs::remove(temporary, error);
+      fs::create_hard_link(source.first, temporary, error);
+      if (error) fs::copy_file(source.first, temporary);
+      fs::rename(temporary, destination);
+    }
+    if (fs::is_symlink(destination) || file_sha256(destination) != source.second)
+      fail("prepared system provider changed: " + path);
+    inventory += source.second + "  " + path + "\n";
+  }
+  PackageManifest descriptor;
+  descriptor.name = "local/system-provider";
+  descriptor.version = provider.version;
+  descriptor.kind = "native";
+  auto materialized = provider;
+  materialized.system_files.clear();
+  descriptor.native_providers = {materialized};
+  const auto metadata = render_manifest(descriptor);
+  const auto metadata_file = root / "sputnik.build.json";
+  if (fs::exists(metadata_file) && provider_read(metadata_file) != metadata)
+    fail("prepared system provider metadata changed");
+  std::ofstream(metadata_file) << metadata;
+  inventory += lexer::sha256_hex(metadata) + "  sputnik.build.json\n";
+  std::ofstream(root / "checksums.sha256") << inventory;
+  return bind_provider(materialized, root, cache);
+}
 } // namespace
 
 std::vector<PackageNativeExtension>
 prepare_native_providers(const PackageManifest &m, const fs::path &root,
-                         const fs::path &cache) {
+                         const fs::path &cache,
+                         const std::map<std::string, std::string> &options) {
   if (m.native_requirements.empty())
     return m.native_extensions;
   identity(m);
@@ -1263,6 +1336,7 @@ prepare_native_providers(const PackageManifest &m, const fs::path &root,
     }
   }
   std::map<std::string, BoundProvider> bound;
+  const auto environment = resolve_install_options(m, options);
   for (const auto &r : m.native_requirements) {
     std::optional<PackageNativeProvider> selected;
     fs::path selected_root;
@@ -1293,6 +1367,17 @@ prepare_native_providers(const PackageManifest &m, const fs::path &root,
       for (const auto &entry : external)
         select(entry.first, entry.second);
     }
+    bool system_provider = false;
+    if (!selected && !r.discovery.empty()) {
+      const auto descriptor = manifest(provider_read(provider_file(root, r.discovery), 8 * MiB), 8 * MiB);
+      const auto host = probe_package_host(false);
+      if (descriptor.kind != "native" || descriptor.target.os != host.os ||
+          descriptor.target.arch != host.arch)
+        fail("system provider target mismatch: " + r.id);
+      for (const auto &provider : descriptor.native_providers)
+        select(provider, root);
+      system_provider = true;
+    }
     if (!selected)
       fail("missing native provider: " + r.id +
            " (set SPUTNIK_NATIVE_PROVIDERS)");
@@ -1306,7 +1391,9 @@ prepare_native_providers(const PackageManifest &m, const fs::path &root,
                          return fs::path(lib.path).filename() == name;
                        }))
         fail("missing runtime export: " + name);
-    bound.emplace(r.id, bind_provider(*selected, selected_root, cache));
+    bound.emplace(r.id, system_provider
+        ? bind_system_provider(*selected, cache, environment)
+        : bind_provider(*selected, selected_root, cache));
   }
   for (const auto &r : m.native_requirements)
     if (r.kind == "sdk" && (bound.at(r.id).provider.runtime_build_id !=
@@ -1433,7 +1520,8 @@ std::string distribution_to_json(const DistributionInfo &info) {
         << ",\"version\":" << quote(p.version) << ",\"abi\":" << quote(p.abi)
         << ",\"build_id\":" << quote(p.build_id) << ",\"runtime_build_id\":" << quote(p.runtime_build_id) << '}';
   }
-  out << "],\n  \"members\": [";
+  out << "],\n  \"install_options\": " << install_options_to_json(info.manifest.install_options);
+  out << ",\n  \"members\": [";
   first = true;
   for (const auto &m : info.members) {
     if (!first)

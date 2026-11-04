@@ -1155,18 +1155,74 @@ void read_package_fields(const JsonValue &root, const std::string &path,
         !language::valid_requirement(m.sputnik_requirement))
       error("requires must contain sputnik: a bounded SemVer range, e.g. >=1.0.0 <2.0.0");
   }
-  text(root, "version", m.version);
-  text(root, "kind", m.kind);
-  text(root, "source_root", m.source_root);
-  strings(root, "files", m.files);
-  m.explicit_files = member(root, "files") != nullptr;
-  text(root, "configure_native", m.configure_native);
   const auto safe_path = [](const std::string &value) {
     const fs::path p(value);
     if (value.empty() || p.is_absolute() || value.find('\\') != std::string::npos || value.find('\0') != std::string::npos) return false;
     for (const auto &part : p) if (part == "..") return false;
     return true;
   };
+  text(root, "version", m.version);
+  if (const auto *options = member(root, "install_options")) {
+    if (options->kind != JsonValue::Kind::Array || options->array_value.size() > 64)
+      error("install_options must be an array with at most 64 entries");
+    else {
+      std::set<std::string> option_names, environments;
+      for (const auto &item : options->array_value) {
+        if (item.kind != JsonValue::Kind::Object) {
+          error("install_options entries must be mappings");
+          continue;
+        }
+        pkg::PackageInstallOption option;
+        text(item, "name", option.name);
+        text(item, "description", option.description);
+        text(item, "type", option.type);
+        text(item, "env", option.env);
+        if (const auto *fallback = member(item, "default");
+            fallback && fallback->kind == JsonValue::Kind::Bool && option.type == "bool")
+          option.default_value = fallback->bool_value ? "true" : "false";
+        else text(item, "default", option.default_value);
+        text(item, "probe", option.probe);
+        if (!option.probe.empty() && !safe_path(option.probe))
+          error("install option probe must be a relative file path");
+        strings(item, "choices", option.choices);
+        if (option.name.empty() || option.name.front() < 'a' || option.name.front() > 'z' || option.name.size() > 64 ||
+            option.name.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-") != std::string::npos ||
+            !option_names.insert(option.name).second)
+          error("install option names must be unique lowercase flag names");
+        if (option.env.empty() || option.env.size() > 128 ||
+            option.env.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != std::string::npos ||
+            !environments.insert(option.env).second)
+          error("install options require unique uppercase ENV names");
+        if (option.type != "path" && option.type != "string" && option.type != "bool")
+          error("install option type must be path, string or bool");
+        if (option.description.empty() || option.description.size() > 4096)
+          error("install options require a bounded description");
+        if (const auto *search = member(item, "search")) {
+          if (search->kind != JsonValue::Kind::Object)
+            error("install option search must map OS names to path arrays");
+          else for (const auto &[os, paths] : search->object_value) {
+            if (os != "macos" && os != "linux" && os != "windows" && os != "any")
+              error("unknown install option search OS");
+            std::vector<std::string> candidates;
+            if (paths.kind != JsonValue::Kind::Array || paths.array_value.size() > 64)
+              error("install option search requires bounded path arrays");
+            else for (const auto &candidate : paths.array_value) {
+              if (candidate.kind != JsonValue::Kind::String)
+                error("install option search paths must be strings");
+              else candidates.push_back(candidate.string_value);
+            }
+            option.search.emplace(os, std::move(candidates));
+          }
+        }
+        m.install_options.push_back(std::move(option));
+      }
+    }
+  }
+  text(root, "kind", m.kind);
+  text(root, "source_root", m.source_root);
+  strings(root, "files", m.files);
+  m.explicit_files = member(root, "files") != nullptr;
+  text(root, "configure_native", m.configure_native);
   if (!safe_path(m.source_root)) error("source_root must be a package-relative directory");
   if (member(root, "configure_native") && !safe_path(m.configure_native))
     error("configure_native must be a package-relative adapter path");
@@ -1264,6 +1320,9 @@ void read_package_fields(const JsonValue &root, const std::string &path,
       text(item, "provider", value.provider);
       text(item, "runtime", value.runtime);
       text(item, "package", value.package);
+      text(item, "discovery", value.discovery);
+      if (!value.discovery.empty() && !safe_path(value.discovery))
+        error("native discovery must be a package-relative descriptor path");
       strings(item, "libraries", value.libraries);
       m.native_requirements.push_back(std::move(value));
     }
@@ -1284,6 +1343,21 @@ void read_package_fields(const JsonValue &root, const std::string &path,
       strings(item, "link_libraries", value.link_libraries);
       strings(item, "files", value.files);
       read_native_libraries(item, value.libraries, path, result.diagnostics);
+      if (const auto *assets = member(item, "system_files")) {
+        if (assets->kind != JsonValue::Kind::Array || assets->array_value.size() > 10000)
+          error("system_files must be a bounded array");
+        else for (const auto &asset : assets->array_value) {
+          pkg::PackageSystemFile file;
+          text(asset, "path", file.path);
+          text(asset, "sha256", file.sha256);
+          strings(asset, "sources", file.sources);
+          if (!safe_path(file.path) || file.sha256.size() != 64 ||
+              file.sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
+              file.sources.empty() || file.sources.size() > 32)
+            error("system files require a safe path, SHA-256 and source candidates");
+          value.system_files.push_back(std::move(file));
+        }
+      }
       m.native_providers.push_back(std::move(value));
     }
   }

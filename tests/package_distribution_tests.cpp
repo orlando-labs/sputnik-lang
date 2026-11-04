@@ -369,6 +369,71 @@ files: []
     rejects("missing explicit provider", [&] {
       prepare_native_providers(consumer, source, root / "cache");
     });
+    auto system = consumer;
+    PackageInstallOption prefix;
+    prefix.name = "fixture-prefix";
+    prefix.type = "path";
+    prefix.env = "SPUTNIK_DISTRIBUTION_TEST_PREFIX";
+    prefix.description = "Fixture native dependency prefix";
+    prefix.probe = "include/api.h";
+    prefix.search["any"] = {(root / "absent-prefix").string(),
+                            root.string(),
+                            (root / "provider-input").string()};
+    system.install_options = {prefix};
+    auto discovery = runtime;
+#if !defined(__APPLE__)
+    discovery.target.os = "linux";
+#endif
+    discovery.native_providers.push_back(sdk_provider);
+    discovery.native_providers[0].system_files = {{
+        "data/runtime.bin", file_sha256(root / "provider-input/data/runtime.bin"),
+        {"${SPUTNIK_DISTRIBUTION_TEST_PREFIX}/data/runtime.bin"}}};
+    discovery.native_providers[1].system_files = {{
+        "include/api.h", file_sha256(root / "provider-input/include/api.h"),
+        {"${SPUTNIK_DISTRIBUTION_TEST_PREFIX}/include/api.h"}}};
+    write(source / "system.json", render_manifest(discovery));
+    for (auto &requirement : system.native_requirements)
+      requirement.discovery = "system.json";
+    const auto system_options = parse_manifest(render_manifest(system));
+    expect(system_options.ok() && system_options.manifest.install_options.size() == 1 &&
+               system_options.manifest.native_requirements[0].discovery == "system.json",
+           "install option and system discovery roundtrip");
+    const auto automatic = prepare_native_providers(system, source, root / "cache");
+    expect(automatic.front().provider_fingerprints.size() == 2,
+           "native runtime and headers discovered through standard prefix candidates");
+    expect(resolve_install_options(system, {{"fixture-prefix", (root / "provider-input").string()}})
+               .at(prefix.env) == fs::canonical(root / "provider-input").string(),
+           "explicit package path option");
+    {
+      const char *previous = std::getenv(prefix.env.c_str());
+      struct RestoreOption {
+        std::string name, value;
+        bool had;
+        ~RestoreOption() {
+          if (had) setenv(name.c_str(), value.c_str(), 1);
+          else unsetenv(name.c_str());
+        }
+      } restore{prefix.env, previous ? previous : "", previous != nullptr};
+      setenv(prefix.env.c_str(), (root / "missing").c_str(), 1);
+      rejects("explicit ENV path overrides standard search", [&] {
+        resolve_install_options(system);
+      });
+      expect(resolve_install_options(system, {{"fixture-prefix", (root / "provider-input").string()}})
+                 .at(prefix.env) == fs::canonical(root / "provider-input").string(),
+             "CLI and UI values override inherited ENV paths");
+    }
+    rejects("unknown install option", [&] {
+      resolve_install_options(system, {{"wrong-name", "/tmp"}});
+    });
+    rejects("invalid explicit native prefix", [&] {
+      prepare_native_providers(system, source, root / "cache",
+                               {{"fixture-prefix", (root / "missing").string()}});
+    });
+    write(root / "provider-input/include/api.h", "wrong native headers");
+    rejects("system provider header build mismatch", [&] {
+      prepare_native_providers(system, source, root / "cache");
+    });
+    write(root / "provider-input/include/api.h", "// fixture SDK\n");
     const auto bindings = (root / "runtime-provider").string() + ":" +
                           (root / "sdk-provider").string();
     setenv("SPUTNIK_NATIVE_PROVIDERS", bindings.c_str(), 1);

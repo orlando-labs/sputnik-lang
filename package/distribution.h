@@ -62,6 +62,7 @@ std::string file_sha256(const std::filesystem::path &file);
 std::vector<PackageNativeExtension>
 prepare_native_providers(const PackageManifest &manifest,
                          const std::filesystem::path &root,
-                         const std::filesystem::path &cache);
+                         const std::filesystem::path &cache,
+                         const std::map<std::string, std::string> &options = {});
 
 } // namespace sputnik::pkg

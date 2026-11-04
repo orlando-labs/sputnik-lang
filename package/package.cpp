@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <map>
@@ -865,6 +866,37 @@ PackageManifestResult parse_manifest(const std::string &source,
   return result;
 }
 
+std::string install_options_to_json(const std::vector<PackageInstallOption> &definitions) {
+  const auto quote = [](const std::string &value) { return "\"" + json_escape(value) + "\""; };
+  const auto strings = [&](const std::vector<std::string> &values) {
+    std::string result = "[", separator;
+    for (const auto &value : values) {
+      result += separator + quote(value);
+      separator = ",";
+    }
+    return result + "]";
+  };
+  std::ostringstream out;
+  out << '[';
+  std::string separator;
+  for (const auto &option : definitions) {
+    out << separator << "{\"name\":" << quote(option.name) << ",\"type\":" << quote(option.type)
+        << ",\"description\":" << quote(option.description) << ",\"env\":" << quote(option.env)
+        << ",\"default\":" << quote(option.default_value) << ",\"probe\":" << quote(option.probe)
+        << ",\"choices\":" << strings(option.choices)
+        << ",\"search\":{";
+    std::string search_separator;
+    for (const auto &[os, paths] : option.search) {
+      out << search_separator << quote(os) << ':' << strings(paths);
+      search_separator = ",";
+    }
+    out << "}}";
+    separator = ",";
+  }
+  out << ']';
+  return out.str();
+}
+
 std::string render_manifest(const PackageManifest &m) {
   namespace fs = std::filesystem;
   const auto quote = [](const std::string &value) { return "\"" + json_escape(value) + "\""; };
@@ -938,6 +970,7 @@ std::string render_manifest(const PackageManifest &m) {
   for (const auto &value : m.native_requirements) {
     Fields f{{"id", quote(value.id)}, {"kind", quote(value.kind)}, {"version", quote(value.version)}, {"abi", quote(value.abi)}, {"build_id", quote(value.build_id)}, {"provider", quote(value.provider)}, {"runtime", quote(value.runtime)}, {"package", quote(value.package)}};
     f.push_back({"libraries", list(value.libraries)});
+    if (!value.discovery.empty()) f.push_back({"discovery", quote(value.discovery)});
     native_requirements.push_back(object(f));
   }
   std::vector<std::string> native_providers;
@@ -948,6 +981,13 @@ std::string render_manifest(const PackageManifest &m) {
     f.push_back({"link_libraries", list(value.link_libraries)});
     f.push_back({"files", list(value.files)});
     f.push_back({"libraries", libraries(value.libraries)});
+    if (!value.system_files.empty()) {
+      std::vector<std::string> assets;
+      for (const auto &asset : value.system_files)
+        assets.push_back(object({{"path", quote(asset.path)}, {"sha256", quote(asset.sha256)},
+                                 {"sources", list(asset.sources)}}));
+      f.push_back({"system_files", list(assets, true)});
+    }
     files.insert(value.files.begin(), value.files.end());
     for (const auto &l : value.libraries) files.insert(l.path);
     native_providers.push_back(object(f));
@@ -972,6 +1012,9 @@ std::string render_manifest(const PackageManifest &m) {
       {"dependencies", deps(m.artifact_dependencies)}, {"build_dependencies", deps(m.artifact_build_dependencies)}})},
     {"target", object(target)}, {"native_extensions", list(native, true)},
     {"native_requirements", list(native_requirements, true)}, {"native_providers", list(native_providers, true)}};
+  if (!m.install_options.empty()) {
+    root.push_back({"install_options", install_options_to_json(m.install_options)});
+  }
   if (!m.root_module.empty()) root.push_back({"root", quote(m.root_module)});
   auto required = m.profiles.required_features;
   if (required.empty()) required.push_back("core.v1");
@@ -1104,7 +1147,7 @@ std::string manifest_to_json(const PackageManifest &manifest) {
     }
     out << "]}";
   }
-  out << "\n  ]\n";
+  out << "\n  ],\n  \"install_options\": " << install_options_to_json(manifest.install_options) << '\n';
   out << "}\n";
   return out.str();
 }
@@ -2135,6 +2178,95 @@ std::string registry_result_to_json(const PackageRegistryResult &result) {
   out << "\n  ]\n";
   out << "}\n";
   return out.str();
+}
+
+std::string expand_install_path(
+    const std::string &value,
+    const std::map<std::string, std::string> &environment) {
+  std::string result = value;
+  std::size_t offset = 0;
+  while ((offset = result.find("${", offset)) != std::string::npos) {
+    const auto end = result.find('}', offset + 2);
+    if (end == std::string::npos)
+      throw std::runtime_error("invalid install path variable: " + value);
+    const auto name = result.substr(offset + 2, end - offset - 2);
+    const auto supplied = environment.find(name);
+    const char *inherited = std::getenv(name.c_str());
+    const auto replacement = supplied != environment.end()
+        ? supplied->second : inherited ? std::string(inherited) : std::string{};
+    if (replacement.empty()) return {};
+    result.replace(offset, end - offset + 1, replacement);
+    offset += replacement.size();
+  }
+  if (result.rfind("~/", 0) == 0) {
+    const char *home = std::getenv("HOME");
+    if (!home) return {};
+    result.replace(0, 1, home);
+  }
+  return result;
+}
+
+std::map<std::string, std::string> resolve_install_options(
+    const PackageManifest &manifest,
+    const std::map<std::string, std::string> &values) {
+  for (const auto &entry : values) {
+    const auto &name = entry.first;
+    if (std::none_of(manifest.install_options.begin(), manifest.install_options.end(),
+                    [&](const auto &option) { return option.name == name; }))
+      throw std::runtime_error("unknown package install option: --" + name);
+  }
+#if defined(__APPLE__)
+  const std::string os = "macos";
+#elif defined(_WIN32)
+  const std::string os = "windows";
+#else
+  const std::string os = "linux";
+#endif
+  std::map<std::string, std::string> environment;
+  for (const auto &option : manifest.install_options) {
+    std::string value;
+    const auto supplied = values.find(option.name);
+    const char *inherited = std::getenv(option.env.c_str());
+    if (supplied != values.end()) value = supplied->second;
+    else if (inherited && *inherited) value = inherited;
+    else {
+      value = expand_install_path(option.default_value, environment);
+      if (value.empty()) {
+        for (const auto &platform : {os, std::string("any")}) {
+          const auto candidates = option.search.find(platform);
+          if (candidates == option.search.end()) continue;
+          for (const auto &candidate : candidates->second) {
+            const auto path = expand_install_path(candidate, environment);
+            if (!path.empty() && std::filesystem::is_directory(path) &&
+                (option.probe.empty() || std::filesystem::is_regular_file(std::filesystem::path(path) / option.probe))) {
+              value = path;
+              break;
+            }
+          }
+          if (!value.empty()) break;
+        }
+      }
+    }
+    if (value.empty()) continue;
+    if (value.size() > 4096 || value.find('\0') != std::string::npos)
+      throw std::runtime_error("invalid package install option: --" + option.name);
+    if (option.type == "bool" && value != "true" && value != "false")
+      throw std::runtime_error("--" + option.name + " requires true or false");
+    if (!option.choices.empty() &&
+        std::find(option.choices.begin(), option.choices.end(), value) == option.choices.end())
+      throw std::runtime_error("unsupported value for --" + option.name);
+    if (option.type == "path") {
+      value = expand_install_path(value, environment);
+      if (value.empty() || !std::filesystem::is_directory(value))
+        throw std::runtime_error("--" + option.name + " requires an existing directory");
+      if (!option.probe.empty() &&
+          !std::filesystem::is_regular_file(std::filesystem::path(value) / option.probe))
+        throw std::runtime_error("--" + option.name + " must contain " + option.probe);
+      value = std::filesystem::canonical(value).string();
+    }
+    environment.emplace(option.env, std::move(value));
+  }
+  return environment;
 }
 
 } // namespace sputnik::pkg

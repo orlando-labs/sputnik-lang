@@ -57,6 +57,7 @@ vm_notebook_image_manifest(const bytecode::BcModule &module,
 // independent of runtime presentation details (and so callers can retain
 // the expression result for cells that do not write a binding).
 struct VmCellExecutionReport {
+  std::vector<runtime::TraceFrame> error_trace;
   std::vector<runtime::NotebookDisplay> displays;
   std::vector<runtime::NotebookLiveEvent> progress;
   std::vector<runtime::NotebookLiveEvent> charts;

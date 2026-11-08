@@ -576,8 +576,8 @@ CellCompileResult compile_cell(const CellSource &cell,
 
   bytecode::NotebookEmitResult emitted;
   try {
-    emitted =
-        image.emitter_.append_cell(*lowered.procedure, code_id, module_name, lowered.blocks);
+    emitted = image.emitter_.append_cell(*lowered.procedure, code_id, module_name,
+                                        lowered.blocks, options.helper_code_ids);
   } catch (...) {
     // NotebookEmitter has already restored its complete checkpoint. Keep the
     // descriptor/code-id sidecar in the same transaction before propagating
@@ -597,6 +597,7 @@ CellCompileResult compile_cell(const CellSource &cell,
   result.code_index = emitted.code_index;
   result.outputs = std::move(prepared_outputs);
   result.inputs = std::move(prepared_inputs);
+  result.helper_code_ids = std::move(emitted.helper_code_ids);
   return result;
 }
 

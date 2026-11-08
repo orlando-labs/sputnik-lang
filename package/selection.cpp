@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cstdlib>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <stdexcept>
@@ -107,22 +108,31 @@ void cuda_devices(PackageHost &h) {
   (void)h;
 #endif
 }
-// Query the installed HIP userspace through its stable C API. No SDK headers,
-// Python process or library from a package archive is involved.
+// Check the kernel devices available to the package manager. The package
+// itself checks its userspace dependencies when it loads.
 void rocm_devices(PackageHost &host) {
 #if defined(__linux__)
-  void *runtime = nullptr;
-  for (const char *path : {"/opt/rocm/lib/libamdhip64.so.6", "/usr/lib64/libamdhip64.so.6",
-                          "/usr/lib/x86_64-linux-gnu/libamdhip64.so.6"}) {
-    runtime = ::dlopen(path, RTLD_LAZY | RTLD_LOCAL);
-    if (runtime) break;
+  const int kfd = ::open("/dev/kfd", O_RDWR | O_CLOEXEC);
+  if (kfd < 0) return;
+  ::close(kfd);
+  namespace fs = std::filesystem;
+  std::error_code error;
+  for (fs::directory_iterator node("/sys/class/kfd/kfd/topology/nodes", error), end;
+       !error && node != end; node.increment(error)) {
+    std::ifstream properties(node->path() / "properties");
+    std::string name, value;
+    while (properties >> name >> value) {
+      if (name != "drm_render_minor") continue;
+      const auto path = "/dev/dri/renderD" + value;
+      const int render = ::open(path.c_str(), O_RDWR | O_CLOEXEC);
+      if (render >= 0) {
+        ::close(render);
+        host.rocm = true;
+        return;
+      }
+      break;
+    }
   }
-  if (!runtime) return;
-  struct Close { void *handle; ~Close() { ::dlclose(handle); } } close{runtime};
-  const auto init = reinterpret_cast<int (*)(unsigned)>(::dlsym(runtime, "hipInit"));
-  const auto count = reinterpret_cast<int (*)(int *)>(::dlsym(runtime, "hipGetDeviceCount"));
-  int devices = 0;
-  host.rocm = init && count && init(0) == 0 && count(&devices) == 0 && devices > 0 && devices <= 64;
 #else
   (void)host;
 #endif

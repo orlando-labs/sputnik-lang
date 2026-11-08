@@ -426,6 +426,63 @@ void test_text_edits_preserve_bundled_environment() {
          "text-only edits/moves must not rebuild or reinitialize bundled code");
 }
 
+void test_code_edits_preserve_independent_bundled_results() {
+  TempDirectory temporary;
+  const auto project = make_bundled_project(temporary.path / "code-environment",
+      {{"helpers", "lib/helpers.s",
+        "package helpers\n"
+        "class Counter:\n"
+        "  def init(): @value = 0\n"
+        "  def next(step: 1):\n"
+        "    @value += step\n"
+        "    @value\n"
+        "State = Counter()\n"
+        "def tick(): State.next()\n"
+        "def keep(&body): &body\n"
+        "export Counter, tick, keep\n"}},
+      {"helpers"});
+  Session session;
+  load_project_into_session(&session, project);
+  session.cells.resize(7);
+  session.cells[0].source = "counter = Counter()\n";
+  session.cells[1].source = "count = counter.next(step: 2)\n";
+  session.cells[2].source = "doubled = count * 2\n";
+  session.cells[3].source = "manual = doubled + 1\n";
+  session.cells[4].source = "manual + 1\n";
+  session.cells[5].source = "callback = keep: tick()\n";
+  session.cells[6].source = "callback()\n";
+  for (std::size_t i = 0; i < session.cells.size(); ++i)
+    session.cells[i].watch = i == 2 || i == 4;
+  evaluate_from(&session, 0, true, false, false);
+  expect(session.cells[1].result == "2" && session.cells[2].result == "4" &&
+             session.cells[4].result == "6" && session.cells[6].result == "1",
+         "initial Run All initializes the provider, consumers, and independent cell");
+  const auto *backend = session.backend.get();
+
+  session.cells[1].source.insert(0, "# comment only\n");
+  evaluate_from(&session, 1, false, false, false);
+  expect(session.backend.get() == backend && session.cells[0].ok &&
+             !session.cells[0].dirty && session.cells[1].ok &&
+             session.cells[1].result == "4",
+         "running the edited cell must reuse the provider's live object: " +
+             session.environment_error + session.cells[1].error);
+  expect(session.cells[2].result == "8" && !session.cells[2].dirty &&
+             session.cells[3].dirty && session.cells[4].dirty,
+         "dependent Watch cells run when ready and respect the Manual barrier");
+  expect(session.cells[6].ok && !session.cells[6].dirty &&
+             session.cells[6].result == "1",
+         "an independent later cell keeps its result without running");
+  evaluate_from(&session, 6, false, false, false);
+  expect(session.cells[6].result == "2", "module initialization must not be replayed");
+
+  session.cells[0].source = "1.times |i|: i\ncounter = Counter()\n";
+  session.cells[6].source = "callback()\n# selected edit\n";
+  evaluate_from(&session, 6, false, false, false);
+  expect(session.cells[0].dirty && session.cells[1].dirty && session.cells[2].dirty &&
+             session.cells[6].ok && session.cells[6].result == "3",
+         "other edited Manual cells and their consumers become stale without replay");
+}
+
 void test_bundled_environment_runs_exports_and_reachable_dependencies() {
   TempDirectory temporary;
   const std::string models = "package models\n"
@@ -514,12 +571,17 @@ void test_bundled_environment_failures_preserve_previous_backend_and_results() {
          "duplicate exports must preserve the active backend and results");
 
   const std::vector<BundledModuleSource> compile_failure{
-      {"models", "lib/models.s", "package models\ndef add(value):\n  (\n"
-                                    "export add\n"}};
+      {"models", "lib/implementation.s",
+       "package models\ndef add(value):\n  (\nexport add\n"}};
   expect(!apply_bundled_environment(&session, compile_failure, true, false) &&
              session.backend.get() == previous_backend && session.cells[0].ok &&
              session.cells[0].result == previous_result,
          "module compile failure must preserve the active backend and results");
+  expect(session.environment_error.find("Module 'models': ") == 0U &&
+             session.environment_error.find(" at lib/implementation.s:") !=
+                 std::string::npos,
+         "environment error should identify the editor module and retain the "
+         "source location: " + session.environment_error);
 
   const std::vector<BundledModuleSource> init_failure{
       {"models", "lib/models.s", "package models\n"
@@ -532,6 +594,22 @@ void test_bundled_environment_failures_preserve_previous_backend_and_results() {
              session.backend.get() == previous_backend && session.cells[0].ok &&
              session.cells[0].result == previous_result,
          "module init failure must preserve the active backend and results");
+
+  Cell note;
+  note.id = sputnik::notebook::allocate_cell_id();
+  note.kind = "text";
+  note.source = "Explanation before code";
+  session.cells.insert(session.cells.begin(), std::move(note));
+  session.cells[1].source = "x = 0\nmissing_name\n";
+  expect(!apply_project_environment(&session, project, true, false) &&
+             session.backend.get() == previous_backend &&
+             session.cells[1].result == previous_result && session.cells[1].ok,
+         "sheet compilation failure must preserve the previous backend and results");
+  expect(session.cells[0].errors.empty() && !session.cells[1].errors.empty() &&
+             session.cells[1].errors[0].has_range &&
+             session.cells[1].errors[0].range.start_line == 1 &&
+             session.cells[1].errors[0].range.start_column == 0,
+         "environment preparation must publish sheet compiler diagnostics on the owning code cell");
 }
 
 void test_bundled_aliases_and_same_named_classes_share_one_world() {
@@ -1129,6 +1207,7 @@ int main() {
   test_text_cells_roundtrip_and_project_edits();
   test_mixed_text_execution_and_diagnostic_identity();
   test_text_edits_preserve_bundled_environment();
+  test_code_edits_preserve_independent_bundled_results();
   test_bundled_environment_runs_exports_and_reachable_dependencies();
   test_bundled_environment_failures_preserve_previous_backend_and_results();
   test_bundled_aliases_and_same_named_classes_share_one_world();

@@ -90,10 +90,13 @@ std::vector<EvaluationStep>
 plan_transition_evaluation(const DependencyGraph &graph,
                            const DependencyGraph &previous,
                            const std::vector<CellSource> &cells,
-                           const std::set<CellId> &changed, bool force_all) {
+                           const std::set<CellId> &changed, bool force_all,
+                           const std::set<CellId> &other_edits) {
+  auto roots = changed;
+  roots.insert(other_edits.begin(), other_edits.end());
   const std::vector<CellId> order =
       force_all ? graph.execution_order()
-                : graph.transition_invalidation_plan(previous, changed);
+                : graph.transition_invalidation_plan(previous, roots);
   return plan_order(graph, cells, changed, order, force_all);
 }
 

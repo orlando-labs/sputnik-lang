@@ -25,6 +25,7 @@ EmitResult emit_program(const hir::Program &program,
 struct NotebookEmitResult {
   std::size_t code_index = 0;
   std::vector<lexer::Diagnostic> diagnostics;
+  std::vector<std::uint32_t> helper_code_ids;
 
   bool ok() const { return diagnostics.empty(); }
 };
@@ -54,7 +55,8 @@ public:
   NotebookEmitResult append_cell(const hir::Procedure &procedure,
                                  std::uint32_t code_id,
                                  const std::string &module_name = {},
-                                 const std::vector<hir::Procedure> &blocks = {});
+                                 const std::vector<hir::Procedure> &blocks = {},
+                                 const std::vector<std::uint32_t> &helper_code_ids = {});
   void reserve_code_ids(const std::vector<std::uint32_t> &ids);
   BcModule &module();
   const BcModule &module() const;

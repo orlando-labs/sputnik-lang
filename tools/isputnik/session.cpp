@@ -35,6 +35,7 @@ struct SessionBackend {
   std::shared_ptr<sputnik::notebook::NotebookKernel> kernel;
   std::unique_ptr<sputnik::runtime::RuntimeWorld> world;
   std::map<sputnik::notebook::CellId, std::uint32_t> code_ids;
+  std::map<sputnik::notebook::CellId, std::vector<std::uint32_t>> helper_code_ids;
   sputnik::notebook::VmNotebookImageManifest manifest;
   sputnik::runtime::RuntimeWatchCursor watch_cursor;
   std::uint32_t next_code_id = 1;
@@ -80,6 +81,7 @@ void publish_backend_candidate(SessionBackend *live,
   live->sources.swap(candidate->sources);
   live->module.swap(candidate->module);
   live->code_ids.swap(candidate->code_ids);
+  live->helper_code_ids.swap(candidate->helper_code_ids);
   live->manifest.cells.swap(candidate->manifest.cells);
   std::swap(live->next_code_id, candidate->next_code_id);
   std::swap(live->generation, candidate->generation);
@@ -115,6 +117,24 @@ std::string diagnostics_to_summary(
       out << " at " << diagnostic.span.file << ":" << diagnostic.span.start.line
           << ":" << diagnostic.span.start.col;
     }
+  }
+  return out.str();
+}
+
+std::string bundled_environment_summary(
+    const std::vector<BundledEnvironmentDiagnostic> &diagnostics) {
+  std::ostringstream out;
+  for (std::size_t i = 0; i < diagnostics.size(); ++i) {
+    const auto &diagnostic = diagnostics[i];
+    if (i != 0U)
+      out << '\n';
+    if (!diagnostic.path.empty()) {
+      if (diagnostic.module_id.empty())
+        out << diagnostic.path << ": ";
+      else
+        out << "Module '" << diagnostic.module_id << "': ";
+    }
+    out << diagnostic.message;
   }
   return out.str();
 }
@@ -519,6 +539,44 @@ std::vector<std::string> error_lines(const std::string &text) {
   return lines;
 }
 
+std::vector<ModuleErrorView> module_errors_from_diagnostics(
+    const std::vector<BundledEnvironmentDiagnostic> &diagnostics,
+    const std::vector<BundledModuleSource> &sources) {
+  std::vector<ModuleErrorView> result;
+  for (const auto &diagnostic : diagnostics) {
+    const auto source = std::find_if(sources.begin(), sources.end(), [&](const auto &source) {
+      return source.id == diagnostic.module_id && source.path == diagnostic.path;
+    });
+    if (source == sources.end()) continue;
+    Cell cell; cell.source = source->source;
+    ModuleErrorView error{source->id, source->source, diagnostic.message, {}};
+    for (const auto &mapped : map_direct_source_ranges_to_cell({cell}, diagnostic.source_ranges))
+      error.ranges.push_back(mapped.range);
+    result.push_back(std::move(error));
+  }
+  return result;
+}
+
+std::vector<ModuleErrorView> module_errors_from_trace(
+    const std::vector<sputnik::runtime::TraceFrame> &trace,
+    const std::vector<BundledModuleSource> &sources, const std::string &message) {
+  std::vector<ModuleErrorView> result;
+  for (const auto &frame : trace) {
+    if (!frame.line) continue;
+    const auto source = std::find_if(sources.begin(), sources.end(), [&](const auto &source) {
+      return source.path == frame.file;
+    });
+    if (source == sources.end()) continue;
+    CodeErrorRange range;
+    range.start_line = range.end_line = static_cast<int>(frame.line - 1);
+    range.whole_line = true;
+    result.push_back({source->id, source->source, message, {range}});
+    // The innermost source frame is the cause; callers remain on the sheet.
+    break;
+  }
+  return result;
+}
+
 std::vector<sputnik::runtime::RuntimeTextOutputEvent> merge_output_events(
     const std::shared_ptr<sputnik::runtime::RuntimeTextWriter> &stdout_sink,
     const std::shared_ptr<sputnik::runtime::RuntimeTextWriter> &stderr_sink) {
@@ -604,7 +662,8 @@ bool same_cell_sources(const std::vector<sputnik::notebook::CellSource> &left,
 
 std::uint32_t allocate_stable_code_id(
     std::map<sputnik::notebook::CellId, std::uint32_t> *code_ids,
-    std::uint32_t *next_code_id, sputnik::notebook::CellId cell_id) {
+    std::uint32_t *next_code_id, sputnik::notebook::CellId cell_id,
+    const std::set<std::uint32_t> &reserved) {
   if (code_ids == nullptr || next_code_id == nullptr || cell_id == 0U) {
     return 0;
   }
@@ -612,7 +671,8 @@ std::uint32_t allocate_stable_code_id(
   if (found != code_ids->end()) {
     return found->second;
   }
-  while (*next_code_id == 0U || std::any_of(code_ids->begin(), code_ids->end(),
+  while (*next_code_id == 0U || reserved.count(*next_code_id) ||
+         std::any_of(code_ids->begin(), code_ids->end(),
                                             [next_code_id](const auto &entry) {
                                               return entry.second ==
                                                      *next_code_id;
@@ -678,9 +738,17 @@ bool has_package_imports(const std::vector<sputnik::notebook::CellSource> &sourc
     const auto analysis = sputnik::notebook::analyze_cell(source);
     for (const auto &item : analysis.items) {
       if (!item || item->kind != "AstImportStmt") continue;
+      std::string module;
       for (const auto &field : item->string_fields)
-        if (field.name == "module_path" &&
-            (field.value == "notebook.ui" || !modules.has_namespace(field.value))) return true;
+        if (field.name == "module_path") module = field.value;
+      if (module == "notebook.ui" || !modules.has_namespace(module)) return true;
+      // Keep the native-only execution path for valid imports, but route an
+      // unavailable native name through source import diagnostics as well.
+      for (const auto &list : item->list_fields) if (list.name == "names")
+        for (const auto &name : list.values) if (name)
+          for (const auto &field : name->string_fields)
+            if (field.name == "source_name" &&
+                !modules.has_namespace(module + "." + field.value)) return true;
     }
   }
   return false;
@@ -691,6 +759,7 @@ struct BackendBuildResult {
   std::size_t error_index = 0;
   EvalView error_view;
   std::vector<sputnik::runtime::RuntimeTextOutputEvent> environment_output;
+  std::vector<sputnik::runtime::TraceFrame> error_trace;
   bool ok = false;
 };
 
@@ -708,6 +777,8 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
   if (previous != nullptr) {
     candidate->code_ids = previous->code_ids;
     candidate->next_code_id = previous->next_code_id;
+    if (previous->generation == std::numeric_limits<std::uint64_t>::max())
+      throw std::overflow_error("notebook image generation exhausted");
     candidate->generation = previous->generation + 1U;
   } else {
     candidate->generation = 1U;
@@ -734,25 +805,45 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
     string_seed = seed.strings;
     symbol_seed = seed.symbols;
   }
-  sputnik::notebook::NotebookImage image = candidate->environment_image
-      ? sputnik::notebook::NotebookImage(*candidate->environment_image)
+  auto base = candidate->environment_image
+      ? std::optional<sputnik::bytecode::BcModule>(*candidate->environment_image)
+      : std::nullopt;
+  if (base && previous) {
+    // The linked module's own indices stay fixed, as do all names already
+    // interned by live cells and native values.
+    base->strings = std::move(string_seed);
+    base->symbols = std::move(symbol_seed);
+  }
+  sputnik::notebook::NotebookImage image = base
+      ? sputnik::notebook::NotebookImage(std::move(*base))
       : sputnik::notebook::NotebookImage(std::move(string_seed),
                                        std::move(symbol_seed));
-  if (candidate->environment_image == nullptr) {
-    std::vector<std::uint32_t> reserved;
-    for (const auto &source : sources) {
-      reserved.push_back(allocate_stable_code_id(
-          &candidate->code_ids, &candidate->next_code_id, source.id));
-    }
-    image.reserve_code_ids(reserved);
+  std::set<std::uint32_t> reserved;
+  for (const auto &code : image.module().code_objects)
+    reserved.insert(code.code_id);
+  if (previous)
+    for (const auto &code : previous->module->code_objects)
+      reserved.insert(code.code_id);
+  for (const auto &[_, id] : candidate->code_ids)
+    reserved.insert(id);
+  for (const auto &source : sources) {
+    reserved.insert(allocate_stable_code_id(
+        &candidate->code_ids, &candidate->next_code_id, source.id, reserved));
   }
+  image.reserve_code_ids(std::vector<std::uint32_t>(reserved.begin(), reserved.end()));
+  std::map<sputnik::notebook::CellId, const sputnik::notebook::CellSource *> old_sources;
+  if (previous)
+    for (const auto &source : previous->sources)
+      old_sources.emplace(source.id, &source);
   for (std::size_t index = 0; index < sources.size(); ++index) {
     const sputnik::notebook::CellSource &source = sources[index];
     sputnik::notebook::NotebookCompileOptions options;
-    if (candidate->environment_image == nullptr) {
-      options.code_id = allocate_stable_code_id(
-          &candidate->code_ids, &candidate->next_code_id, source.id);
-    }
+    options.code_id = candidate->code_ids.at(source.id);
+    const auto old = old_sources.find(source.id);
+    // Closures published by an unchanged cell still refer to its helper code
+    // by id. Keep those ids even when an earlier cell gains or loses blocks.
+    if (old != old_sources.end() && old->second->source == source.source)
+      options.helper_code_ids = previous->helper_code_ids.at(source.id);
     options.module_name = "isputnik.notebook";
     options.import_paths = candidate->import_paths;
     options.import_aliases = candidate->import_aliases;
@@ -770,7 +861,7 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
       }
       return result;
     }
-    candidate->code_ids[source.id] = compiled.code_id;
+    candidate->helper_code_ids.emplace(source.id, std::move(compiled.helper_code_ids));
   }
 
   auto snapshot = std::make_shared<sputnik::bytecode::BcModule>(*image.snapshot());
@@ -832,6 +923,7 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
       if (!initialized.ok()) {
         result.error_view.error = "bundled module initialization failed";
         if (initialized.fault.has_value()) {
+          result.error_trace = initialized.fault->trace;
           result.error_view.error += ": " + initialized.fault->error_name +
                                      ": " + initialized.fault->message;
         }
@@ -922,6 +1014,7 @@ EvalView evaluate_backend_cell(SessionBackend *backend,
   view.audio = std::move(report.audio); view.audio_controls = std::move(report.audio_controls);
   if (!run.ok) {
     view.error = run.error.empty() ? "notebook cell failed" : run.error;
+    view.module_errors = module_errors_from_trace(report.error_trace, backend->bundled_sources, view.error);
     return view;
   }
 
@@ -1093,7 +1186,8 @@ execute_automatic_plan(Session *session, SessionBackend *backend,
 void evaluate_rebuilt_backend(
     Session *session, std::size_t start, bool force_all, bool show_running,
     const EvaluationProgress &progress,
-    const std::vector<sputnik::notebook::CellSource> &sources) {
+    const std::vector<sputnik::notebook::CellSource> &sources,
+    const BundledEnvironmentPreparation *environment = nullptr) {
   if (session == nullptr) {
     return;
   }
@@ -1102,7 +1196,7 @@ void evaluate_rebuilt_backend(
   BackendBuildResult built =
       build_backend(sources, previous, session->runtime_watch_event_capacity,
                     session->activity_notifier(), session->runtime_capability_grants,
-                    nullptr, session->output_observer, session->prepare_runtime);
+                    environment, session->output_observer, session->prepare_runtime);
   if (!built.ok) {
     // Compiler diagnostics are initially indexed in the filtered source
     // vector. Translate them back to display-cell indices before publishing;
@@ -1191,7 +1285,8 @@ void evaluate_rebuilt_backend(
     sputnik::notebook::NotebookKernel::PreparedCellUpdate kernel_update =
         previous->kernel->prepare_update_cells(sources, changed, force_all);
     sputnik::runtime::RuntimeNotebookImageInstallResult installed =
-        previous->world->install_notebook_image(built.backend->module);
+        previous->world->install_notebook_image(built.backend->module,
+                                                previous->environment_image.get());
     if (!installed.ok) {
       // Release the kernel execution lock before installing the failure
       // barrier into the still-published graph generation.
@@ -1254,7 +1349,7 @@ void evaluate_rebuilt_backend(
     SessionBackend *live = session->backend.get();
     if (!live->kernel->commit_update_cells(kernel_update)) {
       const sputnik::runtime::RuntimeNotebookImageInstallResult rolled_back =
-          live->world->install_notebook_image(live->module);
+          live->world->install_notebook_image(live->module, live->environment_image.get());
       kernel_update.cancel();
       EvalView commit_error;
       commit_error.error = rolled_back.ok
@@ -1391,9 +1486,17 @@ EvalView evaluate_source_for_cell(const std::vector<Cell> &cells,
     sputnik::frontend::ImportAliases aliases;
     try { aliases = sputnik::frontend::collect_import_aliases(analysis.items); }
     catch (const std::exception &error) { view.error = error.what(); return view; }
-    const auto prepared = prepare_bundled_environment(owner->bundled_modules, imports, owner->package_search_directory, aliases);
+    const auto prepared = prepare_bundled_environment(owner->bundled_modules, imports, owner->package_search_directory, aliases,
+        {{cells[end_index].id, source, source_path}});
     if (!prepared.ok) {
-      for (const auto &diagnostic : prepared.diagnostics) view.error += diagnostic.message + "\n";
+      view.error = bundled_environment_summary(prepared.diagnostics);
+      for (const auto &diagnostic : prepared.diagnostics) {
+        if (diagnostic.path != source_path) continue;
+        const auto mapped = direct_source_mapping
+            ? map_direct_source_ranges_to_cell(cells, diagnostic.source_ranges)
+            : map_source_error_ranges_to_cells(cells, end_index, diagnostic.source_ranges);
+        view.error_ranges.insert(view.error_ranges.end(), mapped.begin(), mapped.end());
+      }
       return view;
     }
     if (!prepared.modules.empty()) {
@@ -1557,6 +1660,7 @@ bool evaluate_console_cells(
     const EvaluationProgress &progress,
     const std::vector<BundledModuleSource> &bundled_sources) {
   SessionExecutionScope execution_scope(session);
+  session->module_errors.clear();
   start = std::min(start, session->cells.size() - 1U);
   std::size_t end = force_all ? session->cells.size() - 1U : start;
   if (!force_all) {
@@ -1614,13 +1718,16 @@ bool evaluate_console_cells(
     view.error = error.what();
     return fail(std::move(view), start);
   }
-  const auto prepared = prepare_bundled_environment(bundled_sources, imports, session->package_search_directory, aliases);
+  const auto prepared = prepare_bundled_environment(bundled_sources, imports, session->package_search_directory, aliases,
+      {{0, user_source, "<isputnik>"}});
   if (!prepared.ok) {
     EvalView view;
+    view.error = bundled_environment_summary(prepared.diagnostics);
+    view.module_errors = module_errors_from_diagnostics(prepared.diagnostics, bundled_sources);
     for (const auto &diagnostic : prepared.diagnostics) {
-      if (!view.error.empty())
-        view.error += "\n";
-      view.error += diagnostic.message;
+      if (diagnostic.path != "<isputnik>") continue;
+      const auto mapped = map_source_error_ranges_to_cells(session->cells, end, diagnostic.source_ranges);
+      view.error_ranges.insert(view.error_ranges.end(), mapped.begin(), mapped.end());
     }
     return fail(std::move(view), start);
   }
@@ -1741,6 +1848,7 @@ bool evaluate_console_cells(
   if (!report.ok()) {
     EvalView view;
     view.error = report.fault->error_name + ": " + report.fault->message;
+    view.module_errors = module_errors_from_trace(report.fault->trace, bundled_sources, view.error);
     std::vector<SourceErrorRange> ranges;
     std::size_t index = end;
     for (const auto &frame : report.fault->trace) {
@@ -2151,11 +2259,8 @@ void focus_selected_error(Session *session) {
   }
 }
 
-void apply_eval(Session *session, std::size_t index, EvalView view) {
-  if (session == nullptr || index >= session->cells.size()) {
-    return;
-  }
-  if (session->execution_finished) session->execution_finished(session->cells[index].id);
+static void apply_eval_diagnostics(Session *session, std::size_t index,
+                                   const EvalView &view) {
   const std::vector<std::string> messages = error_lines(view.error);
   clear_error_ranges_until(session, index);
   for (std::size_t i = 0; i < view.error_ranges.size(); ++i) {
@@ -2177,7 +2282,15 @@ void apply_eval(Session *session, std::size_t index, EvalView view) {
   if (!view.ok && messages.empty() && view.error_ranges.empty()) {
     push_cell_error(&session->cells[index], view.error, nullptr);
   }
+}
 
+void apply_eval(Session *session, std::size_t index, EvalView view) {
+  if (session == nullptr || index >= session->cells.size()) {
+    return;
+  }
+  if (session->execution_finished) session->execution_finished(session->cells[index].id);
+  session->module_errors.insert(session->module_errors.end(), view.module_errors.begin(), view.module_errors.end());
+  apply_eval_diagnostics(session, index, view);
   Cell *cell = &session->cells[index];
   cell->dirty = false;
   cell->running = false;
@@ -2205,6 +2318,64 @@ void apply_eval(Session *session, std::size_t index, EvalView view) {
   }
 }
 
+void check_module_source(Session *session, std::vector<BundledModuleSource> sources) {
+  if (!session || !session->module_editor || session->cells.size() != 1U)
+    throw std::invalid_argument("Check Module requires a module source buffer");
+  if (session->evaluation_active || session->environment_apply_active)
+    throw std::runtime_error("Module work is already in progress");
+  SessionExecutionScope scope(session);
+  // Use this draft as the only root. Other modules retain their saved source
+  // and are checked only when imported by this module.
+  for (auto &source : sources) source.auto_import = false;
+  const auto current = std::find_if(sources.begin(), sources.end(), [&](const auto &source) {
+    return source.id == session->project_module_id;
+  });
+  BundledModuleSource draft{session->project_module_id, session->project_module_path,
+                           session->cells[0].source, false};
+  if (current == sources.end()) sources.push_back(draft);
+  else *current = draft;
+  EvalView view;
+  try {
+    const auto prepared = prepare_bundled_environment(sources, {draft.id}, session->package_search_directory);
+    if (!prepared.ok) {
+      view.error = bundled_environment_summary(prepared.diagnostics);
+      view.module_errors = module_errors_from_diagnostics(prepared.diagnostics, sources);
+      view.module_errors.erase(std::remove_if(view.module_errors.begin(), view.module_errors.end(), [&](const auto &error) {
+        return error.module_id == draft.id;
+      }), view.module_errors.end());
+      for (const auto &diagnostic : prepared.diagnostics) {
+        if (diagnostic.module_id != draft.id || diagnostic.path != draft.path) continue;
+        const auto ranges = map_direct_source_ranges_to_cell(session->cells, diagnostic.source_ranges);
+        view.error_ranges.insert(view.error_ranges.end(), ranges.begin(), ranges.end());
+      }
+    } else if (prepared.image) {
+      view.ok = verified_notebook_image(*prepared.image, &view.error) != nullptr;
+    } else {
+      view.error = "Module check produced no compiled image";
+    }
+  } catch (const std::exception &error) {
+    view.error = error.what();
+  }
+  const bool ok = view.ok;
+  session->environment_error.clear();
+  session->environment_output.clear();
+  session->module_errors.clear();
+  // A check has no runtime result, output, locals, charts or elapsed run time.
+  auto &cell = session->cells[0];
+  cell.elapsed_ms.reset(); cell.environment_rebuild_ms.reset();
+  cell.stopwatches.clear(); cell.displays.clear(); cell.audio.clear();
+  apply_eval(session, 0, std::move(view));
+  cell.result.clear();
+  session->status = ok ? "module check passed; code not executed" : "module check failed; code not executed";
+}
+
+enum class EnvironmentUpdate { Failed, Rebuilt, UpdatedCells };
+
+static EnvironmentUpdate update_bundled_environment(
+    Session *session, const std::vector<BundledModuleSource> &bundled_sources,
+    bool force_all, bool show_running, const EvaluationProgress &progress,
+    std::optional<std::size_t> selected_cell);
+
 void evaluate_from_with_progress(Session *session, std::size_t start,
                                  bool force_all, bool show_running,
                                  const EvaluationProgress &progress) {
@@ -2219,6 +2390,7 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
     session->status = "environment changed; F6 Apply this sheet";
     return;
   }
+  session->module_errors.clear();
   if (session->module_editor) {
     SessionExecutionScope execution_scope(session);
     if (session->cells.size() != 1U) {
@@ -2289,8 +2461,8 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
       (session->backend != nullptr && session->backend->environment_image);
   if (composite && (session->backend == nullptr ||
                    !same_cell_sources(session->backend->sources, sources))) {
-    if (!apply_bundled_environment(session, session->bundled_modules, force_all,
-                                   show_running, progress))
+    if (update_bundled_environment(session, session->bundled_modules, force_all,
+                                   show_running, progress, start) != EnvironmentUpdate::Rebuilt)
       return;
     // Apply has already run Watch cells. An explicitly selected Manual cell
     // is the only additional root authorized by this evaluation command.
@@ -2385,22 +2557,23 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
       force_all ? "all cells evaluated" : "dependent watch cells evaluated";
 }
 
-bool apply_bundled_environment(
+static EnvironmentUpdate update_bundled_environment(
     Session *session, const std::vector<BundledModuleSource> &bundled_sources,
-    bool force_all, bool show_running, const EvaluationProgress &progress) {
+    bool force_all, bool show_running, const EvaluationProgress &progress,
+    std::optional<std::size_t> selected_cell) {
   if (session == nullptr || session->module_editor)
-    return false;
+    return EnvironmentUpdate::Failed;
   if (session->environment_apply_active) {
     session->status = "environment Apply is already running";
-    return false;
+    return EnvironmentUpdate::Failed;
   }
   if (session->evaluation_active) {
     session->status = "environment Apply deferred until evaluation completes";
-    return false;
+    return EnvironmentUpdate::Failed;
   }
   if (session->backend != nullptr && session->backend->runtime_pump_active) {
     session->status = "environment Apply deferred until runtime watch evaluation completes";
-    return false;
+    return EnvironmentUpdate::Failed;
   }
   if (!session->execution_block_reason.empty() ||
       std::any_of(session->cells.begin(), session->cells.end(),
@@ -2408,11 +2581,12 @@ bool apply_bundled_environment(
                     return cell.kind != "code" && cell.kind != "text";
                   })) {
     session->status = "environment Apply blocked by unsupported sheet content";
-    return false;
+    return EnvironmentUpdate::Failed;
   }
   if (uses_console_definitions(*session))
     return evaluate_console_cells(session, 0U, force_all, show_running, progress,
-                                  bundled_sources);
+                                  bundled_sources)
+        ? EnvironmentUpdate::Rebuilt : EnvironmentUpdate::Failed;
   struct ApplyScope {
     Session *session;
     explicit ApplyScope(Session *value) : session(value) {
@@ -2422,8 +2596,11 @@ bool apply_bundled_environment(
   } scope(session);
   SessionExecutionScope execution_scope(session);
 
+  session->module_errors.clear();
+
   // Stage document/display state as well as the image. A failed compilation
   // or module init must not erase successful cell results in the old world.
+  const auto preparation_started = sputnik::runtime::NotebookLiveStore::monotonic_millis();
   std::unique_ptr<SessionBackend> candidate;
   std::vector<Cell> next_cells;
   std::vector<sputnik::notebook::CellSource> next_sources;
@@ -2431,48 +2608,9 @@ bool apply_bundled_environment(
   std::vector<sputnik::runtime::RuntimeTextOutputEvent> next_output;
   std::vector<sputnik::notebook::EvaluationStep> plan;
   try {
-    next_cells = session->cells;
-    next_bundled = bundled_sources;
-    for (Cell &cell : next_cells) {
-      if (cell.id == 0U)
-        cell.id = sputnik::notebook::allocate_cell_id();
-      if (cell.kind == "text") {
-        // Text is inert and read-only in isputnik. Applying the code
-        // environment must not make it look unevaluated or dirty.
-        cell.ok = false;
-        cell.running = false;
-        cell.dirty = false;
-        cell.result = "preserved (read-only text)";
-        cell.error.clear();
-        cell.locals.clear();
-        cell.displays.clear();
-        cell.output_events.clear();
-        cell.error_ranges.clear();
-        cell.errors.clear();
-        cell.selected_error = 0U;
-        cell.watch_epoch = 0U;
-        cell.watch_event_count = 0U;
-        continue;
-      }
-      cell.ok = false;
-      cell.running = false;
-      cell.dirty = true;
-      cell.result = "not evaluated";
-      cell.result_format = {};
-      cell.error.clear();
-      cell.locals.clear();
-      // Figure bytes are immutable host output, not handles into the old
-      // world. Retain the last complete batch until a successful cell replaces
-      // it, including when a source edit requires rebuilding bundled modules.
-      // `ok = false` / dirty above makes the UI label this snapshot stale.
-      cell.output_events.clear();
-      cell.error_ranges.clear();
-      cell.errors.clear();
-      cell.selected_error = 0U;
-      cell.watch_epoch = 0U;
-      cell.watch_event_count = 0U;
-    }
-    next_sources = notebook_sources(next_cells);
+    for (Cell &cell : session->cells)
+      if (cell.id == 0U) cell.id = sputnik::notebook::allocate_cell_id();
+    next_sources = notebook_sources(session->cells);
     std::vector<std::string> explicit_imports;
     sputnik::frontend::ImportAliases aliases;
     // Imports are compile-time, cell-local declarations. Native imports keep
@@ -2488,30 +2626,89 @@ bool apply_bundled_environment(
       }
     }
     const BundledEnvironmentPreparation prepared =
-        prepare_bundled_environment(next_bundled, explicit_imports, session->package_search_directory, aliases);
+        prepare_bundled_environment(bundled_sources, explicit_imports, session->package_search_directory, aliases, next_sources);
     if (!prepared.ok) {
-      std::string message;
-      for (const auto &error : prepared.diagnostics) {
-        if (!message.empty())
-          message += "\n";
-        if (!error.path.empty())
-          message += error.path + ": ";
-        message += error.message;
-      }
+      auto message = bundled_environment_summary(prepared.diagnostics);
       session->environment_error = message.empty()
           ? "environment preparation failed" : std::move(message);
+      session->module_errors = module_errors_from_diagnostics(prepared.diagnostics, bundled_sources);
+      for (const auto &diagnostic : prepared.diagnostics) {
+        for (const auto &range : diagnostic.source_ranges) {
+          const auto source = std::find_if(next_sources.begin(), next_sources.end(), [&](const auto &entry) {
+            return entry.file == range.file;
+          });
+          if (source == next_sources.end()) continue;
+          const auto index = cell_index_for_id(session->cells, source->id);
+          if (index >= session->cells.size()) continue;
+          EvalView view;
+          view.error = diagnostic.message;
+          view.error_ranges = map_direct_source_ranges_to_cell({session->cells[index]}, {range});
+          for (auto &mapped : view.error_ranges) mapped.cell_index = index;
+          apply_eval_diagnostics(session, index, view);
+        }
+      }
       session->status = "environment Apply failed: " + session->environment_error;
-      return false;
+      return EnvironmentUpdate::Failed;
+    }
+    if (selected_cell && session->backend) {
+      const auto &live = *session->backend;
+      const bool same_image = live.environment_image == prepared.image ||
+          (live.environment_image && prepared.image &&
+           sputnik::bytecode::serialize_module(*live.environment_image) ==
+               sputnik::bytecode::serialize_module(*prepared.image));
+      const bool has_code = live.environment_image ||
+          (!next_sources.empty() && !live.module->code_objects.empty());
+      if (has_code && same_image &&
+          live.ambient_constant_paths == prepared.ambient_constant_paths &&
+          live.import_paths == prepared.import_paths &&
+          live.import_aliases.paths() == prepared.import_aliases.paths()) {
+        session->environment_error.clear();
+        evaluate_rebuilt_backend(session, *selected_cell, force_all, show_running,
+                                 progress, next_sources, &prepared);
+        return EnvironmentUpdate::UpdatedCells;
+      }
+    }
+    next_cells = session->cells;
+    next_bundled = bundled_sources;
+    for (Cell &cell : next_cells) {
+      const bool code = cell.kind == "code";
+      cell.ok = false;
+      cell.running = false;
+      cell.dirty = code;
+      cell.result = code ? "not evaluated" : "preserved (read-only text)";
+      if (code) cell.result_format = {};
+      else cell.displays.clear();
+      cell.error.clear();
+      cell.locals.clear();
+      // Keep the previous figure for code cells until a run replaces it.
+      cell.output_events.clear();
+      cell.error_ranges.clear();
+      cell.errors.clear();
+      cell.selected_error = 0U;
+      cell.watch_epoch = 0U;
+      cell.watch_event_count = 0U;
     }
     BackendBuildResult built = build_backend(
         next_sources, nullptr, session->runtime_watch_event_capacity,
         session->activity_notifier(), session->runtime_capability_grants, &prepared,
         session->output_observer, session->prepare_runtime);
     if (!built.ok) {
-      session->environment_error = std::move(built.error_view.error);
+      session->environment_error = built.error_view.error;
+      session->module_errors = module_errors_from_trace(built.error_trace, next_bundled, built.error_view.error);
       session->environment_output = std::move(built.environment_output);
+      // Preparation can fail while compiling a sheet cell. Publish its source
+      // diagnostics without replacing results or the previously installed world.
+      if (!built.error_view.error_ranges.empty() && built.error_index < next_sources.size()) {
+        for (auto &range : built.error_view.error_ranges) {
+          if (range.cell_index < next_sources.size())
+            range.cell_index = cell_index_for_id(session->cells, next_sources[range.cell_index].id);
+        }
+        const auto index = cell_index_for_id(session->cells, next_sources[built.error_index].id);
+        if (index < session->cells.size())
+          apply_eval_diagnostics(session, index, built.error_view);
+      }
       session->status = "environment Apply failed: " + session->environment_error;
-      return false;
+      return EnvironmentUpdate::Failed;
     }
     candidate = std::move(built.backend);
     candidate->bundled_sources = next_bundled;
@@ -2536,7 +2733,7 @@ bool apply_bundled_environment(
   } catch (const std::exception &error) {
     session->environment_error = error.what();
     session->status = "environment Apply failed: " + session->environment_error;
-    return false;
+    return EnvironmentUpdate::Failed;
   }
 
   session->backend.swap(candidate);
@@ -2546,6 +2743,8 @@ bool apply_bundled_environment(
   session->environment_output.swap(next_output);
   session->environment_error.clear();
   session->environment_stale = false;
+  if (session->environment_prepared)
+    session->environment_prepared(sputnik::runtime::NotebookLiveStore::monotonic_millis() - preparation_started);
   // Module initialization is the commit boundary. A cell fault or a host
   // callback failure after this point cannot undo cells already executed.
   try {
@@ -2562,7 +2761,14 @@ bool apply_bundled_environment(
     session->status = "environment applied; evaluation interrupted by host callback";
   }
   (void)session->activity_notifier().notify_runtime();
-  return true;
+  return EnvironmentUpdate::Rebuilt;
+}
+
+bool apply_bundled_environment(
+    Session *session, const std::vector<BundledModuleSource> &bundled_sources,
+    bool force_all, bool show_running, const EvaluationProgress &progress) {
+  return update_bundled_environment(session, bundled_sources, force_all,
+                                    show_running, progress, std::nullopt) != EnvironmentUpdate::Failed;
 }
 
 void evaluate_from(Session *session, std::size_t start, bool force_all,

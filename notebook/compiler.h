@@ -46,9 +46,7 @@ public:
   NotebookImage() = default;
   NotebookImage(std::vector<std::string> string_seed,
                 std::vector<std::string> symbol_seed);
-  // Starts a fresh composite generation from one already verified ordinary
-  // module image. Runtime hot-install still accepts notebook-only images;
-  // hosts using this constructor must create a fresh RuntimeWorld generation.
+  // Seed the compiler with an already verified ordinary module image.
   explicit NotebookImage(bytecode::BcModule base_module);
   NotebookImage(const NotebookImage &) = delete;
   NotebookImage &operator=(const NotebookImage &) = delete;
@@ -99,6 +97,7 @@ struct NotebookCompileOptions {
   std::unordered_map<std::string, std::string> ambient_constant_paths;
   std::map<std::string, std::map<std::string, std::string>> import_paths;
   frontend::ImportAliases import_aliases;
+  std::vector<std::uint32_t> helper_code_ids;
 };
 
 struct CellCompileResult {
@@ -108,6 +107,7 @@ struct CellCompileResult {
   std::vector<lexer::Diagnostic> diagnostics;
   std::vector<CellSlotUse> inputs;
   std::vector<CellSlotUse> outputs;
+  std::vector<std::uint32_t> helper_code_ids;
 };
 
 CellCompileResult compile_cell(const CellSource &cell,

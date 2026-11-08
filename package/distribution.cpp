@@ -1249,20 +1249,22 @@ BoundProvider bind_system_provider(
     if (asset == provider.system_files.end())
       fail("system provider has no discovery rule: " + path);
     fs::path selected;
+    std::string digest;
     for (const auto &candidate : asset->sources) {
       const auto expanded = expand_install_path(candidate, environment);
       if (expanded.empty() || !fs::is_regular_file(expanded)) continue;
-      if (file_sha256(expanded) != asset->sha256)
+      selected = fs::canonical(expanded);
+      digest = file_sha256(selected);
+      if (!asset->sha256.empty() && digest != asset->sha256)
         fail("NATIVE_ABI_CONFLICT: " + expanded + " does not match the packaged " +
              provider.id + " build " + provider.version);
-      selected = fs::canonical(expanded);
       break;
     }
     if (selected.empty())
       fail("missing system file: " + path + " for " + provider.id +
            " (check package parameters with sputnik pkg install <package> --help)");
-    sources.emplace(path, std::make_pair(selected, asset->sha256));
-    material += path + "=" + selected.string() + "=" + asset->sha256 + "\n";
+    sources.emplace(path, std::make_pair(selected, digest));
+    material += path + "=" + selected.string() + "=" + digest + "\n";
   }
   const auto root = cache / "system" / lexer::sha256_hex(material);
   fs::create_directories(root);
@@ -1277,6 +1279,10 @@ BoundProvider bind_system_provider(
       fs::remove(temporary, error);
       fs::create_hard_link(source.first, temporary, error);
       if (error) fs::copy_file(source.first, temporary);
+      if (file_sha256(temporary) != source.second) {
+        fs::remove(temporary, error);
+        fail("system provider changed during preparation: " + path);
+      }
       fs::rename(temporary, destination);
     }
     if (fs::is_symlink(destination) || file_sha256(destination) != source.second)

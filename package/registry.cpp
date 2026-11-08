@@ -1034,11 +1034,17 @@ RegistryDownload download_registry_package(const std::string &origin,
       return {};
   }
   auto output = destination / (digest.substr(7) + ".sputnikpkg");
-  bool progress_open = ::isatty(STDERR_FILENO);
+  // GUI clients capture stderr through a pipe and explicitly opt into plain
+  // progress lines. Keep ordinary redirected CLI output quiet.
+  const auto *progress_setting = std::getenv("SPUTNIK_PKG_PROGRESS");
+  const bool progress_lines = progress_setting && std::string(progress_setting) == "1";
+  bool progress_open = progress_lines || ::isatty(STDERR_FILENO);
   const auto progress_size = download_size_label(size);
   const auto report_progress = [&](std::uint64_t total) {
-    std::cerr << "\rDownloading " << canonical << '@' << chosen << "  " << std::setw(3)
-              << total * 100 / size << "% (" << progress_size << ')' << std::flush;
+    std::cerr << (progress_lines ? "" : "\r") << "Downloading " << canonical << '@' << chosen << "  " << std::setw(3)
+              << total * 100 / size << "% (" << progress_size << ')';
+    if (progress_lines) std::cerr << '\n';
+    std::cerr << std::flush;
   };
   auto last_update = std::chrono::steady_clock::now();
   if (progress_open) report_progress(0);
@@ -1066,12 +1072,13 @@ RegistryDownload download_registry_package(const std::string &origin,
     if (!file || total != size || "sha256:" + file_sha256(output) != digest) fail("download checksum/size differs");
     if (progress_open) {
       report_progress(total);
-      std::cerr << '\n';
+      if (!progress_lines) std::cerr << '\n';
       progress_open = false;
     }
+    if (progress_lines) std::cerr << "Preparing " << canonical << '@' << chosen << "…\n" << std::flush;
     verify_manifest(inspect_distribution(output).manifest);
   } catch (...) {
-    if (progress_open) std::cerr << '\n';
+    if (progress_open && !progress_lines) std::cerr << '\n';
     std::error_code error;
     fs::remove(output, error);
     throw;

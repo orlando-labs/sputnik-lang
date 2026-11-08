@@ -108,6 +108,7 @@ struct Cell {
   std::vector<sputnik::runtime::NotebookLiveEvent> audio_controls;
   std::vector<sputnik::runtime::NotebookLiveEvent> stopwatches;
   std::optional<std::uint64_t> elapsed_ms;
+  std::optional<std::uint64_t> environment_rebuild_ms;
 };
 
 // Exact bundled sources selected by a project's ordered auto_imports list.
@@ -129,6 +130,13 @@ struct BundledEnvironmentDiagnostic {
   std::string path;
   std::string message;
   std::vector<SourceErrorRange> source_ranges;
+};
+
+// Diagnostic provenance belongs to the executed module snapshot, not to a
+// sheet cell or the current editor draft. Ranges use editor coordinates.
+struct ModuleErrorView {
+  std::string module_id, source, message;
+  std::vector<CodeErrorRange> ranges;
 };
 
 struct CompiledBundledModule {
@@ -236,9 +244,13 @@ public:
   // Anchor for packages/ discovery; empty for a projectless console.
   std::string package_search_directory;
   std::string environment_error;
+  std::vector<ModuleErrorView> module_errors;
   std::vector<sputnik::runtime::RuntimeTextOutputEvent> environment_output;
   SessionOutputObserver output_observer;
   std::function<void(sputnik::notebook::CellId)> execution_finished;
+  // Successful environment preparation, before dispatching its first cell.
+  // The duration includes compilation, native verification and module init.
+  std::function<void(std::uint64_t)> environment_prepared;
   // Owner-thread guard: progress callbacks may pump the UI reentrantly.
   // Callbacks may inspect state/pump events, but must not directly replace
   // the Session, its cells or its backend while an evaluation is active.
@@ -288,6 +300,7 @@ struct EvalView {
   std::uint64_t watch_epoch = 0;
   std::size_t watch_event_count = 0;
   std::vector<CellErrorRange> error_ranges;
+  std::vector<ModuleErrorView> module_errors;
   std::vector<sputnik::runtime::NotebookDisplay> displays;
 };
 
@@ -295,11 +308,16 @@ CompileResult compile_source_text(const std::string &source,
                                   const std::string &source_path,
                                   const std::string &module_name_override = {});
 
+// Source library shipped with the notebook host, independent of installed
+// registry packages and the document's dependency list. Loaded only on Run.
+std::vector<BundledModuleSource> notebook_essential_sources();
+
 BundledEnvironmentPreparation prepare_bundled_environment(
     const std::vector<BundledModuleSource> &sources,
     const std::vector<std::string> &explicit_imports = {},
     const std::string &package_search_directory = {},
-    const sputnik::frontend::ImportAliases &aliases = {});
+    const sputnik::frontend::ImportAliases &aliases = {},
+    const std::vector<sputnik::notebook::CellSource> &import_sources = {});
 
 // Cross the same bytecode serialization boundary used by persisted modules
 // before an immutable notebook image is handed to RuntimeWorld.  The
@@ -324,6 +342,9 @@ EvalView evaluate_prefix(const std::vector<Cell> &cells, std::size_t end_index);
 
 void clear_error_ranges_until(Session *session, std::size_t end_index);
 void apply_eval(Session *session, std::size_t index, EvalView view);
+// Compile/link the current module draft and its imports without loading native
+// libraries, constructing a RuntimeWorld, or executing module initializers.
+void check_module_source(Session *session, std::vector<BundledModuleSource> sources);
 void clamp_selected_error(Cell *cell);
 bool selected_cell_has_errors(const Session *session);
 void focus_selected_error(Session *session);

@@ -2,6 +2,7 @@
 #include "notebook/audio_components.h"
 #include "tools/isputnik/tabs.h"
 #include "tools/isputnik/dependencies.h"
+#include "frontend/lexer/lexer.h"
 
 #include <algorithm>
 #include <functional>
@@ -951,6 +952,64 @@ void ProjectTabs::create_module(const std::string &id) {
   } catch (...) {
     if (project_.document.modules.size() == old_count + 1U &&
         project_.document.modules.back().id == id)
+      publish();
+    throw;
+  }
+  publish();
+}
+
+void ProjectTabs::rename_module(const std::string &id, const std::string &name) {
+  require_idle();
+  const auto found = std::find_if(tabs_.begin(), tabs_.end(), [&](const auto &tab) {
+    return tab->module && tab->module->id == id;
+  });
+  if (found == tabs_.end()) throw std::invalid_argument("unknown module: " + id);
+  const auto start = name.find_first_not_of(" \t\r\n");
+  if (start == std::string::npos) throw std::invalid_argument("Enter a module name.");
+  const auto end = name.find_last_not_of(" \t\r\n");
+  std::string replacement;
+  bool separator = false;
+  // Keep the same safe identifier and filename in every notebook host.
+  for (auto i = start; i <= end; ++i) {
+    const auto ch = name[i];
+    const bool next_separator = ch == ' ' || ch == '-' || ch == '\t' || ch == '\r' || ch == '\n';
+    if (!separator || !next_separator) replacement.push_back(next_separator ? '_' : ch);
+    separator = next_separator;
+  }
+  if (replacement.size() > 64U) throw std::invalid_argument("Use a module name of up to 64 characters.");
+  validate_new_tab_id(replacement);
+  auto &tab = **found;
+  if (tab.session.cells.size() != 1U)
+    throw std::runtime_error("module editor requires one source buffer");
+  auto source = tab.session.cells.front().source;
+  const auto lexed = sputnik::lexer::Lexer(source, tab.module->path).lex();
+  for (std::size_t i = 0; i + 1 < lexed.tokens.size(); ++i) {
+    if (lexed.tokens[i].kind != sputnik::lexer::TokenKind::KeywordPackage) continue;
+    const auto &token = lexed.tokens[i + 1];
+    if (token.kind == sputnik::lexer::TokenKind::Identifier && token.lexeme == id)
+      source.replace(token.span.start.offset, token.span.end.offset - token.span.start.offset, replacement);
+    break;
+  }
+  auto module = *tab.module;
+  // Allocate the editor state before crossing the manifest commit boundary.
+  auto label = project_.document.title + "/module:" + replacement;
+  auto module_path = (std::filesystem::path(module.path).parent_path() /
+      (replacement + std::filesystem::path(module.path).extension().string())).generic_string();
+  auto editor_id = replacement;
+  const auto publish = [&] {
+    tab.module = std::move(module);
+    tab.session.project_module_id.swap(editor_id);
+    tab.session.project_module_path.swap(module_path);
+    tab.session.project_label.swap(label);
+    tab.session.cells.front().source.swap(source);
+    tab.session.cells.front().dirty = true;
+    tab.session.document_dirty = false;
+    for (const auto &sheet : tabs_) if (!sheet->module) sheet->session.environment_stale = true;
+  };
+  try {
+    sputnik::notebook::rename_project_module(&project_, &module, replacement, source);
+  } catch (...) {
+    if (module.id == replacement && module.path == module_path && module.baseline == source)
       publish();
     throw;
   }

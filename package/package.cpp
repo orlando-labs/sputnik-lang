@@ -983,9 +983,12 @@ std::string render_manifest(const PackageManifest &m) {
     f.push_back({"libraries", libraries(value.libraries)});
     if (!value.system_files.empty()) {
       std::vector<std::string> assets;
-      for (const auto &asset : value.system_files)
-        assets.push_back(object({{"path", quote(asset.path)}, {"sha256", quote(asset.sha256)},
-                                 {"sources", list(asset.sources)}}));
+      for (const auto &asset : value.system_files) {
+        Fields fields{{"path", quote(asset.path)}};
+        if (!asset.sha256.empty()) fields.push_back({"sha256", quote(asset.sha256)});
+        fields.push_back({"sources", list(asset.sources)});
+        assets.push_back(object(fields));
+      }
       f.push_back({"system_files", list(assets, true)});
     }
     files.insert(value.files.begin(), value.files.end());

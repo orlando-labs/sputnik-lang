@@ -279,7 +279,18 @@ NotebookKernel::PreparedCellUpdate NotebookKernel::prepare_update_cells(
     previous.emplace(sources_, ambient_names_);
   }
   if (!force_all && previous.has_value()) {
-    plan = plan_transition_evaluation(current, *previous, cells, changed);
+    std::map<CellId, const CellSource *> old_sources;
+    for (const auto &source : sources_) old_sources.emplace(source.id, &source);
+    std::set<CellId> edited;
+    for (const auto &source : cells) {
+      const auto old = old_sources.find(source.id);
+      if (old == old_sources.end() || old->second->source != source.source ||
+          old->second->file != source.file || old->second->mode != source.mode)
+        edited.insert(source.id);
+      if (old != old_sources.end()) old_sources.erase(old);
+    }
+    for (const auto &[id, _] : old_sources) edited.insert(id);
+    plan = plan_transition_evaluation(current, *previous, cells, changed, false, edited);
   } else {
     plan = plan_evaluation(current, cells, changed, force_all);
   }

@@ -659,4 +659,83 @@ LoadedProjectModule create_project_module(LoadedProject *project,
   return published_module;
 }
 
+void rename_project_module(LoadedProject *project, LoadedProjectModule *module,
+                           const std::string &id, const std::string &source) {
+  if (!project || !module)
+    throw std::invalid_argument("notebook project: null project or module");
+  if (source.size() > kMaxModuleBytes)
+    throw std::runtime_error("notebook project: module source exceeds 16 MiB");
+  auto document = module_manifest_snapshot(*project);
+  const auto found = std::find_if(document.modules.begin(), document.modules.end(),
+      [&](const auto &entry) { return entry.id == module->id && entry.path == module->path; });
+  if (found == document.modules.end())
+    throw std::runtime_error("notebook project: module mapping changed; reopen before renaming");
+  const auto destination = std::filesystem::path(module->path).parent_path() /
+      (id + std::filesystem::path(module->path).extension().string());
+  if (id == module->id && destination.generic_string() == module->path)
+    return;
+  found->id = id;
+  found->path = destination.generic_string();
+  for (auto &import : document.auto_imports)
+    if (import == module->id) import = id;
+  const std::function<void(std::vector<ProjectComponent> &)> update = [&](auto &components) {
+    for (auto &component : components) {
+      if (component.kind == "action" || component.kind == "periodic_work") {
+        const auto target = component.extra.find("module_id");
+        if (target != component.extra.end() &&
+            parse_project_input_value(target->second) == runtime::NotebookInputValue{module->id})
+          target->second = serialize_project_input_value(runtime::NotebookInputValue{id});
+      }
+      if (component.panels) for (auto &panel : *component.panels) update(panel.components);
+    }
+  };
+  for (auto &board : document.boards) update(board.components);
+  for (auto &sheet : document.sheets) for (auto &cell : sheet.cells) {
+    const auto entry = cell.extra.find("cell_ui");
+    if (entry == cell.extra.end()) continue;
+    auto ui = parse_project_cell_ui(entry->second);
+    update(ui.pre); update(ui.post);
+    entry->second = serialize_project_cell_ui(ui);
+  }
+  auto baseline = serialize_project_document(document);
+  LoadedProjectModule published{id, found->path, source, source};
+  auto root = open_directory(project->directory);
+  ProjectLock lock(root.get());
+  if (read_document(root.get()) != project->baseline ||
+      read_member(root.get(), module->path, kMaxModuleBytes) != module->baseline)
+    throw std::runtime_error("notebook project: module or manifest changed externally; reopen before renaming");
+  auto parent = open_member_parent(root.get(), module->path);
+  const auto leaf = destination.filename().string();
+  const auto old_path = module->path;
+  const auto old_baseline = module->baseline;
+  require_new_member_target(parent.directory.get(), leaf, published.path);
+  StagedMember staged_source(parent.directory.get(), leaf, source,
+                             member_mode(root.get(), module->path));
+  StagedMember staged_manifest(root.get(), kDocumentName, baseline);
+  if (read_document(root.get()) != project->baseline ||
+      read_member(root.get(), module->path, kMaxModuleBytes) != module->baseline)
+    throw std::runtime_error("notebook project: module or manifest changed during rename; reopen before renaming");
+  staged_source.create();
+  try {
+    sync_directory(parent.directory.get());
+    if (read_document(root.get()) != project->baseline ||
+        read_member(root.get(), module->path, kMaxModuleBytes) != module->baseline)
+      throw std::runtime_error("notebook project: module or manifest changed before rename commit");
+    validate_members(root.get(), document);
+    staged_manifest.replace();
+  } catch (const std::exception &error) {
+    throw std::runtime_error("notebook project: renamed source remains recoverable at " +
+        published.path + "; its manifest was not committed: " + error.what());
+  }
+  project->baseline.swap(baseline);
+  project->document = std::move(document);
+  *module = std::move(published);
+  sync_directory(root.get());
+  if (read_member(root.get(), old_path, kMaxModuleBytes) != old_baseline)
+    throw std::runtime_error("notebook project: module renamed; externally changed source retained at " + old_path);
+  if (::unlinkat(parent.directory.get(), parent.leaf.c_str(), 0) != 0)
+    io_error("module renamed; remove previous source " + old_path);
+  sync_directory(parent.directory.get());
+}
+
 } // namespace sputnik::notebook

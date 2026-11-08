@@ -720,6 +720,68 @@ void test_auto_import_commands_are_ordered_and_apply_is_explicit() {
          "re-enabling an import should append it at the end");
 }
 
+void test_module_rename_updates_filename_and_preserves_editor_state() {
+  TempDirectory temporary;
+  auto project = make_project(temporary.path / "rename");
+  sputnik::notebook::ProjectBoard board;
+  board.id = "training"; board.title = "Training"; board.sheet = "main";
+  sputnik::notebook::ProjectComponent action;
+  action.id = "value"; action.kind = "action"; action.title = "Value";
+  action.extra = {{"module_id", "\"main\""}, {"function", "\"value\""}};
+  board.components.push_back(action);
+  auto document = project.document;
+  document.version = 3;
+  std::filesystem::rename(project.directory / "lib/main.s", project.directory / "lib/technical.s");
+  document.modules[0].path = "lib/technical.s";
+  document.boards.push_back(board);
+  sputnik::notebook::save_project(&project, document);
+  ProjectTabs tabs(project);
+  select_tab(&tabs, find_module_tab(tabs, "main"));
+  tabs.rename_module("main", "main");
+  expect(tabs.active().module->path == "lib/main.s" &&
+             !std::filesystem::exists(project.directory / "lib/technical.s"),
+         "renaming a legacy module to its existing name should align its filename");
+  auto *const editor = &tabs.active();
+  auto &buffer = editor->session.cells.front();
+  const auto cell_id = buffer.id;
+  buffer.source += "# unsaved editor change\n";
+  editor->session.document_dirty = true;
+  tabs.rename_module("main", "train-model");
+  expect(&tabs.active() == editor && buffer.id == cell_id &&
+             editor->module->id == "train_model" && editor->module->path == "lib/train_model.s" &&
+             editor->session.project_module_path == "lib/train_model.s" &&
+             editor->session.project_module_id == "train_model" &&
+             buffer.source.find("package train_model\n") == 0 &&
+             buffer.source.find("# unsaved editor change\n") != std::string::npos &&
+             !tabs.modified(tabs.selected()),
+         "rename should keep the module editor and save its current source under the safe filename");
+  const auto reopened = sputnik::notebook::load_project(project.directory);
+  expect(!std::filesystem::exists(project.directory / "lib/main.s") &&
+             read_text(project.directory / "lib/train_model.s") == buffer.source &&
+             reopened.document.auto_imports == std::vector<std::string>{"train_model"} &&
+             reopened.document.boards[0].components[0].extra.at("module_id") == "\"train_model\"",
+         "renamed file, manifest, auto-import and board action must agree on disk");
+  write_text(project.directory / "lib/occupied.s", "resource bytes\n");
+  const auto saved = tabs.project().baseline;
+  expect_throws([&] { tabs.rename_module("train_model", "occupied"); },
+                "renaming must reject an existing destination");
+  expect(tabs.project().baseline == saved && editor->module->id == "train_model" &&
+             read_text(project.directory / "lib/occupied.s") == "resource bytes\n" &&
+             read_text(project.directory / "lib/train_model.s") == buffer.source,
+         "destination collisions must preserve both files and the module mapping");
+  write_text(project.directory / "lib/train_model.s", "# changed externally\n");
+  expect_throws([&] { tabs.rename_module("train_model", "external_conflict"); },
+                "renaming must reject a changed source baseline");
+  expect(tabs.project().baseline == saved && editor->module->id == "train_model" &&
+             !std::filesystem::exists(project.directory / "lib/external_conflict.s"),
+         "a source conflict must leave the manifest and destination untouched");
+  write_text(project.directory / "lib/train_model.s", buffer.source);
+  select_tab(&tabs, find_sheet_tab(tabs, "main"));
+  expect(tabs.active().session.environment_stale && tabs.apply_active(true, false) &&
+             tabs.active().session.cells[0].ok && tabs.active().session.cells[0].result == "1",
+         "the normal sheet Apply path should load the renamed auto-import");
+}
+
 } // namespace
 
 int main() {
@@ -732,5 +794,6 @@ int main() {
   test_create_sheet_and_module_preserve_runtime_and_dirty_buffers();
   test_structure_commands_reject_invalid_collisions_and_external_changes();
   test_auto_import_commands_are_ordered_and_apply_is_explicit();
+  test_module_rename_updates_filename_and_preserves_editor_state();
   std::cout << "isputnik tabs tests ok\n";
 }

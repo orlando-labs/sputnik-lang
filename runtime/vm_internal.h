@@ -809,7 +809,8 @@ struct RuntimeState {
     dependency_capture.dependencies[found->second] = std::move(dependency);
   }
 
-  void resolve_class_refs_for_module(const bytecode::BcModule &module) {
+  static std::vector<std::uint32_t>
+  class_refs_for_module(const bytecode::BcModule &module) {
     std::unordered_map<std::string, std::uint32_t> full_names;
     std::unordered_map<std::string, std::uint32_t> leaf_names;
     std::unordered_set<std::string> ambiguous_leaves;
@@ -832,7 +833,8 @@ struct RuntimeState {
       }
     }
 
-    resolved_class_refs.assign(module.const_pool.size(), kClassRefUnknown);
+    std::vector<std::uint32_t> resolved_class_refs(module.const_pool.size(),
+                                                   kClassRefUnknown);
     for (std::uint32_t ref = 0; ref < module.const_pool.size(); ++ref) {
       const bytecode::Constant &constant = module.const_pool[ref];
       if (constant.kind != bytecode::ConstantKind::Path ||
@@ -869,6 +871,7 @@ struct RuntimeState {
         resolved_class_refs[ref] = short_name->second;
       }
     }
+    return resolved_class_refs;
   }
 
   void initialize_inline_cache_layout(const bytecode::BcModule &module) {
@@ -905,37 +908,8 @@ struct RuntimeState {
       return;
     }
     initialize_inline_cache_layout(module);
-    resolve_class_refs_for_module(module);
-    for (const bytecode::BcMethod &method : module.methods) {
-      for (std::uint32_t i = 0; i < method.params.size(); ++i) {
-        const std::uint32_t flags = method.params[i].flags;
-        if ((flags & bytecode::kMethodParamFlagRest) != 0U) {
-          rest_param_index_by_code[method.entry_code_id] = i;
-          has_any_rest_params = true;
-        } else if ((flags & bytecode::kMethodParamFlagKwRest) != 0U) {
-          kw_rest_param_index_by_code[method.entry_code_id] = i;
-          has_any_rest_params = true;
-        }
-        if ((flags & (bytecode::kMethodParamFlagRest |
-                      bytecode::kMethodParamFlagKwRest |
-                      bytecode::kMethodParamFlagKeyword |
-                      bytecode::kMethodParamFlagBlock |
-                      bytecode::kMethodParamFlagHasDefault)) != 0U) {
-          codes_needing_param_shaping.insert(method.entry_code_id);
-          has_any_shaped_params = true;
-        }
-      }
-    }
-    for (const bytecode::BcCode &code : module.code_objects) {
-      if ((code.flags & bytecode::kCodeFlagRestParam) == 0U) {
-        continue;
-      }
-      rest_param_index_by_code[code.code_id] =
-          code.flags >> bytecode::kCodeRestParamIndexShift;
-      codes_needing_param_shaping.insert(code.code_id);
-      has_any_rest_params = true;
-      has_any_shaped_params = true;
-    }
+    resolved_class_refs = class_refs_for_module(module);
+    initialize_param_shaping(module, *this);
     for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
       ClassRuntimeState &runtime = classes[index];
       const bytecode::BcClass &owner = module.classes[index];
@@ -961,6 +935,41 @@ struct RuntimeState {
       }
     }
     owners_initialized = true;
+  }
+
+  template <typename Cache>
+  static void initialize_param_shaping(const bytecode::BcModule &module,
+                                       Cache &cache) {
+    for (const bytecode::BcMethod &method : module.methods) {
+      for (std::uint32_t i = 0; i < method.params.size(); ++i) {
+        const std::uint32_t flags = method.params[i].flags;
+        if ((flags & bytecode::kMethodParamFlagRest) != 0U) {
+          cache.rest_param_index_by_code[method.entry_code_id] = i;
+          cache.has_any_rest_params = true;
+        } else if ((flags & bytecode::kMethodParamFlagKwRest) != 0U) {
+          cache.kw_rest_param_index_by_code[method.entry_code_id] = i;
+          cache.has_any_rest_params = true;
+        }
+        if ((flags & (bytecode::kMethodParamFlagRest |
+                      bytecode::kMethodParamFlagKwRest |
+                      bytecode::kMethodParamFlagKeyword |
+                      bytecode::kMethodParamFlagBlock |
+                      bytecode::kMethodParamFlagHasDefault)) != 0U) {
+          cache.codes_needing_param_shaping.insert(method.entry_code_id);
+          cache.has_any_shaped_params = true;
+        }
+      }
+    }
+    for (const bytecode::BcCode &code : module.code_objects) {
+      if ((code.flags & bytecode::kCodeFlagRestParam) == 0U) {
+        continue;
+      }
+      cache.rest_param_index_by_code[code.code_id] =
+          code.flags >> bytecode::kCodeRestParamIndexShift;
+      cache.codes_needing_param_shaping.insert(code.code_id);
+      cache.has_any_rest_params = true;
+      cache.has_any_shaped_params = true;
+    }
   }
 
   std::shared_ptr<const CodeIndex> code_index_for_module(
@@ -1116,8 +1125,7 @@ struct RuntimeState {
     bool has_any_shaped_params = false;
   };
 
-  // A notebook image has no classes or methods. Prepare all allocations for
-  // its code-indexed caches without touching the active RuntimeState.
+  // Prepare code-indexed caches without touching the active RuntimeState.
   // RuntimeWorld validates the shape and bounds before calling this helper.
   NotebookModuleRuntimeStatePreparation
   prepare_notebook_module_runtime_state(const bytecode::BcModule &module) const {
@@ -1134,18 +1142,8 @@ struct RuntimeState {
       prepared.ivar_caches[code.code_id].resize(code.ivar_site_table.size());
     }
 
-    prepared.resolved_class_refs.assign(
-        module.const_pool.size(), kClassRefUnknown);
-    for (const bytecode::BcCode &code : module.code_objects) {
-      if ((code.flags & bytecode::kCodeFlagRestParam) == 0U) {
-        continue;
-      }
-      prepared.rest_param_index_by_code[code.code_id] =
-          code.flags >> bytecode::kCodeRestParamIndexShift;
-      prepared.codes_needing_param_shaping.insert(code.code_id);
-      prepared.has_any_rest_params = true;
-      prepared.has_any_shaped_params = true;
-    }
+    prepared.resolved_class_refs = class_refs_for_module(module);
+    initialize_param_shaping(module, prepared);
 
     return prepared;
   }
@@ -1155,10 +1153,9 @@ struct RuntimeState {
   // the active module can never be left at different generations by an
   // allocation exception.
   void commit_notebook_module_runtime_state(
-      NotebookModuleRuntimeStatePreparation prepared) noexcept {
-    // The notebook-only contract has no class state to resolve.  Keep the
-    // existing class vector untouched; the public boundary rejects both an
-    // old and a replacement image that contain classes or methods.
+      NotebookModuleRuntimeStatePreparation prepared,
+      bool keep_module_bindings = false) noexcept {
+    // The linked classes and methods have already been checked for equality.
     call_caches.swap(prepared.call_caches);
     ivar_caches.swap(prepared.ivar_caches);
     resolved_class_refs.swap(prepared.resolved_class_refs);
@@ -1168,10 +1165,13 @@ struct RuntimeState {
     has_any_rest_params = prepared.has_any_rest_params;
     has_any_shaped_params = prepared.has_any_shaped_params;
     owners_initialized = true;
+    constructor_hook_caches.clear();
     call_cache_entry_count = 0;
-    module_init_completed = false;
-    module_bindings.clear();
-    ++module_bindings_revision;
+    if (!keep_module_bindings) {
+      module_init_completed = false;
+      module_bindings.clear();
+      ++module_bindings_revision;
+    }
     ++world_epoch;
   }
 
@@ -1197,7 +1197,7 @@ struct RuntimeState {
     if (root_shapes.size() < module.classes.size()) {
       root_shapes.resize(module.classes.size());
     }
-    resolve_class_refs_for_module(module);
+    resolved_class_refs = class_refs_for_module(module);
 
     for (std::uint32_t index = 0; index < module.classes.size(); ++index) {
       ClassRuntimeState &runtime = classes[index];

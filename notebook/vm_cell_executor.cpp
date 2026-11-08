@@ -455,6 +455,7 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
   }
   if (!runtime_result.ok()) {
     if (runtime_result.fault.has_value()) {
+      if (report) report->error_trace = runtime_result.fault->trace;
       result.error = runtime_result.fault->error_name;
       if (!runtime_result.fault->message.empty()) {
         result.error += ": ";

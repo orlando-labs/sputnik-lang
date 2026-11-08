@@ -64,6 +64,9 @@ An exact version never silently downgrades.
 
 Linux CUDA targets declare `cuda_version`, `min_cuda_driver` and a nonempty
 `cuda_architectures` list using dotted compute capabilities, for example `8.6`.
+`cuda_version` is the minimum driver API version required to run the artifact.
+A bundle using CUDA minor-version compatibility can carry a newer toolkit
+runtime if its advertised driver and devices passed the package tests.
 The NVIDIA host utility supplies the driver release; the system CUDA Driver API
 supplies the visible devices, their compute capabilities and supported API
 version. This respects `CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER` without
@@ -105,6 +108,15 @@ requirements/providers before download. Multiple runtime provider libraries are
 prepared in one verified directory; conflicting library bytes or singleton ABI
 requirements are errors. Public package dependencies currently use exact versions.
 
+For discovered system files, byte identity is a manifest choice:
+`native_providers[].system_files[].sha256` is optional. A declared hash requires
+an exact match; omitting it accepts the discovered file without comparing it to
+the publisher's copy. Provider version and ABI declarations still apply. The
+installer hashes the actual file for its cache identity and checks it again
+during preparation. Replacing a system library therefore creates a new prepared
+view instead of silently reusing the previous bytes. The package owns discovery
+rules and any library-specific compatibility checks.
+
 ## Store and lock
 
 Tar distributions live at `<home>/<ref>/<version>/<variant>/`, including scoped
@@ -132,7 +144,7 @@ native adapter representation remain independent.
 ROCm variants declare `compute_backend: rocm` and a Linux target. Explicit
 `--backend rocm` selects them explicitly; automatic selection also chooses
 them on a compatible AMD host. Explicit CPU selection excludes ROCm-only runtimes.
-Host checks query `hipInit`/`hipGetDeviceCount` from the installed HIP C library,
-respecting HIP device visibility. A missing runtime or visible GPU rejects both
-automatic and exact-variant selection. LibTorch/ROCm versions and ABI identities
-remain native-provider requirements; no Python or HIP compiler is used to probe.
+Host selection checks access to the Linux KFD and render devices exposed by its
+topology. The package validates its userspace libraries, GPU visibility and
+kernels during preparation or loading. Library versions and ABI identities
+remain package declarations.

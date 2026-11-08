@@ -398,9 +398,23 @@ files: []
     expect(system_options.ok() && system_options.manifest.install_options.size() == 1 &&
                system_options.manifest.native_requirements[0].discovery == "system.json",
            "install option and system discovery roundtrip");
+    auto &runtime_asset = discovery.native_providers.front().system_files.front();
+    const auto runtime_digest = runtime_asset.sha256;
+    runtime_asset.sha256 = std::string(64, '0');
+    write(source / "system.json", render_manifest(discovery));
+    rejects("pinned system runtime digest mismatch", [&] {
+      prepare_native_providers(system, source, root / "cache");
+    });
+    runtime_asset.sha256.clear();
+    write(source / "system.json", render_manifest(discovery));
+    const auto unpinned = prepare_native_providers(system, source, root / "cache");
+    runtime_asset.sha256 = runtime_digest;
+    write(source / "system.json", render_manifest(discovery));
     const auto automatic = prepare_native_providers(system, source, root / "cache");
     expect(automatic.front().provider_fingerprints.size() == 2,
            "native runtime and headers discovered through standard prefix candidates");
+    expect(unpinned.front().provider_fingerprints == automatic.front().provider_fingerprints,
+           "unpinned system assets fingerprint their actual bytes");
     expect(resolve_install_options(system, {{"fixture-prefix", (root / "provider-input").string()}})
                .at(prefix.env) == fs::canonical(root / "provider-input").string(),
            "explicit package path option");

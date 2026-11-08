@@ -96,6 +96,11 @@ sputnik pkg install ./build-manifest-package --version 1.2.0
 `pkg list` reads the local package home and shows each installed version and
 variant.
 
+Registry downloads show progress on terminal stderr. GUI clients can set
+`SPUTNIK_PKG_PROGRESS=1` to receive flushed, newline-separated download
+percentages and preparation messages through a stderr pipe. Redirected output
+stays quiet by default; stdout retains its normal installation results.
+
 A source directory requires one `sputnik.build.yaml`, `sputnik.build.yml`, or
 `sputnik.build.json`. It declares its version, or the caller supplies `--version`.
 Installation builds the normalized tar source distribution and installs it in
@@ -176,9 +181,12 @@ In Notebook, paths refer to the machine that runs the installer.
 
 An exact external native requirement can declare `discovery` as the path
 to a descriptor inside the verified archive. Its provider describes each
-system asset with its package-relative `path`, `sha256` and `sources`
-path candidates. Sputnik matches the provider build identity and verifies the
-file hashes before preparing the adapter. An explicit provider binding via
+system asset with its package-relative `path` and `sources` path candidates.
+An optional `sha256` pins that file to the producer's bytes. Sputnik matches
+the declared provider identity and fingerprints the discovered bytes for its
+cache and process checks, even when the descriptor omits the hash. Omitting
+the hash lets the library loader check the discovered binary at load time.
+An explicit provider binding via
 `SPUTNIK_NATIVE_PROVIDERS` takes priority over discovery.
 
 Exact transitive dependencies are installed from the same registry, reusing

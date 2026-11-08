@@ -242,12 +242,15 @@ DependencyGraph::invalidation_plan(const std::set<CellId> &changed) const {
 
 std::vector<CellId> DependencyGraph::transition_invalidation_plan(
     const DependencyGraph &previous, const std::set<CellId> &changed) const {
-  std::set<CellId> affected;
-  const std::vector<CellId> current_plan = invalidation_plan(changed);
-  affected.insert(current_plan.begin(), current_plan.end());
+  auto roots = changed;
+  // Reordering can select a different provider without editing either cell.
+  for (const auto &[key, provider] : providers_for_reads_) {
+    if (provider != previous.provider_for(key.consumer, key.name))
+      roots.insert(key.consumer);
+  }
   const std::vector<CellId> previous_plan = previous.invalidation_plan(changed);
-  affected.insert(previous_plan.begin(), previous_plan.end());
-  return execution_order(affected);
+  roots.insert(previous_plan.begin(), previous_plan.end());
+  return invalidation_plan(roots);
 }
 
 std::vector<CellId>

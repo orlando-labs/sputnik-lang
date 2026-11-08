@@ -348,9 +348,31 @@ bool notebook_name_pool_has_active_prefix(
   return std::equal(active.begin(), active.end(), candidate.begin());
 }
 
+// Notebook emission extends these pools and appends code/debug records to
+// the linked image. Compare the rest of the module including class, method,
+// and native binding metadata before allowing live Values to cross the swap.
+std::vector<std::uint8_t> notebook_environment_prefix(
+    bytecode::BcModule image, const bytecode::BcModule &environment) {
+  const auto truncate = [](auto &table, const auto &base) {
+    if (table.size() < base.size())
+      throw std::invalid_argument("notebook image dropped an environment table");
+    table.resize(base.size());
+  };
+  truncate(image.strings, environment.strings);
+  truncate(image.symbols, environment.symbols);
+  truncate(image.const_pool, environment.const_pool);
+  truncate(image.code_objects, environment.code_objects);
+  truncate(image.pattern_programs, environment.pattern_programs);
+  truncate(image.line_table, environment.line_table);
+  truncate(image.local_debug, environment.local_debug);
+  image.notebook_metadata.reset();
+  return bytecode::serialize_module(image);
+}
+
 bool validate_notebook_image(
     const std::shared_ptr<const bytecode::BcModule> &image,
-    std::vector<RuntimeNotebookImageDiagnostic> *diagnostics) {
+    std::vector<RuntimeNotebookImageDiagnostic> *diagnostics,
+    const bytecode::BcModule *environment) {
   if (image == nullptr) {
     diagnostics->push_back(notebook_image_diagnostic(
         "NotebookImageError", "notebook image is null"));
@@ -387,14 +409,14 @@ bool validate_notebook_image(
         "NotebookImageError", "notebook image has no code objects"));
     return false;
   }
-  if (image->init.has_entry_code_id) {
+  if (!environment && image->init.has_entry_code_id) {
     diagnostics->push_back(notebook_image_diagnostic(
         "NotebookImageError", "notebook image cannot have module init",
         image->init.entry_code_id));
     return false;
   }
-  if (!image->methods.empty() || !image->classes.empty() ||
-      !image->exports.empty() || !image->dependencies.empty()) {
+  if (!environment && (!image->methods.empty() || !image->classes.empty() ||
+      !image->exports.empty() || !image->dependencies.empty())) {
     diagnostics->push_back(notebook_image_diagnostic(
         "NotebookImageError",
         "notebook image cannot contain classes, methods, exports, or "
@@ -405,7 +427,9 @@ bool validate_notebook_image(
   std::unordered_set<std::uint32_t> handler_targets;
   std::unordered_set<std::uint32_t> closure_targets;
   std::unordered_set<std::uint32_t> code_ids;
-  for (const bytecode::BcCode &code : image->code_objects) {
+  const std::size_t base_size = environment ? environment->code_objects.size() : 0;
+  for (std::size_t index = 0; index < image->code_objects.size(); ++index) {
+    const bytecode::BcCode &code = image->code_objects[index];
     if (code.code_id == 0U) {
       diagnostics->push_back(notebook_image_diagnostic(
           "NotebookImageError", "notebook code id must be non-zero",
@@ -424,6 +448,7 @@ bool validate_notebook_image(
           "NotebookImageError", "duplicate notebook code id", code.code_id));
       return false;
     }
+    if (index < base_size) continue;
     switch (code.kind) {
     case bytecode::CodeKind::NotebookCell:
     case bytecode::CodeKind::Block:
@@ -459,7 +484,8 @@ bool validate_notebook_image(
     }
   }
 
-  for (const bytecode::BcCode &code : image->code_objects) {
+  for (std::size_t index = base_size; index < image->code_objects.size(); ++index) {
+    const bytecode::BcCode &code = image->code_objects[index];
     if (code.kind == bytecode::CodeKind::Block &&
         closure_targets.count(code.code_id) == 0U) {
       diagnostics->push_back(notebook_image_diagnostic(
@@ -2960,7 +2986,8 @@ RuntimeWorld::reload_package_artifact(const pkg::PackageArtifact &artifact) {
 }
 
 RuntimeNotebookImageInstallResult RuntimeWorld::install_notebook_image(
-    std::shared_ptr<const bytecode::BcModule> image) {
+    std::shared_ptr<const bytecode::BcModule> image,
+    const bytecode::BcModule *environment) {
   RuntimeNotebookImageInstallResult result;
   if (impl_ == nullptr) {
     result.diagnostics.push_back(notebook_image_diagnostic(
@@ -3002,15 +3029,37 @@ RuntimeNotebookImageInstallResult RuntimeWorld::install_notebook_image(
       return result;
     }
   }
-  if (!notebook_image_shape_is_safe(*impl_->module)) {
+  if (!environment && !notebook_image_shape_is_safe(*impl_->module)) {
     result.diagnostics.push_back(notebook_image_diagnostic(
         "NotebookImageError",
         "notebook image install requires an existing notebook-safe runtime "
         "world"));
     return result;
   }
-  if (!validate_notebook_image(image, &result.diagnostics)) {
+  if (!validate_notebook_image(image, &result.diagnostics, environment)) {
     return result;
+  }
+  if (environment) {
+    try {
+      auto expected = *environment;
+      expected.file_flags |= bytecode::kFileFlagNotebookOnly;
+      if (expected.format_version.major == 1U && expected.format_version.minor < 1U)
+        expected.format_version.minor = 1U;
+      // The notebook host appends its explicit grants to the linked module.
+      expected.capabilities = impl_->module->capabilities;
+      const auto linked_prefix = bytecode::serialize_module(expected);
+      if (!impl_->module->notebook_metadata || !image->notebook_metadata ||
+          notebook_environment_prefix(*impl_->module, *environment) != linked_prefix ||
+          notebook_environment_prefix(*image, *environment) != linked_prefix) {
+        result.diagnostics.push_back(notebook_image_diagnostic(
+            "NotebookImageError", "notebook module environment changed"));
+        return result;
+      }
+    } catch (const std::exception &error) {
+      result.diagnostics.push_back(notebook_image_diagnostic(
+          "NotebookImageError", error.what()));
+      return result;
+    }
   }
   if (!notebook_name_pool_has_active_prefix(impl_->runtime_strings,
                                             image->strings) ||
@@ -3154,7 +3203,7 @@ RuntimeNotebookImageInstallResult RuntimeWorld::install_notebook_image(
   // Keep the existing state object: its heap, shape storage, watch/dependency
   // bookkeeping, and host root provider are all world-owned state.
   impl_->state->commit_notebook_module_runtime_state(
-      std::move(next_state_runtime));
+      std::move(next_state_runtime), environment != nullptr);
   impl_->native_bridge_session.reset();
   {
     std::lock_guard<std::mutex> pool_guard(

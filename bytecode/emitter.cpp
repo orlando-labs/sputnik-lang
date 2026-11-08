@@ -695,10 +695,22 @@ public:
 
   NotebookEmitResult append_notebook_cell(const hir::Procedure &procedure,
                                           std::uint32_t code_id,
-                                          const std::vector<hir::Procedure> &blocks) {
+                                          const std::vector<hir::Procedure> &blocks,
+                                          const std::vector<std::uint32_t> &helper_code_ids) {
     Emitter checkpoint = this->checkpoint();
     const std::size_t diagnostic_start = diagnostics_.size();
     try {
+      std::vector<std::uint32_t> allocated_helpers;
+      notebook_helper_seed_ = &helper_code_ids;
+      notebook_allocated_helpers_ = &allocated_helpers;
+      std::unordered_set<std::uint32_t> seeded_ids;
+      for (const auto id : helper_code_ids) {
+        if (id == 0 || id == code_id || !seeded_ids.insert(id).second ||
+            std::any_of(module_.code_objects.begin(), module_.code_objects.end(),
+                        [id](const BcCode &code) { return code.code_id == id; }))
+          throw std::invalid_argument("invalid notebook helper code id");
+        reserved_code_ids_.insert(id);
+      }
       // The cell's code object is appended only after CodeEmitter has walked
       // the procedure. Reserve its explicit ID first so helpers emitted while
       // lowering try/rescue/ensure cannot claim the cell's ID.
@@ -736,7 +748,10 @@ public:
            ++index) {
         diagnostics.push_back(diagnostics_[index]);
       }
-      NotebookEmitResult result{code_index, std::move(diagnostics)};
+      notebook_helper_seed_ = nullptr;
+      notebook_allocated_helpers_ = nullptr;
+      NotebookEmitResult result{code_index, std::move(diagnostics),
+                                std::move(allocated_helpers)};
       if (!result.ok()) {
         // Return diagnostics from the failed attempt, but publish none of its
         // module, interning, pattern, cache-site, or sidecar mutations.
@@ -1180,6 +1195,12 @@ private:
   }
 
   std::uint32_t allocate_code_id() {
+    if (notebook_helper_seed_ &&
+        notebook_allocated_helpers_->size() < notebook_helper_seed_->size()) {
+      const auto id = (*notebook_helper_seed_)[notebook_allocated_helpers_->size()];
+      notebook_allocated_helpers_->push_back(id);
+      return id;
+    }
     while (next_code_id_ != 0 && code_id_in_use(next_code_id_)) {
       if (next_code_id_ == std::numeric_limits<std::uint32_t>::max()) {
         return 0;
@@ -1189,7 +1210,9 @@ private:
     if (next_code_id_ == 0) {
       return 0;
     }
-    return next_code_id_++;
+    const auto id = next_code_id_++;
+    if (notebook_allocated_helpers_) notebook_allocated_helpers_->push_back(id);
+    return id;
   }
 
   void append_local_debug(const hir::Procedure &procedure, const BcCode &code) {
@@ -1802,6 +1825,8 @@ private:
   std::unordered_map<std::string, std::string> class_superclasses_;
   std::unordered_map<std::string, std::uint32_t> class_ancestry_flags_;
   std::unordered_set<std::uint32_t> reserved_code_ids_;
+  const std::vector<std::uint32_t> *notebook_helper_seed_ = nullptr;
+  std::vector<std::uint32_t> *notebook_allocated_helpers_ = nullptr;
   std::uint32_t next_code_id_ = 1;
   std::string numeric_int_type_ = "Int64";
   std::string numeric_overflow_ = "checked";
@@ -5295,7 +5320,8 @@ NotebookEmitResult
 NotebookEmitter::append_cell(const hir::Procedure &procedure,
                              std::uint32_t code_id,
                              const std::string &module_name,
-                             const std::vector<hir::Procedure> &blocks) {
+                             const std::vector<hir::Procedure> &blocks,
+                             const std::vector<std::uint32_t> &helper_code_ids) {
   if (impl_ == nullptr) {
     impl_ = std::make_unique<Impl>();
   }
@@ -5305,7 +5331,7 @@ NotebookEmitter::append_cell(const hir::Procedure &procedure,
     // argument in the public API for future qualified references.
     (void)module_name;
   }
-  return impl_->emitter.append_notebook_cell(procedure, code_id, blocks);
+  return impl_->emitter.append_notebook_cell(procedure, code_id, blocks, helper_code_ids);
 }
 
 void NotebookEmitter::reserve_code_ids(const std::vector<std::uint32_t> &ids) {

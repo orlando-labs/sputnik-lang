@@ -258,5 +258,5 @@ void save_project_module_session(Session *session,
   }
   session->document_dirty = false;
   session->status =
-      "module source saved; Run validates it in an isolated runtime";
+      "module source saved; Check Module validates it without execution";
 }

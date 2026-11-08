@@ -2,6 +2,7 @@ include mk/isputnik-sources.mk
 
 ISPUTNIK_SRCS := $(ISPUTNIK_SESSION_SRCS) tools/isputnik/terminal_wait.cpp
 ISPUTNIK_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/obj/%.o,$(ISPUTNIK_SRCS))
+$(BUILD_DIR)/obj/tools/isputnik/essentials.o: CPPFLAGS += '-DSPUTNIK_NOTEBOOK_ESSENTIALS_DIR="$(abspath packages/notebook_ui)"'
 ISPUTNIK_LIBRARY := $(BUILD_DIR)/libisputnik.a
 ISPUTNIK_LDLIBS ?= -lncurses
 ISPUTNIK_TEST_BINS := $(addprefix $(BUILD_DIR)/,$(ISPUTNIK_TEST_NAMES))

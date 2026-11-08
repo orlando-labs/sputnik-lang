@@ -467,8 +467,22 @@
         display.bytes = notebook_table_snapshot(rows, &module_, &runtime_strings_, &runtime_symbols_, &names);
         if (display.bytes.empty()) throw std::invalid_argument("invalid DataTableView columns or rows");
       } else {
-      if (name != "plot.Figure" && name != "plot.Figure3D" && name != "plot.Rendered")
-        throw std::invalid_argument("notebook.show object is not an plot figure");
+      std::string plot_type;
+      if (name == "plot.Figure" || name == "plot.Figure3D" || name == "plot.Rendered") {
+        plot_type = name.substr(5);
+      } else {
+        constexpr std::string_view prefix = "sputnik.notebook.plot_type:";
+        for (const auto &attr : module_.attrs) {
+          const auto key = string_or_empty(attr.key_str_id);
+          if (key.compare(0, prefix.size(), prefix) == 0 &&
+              string_or_empty(attr.value_str_id) == name) {
+            plot_type = key.substr(prefix.size());
+            break;
+          }
+        }
+      }
+      if (plot_type != "Figure" && plot_type != "Figure3D" && plot_type != "Rendered")
+        throw std::invalid_argument("notebook.show expects a figure or PNG Rendered from the selected plot provider");
       const auto width = instance_ivar_value_or_null(object, "width");
       const auto height = instance_ivar_value_or_null(object, "height");
       if (!width.is_integer() || !height.is_integer() || width.as_integer() <= 0 || height.as_integer() <= 0 ||
@@ -477,7 +491,7 @@
       display.width = static_cast<std::uint32_t>(width.as_integer());
       display.height = static_cast<std::uint32_t>(height.as_integer());
       Value png;
-      if (name == "plot.Rendered") {
+      if (plot_type == "Rendered") {
         png = instance_ivar_value_or_null(object, "bytes");
         const auto mime = string_text_from_value(instance_ivar_value_or_null(object, "mime"));
         if (!mime || *mime != "image/png") throw std::invalid_argument("notebook.show Rendered must be PNG; use render(format: :png)");
@@ -503,7 +517,7 @@
       if (data.size() < 33 || data.compare(0, 8, "\x89PNG\r\n\x1a\n", 8) != 0 ||
           data.compare(12, 4, "IHDR") != 0 || u32(16) != display.width || u32(20) != display.height)
         throw std::invalid_argument("plot returned an invalid or mismatched PNG");
-      if (name == "plot.Figure") {
+      if (plot_type == "Figure") {
         const auto *scene_method = find_method_for_dispatch(frame, object->class_index, "notebook_scene", kMethodFlagInstance);
         if (fault_) return SendStatus::Faulted;
         if (scene_method) {

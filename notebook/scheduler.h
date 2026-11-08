@@ -47,7 +47,7 @@ std::vector<EvaluationStep> plan_automatic_evaluation(
 std::vector<EvaluationStep> plan_transition_evaluation(
     const DependencyGraph &graph, const DependencyGraph &previous,
     const std::vector<CellSource> &cells, const std::set<CellId> &changed,
-    bool force_all = false);
+    bool force_all = false, const std::set<CellId> &other_edits = {});
 
 std::vector<EvaluationStep>
 plan_transition_evaluation(const DependencyGraph &graph,

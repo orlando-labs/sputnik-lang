@@ -43,6 +43,7 @@ public:
   void create_sheet(const std::string &id, const std::string &title = {});
   void rename_sheet(const std::string &id, const std::string &title);
   void create_module(const std::string &id);
+  void rename_module(const std::string &id, const std::string &name);
   bool set_auto_import(const std::string &module_id, bool enabled);
   bool apply_active(bool force_all = false, bool show_running = false,
                     const EvaluationProgress &progress = {});

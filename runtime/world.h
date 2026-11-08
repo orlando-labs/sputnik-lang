@@ -499,16 +499,15 @@ public:
   // Atomically replace the immutable notebook-only bytecode image while
   // retaining this world's RuntimeState, heap, host root provider, and
   // options. The image must contain no module init, classes, methods, exports,
-  // dependencies, or ordinary executable entry points. Rescue/Ensure code is
-  // allowed only as internal handler targets; closure/block code is rejected.
+  // dependencies, or ordinary executable entry points unless an unchanged
+  // linked environment is supplied. In that case only the appended notebook
+  // code and its tables may change. Existing module bindings are preserved.
   // Its string/symbol pools must retain the current runtime tables as exact
   // prefixes so host-owned slot Values keep their numeric name IDs across the
   // swap. New names may be appended by a compiler seeded from that snapshot.
-  // The current world must already have the same notebook-only shape; this
-  // deliberately excludes swapping an ordinary/native world while an
-  // out-of-lock bridge task may still hold its old image.
   RuntimeNotebookImageInstallResult
-  install_notebook_image(std::shared_ptr<const bytecode::BcModule> image);
+  install_notebook_image(std::shared_ptr<const bytecode::BcModule> image,
+                         const bytecode::BcModule *environment = nullptr);
   RuntimeNotebookImageNameSeed notebook_image_name_seed() const;
   RuntimeCapabilityCheckResult
   check_capability(const std::string &capability,

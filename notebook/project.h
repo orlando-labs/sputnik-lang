@@ -259,4 +259,11 @@ LoadedProjectModule create_project_module(LoadedProject *project,
                                           const ProjectModule &entry,
                                           const std::string &source);
 
+// Publish the renamed source before its manifest mapping, then remove the old
+// member. The new filename uses id with the existing directory and extension.
+// Source conflicts and existing destinations are rejected without replacement.
+// Baselines advance at manifest commit, including on a later cleanup failure.
+void rename_project_module(LoadedProject *project, LoadedProjectModule *module,
+                           const std::string &id, const std::string &source);
+
 } // namespace sputnik::notebook

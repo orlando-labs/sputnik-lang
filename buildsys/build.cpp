@@ -1351,10 +1351,12 @@ void read_package_fields(const JsonValue &root, const std::string &path,
           text(asset, "path", file.path);
           text(asset, "sha256", file.sha256);
           strings(asset, "sources", file.sources);
-          if (!safe_path(file.path) || file.sha256.size() != 64 ||
-              file.sha256.find_first_not_of("0123456789abcdef") != std::string::npos ||
-              file.sources.empty() || file.sources.size() > 32)
-            error("system files require a safe path, SHA-256 and source candidates");
+          if (!safe_path(file.path) || file.sources.empty() || file.sources.size() > 32)
+            error("system files require a safe path and source candidates");
+          if (member(asset, "sha256") &&
+              (file.sha256.size() != 64 ||
+               file.sha256.find_first_not_of("0123456789abcdef") != std::string::npos))
+            error("system file SHA-256 must be a lowercase hex digest");
           value.system_files.push_back(std::move(file));
         }
       }

@@ -289,6 +289,15 @@ void test_system_in_persistent_notebook() {
   evaluate_from(&denied, 0, true, false, false);
   expect(!denied.cells[0].ok && denied.cells[0].error.find("CapabilityError") != std::string::npos,
          "notebook process creation must still require an explicit grant");
+  denied.runtime_capability_grants = {
+      sputnik::capability::make_capability("process.spawn", "/usr/bin/printf")};
+  evaluate_from(&denied, 0, true, false, false);
+  expect(denied.cells[0].ok && denied.cells[0].result == "\"single\"",
+         "adding a grant must rebuild an unchanged notebook runtime");
+  denied.runtime_capability_grants.clear();
+  evaluate_from(&denied, 0, true, false, false);
+  expect(!denied.cells[0].ok && denied.cells[0].error.find("CapabilityError") != std::string::npos,
+         "revoking a grant must not retain the previous runtime permissions");
 
   Session watch;
   watch.runtime_capability_grants = {

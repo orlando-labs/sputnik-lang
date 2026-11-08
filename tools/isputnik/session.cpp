@@ -45,6 +45,7 @@ struct SessionBackend {
   std::map<std::string, std::map<std::string, std::string>> import_paths;
   sputnik::frontend::ImportAliases import_aliases;
   std::vector<BundledModuleSource> bundled_sources;
+  std::vector<sputnik::runtime::RuntimeCapabilityGrant> capability_grants;
   // The curses session and its progress callbacks run on the UI thread.
   // These flags prevent recursive pumping there; they are not a cross-thread
   // synchronization primitive.
@@ -774,6 +775,7 @@ build_backend(const std::vector<sputnik::notebook::CellSource> &sources,
   BackendBuildResult result;
   auto candidate = std::make_unique<SessionBackend>();
   candidate->sources = sources;
+  candidate->capability_grants = grants;
   if (previous != nullptr) {
     candidate->code_ids = previous->code_ids;
     candidate->next_code_id = previous->next_code_id;
@@ -2447,6 +2449,18 @@ void evaluate_from_with_progress(Session *session, std::size_t start,
     if (cell.id == 0) {
       cell.id = sputnik::notebook::allocate_cell_id();
     }
+  }
+
+  // Grants are RuntimeWorld options. A source-only image swap cannot apply
+  // additions or revocations to a live world, even when the source is unchanged.
+  if (session->backend && !std::equal(
+          session->backend->capability_grants.begin(), session->backend->capability_grants.end(),
+          session->runtime_capability_grants.begin(), session->runtime_capability_grants.end(),
+          [](const auto &left, const auto &right) {
+            return left.name == right.name && left.target == right.target &&
+                   left.reason == right.reason && left.flags == right.flags;
+          })) {
+    session->backend.reset();
   }
 
   if (uses_console_definitions(*session)) {

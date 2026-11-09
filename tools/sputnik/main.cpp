@@ -30027,6 +30027,24 @@ int run_pkg_command(int argc, char **argv) {
     confirmed_policies[fetched.canonical_ref] = fetched.policy;
     return fetched;
   };
+  const auto reuse_native_dependency = [&](const auto &dependency, auto selected_policy)
+      -> std::optional<sputnik::pkg::LocatedPackage> {
+    if (selected_policy.allow_native) return std::nullopt;
+    selected_policy.allow_native = true;
+    fs::path path;
+    try {
+      path = sputnik::pkg::find_registry_package(home, dependency.name,
+                                                dependency.version, selected_policy);
+    } catch (const std::runtime_error &) {
+      return std::nullopt;
+    }
+    const auto candidate = sputnik::pkg::read_package(path, signing_key);
+    if (!candidate.distribution || !sputnik::pkg::package_has_native(candidate.manifest))
+      return std::nullopt;
+    return sputnik::pkg::find_installed_distribution(home, candidate.manifest.name,
+        candidate.manifest.version, candidate.manifest.variant, candidate.digest,
+        sputnik::pkg::remote_registry(registry) ? registry : "");
+  };
   std::map<std::string, std::string> installed;
   std::set<std::string> installing;
   std::function<void(fs::path, const std::string &, const std::string &,
@@ -30058,6 +30076,8 @@ int run_pkg_command(int argc, char **argv) {
           selected_policy.allow_native = confirmed->second.allow_native;
           selected_policy.build_from_source = confirmed->second.build_from_source;
         }
+        // Verified installations can satisfy dependencies without preparing native code again.
+        if (existing && !primary) selected_policy.allow_native = true;
         const auto incompatible = sputnik::pkg::package_incompatibility(package.manifest, sputnik::pkg::probe_package_host(selected_policy.backend == "auto" || selected_policy.backend == "mps" || sputnik::pkg::package_gpu_backend(selected_policy.backend) || sputnik::pkg::package_gpu_backend(package.manifest.target.compute_backend)), selected_policy);
         if (!package.artifact && !incompatible.empty()) throw std::runtime_error("NO_COMPATIBLE_ARTIFACT: " + incompatible);
         const auto pin = pins.find(name);
@@ -30077,26 +30097,31 @@ int run_pkg_command(int argc, char **argv) {
         for (const auto &dependency : dependencies) {
           fs::path dependency_path;
           std::string dependency_name = dependency.name;
-          sputnik::pkg::RegistryDownload fetched;
+          const auto dependency_policy = install_policy(dependency.name, false);
+          std::optional<sputnik::pkg::LocatedPackage> prepared;
           try {
             dependency_path = sputnik::pkg::find_registry_package(
-                home, dependency.name, dependency.version, install_policy(dependency.name,false));
+                home, dependency.name, dependency.version, dependency_policy);
           } catch (const std::exception &) {
-            if (sputnik::pkg::remote_registry(registry)) {
-              fetched = download(dependency.name, dependency.version,false);
+            prepared = reuse_native_dependency(dependency, dependency_policy);
+            if (prepared) {
+              dependency_path = prepared->artifact_path;
+            } else if (sputnik::pkg::remote_registry(registry)) {
+              auto fetched = download(dependency.name, dependency.version, false);
               dependency_path = fetched.path;
               dependency_name = fetched.canonical_ref;
+              prepared = std::move(fetched.installed);
             } else dependency_path = sputnik::pkg::find_registry_package(
-                  registry, dependency.name, dependency.version, install_policy(dependency.name,false));
+                  registry, dependency.name, dependency.version, dependency_policy);
           }
           if (!dependency.checksum.empty()) {
-            const auto candidate = fetched.installed && signing_key.empty()
-                ? *fetched.installed : sputnik::pkg::read_package(dependency_path, signing_key);
+            const auto candidate = prepared && signing_key.empty()
+                ? *prepared : sputnik::pkg::read_package(dependency_path, signing_key);
             if (!candidate.artifact && candidate.digest != dependency.checksum)
               throw std::runtime_error("package dependency checksum differs: " + dependency.name);
           }
           install(dependency_path, dependency_name, dependency.version,
-                  fetched.installed ? &*fetched.installed : nullptr, false, false);
+                  prepared ? &*prepared : nullptr, false, false);
         }
         if (existing) {
           installing.erase(name);

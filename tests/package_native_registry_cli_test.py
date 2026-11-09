@@ -127,6 +127,18 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         assert 'NO_COMPATIBLE_ARTIFACT: test/native@1.0.0' in denied
         assert 'native package requires --allow-native' in denied
         assert state['downloads']==0
+        consumer = root/'consumer'
+        consumer.mkdir()
+        (consumer/'main.s').write_text('package test.consumer\n')
+        (consumer/'sputnik.build.yaml').write_text(json.dumps(dict(
+            name='test/consumer', version='1.0.0', files=['main.s'],
+            module_names={'main.s': 'test.consumer'},
+            dependencies={'test/native': '1.0.0'})))
+        consumer_artifact = root/'consumer.sputnikpkg'
+        cli('pkg', 'build', consumer, '--out', consumer_artifact)
+        install_consumer = ('pkg', 'install', consumer_artifact, '--registry', origin)
+        assert 'native package requires --allow-native' in cli(*install_consumer, ok=False)
+        assert state['downloads'] == 0
         declined = interactive_install('')
         assert 'Install test/native@1.0.0 (cpu-a,' in declined
         assert 'Contains native code' in declined and 'Installation cancelled' in declined
@@ -149,6 +161,17 @@ with tempfile.TemporaryDirectory(prefix='sputnik-native-registry-') as temporary
         accepted = interactive_install('y')
         assert 'Install test/native@1.0.0 (cpu-a,' in accepted
         assert 'Installed test/native@1.0.0' in accepted and state['downloads'] == 1
+        assert 'Already installed test/native@1.0.0 (cpu-a)' in cli(*install_consumer)
+        assert state['downloads'] == 1
+        cli('pkg', 'remove', 'test/consumer', '--version', '1.0.0')
+        inventory = root/'home/test/native/1.0.0/cpu-a/native-files.meta'
+        original_inventory = inventory.read_bytes()
+        try:
+            inventory.unlink()
+            assert 'missing/invalid prepared native inventory' in cli(*install_consumer, ok=False)
+            assert state['downloads'] == 1
+        finally:
+            inventory.write_bytes(original_inventory)
         reused = interactive_install('')
         assert 'Already installed test/native@1.0.0 (cpu-a)' in reused
         assert 'No update available.' in reused

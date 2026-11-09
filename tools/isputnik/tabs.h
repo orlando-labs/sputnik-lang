@@ -42,6 +42,7 @@ public:
   // Creation selects a new stable tab; existing Sessions are never replaced.
   void create_sheet(const std::string &id, const std::string &title = {});
   void rename_sheet(const std::string &id, const std::string &title);
+  void delete_sheet(const std::string &id, const std::string &blank_id);
   void create_module(const std::string &id);
   void rename_module(const std::string &id, const std::string &name);
   bool set_auto_import(const std::string &module_id, bool enabled);
@@ -76,6 +77,7 @@ public:
 private:
   void require_idle() const;
   void attach_new_tab(ProjectTab *tab);
+  std::unique_ptr<ProjectTab> make_sheet_tab(const sputnik::notebook::ProjectSheet &sheet);
   sputnik::notebook::LoadedProject project_;
   SessionActivityChannel activity_;
   std::vector<std::unique_ptr<ProjectTab>> tabs_;

@@ -5,6 +5,7 @@
 #include "frontend/lexer/lexer.h"
 
 #include <algorithm>
+#include <charconv>
 #include <functional>
 #include <exception>
 #include <iterator>
@@ -16,6 +17,18 @@
 #include <utility>
 
 namespace {
+
+constexpr const char *CellIDHighWater = "cell_id_high_water";
+
+sputnik::notebook::CellId cell_id_high_water(const sputnik::notebook::ProjectDocument &document) {
+  const auto saved = document.extra.find(CellIDHighWater);
+  if (saved == document.extra.end()) return 0;
+  const auto &text = saved->second;
+  sputnik::notebook::CellId id = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), id);
+  return result.ec == std::errc{} && result.ptr == text.data() + text.size() &&
+         id != std::numeric_limits<sputnik::notebook::CellId>::max() ? id : 0;
+}
 
 void validate_new_tab_id(const std::string &id) {
   const auto start = [](char ch) {
@@ -104,6 +117,7 @@ ProjectTabs::ProjectTabs(sputnik::notebook::LoadedProject project,
         "initial_sheet and initial_module are mutually exclusive");
   }
   sputnik::notebook::validate_project_document(project_.document);
+  if (const auto id = cell_id_high_water(project_.document)) sputnik::notebook::reserve_cell_id(id);
   inputs_ = sputnik::notebook::project_input_defaults(project_.document);
 
   tabs_.reserve(project_.document.sheets.size() +
@@ -879,6 +893,20 @@ void ProjectTabs::rename_sheet(const std::string &id, const std::string &title) 
     tab->session.project_label = next.title + "/" + title;
 }
 
+std::unique_ptr<ProjectTab> ProjectTabs::make_sheet_tab(const sputnik::notebook::ProjectSheet &sheet) {
+  auto tab = std::make_unique<ProjectTab>();
+  tab->session.project_sheet_id = sheet.id;
+  tab->session.project_label = project_.document.title + "/" + sheet.title;
+  // A new sheet starts from the last applied environment without initializing a VM.
+  tab->session.bundled_modules = environment_sources_;
+  Cell cell;
+  cell.id = sheet.cells.front().id;
+  tab->session.cells.push_back(std::move(cell));
+  tab->session.status = "sheet created; structure saved; not evaluated";
+  attach_new_tab(tab.get());
+  return tab;
+}
+
 void ProjectTabs::create_sheet(const std::string &id, const std::string &title) {
   require_idle();
   validate_new_tab_id(id);
@@ -892,17 +920,7 @@ void ProjectTabs::create_sheet(const std::string &id, const std::string &title) 
   next.sheets.push_back(sheet);
   sputnik::notebook::validate_project_document(next);
 
-  auto tab = std::make_unique<ProjectTab>();
-  tab->session.project_sheet_id = id;
-  tab->session.project_label = next.title + "/" + sheet.title;
-  // New sheets start at the project's last applied source snapshot. Structure
-  // edits (including auto-import settings) never initialize a candidate world.
-  tab->session.bundled_modules = environment_sources_;
-  Cell cell;
-  cell.id = saved_cell.id;
-  tab->session.cells.push_back(std::move(cell));
-  tab->session.status = "sheet created; structure saved; not evaluated";
-  attach_new_tab(tab.get());
+  auto tab = make_sheet_tab(sheet);
   tabs_.reserve(tabs_.size() + 1U);
   const std::size_t index = project_.document.sheets.size();
   const auto publish = [&] {
@@ -920,6 +938,56 @@ void ProjectTabs::create_sheet(const std::string &id, const std::string &title) 
     if (project_.document.sheets.size() == index + 1U &&
         project_.document.sheets.back().id == id)
       publish();
+    throw;
+  }
+  publish();
+}
+
+void ProjectTabs::delete_sheet(const std::string &id, const std::string &blank_id) {
+  require_idle();
+  auto next = project_.document;
+  const auto found = std::find_if(next.sheets.begin(), next.sheets.end(),
+                                  [&](const auto &sheet) { return sheet.id == id; });
+  if (found == next.sheets.end()) throw std::invalid_argument("unknown sheet: " + id);
+  const auto index = static_cast<std::size_t>(found - next.sheets.begin());
+  // Keep future native allocations above removed cells even after reopening.
+  // A remote notebook retains tombstones for these identities.
+  auto high_water = cell_id_high_water(next);
+  for (const auto &cell : found->cells) high_water = std::max(high_water, cell.id);
+  for (const auto &cell : tabs_[index]->session.cells) high_water = std::max(high_water, cell.id);
+  if (high_water) next.extra[CellIDHighWater] = std::to_string(high_water);
+  next.sheets.erase(found);
+  const bool replacing_last = next.sheets.empty();
+
+  std::unique_ptr<ProjectTab> blank;
+  if (replacing_last) {
+    validate_new_tab_id(blank_id);
+    if (blank_id == id) throw std::invalid_argument("A replacement sheet needs a new ID.");
+    auto sheet = sputnik::notebook::make_project_document(next.title).sheets.front();
+    sheet.id = blank_id;
+    sheet.title = "Sheet 1";
+    blank = make_sheet_tab(sheet);
+    next.sheets.push_back(std::move(sheet));
+  }
+  const auto replacement = std::min(index, next.sheets.size() - 1);
+  const auto &replacement_id = next.sheets[replacement].id;
+  if (next.active_sheet == id) next.active_sheet = replacement_id;
+  for (auto &board : next.boards) if (board.sheet == id) board.sheet = replacement_id;
+
+  const auto publish = [&] {
+    tabs_[index]->session.close_activity();
+    if (blank) tabs_[index] = std::move(blank);
+    else tabs_.erase(tabs_.begin() + index);
+    if (selected_ == index) selected_ = replacement;
+    else if (selected_ > index && !replacing_last) --selected_;
+    for (const auto &tab : tabs_) if (!tab->module)
+      tab->session.project_audio = sputnik::notebook::project_audio_components(project_.document, tab->session.project_sheet_id);
+  };
+  try {
+    sputnik::notebook::save_project(&project_, next);
+  } catch (...) {
+    const auto &saved = project_.document.sheets;
+    if (std::none_of(saved.begin(), saved.end(), [&](const auto &sheet) { return sheet.id == id; })) publish();
     throw;
   }
   publish();

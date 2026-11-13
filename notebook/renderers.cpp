@@ -5,6 +5,7 @@
 #include <mutex>
 extern "C" SputnikStatus sputnik_plot_render_png(SputnikCtx *, const SputnikValue *, size_t, SputnikValue *);
 extern "C" SputnikStatus sputnik_plot_render_3d_png(SputnikCtx *, const SputnikValue *, size_t, SputnikValue *);
+extern "C" SputnikStatus sputnik_plot_decode_image(SputnikCtx *, const SputnikValue *, size_t, SputnikValue *);
 #endif
 
 namespace sputnik::notebook {
@@ -15,6 +16,7 @@ void register_builtin_renderers() {
     auto &registry = sputnik::runtime::NativeExtRegistry::global();
     registry.register_thunk("plot.render_png", reinterpret_cast<void *>(&sputnik_plot_render_png));
     registry.register_thunk("plot.render_3d_png", reinterpret_cast<void *>(&sputnik_plot_render_3d_png));
+    registry.register_thunk("plot.decode_image", reinterpret_cast<void *>(&sputnik_plot_decode_image));
   });
 #endif
 }

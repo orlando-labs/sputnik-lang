@@ -319,6 +319,7 @@ struct RuntimeNotebookCellContext {
   ObserveSlot observe_slot;
   ObserveDependency observe_dependency;
   GcRoots gc_roots;
+  std::function<std::map<std::string, Value>()> export_values;
   RuntimeDependencyCaptureRequest dependency_capture;
   // Runtime-owned, closed when the root notebook execution returns.
   std::shared_ptr<NotebookDisplayCollector> display_collector;
@@ -436,6 +437,7 @@ struct ExecutionResult {
   // cells retain their last accepted count/frame separately from slot commits.
   std::vector<NotebookLiveEvent> live_events;
   std::set<std::string> input_dependencies;
+  NotebookExports notebook_exports;
   // Native bridge calls may return only an append-only suffix. Callers apply
   // each non-empty vector at its offset; ordinary execute results use offset
   // zero and therefore retain their full-table semantics.

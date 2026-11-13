@@ -404,9 +404,14 @@ CellCompileResult compile_cell(const CellSource &cell,
 
   std::map<SourceKey, std::uint32_t> external_descriptors;
   std::map<SourceKey, std::string> external_constant_paths;
+  std::set<SourceKey> sheet_imports;
   std::map<std::string, std::uint32_t> output_descriptors;
   try {
     for (const ExternalReadRef &read : analysis.external_read_refs) {
+      if (cell.sheet_imports.count(read.name)) {
+        sheet_imports.insert(source_key(read.span, read.name));
+        continue;
+      }
       const std::optional<BindingKey> provider =
           graph.provider_for(cell.id, read.name);
       if (!provider.has_value()) {
@@ -468,6 +473,9 @@ CellCompileResult compile_cell(const CellSource &cell,
 
   hir::NotebookLoweringOptions lowering_options;
   lowering_options.import_paths = &options.import_paths;
+  lowering_options.sheet_import = [&sheet_imports](const std::string &name, const lexer::Span &span) {
+    return sheet_imports.count(source_key(span, name)) != 0;
+  };
   lowering_options.external_read_descriptor =
       [&external_descriptors](
           const std::string &name,

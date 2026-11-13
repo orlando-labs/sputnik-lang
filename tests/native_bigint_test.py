@@ -55,7 +55,7 @@ print "PASS BigInt arithmetic oracle"
 ''')
     vm = run(compiler, 'run', source)
     binary = directory / 'native-bigint'
-    report = json.loads(run(compiler, 'build', source, '--entry', 'init',
+    report = json.loads(run(compiler, 'build', source, '--target', 'native-debug', '--entry', 'init',
                             '--require-full-native', '-o', binary))
     assert report['native_full_coverage'] is True, report
     assert report['bytecode_fallback'] is False, report

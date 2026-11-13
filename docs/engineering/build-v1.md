@@ -130,14 +130,36 @@ compiled stdlib ABI hashes.
 ```sh
 sputnik build sputnik.build.json --out-dir build/sputnik --cache-dir build/sputnik/.cache
 sputnik build src/main.s -o build/main
+sputnik emit-cpp src/main.s -o main.cpp
 ```
 
 Manifest builds emit `sputnik.build.result.v2` JSON with per-module source
 hashes, cache keys, artifact hashes, ABI hashes, output paths, native sidecar
-metadata, and cache-hit state. The default target is `both`: `.sputnikbc`
-artifacts remain deterministic cacheable sidecars, and the root module also
-gets a host native executable at `<out-dir>/<root-module>`. Use
-`--target bytecode` for bytecode-only builds.
+metadata, and cache-hit state. The default target is `native`: only the host
+executable at `<out-dir>/<root-module>` (or `-o <path>`) is retained. Intermediate
+bytecode, generated C++, extension objects, compiler reports and LLVM files
+are removed on success or failure. The executable is published atomically after
+compilation and symbol validation, preserving an existing output if compilation
+fails. Use `--target bytecode` for bytecode-only builds or `--target both` to
+retain bytecode alongside the executable. An explicit `--cache-dir` is retained.
+
+`sputnik emit-cpp <source|manifest> [-o <path>]` emits only C++, without locating
+or invoking a C++ compiler. A source defaults to `<source-stem>.cpp`; a manifest
+defaults to `<root-module>.cpp` beside the manifest. Source entry modes and
+capability grants match `build`. `build --target native-debug` retains generated
+source, compilation reports and other intermediates for backend diagnostics.
+The ordinary build's `native_source` field is empty because no C++ file remains.
+
+`make` ships `libsputnik_rt.a` and its compatibility key beside `sputnik`, reusing
+the runtime objects already compiled for the interpreter. Native builds compare
+compiler identity, flags, source/header contents and Value representation before
+using this archive. A different toolchain or changed runtime uses the external
+`SPUTNIK_NATIVE_RT_CACHE` (default `~/.cache/sputnik/native-rt`). Successful runtime
+compilation is quiet; failures retain compiler diagnostics and are not retried
+by recompiling every runtime source on the final link command. Source-build JSON
+reports `native_runtime_prepare_ms`, `native_compile_link_ms`, and binary bytes.
+Native provider libraries needed at execution time use a persistent provider
+cache, never the disposable program build directory.
 
 `sputnik run <manifest>` always executes the Sputnik graph in the bytecode VM.
 Missing source-module dependencies are resolved from the adjacent `packages/`
@@ -170,7 +192,7 @@ lock update. Immutable installed artifacts retain checksum verification.
 
 Build summaries expose absolute `inputs`: project/package source files,
 external template inputs, package manifests and native source/header inputs.
-Configured source entries and manifest VM runs also write that summary to `<SPUTNIK_VM_CACHE>/inputs.json`
+Configured source VM runs and manifest VM runs also write that summary to `<SPUTNIK_VM_CACHE>/inputs.json`
 (default `<manifest-directory>/.sputnik/vm/inputs.json`) for development tools.
 Watchers need not infer the dependency graph from the consumer's `modules`.
 
@@ -219,7 +241,7 @@ Automatic selection falls back to serial compilation when tools are unavailable;
 small programs and macOS keep the existing serial path. Explicit parallel builds
 also work for small programs, which is useful for equivalence tests.
 
-The driver writes `<generated-source>.compile.json` with the compilation mode,
+With `--target native-debug`, the driver writes `<generated-source>.compile.json` with the compilation mode,
 optimization level, worker/partition counts and compile/link wall time. LLVM
 intermediates and the ThinLTO cache live under `<generated-source>.llvm/` in the
 build directory. The build remains usable without Python; the optional

@@ -1,6 +1,11 @@
 .DEFAULT_GOAL := all
 include mk/config.mk
 
+.PHONY: test-native-build-cli
+test-native-build-cli: $(BUILD_DIR)/sputnik
+	python3 tests/native_build_cli_test.py $(BUILD_DIR)/sputnik
+test: test-native-build-cli
+
 $(BUILD_DIR)/language_version_tests: tests/language_version_tests.cpp runtime/version.h runtime/semver.h
 	@mkdir -p "$(@D)"
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $< -o $@
@@ -122,6 +127,12 @@ SPUTNIKTEST_SRCS := tools/sputniktest/main.cpp $(CORE_SRCS) $(RUNTIME_SRCS) $(PA
 LIB_SRCS := $(sort $(CORE_SRCS) $(RUNTIME_SRCS) $(PACKAGE_SRCS) $(FROZEN_SRCS) $(FROZEN_RUNTIME_SRCS))
 LIB_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/obj/%.o,$(LIB_SRCS))
 LIBRARY := $(BUILD_DIR)/libsputnik.a
+NATIVE_RUNTIME_SRCS := $(shell sed -n 's/^SPUTNIK_NATIVE_SOURCE("\(.*\)")/\1/p' tools/sputnik/native_runtime_sources.inc)
+NATIVE_RUNTIME_OBJS := $(patsubst %.cpp,$(BUILD_DIR)/obj/%.o,$(NATIVE_RUNTIME_SRCS))
+NATIVE_RUNTIME_LIBRARY := $(BUILD_DIR)/libsputnik_rt.a
+# Native executables discard unused runtime functions, including on ELF hosts.
+$(NATIVE_RUNTIME_OBJS): CXXFLAGS += -ffunction-sections -fdata-sections
+$(NATIVE_RUNTIME_OBJS): Makefile mk/config.mk
 runtime: $(LIBRARY)
 .PHONY: test-config-document
 $(BUILD_DIR)/config_document_tests: $(BUILD_DIR)/obj/tests/config_document_tests.o $(LIBRARY)
@@ -133,6 +144,9 @@ $(BUILD_DIR)/obj/%.o: %.cpp
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -MMD -MP -c $< -o $@
 $(LIBRARY): $(LIB_OBJS)
 	$(AR) rcs $@ $^
+$(NATIVE_RUNTIME_LIBRARY): $(NATIVE_RUNTIME_OBJS) tools/sputnik/native_runtime_sources.inc
+	$(AR) rcs $@.tmp $(NATIVE_RUNTIME_OBJS)
+	mv $@.tmp $@
 -include $(LIB_OBJS:.o=.d) $(wildcard $(BUILD_DIR)/obj/tools/*/*.d) $(wildcard $(BUILD_DIR)/obj/tests/*.d)
 include mk/isputnik.mk
 LEXER_TEST_SRCS := tests/lexer_tests.cpp $(LEXER_SRCS)
@@ -367,8 +381,10 @@ $(BUILD_DIR)/.dir:
 	touch $(BUILD_DIR)/.dir
 
 
-$(BUILD_DIR)/sputnik: $(BUILD_DIR)/obj/tools/sputnik/main.o $(LIBRARY) | $(BUILD_DIR)/.dir
+$(BUILD_DIR)/sputnik: $(BUILD_DIR)/obj/tools/sputnik/main.o $(LIBRARY) $(NATIVE_RUNTIME_LIBRARY) | $(BUILD_DIR)/.dir
 	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
+	$@ --native-runtime-key '$(CXX)' > $(NATIVE_RUNTIME_LIBRARY).key.tmp
+	mv $(NATIVE_RUNTIME_LIBRARY).key.tmp $(NATIVE_RUNTIME_LIBRARY).key
 
 $(BUILD_DIR)/sputniktest: $(BUILD_DIR)/obj/tools/sputniktest/main.o $(LIBRARY) | $(BUILD_DIR)/.dir
 	$(CXX) $(CXXFLAGS) $< $(LIBRARY) $(LDFLAGS) $(SPUTNIK_DYNAMIC_EXPORT_FLAGS) $(SPUTNIK_DYNAMIC_LOADER_LIBS) -o $@
@@ -538,7 +554,7 @@ test: build-tests
 	$(BUILD_DIR)/module_loader_tests
 	$(BUILD_DIR)/package_tests
 	$(BUILD_DIR)/sputnik lex corpus/parse/lexer/basic/source.s > $(BUILD_DIR)/lexer-basic.tokens.json
-	$(BUILD_DIR)/sputnik build tests/fixtures/w14_build/sputnik.build.json --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-first.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/w14_build/sputnik.build.json --target both --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-first.json
 	$(BUILD_DIR)/sputnik build tests/fixtures/w14_build/sputnik.build.json --target bytecode --out-dir $(BUILD_DIR)/w14_build/out --cache-dir $(BUILD_DIR)/w14_build/cache > $(BUILD_DIR)/w14-build-second.json
 	$(BUILD_DIR)/sputnik sputnikbc-verify $(BUILD_DIR)/w14_build/out/demo.main.sputnikbc > $(BUILD_DIR)/w14-main.verify.json
 	$(BUILD_DIR)/sputnik metadata $(BUILD_DIR)/w14_build/out/demo.main.sputnikbc --json > $(BUILD_DIR)/w14-main.metadata.json
@@ -558,7 +574,7 @@ test: build-tests
 	grep -q '"native_entry": true' $(BUILD_DIR)/w14-main-exe-build.json
 	$(BUILD_DIR)/w14-main-exe > $(BUILD_DIR)/w14-main-exe.out
 	grep -q '^42$$' $(BUILD_DIR)/w14-main-exe.out
-	$(BUILD_DIR)/sputnik build tests/fixtures/native_scalar_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_scalar_core/main.s --target native-debug --entry main-only --require-full-native -o $(BUILD_DIR)/native-scalar-core > $(BUILD_DIR)/native-scalar-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-scalar-core-build.json
 	awk '/compact native frame:/ { if ($$5 > $$8) reduced = 1 } END { exit reduced ? 0 : 1 }' $(BUILD_DIR)/native-scalar-core.native.cpp
 	! grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-scalar-core.native.cpp
@@ -583,7 +599,7 @@ test: build-tests
 	$(BUILD_DIR)/sputnik native-dump tests/fixtures/native_regexp_core/main.s > $(BUILD_DIR)/native-regexp-core.dump
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-regexp-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-regexp-core.dump
-	$(BUILD_DIR)/sputnik build tests/fixtures/native_sequence_core/main.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_sequence_core/main.s --target native-debug --entry main-only --require-full-native -o $(BUILD_DIR)/native-sequence-core > $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-sequence-core-build.json
 	grep -q 'NativeClosure \*invocation = as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
 	! grep -q 'NativeClosure invocation = \*as_closure' $(BUILD_DIR)/native-sequence-core.native.cpp
@@ -666,7 +682,7 @@ test: build-tests
 	grep -q 'cpp-bytecode-direct-v1 coverage' $(BUILD_DIR)/native-capability-modules-core.dump
 	grep -q 'mode=direct-native' $(BUILD_DIR)/native-capability-modules-core.dump
 	python3 tests/native_http_query_test.py $(BUILD_DIR)/sputnik $(BUILD_DIR)/native-http-query
-	$(BUILD_DIR)/sputnik build tests/fixtures/native_http_server_core/sputnik.build.yaml --target native --out-dir $(BUILD_DIR)/native-http-server-core --cache-dir $(BUILD_DIR)/native-http-server-core/cache --grant net.listen --require-full-native > $(BUILD_DIR)/native-http-server-core-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_http_server_core/sputnik.build.yaml --target native-debug --out-dir $(BUILD_DIR)/native-http-server-core --cache-dir $(BUILD_DIR)/native-http-server-core/cache --grant net.listen --require-full-native > $(BUILD_DIR)/native-http-server-core-build.json
 	grep -q '"native_graph_full_coverage": true' $(BUILD_DIR)/native-http-server-core-build.json
 	grep -q '"native_graph_vm_independent": true' $(BUILD_DIR)/native-http-server-core-build.json
 	! grep -q 'invoke_native_stdlib_send' $(BUILD_DIR)/native-http-server-core/native.http_server_core.native.cpp
@@ -696,7 +712,7 @@ test: build-tests
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-object-state-build.json
 	$(BUILD_DIR)/native-object-state > $(BUILD_DIR)/native-object-state.out
 	grep -q '^87$$' $(BUILD_DIR)/native-object-state.out
-	$(BUILD_DIR)/sputnik build corpus/run/native_exception_state/source.s --entry main-only --require-full-native -o $(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state-build.json
+	$(BUILD_DIR)/sputnik build corpus/run/native_exception_state/source.s --target native-debug --entry main-only --require-full-native -o $(BUILD_DIR)/native-exception-state > $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '"native_full_coverage": true' $(BUILD_DIR)/native-exception-state-build.json
 	grep -q '^  if (handler_seed != nullptr) native_seed_handler_frame' $(BUILD_DIR)/native-exception-state.native.cpp
 	grep -q 'static constexpr NativeTraceLocationRecord kNativeTraceLocations' $(BUILD_DIR)/native-exception-state.native.cpp
@@ -822,7 +838,7 @@ test: build-tests
 	$(BUILD_DIR)/native_implicit_self_cli/out/native.implicit_self_cli.main --count 42 > $(BUILD_DIR)/native-implicit-self-cli.out
 	grep -q '^84$$' $(BUILD_DIR)/native-implicit-self-cli.out
 	rm -rf $(BUILD_DIR)/native_ext_dep
-	$(BUILD_DIR)/sputnik build tests/fixtures/native_ext_dep/sputnik.build.json --target native --require-full-native --out-dir $(BUILD_DIR)/native_ext_dep/out --cache-dir $(BUILD_DIR)/native_ext_dep/cache > $(BUILD_DIR)/native-ext-dep-build.json
+	$(BUILD_DIR)/sputnik build tests/fixtures/native_ext_dep/sputnik.build.json --target native-debug --require-full-native --out-dir $(BUILD_DIR)/native_ext_dep/out --cache-dir $(BUILD_DIR)/native_ext_dep/cache > $(BUILD_DIR)/native-ext-dep-build.json
 	python3 -c 'import json, sys; result = json.load(open(sys.argv[1])); assert result["status"] == "ok" and result["native_graph_module_count"] == 2 and result["native_graph_native_code_count"] == result["native_graph_code_count"] and result["native_graph_vm_fallback_code_count"] == 0 and not result["native_bytecode_fallback"] and result["native_extensions"] and result["native_extensions"][0]["native_source_sha256"].startswith("sha256:"), result' $(BUILD_DIR)/native-ext-dep-build.json
 	! grep -Eq 'run_vm_entry|sputnik_vm_fallback|\.execute\(' $(BUILD_DIR)/native_ext_dep/out/nat.dep.main.native.cpp
 	$(BUILD_DIR)/native_ext_dep/out/nat.dep.main > $(BUILD_DIR)/native-ext-dep-native.out

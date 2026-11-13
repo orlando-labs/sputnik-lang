@@ -66,6 +66,35 @@
   SendStatus apply_notebook_show(Frame &frame, const std::string &selector,
       const std::vector<Value> &args, const Value &block,
       const std::vector<std::pair<std::uint32_t, Value>> &kw_args, Value *out) {
+    if (selector == "import_value") {
+      if (args.size() != 1 || !args[0].is_string() || !kw_args.empty() || !block.is_null()) {
+        set_fault(frame, "TypeError", "notebook.import_value requires a string name");
+        return SendStatus::Faulted;
+      }
+      const auto name = selector_text_from_value(args[0]).value_or("");
+      const auto &capture = notebook_cell_context_.input_capture;
+      if (capture && capture->active()) {
+        const auto cached = notebook_import_cache_.find(name);
+        if (cached != notebook_import_cache_.end()) {
+          *out = cached->second;
+          return SendStatus::Matched;
+        }
+      }
+      const auto wire = capture ? capture->read(notebook_sheet_import_key(name)) : std::nullopt;
+      const auto *bytes = wire ? std::get_if<std::string>(&*wire) : nullptr;
+      if (!bytes) {
+        set_fault(frame, "NotebookImportError", "sheet import '" + name + "' is waiting for its source");
+        return SendStatus::Faulted;
+      }
+      try {
+        const auto found = notebook_import_cache_.emplace(name, decode_notebook_value(frame, *bytes)).first;
+        *out = found->second;
+        return SendStatus::Matched;
+      } catch (const std::exception &error) {
+        set_fault(frame, "NotebookImportError", "import '" + name + "': " + error.what());
+        return SendStatus::Faulted;
+      }
+    }
     if (selector == "images") return apply_notebook_images(frame, args, block, kw_args, out);
     if (selector == "read_image" || selector == "read_images") return apply_notebook_read_images(frame, selector, args, block, kw_args, out);
     if (selector == "chart_begin" || selector == "chart_point" || selector == "chart_end")

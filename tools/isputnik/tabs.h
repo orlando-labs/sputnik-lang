@@ -19,6 +19,9 @@ struct ProjectTab {
   RuntimePumpDispatch runtime_dispatch;
   SessionActivityWaiter activity;
   std::uint64_t environment_generation = 1;
+  sputnik::runtime::NotebookExports imported_values;
+  std::set<sputnik::notebook::CellId> iteration_deferred;
+  std::set<sputnik::notebook::CellId> iteration_ready;
 };
 
 class ProjectTabs {
@@ -43,6 +46,11 @@ public:
   void create_sheet(const std::string &id, const std::string &title = {});
   void rename_sheet(const std::string &id, const std::string &title);
   void delete_sheet(const std::string &id, const std::string &blank_id);
+  void save_sheet_imports(const std::string &id, const std::string &json);
+  using SheetRun = std::function<bool(ProjectTab &, const std::string &, std::size_t,
+                                      const std::set<std::string> &)>;
+  bool run_linked(ProjectTab &, const std::string &action, std::size_t index, const SheetRun &);
+  bool sheet_has_cycle(const std::string &id) const;
   void create_module(const std::string &id);
   void rename_module(const std::string &id, const std::string &name);
   bool set_auto_import(const std::string &module_id, bool enabled);
@@ -75,6 +83,12 @@ public:
   void remove_dependency(const std::string &path);
 
 private:
+  bool apply_tab(ProjectTab &, bool force_all, bool show_running, const EvaluationProgress &);
+  void assign_inputs(ProjectTab &);
+  void propagate_exports(const SheetRun &,
+      const std::map<sputnik::notebook::CellId, std::uint64_t> &before);
+  std::set<std::string> refresh_sheet_imports(ProjectTab &);
+  const sputnik::notebook::ProjectSheet *sheet_for(const ProjectTab &) const;
   void require_idle() const;
   void attach_new_tab(ProjectTab *tab);
   std::unique_ptr<ProjectTab> make_sheet_tab(const sputnik::notebook::ProjectSheet &sheet);

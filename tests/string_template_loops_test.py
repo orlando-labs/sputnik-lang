@@ -26,7 +26,7 @@ with tempfile.TemporaryDirectory(prefix="sputnik-template-loops-") as temporary:
     vm = run("run", fixture).stdout
     assert vm.strip() == "PASS string template loops", vm
     executable = directory / "loops"
-    info = json.loads(run("build", fixture, "--entry", "init", "--require-full-native",
+    info = json.loads(run("build", fixture, "--target", "native-debug", "--entry", "init", "--require-full-native",
                           "-o", executable).stdout)
     assert info["native_full_coverage"] and info["native_vm_independent"], info
     assert not info["bytecode_fallback"] and not info["native_runtime_bridge"], info

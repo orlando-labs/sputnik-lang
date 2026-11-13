@@ -118,6 +118,7 @@ void DependencyGraph::rebuild(
       if (provider_it == latest_provider.end()) {
         providers_for_reads_.emplace(std::move(read_key), std::nullopt);
         if (ambient_names_.count(name) == 0U &&
+            !cells[positions_.at(id)].sheet_imports.count(name) &&
             !binder::is_native_prelude_name(name)) {
           missing_[id].insert(name);
         }

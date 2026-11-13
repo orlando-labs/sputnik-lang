@@ -71,9 +71,10 @@ COMDAT/alias groups; see its [implementation](https://github.com/llvm/llvm-proje
 code objects, using at most eight workers. `1` forces the serial baseline.
 `2`–`64` force parallel compilation and require a matching toolchain. The
 automatic path retains serial compatibility on older toolchains and on macOS.
-Each build writes `<native-source>.compile.json`, including mode, optimization,
+With `--target native-debug`, builds write `<native-source>.compile.json`, including mode, optimization,
 workers, partitions and compile/link wall time. LLVM intermediates and the
-ThinLTO cache are retained under `<native-source>.llvm/`.
+ThinLTO cache are retained under `<native-source>.llvm/`. Ordinary builds now
+remove all these intermediates; use `emit-cpp` to export C++ without compiling.
 
 The opt-in `make test-native-parallel` gate compares serial and parallel execution
 of the existing FFI/call-buffer fixture (closures, ownership, default/keyword

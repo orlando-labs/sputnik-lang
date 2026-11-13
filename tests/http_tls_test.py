@@ -184,7 +184,7 @@ def context(work, name="good", version=None, mtls=False):
 
 def build(sputnik, root, work, source, env):
     executable = work / source.stem
-    result = run([str(sputnik), "build", str(source), "--target", "native", "--entry", "main-only",
+    result = run([str(sputnik), "build", str(source), "--target", "native-debug", "--entry", "main-only",
                   "--require-full-native", "--grant", "net.connect", "--grant", "net.listen",
                   "-o", str(executable), "--out-dir", str(work)], cwd=root, env=env, timeout=600)
     metadata = json.loads(result.stdout)

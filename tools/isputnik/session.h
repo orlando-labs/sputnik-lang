@@ -109,6 +109,9 @@ struct Cell {
   std::vector<sputnik::runtime::NotebookLiveEvent> stopwatches;
   std::optional<std::uint64_t> elapsed_ms;
   std::optional<std::uint64_t> environment_rebuild_ms;
+  sputnik::runtime::NotebookExports exports;
+  std::uint64_t evaluations = 0;
+  std::vector<std::string> import_reads;
 };
 
 // Exact bundled sources selected by a project's ordered auto_imports list.
@@ -166,6 +169,7 @@ struct BundledEnvironmentPreparation {
   std::shared_ptr<const sputnik::bytecode::BcModule> image;
   std::map<std::string, std::map<std::string, std::string>> import_paths;
   sputnik::frontend::ImportAliases import_aliases;
+  std::map<std::string, std::string> fault_name_prefixes;
 };
 
 // Opaque persistent backend owned by one Session.  Keeping this out of the
@@ -190,6 +194,7 @@ private:
 
 public:
   std::shared_ptr<const sputnik::runtime::NotebookInputSnapshot> project_inputs;
+  std::set<std::string> sheet_import_names;
   sputnik::runtime::RuntimeRunTelemetry run_telemetry;
   std::shared_ptr<const sputnik::runtime::NotebookImageInputs> project_images;
   std::shared_ptr<const sputnik::runtime::NotebookAudioInputs> project_audio_inputs;
@@ -273,7 +278,8 @@ public:
 
 // Called by the project owner after publishing one validated input batch.
 // Never starts a sheet that has not been run; never runs unsaved code edits.
-void apply_project_input_changes(Session *session, const std::set<std::string> &keys);
+void apply_project_input_changes(Session *session, const std::set<std::string> &keys,
+                                 const std::set<sputnik::notebook::CellId> &deferred = {});
 // Mark the dependency closure stale without executing user code.
 void invalidate_project_input_changes(Session *session, const std::set<std::string> &keys);
 
@@ -286,6 +292,7 @@ struct CompileResult {
 };
 
 struct EvalView {
+  sputnik::runtime::NotebookExports exports;
   std::vector<sputnik::runtime::NotebookLiveEvent> progress;
   std::vector<sputnik::runtime::NotebookLiveEvent> charts;
   std::vector<sputnik::runtime::NotebookLiveEvent> images;
@@ -332,6 +339,7 @@ verified_notebook_image(const sputnik::bytecode::BcModule &candidate,
 
 std::vector<sputnik::notebook::CellSource>
 notebook_sources(const std::vector<Cell> &cells);
+std::vector<sputnik::notebook::CellSource> notebook_sources(const Session &session);
 sputnik::notebook::DependencyGraph
 dependency_graph_for_cells(const std::vector<Cell> &cells);
 std::optional<std::string>

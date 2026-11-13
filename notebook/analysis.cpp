@@ -342,6 +342,10 @@ CellAnalysis analyze_cell(const CellSource &cell) {
     return analysis;
   }
 
+  // Only spans from the original source can be used to edit declarations.
+  for (const auto &item : parse_result.items)
+    if (item->kind == "AstExportStmt") analysis.export_spans.push_back(item->span);
+
   const auto expansion = macros::expand_macros(
       parse_result.items, parse_result.module_name, cell.source);
   if (!expansion.ok) {
@@ -351,6 +355,19 @@ CellAnalysis analyze_cell(const CellSource &cell) {
   }
   ast::expand_quotes(parse_result.items);
   analysis.items = std::move(parse_result.items);
+  for (auto it = analysis.items.begin(); it != analysis.items.end();) {
+    if ((*it)->kind != "AstExportStmt") {
+      ++it;
+      continue;
+    }
+    for (const auto &item : list_field(**it, "items")->values) {
+      const auto name = string_field(*item, "public_name");
+      if (!analysis.exports.emplace(name, string_field(*item, "local_name")).second)
+        analysis.diagnostics.push_back({"NB1010", "error", "notebook",
+                                        "duplicate cell export '" + name + "'", item->span});
+    }
+    it = analysis.items.erase(it);
+  }
   const auto bound = binder::bind_module(analysis.items, parse_result.module_name);
   DependencyScanner scanner(&analysis, bound.graph);
   for (const std::unique_ptr<ast::Expr> &item : analysis.items) {
@@ -359,6 +376,17 @@ CellAnalysis analyze_cell(const CellSource &cell) {
     }
   }
   analysis.parsed = true;
+  if (analysis.exports.size() > 128)
+    analysis.diagnostics.push_back({"NB1010", "error", "notebook",
+                                    "a cell supports at most 128 exports", {}});
+  for (const auto &[name, local] : analysis.exports)
+    if (!analysis.writes.count(local))
+      analysis.diagnostics.push_back({"NB1010", "error", "notebook",
+                                      "export '" + name + "' requires a binding written in this cell", {}});
+  for (const auto &name : cell.sheet_imports)
+    if (analysis.writes.count(name))
+      analysis.diagnostics.push_back({"NB1011", "error", "notebook",
+                                      "cannot assign to sheet import '" + name + "'", {}});
   return analysis;
 }
 

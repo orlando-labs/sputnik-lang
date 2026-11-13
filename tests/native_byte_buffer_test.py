@@ -25,7 +25,7 @@ with tempfile.TemporaryDirectory(prefix='sputnik-byte-buffer-') as temporary:
         vm = run(compiler, 'run', source)
         assert message in vm, vm
         binary = Path(temporary) / fixture
-        report = json.loads(run(compiler, 'build', source, '--entry', 'init',
+        report = json.loads(run(compiler, 'build', source, '--target', 'native-debug', '--entry', 'init',
                                 '--require-full-native', '-o', binary))
         assert report['native_full_coverage'] is True, report
         assert report['bytecode_fallback'] is False, report

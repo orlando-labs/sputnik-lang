@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -27,6 +28,7 @@ struct CellSource {
   std::string source;
   std::string file;
   CellMode mode = CellMode::Manual;
+  std::set<std::string> sheet_imports = {};
 
   bool watch_enabled() const { return mode == CellMode::Watch; }
 };
@@ -101,6 +103,8 @@ struct CellAnalysis {
   std::set<std::string> local_reads;
   std::set<std::string> writes;
   std::vector<ExternalReadRef> external_read_refs;
+  std::map<std::string, std::string> exports; // public name -> cell binding
+  std::vector<lexer::Span> export_spans;
 
   std::vector<lexer::Diagnostic> diagnostics;
   std::vector<std::unique_ptr<ast::Expr>> items;

@@ -21,6 +21,7 @@ struct EmitResult {
 
 EmitResult emit_program(const hir::Program &program,
                         const std::string &module_name);
+std::string native_error_namespace(const std::string &module_name);
 
 struct NotebookEmitResult {
   std::size_t code_index = 0;

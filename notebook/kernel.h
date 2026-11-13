@@ -244,7 +244,8 @@ public:
   // NotebookKernel/world generation.
   void reset();
   // Project-scoped external input events, with normal Watch/Manual barriers.
-  std::vector<EvaluationStep> plan_input_changes(const std::set<std::string> &keys);
+  std::vector<EvaluationStep> plan_input_changes(const std::set<std::string> &keys,
+                                                  const std::set<CellId> &deferred = {});
 
 private:
   std::vector<BindingKey> expected_writes(CellId id) const;

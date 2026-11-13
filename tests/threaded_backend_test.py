@@ -40,7 +40,7 @@ def main():
         path = work / f"{name}.s"
         path.write_text(source)
         executable = work / name
-        result = run([str(compiler), "build", str(path), "--target", "native",
+        result = run([str(compiler), "build", str(path), "--target", "native-debug",
                       "--entry", "init", "--require-full-native", "--grant",
                       "process.spawn", "-o", str(executable)], timeout=300)
         info = json.loads(result.stdout)

@@ -249,7 +249,12 @@ artifact/container baseline for `W4.1`-`W4.4` from the implementation matrix:
 - `sputnik build <file.s>` for single-file native executables generated from
   eligible bytecode through the `cpp-bytecode-direct-v1` backend, with verified
   VM fallback for unsupported bytecode and explicit
-  `--target bytecode-wrapper` for the legacy embedded-wrapper path;
+  `--target bytecode-wrapper` for the legacy embedded-wrapper path. Source and
+  manifest builds default to just the executable; intermediate C++, objects,
+  reports and LLVM files are removed automatically, including on failure;
+- `sputnik emit-cpp <source|manifest> [-o program.cpp]` to inspect the generated
+  C++ without invoking a C++ compiler. `build --target native-debug` explicitly
+  retains intermediate files and a compilation report for backend debugging;
 - `sputnik metadata <file.sputnikbc> --json` and
   `sputnik verify <file.sputnikbc> --json` as the public `.sputnikbc` artifact
   inspection/verification surface, with structured verifier JSON for corrupted

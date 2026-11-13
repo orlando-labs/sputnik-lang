@@ -2560,6 +2560,19 @@ private:
     // Macro-generated locals share call-site spans with external reads, but
     // retain their own hygienic lexical storage.
     const bool macro_local = lexical_binding && !lexical_binding->context.empty();
+    if (!macro_local && notebook_options_ && notebook_options_->sheet_import &&
+        notebook_options_->sheet_import(string_value(expr, "name"), expr.span)) {
+      auto receiver = make_node("HLoadConst", expr.span);
+      receiver->string_field("path", "notebook");
+      auto node = make_node("HSend", expr.span);
+      node->node_field("receiver", std::move(receiver));
+      node->string_field("selector", "import_value");
+      std::vector<std::unique_ptr<Node>> args;
+      args.push_back(make_const_str(string_value(expr, "name"), expr.span));
+      node->list_field("pos_args", std::move(args));
+      node->list_field("kw_args", {});
+      return node;
+    }
     if (!macro_local && notebook_options_ != nullptr &&
         notebook_options_->external_read_descriptor) {
       const std::optional<std::uint32_t> descriptor =

@@ -63,6 +63,7 @@ void load_project_into_session(Session *session,
   loaded.package_search_directory = project.directory.string();
   loaded.project_inputs = sputnik::notebook::project_input_defaults(project.document);
   loaded.project_sheet_id = id;
+  for (const auto &link : found->imports) loaded.sheet_import_names.insert(link.name);
   loaded.project_audio_inputs = sputnik::notebook::load_project_audio_inputs(project.document, project.directory, id);
   loaded.project_audio = sputnik::notebook::project_audio_components(project.document, id);
   loaded.project_images = sputnik::notebook::load_project_image_inputs(project.document, project.directory, id);

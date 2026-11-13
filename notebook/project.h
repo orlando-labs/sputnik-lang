@@ -41,12 +41,22 @@ struct ProjectCell {
   std::string formatting;
 };
 
+struct ProjectSheetImport {
+  std::string name;
+  std::string sheet;
+  CellId cell = 0;
+  std::string export_name;
+};
+
 struct ProjectSheet {
   std::string id;
   std::string title;
   std::vector<ProjectCell> cells;
   ProjectExtraFields extra;
+  std::vector<ProjectSheetImport> imports;
 };
+
+std::vector<ProjectSheetImport> parse_project_sheet_imports(const std::string &json);
 
 struct ProjectModule {
   std::string id;
@@ -178,7 +188,7 @@ ProjectBoard parse_project_board(const std::string &json);
 std::string serialize_project_board(const ProjectBoard &board);
 ProjectDependency parse_project_dependency(const std::string &json);
 
-// Schema v1/v2/v3: a single atomic project.json holds all sheet documents and the
+// A single atomic project.json holds all sheet documents and the
 // module manifest; module sources remain ordinary .s files beside it.
 // Throws std::runtime_error on malformed/unsupported documents. IDs are JSON
 // decimal strings to avoid loss in native or browser clients using doubles.

@@ -17,6 +17,7 @@
 #include "runtime/stdlib_url.h"
 #include "runtime/vm_internal.h"
 #include "runtime/notebook_table.h"
+#include "runtime/numeric.h"
 #include "runtime/audio.h"
 
 #include <algorithm>
@@ -1562,6 +1563,21 @@ public:
                            std::move(watch_snapshot.events),
                            watch_snapshot.latest_epoch};
     result.watch_event_status = watch_snapshot.status;
+    if (notebook_cell_execution_ && notebook_cell_context_.export_values) {
+      try {
+        for (const auto &[name, value] : notebook_cell_context_.export_values()) {
+          try {
+            Frame transfer_frame;
+            transfer_frame.code = entry;
+            result.notebook_exports.emplace(name, encode_notebook_value(transfer_frame, value));
+          } catch (const std::exception &error) {
+            throw std::runtime_error("export '" + name + "': " + error.what());
+          }
+        }
+      } catch (const std::exception &error) {
+        result = fail("NotebookExportError", error.what(), code_id, 0);
+      }
+    }
     return with_runtime_names(std::move(result));
   }
 
@@ -3512,6 +3528,9 @@ private:
     for (const Value &value : state_->external_gc_roots_snapshot()) {
       append_value_root(&roots, value);
     }
+    for (const auto &[_, value] : notebook_import_cache_) roots.push_back(value);
+    for (const auto *values : notebook_transfer_roots_)
+      for (const auto &value : *values) append_value_root(&roots, value);
     if (notebook_cell_context_.gc_roots) {
       try {
         const std::vector<Value> notebook_roots =
@@ -14831,6 +14850,7 @@ private:
     notebook_cell_context.live_store.reset();
     notebook_cell_context.live_generation = 0;
     notebook_cell_context.input_capture.reset();
+    notebook_cell_context.export_values = {};
     std::function<void(RuntimeTraceEvent)> trace_recorder = trace_recorder_;
     const std::uint32_t code_id = closure->code_id;
     std::vector<Value> captures = closure->captures;
@@ -14977,6 +14997,7 @@ private:
     mutable_template->notebook_cell_context.live_store.reset();
     mutable_template->notebook_cell_context.live_generation = 0;
     mutable_template->notebook_cell_context.input_capture.reset();
+    mutable_template->notebook_cell_context.export_values = {};
     mutable_template->run_cancellation = current_runtime_run_cancellation();
     mutable_template->trace_recorder = trace_recorder_;
     mutable_template->code_id = closure->code_id;
@@ -25748,6 +25769,7 @@ private:
   }
 
 #include "runtime/vm_notebook.inc"
+#include "runtime/vm_notebook_transfer.inc"
 #include "runtime/vm_notebook_chart.inc"
 #include "runtime/vm_notebook_image.inc"
 
@@ -35196,6 +35218,8 @@ private:
   std::string module_id_;
   const RuntimeWorldOptions *world_options_ = nullptr;
   RuntimeNotebookCellContext notebook_cell_context_;
+  std::map<std::string, Value> notebook_import_cache_;
+  std::vector<const std::vector<Value> *> notebook_transfer_roots_;
   bool notebook_cell_execution_ = false;
   const RuntimeCapabilityResolution *capabilities_ = nullptr;
   const RuntimeEffectValidation *effects_ = nullptr;

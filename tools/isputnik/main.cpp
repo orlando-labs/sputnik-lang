@@ -1701,6 +1701,24 @@ int run_curses_console(
           session.status =
               "unsaved changes: C-S save tab, Q discard all & quit, other key cancels";
           confirm_discard = true;
+        } else if (workspace && !tab.module && workspace->project().document.version >= 5 &&
+                   ((!tab.edit_mode && (ch == '\n' || ch == '\r' || ch == 'r')) ||
+                    (tab.edit_mode && (ch == 24 || ch == 18)))) {
+          const bool all = tab.edit_mode ? ch == 18 : ch == 'r';
+          workspace->run_linked(tab, all ? "run_all" : "run", all ? 0 : session.selected,
+              [&](ProjectTab &target, const auto &command, auto start, const auto &changed) {
+                if (command == "inputs")
+                  apply_project_input_changes(&target.session, changed, target.iteration_deferred);
+                else {
+                  invalidate_project_input_changes(&target.session, changed);
+                  evaluate_from_ui(&target.session, start, command == "run_all", tab.edit_mode, &target == &tab);
+                }
+                return !sputnik::runtime::runtime_run_cancel_requested();
+              });
+          if (tab.edit_mode && ch == 24) {
+            tab.edit_mode = false;
+            curs_set(0);
+          }
         } else if (tab.edit_mode) {
           running = handle_edit_key(&session, ch, &tab.edit_mode);
         } else {
@@ -1741,9 +1759,20 @@ int run_curses_console(
       if (!tab.runtime_dispatch.due(RuntimePumpDispatch::Clock::now()))
         continue;
       const bool visible = &tab == &current_tab();
-      const auto result = visible && !project_command
-          ? pump_runtime_events_ui(&tab.session, tab.edit_mode)
-          : pump_runtime_events_detailed(&tab.session, false);
+      RuntimeEventPumpResult result;
+      const auto pump = [&] {
+        result = visible && !project_command
+            ? pump_runtime_events_ui(&tab.session, tab.edit_mode)
+            : pump_runtime_events_detailed(&tab.session, false);
+      };
+      if (workspace && workspace->project().document.version >= 5) {
+        workspace->run_linked(tab, "watch", 0,
+            [&](ProjectTab &target, const auto &command, auto, const auto &changed) {
+              if (command == "watch") pump();
+              else apply_project_input_changes(&target.session, changed, target.iteration_deferred);
+              return !sputnik::runtime::runtime_run_cancel_requested();
+            });
+      } else pump();
       tab.runtime_dispatch.complete(result, RuntimePumpDispatch::Clock::now());
       redraw = redraw ||
           (visible && (result.handled() || result.needs_recovery()));
@@ -1858,12 +1887,22 @@ int run_project_module(const sputnik::notebook::LoadedProject &project,
 int run_project_sheet(const sputnik::notebook::LoadedProject &project,
                        const std::string &sheet_id,
                        const std::vector<sputnik::runtime::RuntimeCapabilityGrant> &grants = {}) {
-  Session session;
-  load_project_into_session(&session, project, sheet_id);
-  session.runtime_capability_grants = grants;
-  session.console_definitions = true;
-  const bool applied =
-      apply_project_environment(&session, project, true, false, {});
+  ProjectTabs tabs(project, sheet_id);
+  for (const auto &tab : tabs.tabs()) {
+    tab->session.runtime_capability_grants = grants;
+    tab->session.console_definitions = true;
+  }
+  auto &session = tabs.active().session;
+  const bool applied = tabs.run_linked(tabs.active(), "run_all", 0,
+      [&](ProjectTab &tab, const auto &command, auto start, const auto &changed) {
+        if (command == "run_all") return apply_project_environment(&tab.session, project, true, false, {});
+        if (command == "inputs") apply_project_input_changes(&tab.session, changed, tab.iteration_deferred);
+        else {
+          invalidate_project_input_changes(&tab.session, changed);
+          evaluate_from_with_progress(&tab.session, start, false, false, {});
+        }
+        return true;
+      });
   for (const std::string &line :
        output_detail_lines(session.environment_output, 120))
     std::cout << line << "\n";

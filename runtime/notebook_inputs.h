@@ -22,6 +22,11 @@ struct NotebookInputRange {
 };
 using NotebookInputValue = std::variant<bool, std::int64_t, double, std::string, NotebookInputRange>;
 using NotebookInputSnapshot = std::map<std::string, NotebookInputValue>;
+using NotebookExports = std::map<std::string, std::string>;
+
+inline std::string notebook_sheet_import_key(const std::string &name) {
+  return std::string(1, '\0') + "import:" + name;
+}
 
 // Internal dependency identity; authored project IDs cannot contain NUL.
 inline std::string notebook_cell_input_key(std::uint64_t cell, const std::string &name) {

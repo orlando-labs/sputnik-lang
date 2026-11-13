@@ -1,6 +1,7 @@
 #include "frontend/foreign_import.h"
 #include "tools/isputnik/session.h"
 
+#include "bytecode/emitter.h"
 #include "bytecode/graph_linker.h"
 #include "runtime/stdlib_registry.h"
 #include "package/store.h"
@@ -119,6 +120,25 @@ BundledEnvironmentPreparation prepare_bundled_environment(
     result.diagnostics.push_back({{}, {}, error.what(), {}});
     return result;
   }
+  std::set<std::string> used_aliases;
+  std::map<std::string, std::string> resolved_aliases;
+  for (const auto &[alias, target] : aliases.paths()) {
+    resolved_aliases.emplace(alias, aliases.resolve(alias));
+    if (explicit_aliases.paths().count(alias)) used_aliases.insert(alias);
+  }
+  const auto resolve_import = [&](const std::string &requested) {
+    const auto canonical = aliases.resolve(requested);
+    if (canonical == requested) return canonical;
+    const std::string *best = nullptr;
+    for (const auto &[alias, target] : resolved_aliases) {
+      if ((!best || alias.size() > best->size()) &&
+          sputnik::frontend::ImportAliases::prefix(requested, alias) &&
+          canonical == target + requested.substr(alias.size()))
+        best = &alias;
+    }
+    if (best) used_aliases.insert(*best);
+    return canonical;
+  };
   std::map<std::string, const BundledModuleSource *> by_id;
   std::vector<std::string> roots;
   std::set<std::string> selected;
@@ -175,7 +195,7 @@ BundledEnvironmentPreparation prepare_bundled_environment(
     return !*installed_notebook_ui;
   };
   for (const auto &requested : explicit_imports) {
-    const auto canonical = aliases.resolve(requested);
+    const auto canonical = resolve_import(requested);
     const auto provider = sputnik::frontend::foreign_import_provider(canonical);
     const auto id = provider.empty() ? canonical : provider;
     if (!native_only(id) && selected.insert(id).second) roots.push_back(id);
@@ -188,7 +208,7 @@ BundledEnvironmentPreparation prepare_bundled_environment(
   }
   std::map<std::string, std::set<std::string>> exports;
   const auto validate_import = [&](const ImportReference &ref) {
-    const auto id = aliases.resolve(ref.module);
+    const auto id = resolve_import(ref.module);
     if (!sputnik::frontend::foreign_import_provider(id).empty()) return true;
     for (const auto &[name, span] : ref.names) {
       const auto provider = exports.find(id);
@@ -267,6 +287,8 @@ BundledEnvironmentPreparation prepare_bundled_environment(
                                     std::move(compiled.error_ranges)});
       return false;
     }
+    for (const auto &dep : compiled.module.dependencies)
+      (void)resolve_import(compiled.module.strings.at(dep.module_name_str_id));
     sputnik::bytecode::redirect_module_imports(&compiled.module, aliases);
     for (const sputnik::bytecode::DepEntry &dep : compiled.module.dependencies) {
       const auto &dependency = compiled.module.strings.at(dep.module_name_str_id);
@@ -356,6 +378,15 @@ BundledEnvironmentPreparation prepare_bundled_environment(
   }
   if (!result.diagnostics.empty())
     return result;
+
+  // A registered short name affects diagnostics once the notebook uses it.
+  for (const auto &alias : used_aliases) {
+    const auto &target = resolved_aliases.at(alias);
+    result.fault_name_prefixes.try_emplace(target, alias);
+    result.fault_name_prefixes.try_emplace(
+        sputnik::bytecode::native_error_namespace(target),
+        sputnik::bytecode::native_error_namespace(alias));
+  }
 
   // notebook.show is a VM intrinsic. Record the class exports of the provider
   // selected by `import plot` so the VM uses the same binding as the compiler.

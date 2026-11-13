@@ -429,6 +429,19 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
     return true;
   };
   context.gc_roots = [state]() { return state->snapshot(); };
+  if (!exports_.empty()) context.export_values = [state, this] {
+    std::map<std::string, runtime::Value> values;
+    for (const auto &[name, binding] : exports_) {
+      const auto slot = std::find_if(descriptors_.slots.begin(), descriptors_.slots.end(),
+          [&](const auto &entry) {
+            return entry.direction == NotebookSlotDirection::Output && entry.key.name == binding;
+          });
+      const auto value = slot == descriptors_.slots.end() ? std::nullopt : state->staged_value(slot->descriptor);
+      if (!value) throw std::runtime_error("export '" + name + "' was not assigned");
+      values.emplace(name, *value);
+    }
+    return values;
+  };
   if (consumer_cell_id_ != 0U) {
     context.dependency_capture.consumer_cell_id = consumer_cell_id_;
   }
@@ -455,12 +468,12 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
   }
   if (!runtime_result.ok()) {
     if (runtime_result.fault.has_value()) {
-      if (report) report->error_trace = runtime_result.fault->trace;
       result.error = runtime_result.fault->error_name;
       if (!runtime_result.fault->message.empty()) {
         result.error += ": ";
         result.error += runtime_result.fault->message;
       }
+      if (report) report->fault = std::move(runtime_result.fault);
     } else {
       result.error = "notebook VM execution failed";
     }
@@ -507,6 +520,7 @@ NotebookVmCellExecutor::execute(const std::vector<KernelInput> &inputs,
     result.runtime_dependencies = runtime_result.dependency_capture;
   }
   if (report != nullptr) {
+    report->exports = std::move(runtime_result.notebook_exports);
     report->value = runtime_result.value;
     report->displays = std::move(runtime_result.displays);
     report->locals = runtime_result.locals;

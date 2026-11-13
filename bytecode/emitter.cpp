@@ -16,6 +16,29 @@
 
 namespace sputnik::bytecode {
 
+std::string native_error_namespace(const std::string &module_name) {
+  std::string out;
+  bool capitalize = true;
+  for (const char ch : module_name) {
+    if (ch == '_' || ch == '-') {
+      capitalize = true;
+      continue;
+    }
+    if (ch == '.') {
+      out.push_back(ch);
+      capitalize = true;
+      continue;
+    }
+    if (capitalize && ch >= 'a' && ch <= 'z') {
+      out.push_back(static_cast<char>(ch - 'a' + 'A'));
+    } else {
+      out.push_back(ch);
+    }
+    capitalize = false;
+  }
+  return out;
+}
+
 namespace {
 
 const ast::Expr *node_field(const ast::Expr &expr, const std::string &name) {
@@ -1401,34 +1424,11 @@ private:
     }
   }
 
-  std::string native_error_namespace() const {
-    std::string out;
-    bool capitalize = true;
-    for (const char ch : module_name_) {
-      if (ch == '_' || ch == '-') {
-        capitalize = true;
-        continue;
-      }
-      if (ch == '.') {
-        out.push_back(ch);
-        capitalize = true;
-        continue;
-      }
-      if (capitalize && ch >= 'a' && ch <= 'z') {
-        out.push_back(static_cast<char>(ch - 'a' + 'A'));
-      } else {
-        out.push_back(ch);
-      }
-      capitalize = false;
-    }
-    return out;
-  }
-
   std::string qualified_native_error_name(const std::string &name) const {
     if (name.find('.') != std::string::npos || module_name_.empty()) {
       return name;
     }
-    const std::string name_space = native_error_namespace();
+    const std::string name_space = native_error_namespace(module_name_);
     return name_space.empty() ? name : name_space + "." + name;
   }
 

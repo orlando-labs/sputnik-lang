@@ -117,6 +117,8 @@ void usage(std::ostream &out) {
          "[--target native|native-debug|bytecode-wrapper] "
          "[--entry auto|init|main|main-only] [--grant <cap[=target]>...] "
          "[--require-native-body-coverage|--require-full-native]\n";
+  out << "  sputnik emit-cpp <source|manifest> [-o <path>] [--out-dir <dir>] "
+         "[--entry auto|init|main|main-only] [--grant <cap[=target]>...]\n";
   out << "  sputnik lex <file>\n";
   out << "  sputnik parse <file>\n";
   out << "  sputnik parse-expr <file>\n";
@@ -1042,16 +1044,18 @@ std::optional<SourceConfiguration> source_configuration(const std::string &path)
 RunnableModuleArtifact compile_configured_source(
     const SourceConfiguration &configuration,
     const std::optional<EntryExecutionMode> &forced_entry_mode,
-    const std::vector<sputnik::capability::CapabilityRequest> &capabilities);
+    const std::vector<sputnik::capability::CapabilityRequest> &capabilities,
+    const std::filesystem::path &build_cache);
 
 RunnableModuleArtifact compile_source_to_runnable_module(
     const std::string &path,
     const std::optional<EntryExecutionMode> forced_entry_mode = std::nullopt,
     const std::vector<sputnik::capability::CapabilityRequest> &capabilities =
-        {}, bool resolve_packages = true) {
+        {}, bool resolve_packages = true,
+    const std::filesystem::path &build_cache = {}) {
   if (resolve_packages)
     if (const auto configuration = source_configuration(path))
-      return compile_configured_source(*configuration, forced_entry_mode, capabilities);
+      return compile_configured_source(*configuration, forced_entry_mode, capabilities, build_cache);
   const std::string source = read_file(path);
   sputnik::lexer::LexResult lex_result = lex_source(source, path);
   if (!lex_result.ok()) {
@@ -1441,6 +1445,8 @@ struct NativeExecutableBuildResult {
   std::size_t fallback_code_count = 0;
   std::size_t total_code_count = 0;
   std::uint64_t binary_size_bytes = 0;
+  std::int64_t runtime_prepare_ms = 0;
+  std::int64_t compile_link_ms = 0;
   bool entry_native = false;
   bool body_coverage_full = false;
   bool full_native_coverage = false;
@@ -3885,7 +3891,7 @@ std::set<std::uint32_t> native_cpp_direct_chars_each_block_code_ids(
   return selected;
 }
 
-enum class NativeScalarKind { Unknown, Integer, Float, Bool };
+enum class NativeScalarKind { Unknown, Integer, Float, Bool, PrintFunction };
 
 struct NativeScalarFlow {
   std::vector<std::vector<NativeScalarKind>> at_pc;
@@ -4039,6 +4045,11 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
   if (pc_count == 0U) {
     return flow;
   }
+  const bool tracks_print = std::none_of(
+      code.instructions.begin(), code.instructions.end(), [](const auto &insn) {
+        return (insn.opcode >= Opcode::PPrepSeq && insn.opcode <= Opcode::PFail) ||
+               insn.opcode == Opcode::PBegin;
+      });
 
   const auto enqueue = [&](std::size_t target,
                            const std::vector<NativeScalarKind> &state) {
@@ -4115,6 +4126,17 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
       }
       break;
     }
+    case Opcode::LookupConst: {
+      std::uint32_t path = 0;
+      const bool print = tracks_print && operand_u32_value(instruction, 1, &path) &&
+          native_cpp_constant_path_text(module, path) == "print" &&
+          !native_cpp_package_module_for_path(module, path) &&
+          !native_cpp_declared_error_path(module, "print", true) &&
+          !native_cpp_class_index_for_path(module, path) &&
+          !native_cpp_function_code_for_path(module, path);
+      set_dst(print ? NativeScalarKind::PrintFunction : NativeScalarKind::Unknown);
+      break;
+    }
     case Opcode::Move: {
       std::uint32_t src = 0;
       if (operand_u32_value(instruction, 1, &src)) {
@@ -4184,7 +4206,6 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
     case Opcode::MakeSetSpread:
     case Opcode::MakeMapDyn:
     case Opcode::MakeMapSpread:
-    case Opcode::LookupConst:
     case Opcode::LoadUpval:
     case Opcode::MakeClosure:
     case Opcode::Call:
@@ -4194,6 +4215,12 @@ native_cpp_scalar_registers(const sputnik::bytecode::BcModule &module,
       set_dst(NativeScalarKind::Unknown);
       break;
     default:
+      // Only explicitly modelled instructions may preserve callable identity.
+      // Other operations can overwrite registers or affect control flow in
+      // ways the older numeric-lane analysis does not describe.
+      for (auto &kind : next) {
+        if (kind == NativeScalarKind::PrintFunction) kind = NativeScalarKind::Unknown;
+      }
       break;
     }
 
@@ -6131,7 +6158,14 @@ emit_native_cpp_code_function(const sputnik::bytecode::BcModule &module,
         break;
       }
       std::ostringstream expr;
-      expr << "sputnik_native_call_value(" << read_reg_expr(callee) << ", {";
+      // The flow proof survives moves and joins, and is disabled for captured
+      // locals and handlers. A known prelude call need not retain every dynamic
+      // callable (constructors, ArgParser, HTTP handles, etc.) in small binaries.
+      if (scalar_kind(callee, pc_scalar_state) == NativeScalarKind::PrintFunction) {
+        expr << "native_call_print({";
+      } else {
+        expr << "sputnik_native_call_value(" << read_reg_expr(callee) << ", {";
+      }
       for (std::uint32_t index = 0; index < pos_count; ++index) {
         std::uint32_t arg_reg = 0;
         operand_u32_value(instruction, 3U + index, &arg_reg);
@@ -21622,6 +21656,31 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
   out << "static NativeValue sputnik_native_call_value("
          "const NativeValue &, const NativeArgsView &, "
          "const NativeKeywordArgsView &, NativeValue);\n";
+  out << R"SPUTNIKPP(static NativeValue native_print_impl(
+    const NativeArgsView &args, const NativeKeywordArgsView &kwargs, NativeValue block) {
+    if (block.tag != NativeValue::Tag::Null || kwargs.size() > 1U ||
+        (!kwargs.empty() && (kwargs[0].name != "to" ||
+                             kwargs[0].value.tag != NativeValue::Tag::TextWriter)))
+      throw NativeRaised{native_named_error("TypeError", "invalid print arguments")};
+    auto writer = kwargs.empty() ? sputnik::runtime::current_runtime_stdout()
+                                 : as_native_text_writer(kwargs[0].value).value;
+    native_commit_effect();
+    if (args.empty()) native_check_text_write(writer->write_str("\n"));
+    for (const auto &arg : args) {
+      native_check_text_write(writer->write_str(native_value_to_display_string(arg)));
+      native_check_text_write(writer->write_str("\n"));
+    }
+    return NativeValue::nullv();
+}
+static NativeValue native_call_print(const NativeArgsView &args,
+    const NativeKeywordArgsView &kwargs, NativeValue block) {
+  try { return native_print_impl(args, kwargs, std::move(block)); }
+  catch (const NativeBailout &bailout) {
+    throw NativeBailout("callable tag " +
+        std::to_string(static_cast<int>(NativeValue::Tag::PrintFunction)) + ": " + bailout.what());
+  }
+}
+)SPUTNIKPP";
   out << R"SPUTNIKPP(static NativeValue native_bare_identifier(const NativeValue &value) {
   if (value.tag == NativeValue::Tag::Closure) {
     const auto method = native_method_descriptor(as_closure(value)->code_id);
@@ -21669,22 +21728,8 @@ static SPUTNIK_NATIVE_ALWAYS_INLINE NativeValue native_numeric_fast_cmp_int_rhs(
          "block.tag != NativeValue::Tag::Null) throw NativeBailout();\n";
   out << "    return NativeValue::tuple({value, *args.begin()});\n";
   out << "  }\n";
-  out << R"SPUTNIKPP(  if (value.tag == NativeValue::Tag::PrintFunction) {
-    if (block.tag != NativeValue::Tag::Null || kwargs.size() > 1U ||
-        (!kwargs.empty() && (kwargs[0].name != "to" ||
-                             kwargs[0].value.tag != NativeValue::Tag::TextWriter)))
-      throw NativeRaised{native_named_error("TypeError", "invalid print arguments")};
-    auto writer = kwargs.empty() ? sputnik::runtime::current_runtime_stdout()
-                                 : as_native_text_writer(kwargs[0].value).value;
-    native_commit_effect();
-    if (args.empty()) native_check_text_write(writer->write_str("\n"));
-    for (const auto &arg : args) {
-      native_check_text_write(writer->write_str(native_value_to_display_string(arg)));
-      native_check_text_write(writer->write_str("\n"));
-    }
-    return NativeValue::nullv();
-  }
-)SPUTNIKPP";
+  out << "  if (value.tag == NativeValue::Tag::PrintFunction) "
+         "return native_print_impl(args, kwargs, std::move(block));\n";
   out << "  if (value.tag == NativeValue::Tag::ErrorClass) {\n";
   out << "    if (kwargs.size() != 0U) throw NativeRaised{native_named_error("
          "\"TypeError\", \"error constructor does not accept keywords\")};\n";
@@ -23615,8 +23660,14 @@ static NativeValue native_channel_send(
     out << "  throw NativeBailout(\"native HTTP bridge is unavailable\");\n";
   }
   out << "}\n\n";
+  out << "static std::atomic<void (*)()> native_task_shutdown{nullptr};\n";
   out << "static sputnik::runtime::RuntimeTaskModule &native_task_runtime() {\n";
   out << "  static sputnik::runtime::RuntimeTaskModule runtime;\n";
+  out << "  static const bool registered = [] {\n"
+         "    native_task_shutdown.store(+[] { runtime.scheduler().shutdown(); }, std::memory_order_release);\n"
+         "    return true;\n"
+         "  }();\n"
+         "  (void)registered;\n";
   out << "  return runtime;\n";
   out << "}\n";
   if (plan.uses_native_system_runtime || plan.uses_native_threaded_runtime ||
@@ -26703,7 +26754,7 @@ static NativeValue sputnik_native_extension_invoke(
   }
   out << "  struct NativeTaskRuntimeShutdown {\n";
   out << "    ~NativeTaskRuntimeShutdown() {\n";
-  out << "      native_task_runtime().scheduler().shutdown();\n";
+  out << "      if (const auto shutdown = native_task_shutdown.load(std::memory_order_acquire)) shutdown();\n";
   out << "    }\n";
   out << "  } native_task_runtime_shutdown;\n";
   out << "  try {\n";
@@ -26857,64 +26908,9 @@ std::string shell_command(const std::vector<std::string> &parts) {
 std::vector<std::string>
 native_runtime_sources(const std::filesystem::path &root) {
   const std::vector<std::string> relative = {
-      "bytecode/format.cpp",
-      "frontend/lexer/token.cpp",
-      "frontend/ast/expr.cpp",
-      "profile/capabilities.cpp",
-      "profile/effects.cpp",
-      "profile/replay.cpp",
-      "profile/data.cpp",
-      "profile/wasm_accel.cpp",
-      "profile/modern.cpp",
-      "buildsys/build.cpp",
-      "optimizer/native.cpp",
-      "package/package.cpp",
-      "runtime/context.cpp",
-      "runtime/text.cpp",
-      "runtime/watch.cpp",
-      "runtime/value.cpp",
-      "runtime/value_display.cpp",
-      "runtime/errors.cpp",
-      "runtime/numeric.cpp",
-      "runtime/objects.cpp",
-      "runtime/heap.cpp",
-      "runtime/concurrency.cpp",
-      "runtime/world.cpp",
-      "runtime/io.cpp",
-      "runtime/tls.cpp",
-      "runtime/system.cpp",
-      "runtime/reactor.cpp",
-      "runtime/digest.cpp",
-      "runtime/http_codec.cpp",
-      "runtime/net_http.cpp",
-      "runtime/net_http_server.cpp",
-      "runtime/net_http_transport.cpp",
-      "runtime/vm.cpp",
-      "runtime/stdlib_registry.cpp",
-      "runtime/stdlib_io.cpp",
-      "runtime/stdlib_fs.cpp",
-      "runtime/stdlib_net.cpp",
-      "runtime/stdlib_net_http.cpp",
-      "runtime/stdlib_task.cpp",
-      "runtime/stdlib_bool.cpp",
-      "runtime/stdlib_math.cpp",
-      "runtime/stdlib_json.cpp",
-      "runtime/stdlib_codecs.cpp",
-      "runtime/stdlib_digest.cpp",
-      "runtime/stdlib_signature.cpp",
-      "runtime/stdlib_benchmark.cpp",
-      "runtime/stdlib_notebook_ui.cpp",
-      "runtime/stdlib_secure_random.cpp",
-      "runtime/stdlib_argparser.cpp",
-      "runtime/stdlib_regexp.cpp",
-      "runtime/stdlib_uuid.cpp",
-      "runtime/stdlib_time.cpp",
-      "runtime/stdlib_url.cpp",
-      "runtime/stdlib_yaml.cpp",
-      "runtime/config_document.cpp",
-      "runtime/sputnik_ext.cpp",
-      "runtime/module_loader.cpp",
-      "runtime/native_bridge.cpp",
+#define SPUTNIK_NATIVE_SOURCE(path) path,
+#include "tools/sputnik/native_runtime_sources.inc"
+#undef SPUTNIK_NATIVE_SOURCE
   };
   std::vector<std::string> out;
   out.reserve(relative.size());
@@ -27054,21 +27050,66 @@ std::size_t native_runtime_archive_jobs(std::size_t source_count) {
   return std::min<std::size_t>(source_count, std::min<std::size_t>(jobs, 8U));
 }
 
+// Every invocation owns its scratch directory, including failed and concurrent
+// builds. Destruction must never mask the original compiler diagnostic.
+struct NativeBuildDirectory {
+  std::filesystem::path path;
+  explicit NativeBuildDirectory(const std::filesystem::path &parent =
+                                    std::filesystem::temp_directory_path()) {
+    auto pattern = (parent / ".sputnik-build-XXXXXX").string();
+    const char *created = ::mkdtemp(pattern.data());
+    if (created == nullptr) throw std::runtime_error("cannot create native build directory");
+    path = created;
+  }
+  NativeBuildDirectory(const NativeBuildDirectory &) = delete;
+  NativeBuildDirectory &operator=(const NativeBuildDirectory &) = delete;
+  ~NativeBuildDirectory() {
+    std::error_code error;
+    std::filesystem::remove_all(path, error);
+  }
+};
+
+std::filesystem::path resolved_executable_path(const std::string &executable) {
+  namespace fs = std::filesystem;
+  fs::path compiler(executable);
+  if (!compiler.has_parent_path()) {
+    std::istringstream paths(std::getenv("PATH") ? std::getenv("PATH") : "");
+    std::string directory;
+    while (std::getline(paths, directory, ':')) {
+      const auto candidate = fs::path(directory) / compiler;
+      if (::access(candidate.c_str(), X_OK) == 0) {
+        compiler = candidate;
+        break;
+      }
+    }
+  }
+  return fs::canonical(compiler);
+}
+
 std::filesystem::path
 ensure_native_runtime_archive(const std::string &cxx,
                               const std::filesystem::path &runtime_root,
-                              const std::vector<std::string> &runtime_sources) {
+                              const std::vector<std::string> &runtime_sources,
+                              const std::string &argv0) {
   const std::string key =
       native_runtime_cache_key(cxx, runtime_root, runtime_sources);
+  // `make` already compiled these sources for the interpreter. Its companion
+  // archive is reusable only with the same compiler, runtime contents and ABI.
+  const auto bundled = resolved_executable_path(argv0).parent_path() / "libsputnik_rt.a";
+  const auto bundled_key = bundled.string() + ".key";
+  if (std::filesystem::exists(bundled) && std::filesystem::exists(bundled_key) &&
+      read_file(bundled_key) == key + "\n") {
+    return bundled;
+  }
   const std::filesystem::path cache_root = native_runtime_cache_root();
   const std::filesystem::path final_path = cache_root / key / "libsputnik_rt.a";
   if (std::filesystem::exists(final_path)) {
     return final_path;
   }
 
-  const std::filesystem::path temp_dir =
-      cache_root / (key + ".tmp." + std::to_string(::getpid()));
-  std::filesystem::create_directories(temp_dir);
+  std::filesystem::create_directories(cache_root);
+  NativeBuildDirectory scratch(cache_root);
+  const std::filesystem::path temp_dir = scratch.path;
 
   std::vector<std::string> objects;
   objects.reserve(runtime_sources.size());
@@ -27104,7 +27145,11 @@ ensure_native_runtime_archive(const std::string &cxx,
     }
     batch << "exit \"$status\"\n";
     const std::string rendered_batch = batch.str();
-    if (std::system(rendered_batch.c_str()) != 0) {
+    const auto diagnostics = temp_dir / "compile.log";
+    const auto quiet_batch = "(" + rendered_batch + ") > " +
+        shell_single_quote(diagnostics.string()) + " 2>&1";
+    if (std::system(quiet_batch.c_str()) != 0) {
+      std::cerr << read_file(diagnostics.string());
       std::filesystem::remove_all(temp_dir);
       throw std::runtime_error("native runtime archive compile failed: " +
                                compile_commands[start]);
@@ -27192,7 +27237,7 @@ void append_native_library_paths(
 NativeExecutableBuildResult build_native_executable(
     const std::string &argv0, const RunnableModuleArtifact &artifact,
     const std::filesystem::path &output_path,
-    const std::filesystem::path &native_source_path,
+    const std::filesystem::path &retained_source_path,
     const std::vector<sputnik::pkg::PackageNativeExtension> &native_extensions =
         {},
     const std::filesystem::path &native_base_dir = {}) {
@@ -27202,6 +27247,10 @@ NativeExecutableBuildResult build_native_executable(
   if (!parent.empty()) {
     std::filesystem::create_directories(parent);
   }
+  NativeBuildDirectory scratch;
+  const auto staged_output = scratch.path / "program";
+  const auto native_source_path = retained_source_path.empty()
+      ? scratch.path / "program.native.cpp" : retained_source_path;
   const std::filesystem::path source_parent = native_source_path.parent_path();
   if (!source_parent.empty()) {
     std::filesystem::create_directories(source_parent);
@@ -27213,16 +27262,11 @@ NativeExecutableBuildResult build_native_executable(
   const std::vector<std::string> runtime_sources =
       native_runtime_sources(runtime_root);
 
-  std::filesystem::path runtime_archive;
-  try {
-    runtime_archive =
-        ensure_native_runtime_archive(cxx, runtime_root, runtime_sources);
-  } catch (const std::exception &) {
-    // Fall back to compiling the runtime sources into the executable
-    // directly (the pre-archive behavior) when the archive cannot be built,
-    // e.g. `ar` is unavailable.
-    runtime_archive.clear();
-  }
+  const auto runtime_started = std::chrono::steady_clock::now();
+  const auto runtime_archive =
+      ensure_native_runtime_archive(cxx, runtime_root, runtime_sources, argv0);
+  const auto runtime_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - runtime_started).count();
 
   std::vector<std::string> command = {cxx};
   const std::vector<std::string> &flags = native_runtime_compile_flags();
@@ -27326,18 +27370,14 @@ NativeExecutableBuildResult build_native_executable(
 #endif
   }
 
-  if (!runtime_archive.empty()) {
 #if defined(__APPLE__)
-    command.push_back("-Wl,-force_load," + runtime_archive.string());
+    command.insert(command.end(), {"-Xlinker", "-force_load", "-Xlinker",
+                                    runtime_archive.string()});
 #else
     command.push_back("-Wl,--whole-archive");
     command.push_back(runtime_archive.string());
     command.push_back("-Wl,--no-whole-archive");
 #endif
-  } else {
-    command.insert(command.end(), runtime_sources.begin(),
-                   runtime_sources.end());
-  }
 #if defined(__APPLE__)
   // Native executables used to retain the entire force-loaded runtime archive,
   // including compiler/build/package code.  Darwin's atom-level dead stripping
@@ -27345,6 +27385,7 @@ NativeExecutableBuildResult build_native_executable(
   // -x removes local linker symbols from the release artifact.
   command.push_back("-Wl,-dead_strip");
   command.push_back("-Wl,-x");
+  if (native_extensions.empty()) command.push_back("-Wl,-dead_strip_dylibs");
 #elif defined(__linux__)
   command.push_back("-Wl,--gc-sections");
   command.push_back("-Wl,--strip-debug");
@@ -27382,7 +27423,7 @@ NativeExecutableBuildResult build_native_executable(
   command.push_back("-ldl");
 #endif
   command.push_back("-o");
-  command.push_back(output_path.string());
+  command.push_back(staged_output.string());
 
   const std::string rendered = shell_command(command);
   const int exit_code = std::system(rendered.c_str());
@@ -27398,6 +27439,7 @@ NativeExecutableBuildResult build_native_executable(
                  << "  \"cxx\": \"" << json_escape(cxx) << "\",\n"
                  << "  \"jobs\": " << parallel.jobs << ",\n"
                  << "  \"partitions\": " << (parallel.objects.empty() ? 1U : parallel.objects.size()) << ",\n"
+                 << "  \"runtime_prepare_ms\": " << runtime_ms << ",\n"
                  << "  \"compile_link_ms\": " << compile_ms << "\n}\n";
   write_file(native_source_path.string() + ".compile.json", compile_report.str());
 
@@ -27406,8 +27448,8 @@ NativeExecutableBuildResult build_native_executable(
   // undefined-reference once the Sputnik bindings start calling them.
   // Best-effort: skipped when `nm` is unavailable.
   if (!declared_symbols.empty()) {
-    const std::filesystem::path nm_dump = output_path.string() + ".nm.txt";
-    const std::string nm_command = shell_command({"nm", output_path.string()}) +
+    const std::filesystem::path nm_dump = scratch.path / "symbols.txt";
+    const std::string nm_command = shell_command({"nm", staged_output.string()}) +
                                    " > " + shell_command({nm_dump.string()}) +
                                    " 2>/dev/null";
     const int nm_exit = std::system(nm_command.c_str());
@@ -27434,9 +27476,15 @@ NativeExecutableBuildResult build_native_executable(
     }
   }
 
+  // Keep compiler scratch in the system temporary directory. Publish on the
+  // output filesystem only after validation (TMPDIR may be another volume).
+  NativeBuildDirectory publication(parent.empty() ? std::filesystem::current_path() : parent);
+  const auto published_output = publication.path / "program";
+  std::filesystem::copy_file(staged_output, published_output);
+  std::filesystem::rename(published_output, output_path);
   NativeExecutableBuildResult result;
   result.output_path = output_path.string();
-  result.source_path = native_source_path.string();
+  result.source_path = retained_source_path.string();
   result.hash = sputnik::lexer::sha256_hex(read_file(output_path.string()));
   result.backend = plan.backend;
   result.cxx = cxx;
@@ -27460,6 +27508,8 @@ NativeExecutableBuildResult build_native_executable(
   result.full_native_coverage =
       result.body_coverage_full && result.vm_independent;
   result.binary_size_bytes = std::filesystem::file_size(output_path);
+  result.runtime_prepare_ms = runtime_ms;
+  result.compile_link_ms = compile_ms;
   result.fallback_reason = plan.fallback_reason;
   result.coverage = plan.coverage;
   return result;
@@ -27703,6 +27753,10 @@ std::string executable_build_result_to_json(
       << "\",\n";
   out << "  \"native_binary_size_bytes\": "
       << (native == nullptr ? 0U : native->binary_size_bytes) << ",\n";
+  out << "  \"native_runtime_prepare_ms\": "
+      << (native == nullptr ? 0 : native->runtime_prepare_ms) << ",\n";
+  out << "  \"native_compile_link_ms\": "
+      << (native == nullptr ? 0 : native->compile_link_ms) << ",\n";
   out << "  \"native_code_count\": "
       << (native == nullptr ? 0U : native->native_code_count) << ",\n";
   out << "  \"native_extension_code_count\": "
@@ -27750,9 +27804,15 @@ std::string executable_build_result_to_json(
 int run_source_build_command(int argc, char **argv) {
   const std::string source_path = argv[2];
   SourceBuildCliOptions options = parse_source_build_options(argc, argv, 3);
-  const std::filesystem::path output_path =
+  const bool emit_cpp = std::string(argv[1]) == "emit-cpp";
+  std::filesystem::path output_path =
       default_executable_path_for(source_path, options);
+  if (emit_cpp && options.out_path.empty()) output_path += ".cpp";
   try {
+    if (emit_cpp && (options.target != "native" ||
+        options.require_full_native || options.require_native_body_coverage)) {
+      throw std::runtime_error("emit-cpp accepts output, entry and grant options only");
+    }
     if (options.target == "bytecode-wrapper" &&
         !options.capability_grants.empty()) {
       throw std::runtime_error(
@@ -27770,11 +27830,19 @@ int run_source_build_command(int argc, char **argv) {
             ? std::nullopt
             : std::optional<EntryExecutionMode>(
                   parse_source_build_entry_mode(options.entry));
+    NativeBuildDirectory frontend_scratch;
     const RunnableModuleArtifact artifact = compile_source_to_runnable_module(
-        source_path, forced_entry, options.capability_grants);
+        source_path, forced_entry, options.capability_grants, true, frontend_scratch.path);
     const std::filesystem::path parent = output_path.parent_path();
     if (!parent.empty()) {
       std::filesystem::create_directories(parent);
+    }
+    if (emit_cpp) {
+      const auto plan = build_native_cpp_plan(artifact, artifact.module,
+                                              artifact.package_extensions);
+      write_file(output_path.string(), plan.source);
+      std::cout << output_path.string() << "\n";
+      return 0;
     }
     NativeExecutableBuildResult native_result;
     const NativeExecutableBuildResult *native_json = nullptr;
@@ -27793,7 +27861,8 @@ int run_source_build_command(int argc, char **argv) {
                                    std::filesystem::perm_options::replace);
     } else {
       const std::filesystem::path native_source_path =
-          output_path.string() + ".native.cpp";
+          options.target == "native-debug" ? output_path.string() + ".native.cpp"
+                                            : std::string();
       native_result = build_native_executable(argv[0], artifact, output_path,
                                               native_source_path,
                                               artifact.package_extensions);
@@ -27967,9 +28036,10 @@ int run_package_command(int argc, char **argv) {
 }
 
 struct BuildCliOptions {
+  std::string out_path;
   std::string out_dir;
   std::string cache_dir;
-  std::string target = "both";
+  std::string target = "native";
   std::vector<sputnik::capability::CapabilityRequest> capability_grants;
   bool cache_enabled = true;
   bool require_native_body_coverage = false;
@@ -27980,14 +28050,16 @@ BuildCliOptions parse_build_options(int argc, char **argv, int start_index) {
   BuildCliOptions options;
   for (int i = start_index; i < argc; ++i) {
     const std::string arg = argv[i];
-    if (arg == "--out-dir" && i + 1 < argc) {
+    if ((arg == "-o" || arg == "--out") && i + 1 < argc) {
+      options.out_path = argv[++i];
+    } else if (arg == "--out-dir" && i + 1 < argc) {
       options.out_dir = argv[++i];
     } else if (arg == "--cache-dir" && i + 1 < argc) {
       options.cache_dir = argv[++i];
     } else if (arg == "--target" && i + 1 < argc) {
       options.target = argv[++i];
       if (options.target != "bytecode" && options.target != "native" &&
-          options.target != "both") {
+          options.target != "both" && options.target != "native-debug") {
         throw std::runtime_error("unknown build target: " + options.target);
       }
     } else if (arg == "--no-cache") {
@@ -28696,7 +28768,7 @@ void populate_cached_graph_entry(RunnableModuleArtifact *artifact,
 }
 
 int run_build_command(int argc, char **argv) {
-  if (argc < 3 || std::string(argv[1]) != "build") {
+  if (argc < 3) {
     usage(std::cerr);
     return 2;
   }
@@ -28706,19 +28778,29 @@ int run_build_command(int argc, char **argv) {
     return run_source_build_command(argc, argv);
   }
   const BuildCliOptions options = parse_build_options(argc, argv, 3);
+  const bool emit_cpp = std::string(argv[1]) == "emit-cpp";
+  if (emit_cpp && (options.target != "native" || options.require_full_native ||
+                   options.require_native_body_coverage)) {
+    throw std::runtime_error("emit-cpp accepts output and grant options only for manifests");
+  }
+  if (!options.out_path.empty() && options.target == "bytecode") {
+    throw std::runtime_error("bytecode builds use --out-dir, not -o");
+  }
+  NativeBuildDirectory scratch;
+  const bool keep_modules = !emit_cpp && options.target != "native";
   const std::filesystem::path manifest_dir =
       std::filesystem::path(dirname(manifest_path));
   const std::filesystem::path out_dir =
       options.out_dir.empty() ? (manifest_dir / "build" / "sputnik")
                               : std::filesystem::path(options.out_dir);
   const std::filesystem::path cache_dir =
-      options.cache_dir.empty() ? (out_dir / ".cache")
+      options.cache_dir.empty() ? ((keep_modules ? out_dir : scratch.path) / ".cache")
                                 : std::filesystem::path(options.cache_dir);
 
   sputnik::build::BuildSummary summary;
   summary.target = options.target;
   summary.out_dir = out_dir.string();
-  summary.cache_dir = cache_dir.string();
+  summary.cache_dir = keep_modules || !options.cache_dir.empty() ? cache_dir.string() : "";
 
   const sputnik::build::BuildManifestResult parsed =
       sputnik::build::parse_build_manifest(read_file(manifest_path),
@@ -28736,11 +28818,12 @@ int run_build_command(int argc, char **argv) {
   try {
     sputnik::pkg::PackageResolver package_resolver(std::filesystem::absolute(manifest_path).parent_path());
     package_resolver.require(parsed.manifest.dependencies);
-    build_manifest_modules(parsed.manifest, manifest_dir, out_dir, cache_dir,
+    build_manifest_modules(parsed.manifest, manifest_dir,
+                           keep_modules ? out_dir : scratch.path, cache_dir,
                            options.cache_enabled, &summary, &package_resolver);
     auto graph_modules = decode_native_graph_modules(summary);
     resolve_graph_packages(&graph_modules, parsed.manifest.root_module, &package_resolver, parsed.manifest.source_formats);
-    if (options.target == "native" || options.target == "both") {
+    if (options.target != "bytecode") {
       sputnik::build::BuildArtifactRecord *root_record = nullptr;
       for (sputnik::build::BuildArtifactRecord &artifact : summary.artifacts) {
         if (!artifact.stdlib && artifact.name == parsed.manifest.root_module) {
@@ -28777,18 +28860,35 @@ int run_build_command(int argc, char **argv) {
                 : linked_graph.diagnostics.front().message);
       }
       const std::filesystem::path native_output_path =
-          out_dir / safe_artifact_name(parsed.manifest.root_module);
+          options.out_path.empty() ? out_dir / safe_artifact_name(parsed.manifest.root_module)
+                                   : std::filesystem::path(options.out_path);
       const std::filesystem::path native_source_path =
-          out_dir /
-          (safe_artifact_name(parsed.manifest.root_module) + ".native.cpp");
+          options.target == "native-debug"
+              ? std::filesystem::path(native_output_path.string() + ".native.cpp")
+              : std::filesystem::path();
       auto combined_extensions = sputnik::pkg::prepare_native_providers(
           sputnik::build::package_manifest(parsed.manifest), manifest_dir,
-          std::filesystem::absolute(cache_dir / "native-providers"));
+          std::filesystem::absolute(
+              keep_modules || !options.cache_dir.empty()
+                  ? cache_dir / "native-providers"
+                  : native_runtime_cache_root().parent_path() / "native-providers"));
       const auto package_extensions = resolved_native_extensions(package_resolver);
       combined_extensions.insert(combined_extensions.end(), package_extensions.begin(), package_extensions.end());
       const std::vector<sputnik::pkg::PackageNativeExtension> native_extensions =
           augment_native_extensions_from_source(
               combined_extensions, linked_graph.artifact.module);
+      if (emit_cpp) {
+        const auto cpp_path = options.out_path.empty()
+            ? (options.out_dir.empty() ? manifest_dir : out_dir) /
+                (safe_artifact_name(parsed.manifest.root_module) + ".cpp")
+            : std::filesystem::path(options.out_path);
+        if (!cpp_path.parent_path().empty())
+          std::filesystem::create_directories(cpp_path.parent_path());
+        write_file(cpp_path.string(), build_native_cpp_plan(
+            linked_graph.artifact, linked_graph.artifact.module, native_extensions).source);
+        std::cout << cpp_path.string() << "\n";
+        return 0;
+      }
       const std::vector<sputnik::pkg::PackageNativeBlob> native_blobs =
           collect_native_blobs(native_extensions, manifest_dir.string());
       const NativeExecutableBuildResult native_result = build_native_executable(
@@ -28846,6 +28946,9 @@ int run_build_command(int argc, char **argv) {
           return 1;
         }
       }
+    }
+    if (!keep_modules) {
+      for (auto &artifact : summary.artifacts) artifact.output_path.clear();
     }
     summary.ok = true;
     std::cout << sputnik::build::summary_to_json(summary);
@@ -29119,11 +29222,13 @@ std::filesystem::path vm_build_cache_root(
 RunnableModuleArtifact compile_configured_source(
     const SourceConfiguration &configuration,
     const std::optional<EntryExecutionMode> &forced_entry_mode,
-    const std::vector<sputnik::capability::CapabilityRequest> &capabilities) {
+    const std::vector<sputnik::capability::CapabilityRequest> &capabilities,
+    const std::filesystem::path &build_cache) {
   const auto &manifest = configuration.manifest;
   sputnik::pkg::PackageResolver resolver(configuration.directory);
   resolver.require(manifest.dependencies);
-  const auto cache = vm_build_cache_root(configuration.directory);
+  const auto cache = build_cache.empty() ? vm_build_cache_root(configuration.directory)
+                                        : build_cache;
   sputnik::build::BuildSummary summary;
   summary.name = manifest.name;
   summary.root_module = manifest.root_module;
@@ -29542,20 +29647,7 @@ void load_installed_package_extensions(
 }
 
 std::string package_toolchain_revision(const std::string &executable) {
-  namespace fs = std::filesystem;
-  fs::path compiler(executable);
-  if (!fs::exists(compiler) && !compiler.has_parent_path()) {
-    std::istringstream paths(std::getenv("PATH") ? std::getenv("PATH") : "");
-    std::string directory;
-    while (std::getline(paths, directory, ':')) {
-      const auto candidate = fs::path(directory) / compiler;
-      if (::access(candidate.c_str(), X_OK) == 0) {
-        compiler = candidate;
-        break;
-      }
-    }
-  }
-  return sputnik::pkg::file_sha256(fs::canonical(compiler));
+  return sputnik::pkg::file_sha256(resolved_executable_path(executable));
 }
 
 int run_distribution_command(int argc, char **argv) {
@@ -30817,6 +30909,12 @@ int run_bytecode_artifact_command(const std::string &command,
 
 int main(int argc, char **argv) {
   try {
+    // Build-system handshake for the companion archive; not a program build.
+    if (argc == 3 && std::string(argv[1]) == "--native-runtime-key") {
+      const auto root = detect_native_runtime_root(argv[0]);
+      std::cout << native_runtime_cache_key(argv[2], root, native_runtime_sources(root)) << "\n";
+      return 0;
+    }
     if (argc == 2 && std::string(argv[1]) == "--version") {
       std::cout << "sputnik " SPUTNIK_VERSION "\n";
       return 0;
@@ -30832,7 +30930,8 @@ int main(int argc, char **argv) {
     if (argc == 2 && is_sputnik_source_path(argv[1])) {
       return run_source_file_command(argv[1]);
     }
-    if (argc >= 2 && std::string(argv[1]) == "build") {
+    if (argc >= 2 && (std::string(argv[1]) == "build" ||
+                      std::string(argv[1]) == "emit-cpp")) {
       return run_build_command(argc, argv);
     }
     if (argc >= 2 && std::string(argv[1]).find("package-") == 0U) {

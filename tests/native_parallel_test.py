@@ -20,7 +20,7 @@ work.mkdir(parents=True, exist_ok=True)
 def build(source, name, jobs):
     environment = dict(os.environ, SPUTNIK_NATIVE_JOBS=str(jobs))
     output = work / name
-    command = [str(compiler), "build", str(source), "--target", "native",
+    command = [str(compiler), "build", str(source), "--target", "native-debug",
                "--require-full-native", "--out-dir", str(output), "--grant", "ffi"]
     result = subprocess.run(command, cwd=root, env=environment, capture_output=True,
                             text=True, timeout=600)

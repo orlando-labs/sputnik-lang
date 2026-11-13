@@ -4,9 +4,12 @@
 #include <algorithm>
 #include <cstdlib>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <unistd.h>
 
 namespace {
 
@@ -179,6 +182,56 @@ void test_import_as_replaces_notebook_dependencies() {
              "failed replacement edit preserves the previous result");
     }
   }
+}
+
+void test_package_import_spelling_in_notebook_faults() {
+  char directory[] = "/tmp/sputnik-notebook-import-XXXXXX";
+  expect(mkdtemp(directory) != nullptr, "create a notebook package directory");
+  const auto packages = std::filesystem::path(directory) / "packages";
+  std::filesystem::create_directory(packages);
+  std::ofstream(packages / "imports.index")
+      << "test_vendor/engine\tengine\ttest_vendor.engine\n";
+
+  const BundledModuleSource errors{
+      "test_vendor.engine.errors", "errors.s",
+      "package test_vendor.engine.errors\nexport EngineError\n"
+      "class EngineError < NativeError\n", false};
+  for (const bool unscoped : {true, false}) {
+    const std::string import = unscoped ? "engine" : "test_vendor.engine";
+    const std::string declaration = "from " + import + ".errors import EngineError\n";
+    const std::string raise_error =
+        "raise EngineError(\"detail mentions TestVendor.Engine.Errors.EngineError\")\n";
+    const std::string expected =
+        std::string(unscoped ? "Engine" : "TestVendor.Engine") +
+        ".Errors.EngineError: detail mentions TestVendor.Engine.Errors.EngineError";
+    const BundledModuleSource model{
+        "model", "model.s",
+        declaration + "export fail\ndef fail():\n  " + raise_error, false};
+
+    Session session;
+    session.package_search_directory = directory;
+    session.cells = {make_cell("from model import fail\nfail()\n")};
+    expect(apply_bundled_environment(&session, {errors, model}, true, false),
+           "engine dependency should load: " + session.environment_error);
+    expect(session.cells[0].error == expected,
+           "sheet fault should use the imported spelling: " + session.cells[0].error);
+    expect(session.module_errors.size() == 1 &&
+               session.module_errors.front().module_id == "model" &&
+               session.module_errors.front().message == expected,
+           "module banner should show the same fault");
+
+    Session module_run;
+    module_run.module_editor = true;
+    module_run.project_module_id = "model";
+    module_run.project_module_path = "model.s";
+    module_run.package_search_directory = directory;
+    module_run.bundled_modules = {errors};
+    module_run.cells = {make_cell(declaration + raise_error)};
+    evaluate_from(&module_run, 0, true, false, false);
+    expect(module_run.cells[0].error == "ModuleInitError: model: " + expected,
+           "module run should use the imported spelling: " + module_run.cells[0].error);
+  }
+  std::filesystem::remove_all(directory);
 }
 
 void test_console_definitions_imports_and_private_results() {
@@ -879,6 +932,7 @@ void test_runtime_event_pump_coalesces_reentry_and_reports_drain_cap() {
 int main() {
   test_native_resource_preview_in_tuple();
   test_import_as_replaces_notebook_dependencies();
+  test_package_import_spelling_in_notebook_faults();
   test_console_definitions_across_cells();
   test_console_definitions_errors_and_capabilities();
   test_console_definitions_imports_and_private_results();

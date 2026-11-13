@@ -145,7 +145,7 @@ with tempfile.TemporaryDirectory(prefix="sputnik-native-throw-") as temporary:
         source.write_text(text)
         vm = run(compiler, "run", source)
         executable = Path(temporary) / name
-        built = run(compiler, "build", source, "--target", "native", "--entry", "init",
+        built = run(compiler, "build", source, "--target", "native-debug", "--entry", "init",
                     "--require-full-native", "-o", executable, timeout=600)
         assert built.returncode == 0, built.stdout + built.stderr
         report = json.loads(built.stdout)
@@ -181,7 +181,7 @@ def main():
 ''')
     manifest = ffi / "vm_control.build.json"
     vm = run(compiler, "run", manifest, "--grant", "ffi")
-    built = run(compiler, "build", manifest, "--target", "native",
+    built = run(compiler, "build", manifest, "--target", "native-debug",
                 "--require-full-native", "--out-dir", ffi / "out", timeout=600)
     assert built.returncode == 0, built.stdout + built.stderr
     report = json.loads(built.stdout)

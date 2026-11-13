@@ -71,6 +71,7 @@ struct NotebookLoweringOptions {
   std::function<std::optional<std::string>(const std::string &,
                                             const lexer::Span &)>
       external_read_constant_path;
+  std::function<bool(const std::string &, const lexer::Span &)> sheet_import;
   std::function<std::optional<std::uint32_t>(const std::string &)>
       declared_write_descriptor;
 };

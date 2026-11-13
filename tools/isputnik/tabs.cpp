@@ -125,7 +125,7 @@ ProjectTabs::ProjectTabs(sputnik::notebook::LoadedProject project,
   for (const auto &sheet : project_.document.sheets) {
     auto tab = std::make_unique<ProjectTab>();
     load_project_into_session(&tab->session, project_, sheet.id);
-    tab->session.project_inputs = inputs_;
+    assign_inputs(*tab);
     // Every sheet starts from the same immutable source snapshot. Loading a
     // sheet is intentionally source-only; it does not build or run a VM.
     tab->session.bundled_modules = environment_sources_;
@@ -261,7 +261,7 @@ void ProjectTabs::save_active() {
 }
 
 void ProjectTabs::attach_new_tab(ProjectTab *tab) {
-  tab->session.project_inputs = inputs_;
+  assign_inputs(*tab);
   // Carry host policy, not another tab's runtime or editor state. All these
   // potentially allocating operations happen before disk publication.
   tab->session.runtime_capability_grants =
@@ -297,7 +297,7 @@ bool ProjectTabs::set_inputs(const std::map<std::string, std::string> &values, b
   inputs_ = next;
   // Publish to every sheet before executing any: callbacks never see a
   // partially distributed snapshot. Each sheet owns its own runtime Values.
-  for (const auto &tab : tabs_) tab->session.project_inputs = inputs_;
+  for (const auto &tab : tabs_) assign_inputs(*tab);
   if (evaluate) for (const auto &tab : tabs_) apply_project_input_changes(&tab->session, changed);
   return true;
 }
@@ -326,7 +326,7 @@ bool ProjectTabs::set_cell_inputs(sputnik::notebook::CellId owner, const std::ma
   sputnik::notebook::validate_project_control_values(project_.document, *next);
   if (changed.empty()) return false;
   inputs_ = next;
-  for (const auto &tab : tabs_) tab->session.project_inputs = inputs_;
+  for (const auto &tab : tabs_) assign_inputs(*tab);
   if (evaluate) for (const auto &tab : tabs_) apply_project_input_changes(&tab->session, changed);
   return true;
 }
@@ -360,6 +360,9 @@ void ProjectTabs::set_cell_id(sputnik::notebook::CellId owner, sputnik::notebook
     sheet->cells.push_back(std::move(cell)); saved = std::prev(sheet->cells.end());
   }
   saved->id = replacement;
+  for (auto &consumer : next.sheets)
+    for (auto &link : consumer.imports)
+      if (link.sheet == sheet->id && link.cell == owner) link.cell = replacement;
   std::function<void(std::vector<sputnik::notebook::ProjectComponent> &)> rebind = [&](auto &items) {
     for (auto &component : items) {
       if (component.cell == owner) component.cell = replacement;
@@ -398,7 +401,7 @@ void ProjectTabs::set_cell_id(sputnik::notebook::CellId owner, sputnik::notebook
   }
   target_cell->id = replacement;
   inputs_ = std::move(values);
-  for (const auto &tab : tabs_) tab->session.project_inputs = inputs_;
+  for (const auto &tab : tabs_) assign_inputs(*tab);
   if (target_cell->kind == "code") for (auto &cell : target_tab->session.cells)
     if (cell.kind == "code") cell.dirty = true;
   target_tab->session.status = "cell Hard ID updated";
@@ -467,7 +470,7 @@ void ProjectTabs::save_cell_ui(sputnik::notebook::CellId owner, const std::strin
   for (const auto &tab : tabs_) if (!tab->module) tab->session.project_audio = sputnik::notebook::project_audio_components(project_.document, tab->session.project_sheet_id);
   inputs_ = values;
   for (const auto &tab : tabs_) {
-    tab->session.project_inputs = inputs_;
+    assign_inputs(*tab);
     // Structure editing stays inert; defer Watch until an explicit run or input edit.
     invalidate_project_input_changes(&tab->session, changed);
   }
@@ -487,7 +490,7 @@ void ProjectTabs::create_input(const sputnik::notebook::ProjectInput &input) {
   sputnik::notebook::save_project(&project_, next);
   for (const auto &tab : tabs_) if (!tab->module) tab->session.project_audio = sputnik::notebook::project_audio_components(project_.document, tab->session.project_sheet_id);
   inputs_ = values;
-  for (const auto &tab : tabs_) tab->session.project_inputs = inputs_;
+  for (const auto &tab : tabs_) assign_inputs(*tab);
   // Defining project structure never executes user code.
 }
 
@@ -509,7 +512,7 @@ void ProjectTabs::delete_input(const std::string &id) {
   sputnik::notebook::save_project(&project_, next);
   inputs_ = values;
   for (const auto &tab : tabs_) {
-    tab->session.project_inputs = inputs_;
+    assign_inputs(*tab);
     // Removing a definition is inert. Reads become stale until the next Run.
     invalidate_project_input_changes(&tab->session, {id});
   }
@@ -627,7 +630,7 @@ void ProjectTabs::save_board(const sputnik::notebook::ProjectBoard &board) {
   sputnik::notebook::save_project(&project_, next);
   inputs_ = input_values;
   for (const auto &tab : tabs_) if (!tab->module) {
-    tab->session.project_inputs = inputs_;
+    assign_inputs(*tab);
     tab->session.project_audio_inputs = staged_audio.at(tab->session.project_sheet_id);
     invalidate_project_input_changes(&tab->session, changed_annotations);
   }
@@ -756,7 +759,7 @@ bool ProjectTabs::restore_inputs(const std::map<std::string, std::string> &value
   sputnik::notebook::validate_project_control_values(project_.document, *next);
   if (changed.empty()) return false;
   inputs_ = next;
-  for (const auto &tab : tabs_) { tab->session.project_inputs = inputs_; invalidate_project_input_changes(&tab->session, changed); }
+  for (const auto &tab : tabs_) { assign_inputs(*tab); invalidate_project_input_changes(&tab->session, changed); }
   return true;
 }
 
@@ -846,7 +849,7 @@ void ProjectTabs::edit_audio(const sputnik::notebook::ProjectAudioEdit &edit) {
   (*values)[key] = defaults->at(key);
   sputnik::notebook::save_project(&project_, next); inputs_ = values;
   for (const auto &tab : tabs_) if (!tab->module) {
-    tab->session.project_inputs = inputs_; tab->session.project_audio_inputs = staged.at(tab->session.project_sheet_id);
+    assign_inputs(*tab); tab->session.project_audio_inputs = staged.at(tab->session.project_sheet_id);
     invalidate_project_input_changes(&tab->session, {key});
   }
 }
@@ -949,6 +952,11 @@ void ProjectTabs::delete_sheet(const std::string &id, const std::string &blank_i
   const auto found = std::find_if(next.sheets.begin(), next.sheets.end(),
                                   [&](const auto &sheet) { return sheet.id == id; });
   if (found == next.sheets.end()) throw std::invalid_argument("unknown sheet: " + id);
+  for (const auto &consumer : next.sheets)
+    for (const auto &link : consumer.imports)
+      if (link.sheet == id)
+        throw std::invalid_argument("Sheet '" + consumer.title + "' imports '" + link.name +
+                                    "' from this sheet. Remove or change that import first.");
   const auto index = static_cast<std::size_t>(found - next.sheets.begin());
   // Keep future native allocations above removed cells even after reopening.
   // A remote notebook retains tombstones for these identities.
@@ -991,6 +999,222 @@ void ProjectTabs::delete_sheet(const std::string &id, const std::string &blank_i
     throw;
   }
   publish();
+}
+
+void ProjectTabs::save_sheet_imports(const std::string &id, const std::string &json) {
+  require_idle();
+  auto next = project_.document;
+  const auto found = std::find_if(next.sheets.begin(), next.sheets.end(),
+      [&](const auto &sheet) { return sheet.id == id; });
+  if (found == next.sheets.end()) throw std::invalid_argument("unknown sheet: " + id);
+  const auto index = static_cast<std::size_t>(found - next.sheets.begin());
+  found->imports = sputnik::notebook::parse_project_sheet_imports(json);
+  if (!found->imports.empty()) next.version = 5;
+  std::set<std::string> names;
+  for (const auto &link : found->imports) names.insert(link.name);
+  sputnik::notebook::save_project(&project_, next);
+  auto &session = tabs_[index]->session;
+  session.sheet_import_names = std::move(names);
+  for (auto &cell : session.cells) if (cell.kind == "code") cell.dirty = true;
+}
+
+const sputnik::notebook::ProjectSheet *ProjectTabs::sheet_for(const ProjectTab &tab) const {
+  const auto &sheets = project_.document.sheets;
+  const auto found = std::find_if(sheets.begin(), sheets.end(),
+      [&](const auto &sheet) { return sheet.id == tab.session.project_sheet_id; });
+  return found == sheets.end() ? nullptr : &*found;
+}
+
+void ProjectTabs::assign_inputs(ProjectTab &tab) {
+  if (tab.imported_values.empty()) {
+    tab.session.project_inputs = inputs_;
+    return;
+  }
+  auto values = std::make_shared<sputnik::runtime::NotebookInputSnapshot>(*inputs_);
+  for (const auto &[name, value] : tab.imported_values)
+    values->emplace(sputnik::runtime::notebook_sheet_import_key(name), value);
+  tab.session.project_inputs = std::move(values);
+}
+
+std::set<std::string> ProjectTabs::refresh_sheet_imports(ProjectTab &tab) {
+  const auto *sheet = sheet_for(tab);
+  if (!sheet || (sheet->imports.empty() && tab.imported_values.empty())) return {};
+  using sputnik::runtime::notebook_sheet_import_key;
+  sputnik::runtime::NotebookExports imports;
+  for (const auto &link : sheet->imports) {
+    for (const auto &provider : tabs_) {
+      if (provider->session.project_sheet_id != link.sheet) continue;
+      const auto &cells = provider->session.cells;
+      const auto source = std::find_if(cells.begin(), cells.end(),
+          [&](const auto &cell) { return cell.id == link.cell; });
+      if (source == cells.end() || source->dirty || !source->ok) break;
+      const auto exported = source->exports.find(link.export_name);
+      if (exported != source->exports.end()) imports.emplace(link.name, exported->second);
+      break;
+    }
+  }
+  std::set<std::string> changed;
+  std::size_t bytes = 0;
+  for (const auto &[name, value] : imports) {
+    bytes += name.size() + value.size();
+    if (bytes > 7U * 1024U * 1024U)
+      throw std::runtime_error("sheet import snapshot exceeds the 7 MiB worker transfer limit");
+    auto key = notebook_sheet_import_key(name);
+    const auto previous = tab.imported_values.find(name);
+    if (previous == tab.imported_values.end() || previous->second != value) changed.insert(key);
+  }
+  for (const auto &[name, _] : tab.imported_values)
+    if (!imports.count(name)) changed.insert(notebook_sheet_import_key(name));
+  tab.imported_values.swap(imports);
+  assign_inputs(tab);
+  return changed;
+}
+
+bool ProjectTabs::sheet_has_cycle(const std::string &id) const {
+  std::set<std::string> visited;
+  std::function<bool(const std::string &)> reaches = [&](const auto &current) {
+    if (!visited.insert(current).second) return false;
+    const auto &sheets = project_.document.sheets;
+    const auto found = std::find_if(sheets.begin(), sheets.end(),
+        [&](const auto &sheet) { return sheet.id == current; });
+    if (found == sheets.end()) return false;
+    for (const auto &link : found->imports)
+      if (link.sheet == id || reaches(link.sheet)) return true;
+    return false;
+  };
+  return reaches(id);
+}
+
+bool ProjectTabs::run_linked(ProjectTab &tab, const std::string &action,
+                             std::size_t index, const SheetRun &run) {
+  if (tab.module || project_.document.version < 5)
+    return run(tab, action, index, {});
+  using sputnik::notebook::CellId;
+  std::map<CellId, std::uint64_t> before;
+  for (const auto &entry : tabs_)
+    for (const auto &cell : entry->session.cells) before.emplace(cell.id, cell.evaluations);
+  if (action == "run" || action == "run_all" || action == "apply")
+    tab.iteration_ready.clear();
+  std::set<CellId> preparing;
+  std::function<bool(ProjectTab &, const std::string &, std::size_t)> evaluate;
+  evaluate = [&](ProjectTab &target, const std::string &command, std::size_t start) {
+    const auto *sheet = sheet_for(target);
+    const auto &cells = target.session.cells;
+    if (!sheet || cells.empty()) return run(target, command, start, {});
+    const auto root = cells.at(start).id;
+    if (!preparing.insert(root).second) return false;
+    const auto sources = notebook_sources(target.session);
+    const sputnik::notebook::DependencyGraph graph(sources);
+    std::set<CellId> relevant{root};
+    if (command == "run_all" || command == "apply" || !cells.at(start).ok)
+      for (const auto &source : sources)
+        if (command == "run_all" || source.watch_enabled()) relevant.insert(source.id);
+    const auto downstream = graph.invalidation_plan(root);
+    relevant.insert(downstream.begin(), downstream.end());
+    for (auto edge = graph.edges().rbegin(); edge != graph.edges().rend(); ++edge)
+      if (relevant.count(edge->consumer)) relevant.insert(edge->provider.cell_id);
+    for (const auto &link : sheet->imports) {
+      if (std::none_of(relevant.begin(), relevant.end(), [&](auto id) {
+            const auto *analysis = graph.analysis(id);
+            return analysis && analysis->reads.count(link.name);
+          })) continue;
+      for (const auto &provider : tabs_) {
+        if (provider->session.project_sheet_id != link.sheet) continue;
+        const auto &upstream = provider->session.cells;
+        const auto source = std::find_if(upstream.begin(), upstream.end(),
+            [&](const auto &cell) { return cell.id == link.cell; });
+        if (source == upstream.end() || !source->watch ||
+            (source->ok && !source->dirty && source->exports.count(link.export_name))) break;
+        if (!preparing.count(source->id) &&
+            !evaluate(*provider, "run", static_cast<std::size_t>(source - upstream.begin()))) {
+          preparing.erase(root);
+          return false;
+        }
+        break;
+      }
+    }
+    const auto changed = refresh_sheet_imports(target);
+    const bool completed = run(target, command, start, changed);
+    preparing.erase(root);
+    return completed;
+  };
+  const bool completed = action == "watch" || action == "inputs"
+      ? run(tab, action, index, refresh_sheet_imports(tab))
+      : evaluate(tab, action, index);
+  if (completed) propagate_exports(run, before);
+  return completed;
+}
+
+void ProjectTabs::propagate_exports(const SheetRun &run,
+    const std::map<sputnik::notebook::CellId, std::uint64_t> &before) {
+  std::map<ProjectTab *, std::set<sputnik::notebook::CellId>> feedback;
+  std::vector<ProjectTab *> ordered;
+  std::set<std::string> visited;
+  std::function<void(ProjectTab &)> visit = [&](ProjectTab &tab) {
+    const auto *sheet = sheet_for(tab);
+    if (!sheet || !visited.insert(sheet->id).second) return;
+    for (const auto &link : sheet->imports)
+      for (const auto &provider : tabs_)
+        if (!provider->module && provider->session.project_sheet_id == link.sheet) visit(*provider);
+    ordered.push_back(&tab);
+  };
+  for (const auto &tab : tabs_) if (!tab->module) visit(*tab);
+  std::size_t passes = before.size() + 1;
+  bool complete = true;
+  while (passes--) {
+    bool ran = false;
+    for (auto *tab : ordered) {
+      const auto *sheet = sheet_for(*tab);
+      if (!sheet || sheet->imports.empty()) continue;
+      const bool started = std::any_of(tab->session.cells.begin(), tab->session.cells.end(),
+          [](const auto &cell) { return cell.kind == "code" && (cell.ok || !cell.error.empty()); });
+      if (!started) continue;
+      const auto changed = refresh_sheet_imports(*tab);
+      if (changed.empty()) continue;
+      tab->iteration_deferred = tab->iteration_ready;
+      if (sheet_has_cycle(sheet->id)) {
+        for (const auto &source : notebook_sources(tab->session)) {
+          const auto cell = std::find_if(tab->session.cells.begin(), tab->session.cells.end(),
+              [&](const auto &entry) { return entry.id == source.id; });
+          if (before.at(source.id) == cell->evaluations || !cell->ok) continue;
+          tab->iteration_deferred.insert(source.id);
+          const auto analysis = sputnik::notebook::analyze_cell(source);
+          if (std::any_of(analysis.reads.begin(), analysis.reads.end(), [&](const auto &name) {
+                return changed.count(sputnik::runtime::notebook_sheet_import_key(name));
+              })) feedback[tab].insert(source.id);
+        }
+      }
+      struct ClearDeferred {
+        ProjectTab &tab;
+        ~ClearDeferred() { tab.iteration_deferred.clear(); }
+      } clear{*tab};
+      if (!run(*tab, "inputs", 0, changed)) return;
+      if (tab->session.status == "project input evaluation failed") complete = false;
+      const auto sources = notebook_sources(tab->session);
+      const sputnik::notebook::DependencyGraph graph(sources);
+      std::set<sputnik::notebook::CellId> roots;
+      for (const auto &source : sources) {
+        const auto *analysis = graph.analysis(source.id);
+        if (analysis && std::any_of(analysis->reads.begin(), analysis->reads.end(), [&](const auto &name) {
+              return changed.count(sputnik::runtime::notebook_sheet_import_key(name));
+            })) roots.insert(source.id);
+      }
+      for (const auto id : graph.invalidation_plan(roots)) {
+        if (tab->iteration_deferred.count(id)) continue;
+        const auto cell = std::find_if(tab->session.cells.begin(), tab->session.cells.end(),
+            [&](const auto &value) { return value.id == id; });
+        if (cell != tab->session.cells.end() && (cell->dirty || !cell->ok)) complete = false;
+      }
+      ran = true;
+    }
+    if (!ran) break;
+  }
+  if (passes == static_cast<std::size_t>(-1))
+    throw std::runtime_error("sheet dependency propagation did not settle");
+  if (complete) for (const auto &[tab, cells] : feedback) {
+    tab->iteration_ready.insert(cells.begin(), cells.end());
+    tab->session.status = "Cycle completed · ready for the next manual iteration";
+  }
 }
 
 void ProjectTabs::create_module(const std::string &id) {
@@ -1114,8 +1338,22 @@ bool ProjectTabs::set_auto_import(const std::string &module_id, bool enabled) {
 
 bool ProjectTabs::apply_active(bool force_all, bool show_running,
                                const EvaluationProgress &progress) {
+  return run_linked(active(), "apply", 0,
+      [&](ProjectTab &tab, const auto &command, auto start, const auto &changed) {
+        if (command == "inputs") {
+          apply_project_input_changes(&tab.session, changed, tab.iteration_deferred);
+          return true;
+        }
+        invalidate_project_input_changes(&tab.session, changed);
+        if (command == "apply") return apply_tab(tab, force_all, show_running, progress);
+        evaluate_from_with_progress(&tab.session, start, false, show_running, progress);
+        return !sputnik::runtime::runtime_run_cancel_requested();
+      });
+}
+
+bool ProjectTabs::apply_tab(ProjectTab &tab, bool force_all, bool show_running,
+                            const EvaluationProgress &progress) {
   require_idle();
-  ProjectTab &tab = active();
   if (tab.module.has_value()) {
     tab.session.status = "switch to a sheet to Apply bundled modules";
     return false;

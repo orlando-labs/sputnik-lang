@@ -23,7 +23,7 @@ def main():
     for name,(body,selected,expected) in CASES.items():
         source=out / (name+".s");source.write_text("package test.scalar_"+name+"\nexport main\n\n"+body+"\nmain()\n")
         binary=out / name
-        built=subprocess.run([str(compiler),"build",str(source),"--entry","init","--require-full-native","-o",str(binary)],cwd=ROOT,text=True,capture_output=True,timeout=240)
+        built=subprocess.run([str(compiler),"build",str(source),"--target","native-debug","--entry","init","--require-full-native","-o",str(binary)],cwd=ROOT,text=True,capture_output=True,timeout=240)
         if built.returncode: raise RuntimeError(built.stderr+built.stdout)
         result=json.loads(built.stdout)
         if result.get("native_full_coverage") is not True or result.get("bytecode_fallback") is not False: raise RuntimeError("incomplete native coverage")

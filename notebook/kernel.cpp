@@ -753,18 +753,29 @@ void NotebookKernel::reset() {
   runtime_watch_source_.reset();
 }
 
-std::vector<EvaluationStep> NotebookKernel::plan_input_changes(const std::set<std::string> &keys) {
+std::vector<EvaluationStep> NotebookKernel::plan_input_changes(
+    const std::set<std::string> &keys, const std::set<CellId> &deferred) {
   std::lock_guard<std::mutex> execution_lock(execution_mutex_);
   std::lock_guard<std::mutex> state_lock(state_mutex_);
   if (keys.empty()) return {};
   std::set<CellId> roots;
   for (const auto id : graph_.cell_order()) {
+    if (deferred.count(id)) continue;
     const auto found = input_dependencies_.find(id);
-    if (found == input_dependencies_.end() || input_retry_consumers_.count(id) ||
-        std::any_of(keys.begin(), keys.end(), [&](const auto &key) { return found->second.count(key); }))
+    const auto *analysis = graph_.analysis(id);
+    if (std::any_of(keys.begin(), keys.end(), [&](const auto &key) {
+          constexpr std::string_view prefix("\0import:", 8);
+          if (std::string_view(key).substr(0, prefix.size()) == prefix)
+            return (analysis && analysis->reads.count(key.substr(prefix.size()))) ||
+                   (found != input_dependencies_.end() && found->second.count(key));
+          return found == input_dependencies_.end() || input_retry_consumers_.count(id) ||
+                 found->second.count(key);
+        }))
       roots.insert(id);
   }
   auto plan = plan_automatic_evaluation(graph_, sources_, roots);
+  plan.erase(std::remove_if(plan.begin(), plan.end(),
+      [&](const auto &step) { return deferred.count(step.id); }), plan.end());
   mark_plan_outputs_stale(nullptr, graph_, plan);
   return plan;
 }

@@ -51,7 +51,7 @@ def main():
         vm = run([str(compiler), "run", str(source), *grants], root, env)
         assert vm.strip() == "42", (name, "VM", vm)
         executable = work / name
-        info = json.loads(run([str(compiler), "build", str(source), "--target", "native",
+        info = json.loads(run([str(compiler), "build", str(source), "--target", "native-debug",
                                "--entry", "init", "--require-full-native", "-o", str(executable),
                                *grants], root, env, 300))
         assert info["native_vm_independent"] and info["native_full_coverage"], info

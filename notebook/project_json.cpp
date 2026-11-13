@@ -588,7 +588,9 @@ ProjectSheet parse_sheet(const JsonValue &value, const std::string &json,
     sheet.cells.push_back(parse_cell(
         cells[index], json, path + ".cells[" + std::to_string(index) + "]"));
   }
-  sheet.extra = parse_extras(value, {"id", "title", "cells"}, json);
+  if (const auto *imports = find_member(value, "imports"))
+    sheet.imports = parse_project_sheet_imports(raw_json(json, *imports));
+  sheet.extra = parse_extras(value, {"id", "title", "cells", "imports"}, json);
   return sheet;
 }
 
@@ -2280,6 +2282,23 @@ ProjectDependency parse_project_dependency(const std::string &json) {
   return dependency;
 }
 
+std::vector<ProjectSheetImport> parse_project_sheet_imports(const std::string &json) {
+  const auto root = JsonParser(json).parse();
+  const auto &items = require_array(root, "sheet.imports");
+  if (items.size() > 128) throw std::runtime_error("too many sheet imports");
+  std::vector<ProjectSheetImport> imports;
+  for (const auto &item : items) {
+    require_object(item, "sheet import");
+    const auto name = [&](const char *key) {
+      return require_string(require_member(item, key, "sheet import"), key);
+    };
+    imports.push_back({name("name"), name("sheet"),
+                       parse_cell_id(require_member(item, "cell", "sheet import"), "sheet import.cell"),
+                       name("export")});
+  }
+  return imports;
+}
+
 ProjectDocument parse_project_document(const std::string &json) {
   JsonValue root = JsonParser(json).parse();
   require_object(root, "$");
@@ -2291,8 +2310,8 @@ ProjectDocument parse_project_document(const std::string &json) {
   }
   const JsonValue &version = require_member(root, "version", "$");
   if (version.kind != JsonKind::Number ||
-      (raw_json(json, version) != "1" && raw_json(json, version) != "2" && raw_json(json, version) != "3" && raw_json(json, version) != "4")) {
-    document_error_at("$.version", "version must be 1, 2, 3 or 4",
+      (raw_json(json, version) != "1" && raw_json(json, version) != "2" && raw_json(json, version) != "3" && raw_json(json, version) != "4" && raw_json(json, version) != "5")) {
+    document_error_at("$.version", "version must be 1 through 5",
                       version.begin);
   }
 
@@ -2604,7 +2623,7 @@ static void validate_p1(const ProjectComponent &c, const ProjectDocument &docume
 }
 
 void validate_project_document(const ProjectDocument &document) {
-  if ((document.version < 1 || document.version > 4) ||
+  if ((document.version < 1 || document.version > 5) ||
       (document.version == 1 && (!document.inputs.empty() || !document.boards.empty())))
     throw std::runtime_error("project inputs and boards require schema version 2");
   if (document.version < 3 && !document.dependencies.empty())
@@ -2650,7 +2669,29 @@ void validate_project_document(const ProjectDocument &document) {
       validate_cell(sheet.cells[cell_index], &cell_ids,
                     sheet_path + ".cells[" + std::to_string(cell_index) + "]");
     }
-    validate_extra_fields(sheet.extra, {"id", "title", "cells"}, sheet_path);
+    validate_extra_fields(sheet.extra, {"id", "title", "cells", "imports"}, sheet_path);
+    if (sheet.imports.size() > 128 || (!sheet.imports.empty() && document.version < 5))
+      document_error(sheet_path + ".imports", "sheet imports require version 5 and at most 128 links");
+    std::set<std::string> aliases;
+    for (const auto &link : sheet.imports) {
+      const auto identifier = [](const std::string &name) {
+        if (name.empty() || name.size() > 256) return false;
+        const auto letter = [](unsigned char ch) {
+          return (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_';
+        };
+        return letter(name.front()) && std::all_of(name.begin() + 1, name.end(),
+            [&](unsigned char ch) { return letter(ch) || (ch >= '0' && ch <= '9'); });
+      };
+      if (!identifier(link.name) || !identifier(link.export_name) || !aliases.insert(link.name).second)
+        document_error(sheet_path + ".imports", "invalid or duplicate import name");
+      const auto provider = std::find_if(document.sheets.begin(), document.sheets.end(),
+          [&](const auto &entry) { return entry.id == link.sheet; });
+      if (provider == document.sheets.end() || provider->id == sheet.id)
+        document_error(sheet_path + ".imports", "import '" + link.name + "' requires source sheet '" + link.sheet + "'");
+      if (std::none_of(provider->cells.begin(), provider->cells.end(),
+          [&](const auto &cell) { return cell.id == link.cell && cell.kind == "code"; }))
+        document_error(sheet_path + ".imports", "source cell for import '" + link.name + "' is missing");
+    }
   }
   if (sheet_ids.count(document.active_sheet) == 0U) {
     document_error("active_sheet", "does not name an existing sheet");
@@ -3013,6 +3054,24 @@ std::string serialize_project_document(const ProjectDocument &document) {
     if (!sheet.cells.empty())
       output += "\n      ";
     output.push_back(']');
+    if (!sheet.imports.empty()) {
+      output += ",\n      \"imports\": [";
+      bool first_import = true;
+      for (const auto &link : sheet.imports) {
+        if (!first_import) output += ", ";
+        first_import = false;
+        output += "{\"name\": ";
+        write_json_string(link.name, &output);
+        output += ", \"sheet\": ";
+        write_json_string(link.sheet, &output);
+        output += ", \"cell\": ";
+        write_json_string(std::to_string(link.cell), &output);
+        output += ", \"export\": ";
+        write_json_string(link.export_name, &output);
+        output += "}";
+      }
+      output += "]";
+    }
     write_extra(sheet.extra, 6);
     output += "\n    }";
   }

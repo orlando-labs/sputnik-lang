@@ -174,6 +174,8 @@ struct PackageManifest {
   std::vector<PackageNativeRequirement> native_requirements;
   std::vector<PackageNativeProvider> native_providers;
   std::vector<PackageInstallOption> install_options;
+  // Informational registry references shown by Notebook's dependency picker.
+  std::vector<std::string> notebook_packages;
   // Derived registry metadata when module payloads have not been downloaded.
   bool has_bytecode_delivery = false;
   bool has_native_payload = false;

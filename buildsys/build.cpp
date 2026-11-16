@@ -1219,6 +1219,22 @@ void read_package_fields(const JsonValue &root, const std::string &path,
     }
   }
   text(root, "kind", m.kind);
+  strings(root, "notebook_packages", m.notebook_packages);
+  std::set<std::string> notebook_refs;
+  for (const auto &ref : m.notebook_packages) {
+    const auto valid_part = [](std::string_view part) {
+      return !part.empty() && part.size() <= 128 && std::isalnum(static_cast<unsigned char>(part.front())) &&
+          part.find("..") == std::string_view::npos &&
+          part.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") == std::string_view::npos;
+    };
+    const auto slash = ref.find('/');
+    const std::string_view view(ref);
+    if (!valid_part(view.substr(0, slash)) ||
+        (slash != std::string::npos && !valid_part(view.substr(slash + 1))) ||
+        ref == m.name || !notebook_refs.insert(ref).second)
+      error("notebook_packages must contain distinct package references");
+  }
+  if (m.notebook_packages.size() > 16) error("notebook_packages permits at most 16 entries");
   text(root, "source_root", m.source_root);
   strings(root, "files", m.files);
   m.explicit_files = member(root, "files") != nullptr;

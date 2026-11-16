@@ -1018,6 +1018,7 @@ std::string render_manifest(const PackageManifest &m) {
   if (!m.install_options.empty()) {
     root.push_back({"install_options", install_options_to_json(m.install_options)});
   }
+  if (!m.notebook_packages.empty()) root.push_back({"notebook_packages", list(m.notebook_packages)});
   if (!m.root_module.empty()) root.push_back({"root", quote(m.root_module)});
   auto required = m.profiles.required_features;
   if (required.empty()) required.push_back("core.v1");

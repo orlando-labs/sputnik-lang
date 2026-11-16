@@ -2768,10 +2768,12 @@ void validate_project_document(const ProjectDocument &document) {
         if (!components.insert(c.id).second) throw std::runtime_error("duplicate component id");
         if (components.size() > 256) throw std::runtime_error("board permits at most 256 components across all panels");
         const bool periodic = c.kind == "periodic_work";
-        if (periodic) {
+        const bool package_service = c.kind == "package_service";
+        const bool package_component = package_service || c.kind == "package_board";
+        if (periodic || package_service) {
           if (depth != 0 || !c.row.empty() || c.cell || !c.input.empty() || !c.binding.empty())
-            throw std::runtime_error("periodic work belongs to the board service tray, without row or cell bindings");
-          (void)project_periodic_work_settings(c);
+            throw std::runtime_error("services belong to the board service tray, without row or cell bindings");
+          if (periodic) (void)project_periodic_work_settings(c);
         } else if (rows) {
           const auto row = row_spans.find(c.row);
           if (row == row_spans.end()) throw std::runtime_error("component references unknown board row");
@@ -2786,10 +2788,24 @@ void validate_project_document(const ProjectDocument &document) {
         const bool text_cell = c.kind == "rich_text";
         const bool form = c.kind == "parameter_form";
         const bool group = c.kind == "group" || c.kind == "split";
-        const bool independent = c.kind == "parameter_presets" || c.kind == "action" || c.kind == "execution_controls" || c.kind == "status" || c.kind == "stopwatch" || c.kind == "run_history" || c.kind == "experiment_compare" || c.kind == "task_monitor";
+        const bool independent = package_component || c.kind == "parameter_presets" || c.kind == "action" || c.kind == "execution_controls" || c.kind == "status" || c.kind == "stopwatch" || c.kind == "run_history" || c.kind == "experiment_compare" || c.kind == "task_monitor";
         const bool p1_output = c.kind == "metric" || c.kind == "log" || c.kind == "artifacts";
         if (!group && !independent && !p1_output && c.kind != "file_input" && c.kind != "audio_input" && c.kind != "audio_annotator" && c.kind != "range_input" && c.kind != "date_input" && c.kind != "input" && !form && c.kind != "audio" && c.kind != "table" && c.kind != "text" && c.kind != "result" && c.kind != "progress" && !text_cell && c.kind != "plot" && c.kind != "live_chart" && c.kind != "run" && c.kind != "tabs" && !image_component && !periodic)
           throw std::runtime_error("unsupported board component kind: " + c.kind);
+        if (package_component) {
+          if (c.cell || !c.input.empty() || !c.binding.empty())
+            throw std::runtime_error("package components own their configuration and bindings");
+          const auto entry = c.extra.find("package_component");
+          if (entry == c.extra.end() || entry->second.size() > 65536)
+            throw std::runtime_error("missing or oversized package component reference");
+          const auto ref = JsonParser(entry->second).parse();
+          require_object(ref, "package_component");
+          for (const auto *key : {"provider", "type"}) {
+            const auto value = require_string(require_member(ref, key, "package_component"), key);
+            if (value.empty() || value.size() > 256 || value.find('\0') != std::string::npos)
+              throw std::runtime_error("invalid package component identity");
+          }
+        }
         if ((c.kind == "input" || c.kind == "file_input") && !inputs.count(c.input)) throw std::runtime_error("component references unknown input");
         validate_p1(c, document);
         if (c.kind == "file_input") {
